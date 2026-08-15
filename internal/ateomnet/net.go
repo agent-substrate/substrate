@@ -193,6 +193,9 @@ func PodIPv4() (net.IP, error) {
 }
 
 // EnableIPv4Forwarding enables IPv4 forwarding in the current network namespace.
+// It also enables IPv6 forwarding so actor IPv6 traffic (including DNS queries
+// on IPv6-capable clusters) is routed between the veth and eth0 instead of
+// being dropped by ip6_forward().
 func EnableIPv4Forwarding() error {
 	// Forwarding is required because actor packets now enter the worker pod via
 	// the host-side veth and then leave through the pod's eth0. Without this, the
@@ -203,20 +206,41 @@ func EnableIPv4Forwarding() error {
 	// The worker holds CAP_SYS_ADMIN and uses no user namespace, so the ro flag
 	// is not locked: clear it, write the sysctl, restore ro.
 	const path = "/proc/sys/net/ipv4/ip_forward"
+	if err := writeSysctlIfUnset(path); err != nil {
+		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
+	}
+	// IPv6 forwarding: actor packets that arrive on the veth and leave via eth0
+	// are IPv6 on dual-stack / IPv6-only clusters. Without
+	// net.ipv6.conf.all.forwarding the kernel drops every IPv6 packet in
+	// ip6_forward(), including the actor's DNS queries. conf.all.forwarding=1
+	// also implies the per-interface default, so a single write covers the veth
+	// and eth0.
+	const v6path = "/proc/sys/net/ipv6/conf/all/forwarding"
+	if err := writeSysctlIfUnset(v6path); err != nil {
+		return fmt.Errorf("while enabling IPv6 forwarding in worker pod netns: %w", err)
+	}
+	return nil
+}
+
+// writeSysctlIfUnset writes "1\n" to a sysctl path unless it already reads "1".
+func writeSysctlIfUnset(path string) error {
 	if b, err := os.ReadFile(path); err == nil && len(b) > 0 && b[0] == '1' {
 		return nil
 	}
 	if err := os.WriteFile(path, []byte("1\n"), 0o644); err == nil {
 		return nil
 	}
+	// Without privileged, the container runtime bind-mounts /proc/sys read-only.
+	// The worker holds CAP_SYS_ADMIN and uses no user namespace, so the ro flag
+	// is not locked: clear it, write the sysctl, restore ro.
 	if err := unix.Mount("none", "/proc/sys", "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
-		return fmt.Errorf("while remounting /proc/sys read-write to enable IPv4 forwarding: %w", err)
+		return fmt.Errorf("while remounting /proc/sys read-write to enable forwarding: %w", err)
 	}
 	defer func() {
 		_ = unix.Mount("none", "/proc/sys", "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
 	}()
 	if err := os.WriteFile(path, []byte("1\n"), 0o644); err != nil {
-		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
+		return fmt.Errorf("while writing %s: %w", path, err)
 	}
 	return nil
 }
