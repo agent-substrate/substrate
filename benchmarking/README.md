@@ -81,9 +81,10 @@ Once installed:
 
 ### Rebuilding gRPC Python clients
 
-Make sure you have a virtual environment created (`python3 -m venv venv`)
-and activated (`source venv/bin/activate`).
+Run `./hack/update/locust-protos.sh` to regenerate the checked-in Python stubs
+under `benchmarking/locust/common/`. The generator uses a pinned venv in
+`benchmarking/locust/codegen/` so the output does not depend on whatever
+packages happen to be installed locally.
 
-Install project requirements: `pip install -r requirements.txt`
-
-Then run `generate_protos.sh` to generate the Python proto clients.
+`hack/verify-all.sh` (and therefore `make verify`) fails if those stubs have
+drifted from the `.proto` sources.
