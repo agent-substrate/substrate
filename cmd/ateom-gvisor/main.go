@@ -55,11 +55,11 @@ var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
 	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
-	atunnelListenAddress       = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	atunnelListenAddress       = pflag.String("atunnel-listen-address", ":443", "Address for actor ingress HTTPS")
 	atunnelCredentialBundle    = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle for actor ingress HTTPS")
 	atunnelTrustBundle         = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for actor ingress clients")
 	atunnelClientIdentity      = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
-	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", ":15001", "Address for transparently intercepted actor egress TCP")
 	atunnelEgressTrustBundle   = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for the egress gateway")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")

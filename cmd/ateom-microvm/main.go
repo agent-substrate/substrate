@@ -60,11 +60,11 @@ var (
 	showVersion  = flag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
-	atunnelListenAddress       = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	atunnelListenAddress       = flag.String("atunnel-listen-address", ":443", "Address for actor ingress HTTPS")
 	atunnelCredentialBundle    = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle for actor ingress HTTPS")
 	atunnelTrustBundle         = flag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for actor ingress clients")
 	atunnelClientIdentity      = flag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
-	atunnelEgressListenAddress = flag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	atunnelEgressListenAddress = flag.String("atunnel-egress-listen-address", ":15001", "Address for transparently intercepted actor egress TCP")
 	atunnelEgressTrustBundle   = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for the egress gateway")
 )
 
