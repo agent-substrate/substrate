@@ -212,7 +212,7 @@ func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRe
 	var fldPath *field.Path
 
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
+	op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
 	errs := Validate_CreateActorRequest(ctx, op, nil, req, nil)
 
 	actor := req.GetActor()
@@ -510,7 +510,7 @@ func validateActorUpdate(ctx context.Context, newVal, oldVal *ateapipb.Actor) fi
 	var fldPath *field.Path
 
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
+	op := operation.Operation{Type: operation.Update, Options: map[string]bool{"validateOutput": true}}
 	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
 
 	return errs

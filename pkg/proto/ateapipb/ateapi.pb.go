@@ -643,12 +643,14 @@ type ResourceMetadata struct {
 	// Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
+	// +k8s:immutable
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// name is the resource's name, unique within its atespace (or globally, for
 	// global-scoped resources). Caller-specified at creation and immutable thereafter.
 	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
+	// +k8s:immutable
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// uid is a server-assigned, globally unique identifier for this resource.
 	// Immutable throughout the lifecycle of the resource.
@@ -656,37 +658,39 @@ type ResourceMetadata struct {
 	// This field is ignored during create operations and used as precondition
 	// for update operations.
 	//
-	// FIXME: document this better
-	// TODO: use upcoming "set by server" tag
-	// +k8s:optional # optional on input, always specified on output
+	// +k8s:ifDisabled(validateOutput)=+k8s:optional
+	// +k8s:ifEnabled(validateOutput)=+k8s:required
+	// +k8s:ifEnabled(validateOutput)=+k8s:immutable
 	// +k8s:format=k8s-uuid
-	// +k8s:immutable
 	Uid string `protobuf:"bytes,3,opt,name=uid,proto3" json:"uid,omitempty"`
 	// version is increased on every mutation.
 	//
 	// This field is ignored during create operations and used as precondition
 	// for update operations.
 	//
-	// FIXME: document this better
-	// TODO: use upcoming "set by server" tag
-	// +k8s:optional # optional on input, always specified on output
+	// +k8s:ifDisabled(validateOutput)=+k8s:optional
+	// +k8s:ifEnabled(validateOutput)=+k8s:required
+	// +k8s:alpha(since: "0.0")=+k8s:ifEnabled(validateOutput)=+k8s:monotonic # TODO: get rid of alpha prefix
+	// +k8s:ifEnabled(validateOutput)=+k8s:update=NoUnset
 	// +k8s:minimum=1
-	// +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
-	// +k8s:update=NoUnset
 	Version int64 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
 	// create_time is the time the resource was created.
 	//
-	// FIXME: document this better
-	// TODO: use upcoming "set by server" tag
-	// +k8s:optional # optional on input, always specified on output
-	// +k8s:immutable
+	// This field is ignored on input.
+	//
+	// +k8s:ifDisabled(validateOutput)=+k8s:optional
+	// +k8s:ifEnabled(validateOutput)=+k8s:required
+	// +k8s:ifEnabled(validateOutput)=+k8s:immutable
+	// TODO: validate that this is a valid timestamp
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	// update_time is the time the resource was last updated.
 	//
-	// FIXME: document this better
-	// TODO: use upcoming "set by server" tag
-	// +k8s:optional # optional on input, always specified on output
-	// TODO: do customValidation to ensure >= createTime
+	// This field is ignored on input.
+	//
+	// +k8s:ifDisabled(validateOutput)=+k8s:optional
+	// +k8s:ifEnabled(validateOutput)=+k8s:required
+	// TODO: validate that this is a valid timestamp
+	// TODO: validate that UpdateTime >= CreateTime
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -860,7 +864,8 @@ type Actor struct {
 	// status is the actor's current lifecycle state, set by the system.
 	// User-provided values are ignored.
 	//
-	// +k8s:optional
+	// +k8s:ifDisabled(validateOutput)=+k8s:forbidden
+	// +k8s:ifEnabled(validateOutput)=+k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=8 # keep this in sync with the Status enum above
 	Status Actor_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.Actor_Status" json:"status,omitempty"`
