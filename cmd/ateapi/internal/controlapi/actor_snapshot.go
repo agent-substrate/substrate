@@ -133,9 +133,6 @@ func (s *Service) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.Crea
 		return nil, toGRPCStatusError(errs)
 	}
 	ref := req.GetActorSnapshotTag().GetSnapshot()
-	if req.GetActorSnapshotTag().GetMetadata().GetAtespace() != ref.GetAtespace() {
-		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot tags must belong to the snapshot's Atespace")
-	}
 	tag, err := s.persistence.CreateActorSnapshotTag(ctx, ref.GetAtespace(), ref.GetName(), req.GetActorSnapshotTag())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
@@ -156,7 +153,7 @@ func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagR
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	tag := req.ActorSnapshotTag
+	tag := req.GetActorSnapshotTag()
 	tagPath := fldPath.Child("actor_snapshot_tag")
 	if tag == nil {
 		errs = append(errs, field.Required(tagPath, ""))
@@ -165,13 +162,18 @@ func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagR
 
 	errs = append(errs, resources.ValidateObjectRef(&ateapipb.ObjectRef{Atespace: tag.GetMetadata().GetAtespace(), Name: tag.GetMetadata().GetName()}, tagPath.Child("metadata"))...)
 
-	if val, p := tag.Snapshot, tagPath.Child("snapshot"); val == nil {
+	if val, p := tag.GetSnapshot(), tagPath.Child("snapshot"); val == nil {
 		errs = append(errs, field.Required(p, ""))
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, p)...)
 	}
 
 	errs = append(errs, validateActorSnapshotTagScope(tag.GetScope(), tagPath.Child("scope"))...)
+
+	metaAtespace, snapAtespace := tag.GetMetadata().GetAtespace(), tag.GetSnapshot().GetAtespace()
+	if metaAtespace != snapAtespace && resources.IsValidResourceName(metaAtespace) && resources.IsValidResourceName(snapAtespace) {
+		errs = append(errs, field.Invalid(tagPath.Child("metadata").Child("atespace"), metaAtespace, "must match snapshot.atespace"))
+	}
 
 	return errs
 }
@@ -218,7 +220,7 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 
 	errs = append(errs, resources.ValidateResourceMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
 
-	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorSnapshotTagMutableFields, field.NewPath("update_mask"))...)
+	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorSnapshotTagMutableFields, fldPath.Child("update_mask"))...)
 
 	errs = append(errs, validateActorSnapshotTagScope(tag.GetScope(), tagPath.Child("scope"))...)
 
