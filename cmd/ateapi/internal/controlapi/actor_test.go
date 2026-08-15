@@ -141,15 +141,15 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	}, {
 		"negative actor.status",
 		validActor(func(a *ateapipb.Actor) { a.Status = -1 }),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "status"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Forbidden(field.NewPath("actor", "status"), "")},
 	}, {
 		"valid actor.status",
 		validActor(func(a *ateapipb.Actor) { a.Status = ateapipb.Actor_STATUS_RUNNING }),
-		nil,
+		field.ErrorList{field.Forbidden(field.NewPath("actor", "status"), "")},
 	}, {
 		"invalid actor.status",
 		validActor(func(a *ateapipb.Actor) { a.Status = 1234567890 }),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "status"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Forbidden(field.NewPath("actor", "status"), "")},
 	}, {
 		"worker_selector with nil match_labels",
 		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
