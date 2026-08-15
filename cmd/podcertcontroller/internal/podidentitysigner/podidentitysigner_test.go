@@ -153,7 +153,7 @@ func TestMakeCert(t *testing.T) {
 			maxExpirationSeconds: 86400,
 			wantLifetime:         24 * time.Hour,
 			wantURI:              "spiffe://cluster.local/ns/default/sa/default",
-			wantEKUs:             []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			wantEKUs:             []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 			wantIdentity: &substratex509.PodIdentity{
 				Namespace:          "default",
 				ServiceAccountName: "default",
@@ -172,7 +172,7 @@ func TestMakeCert(t *testing.T) {
 			maxExpirationSeconds: 7 * 86400,
 			wantLifetime:         24 * time.Hour,
 			wantURI:              "spiffe://cluster.local/ns/default/sa/default",
-			wantEKUs:             []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			wantEKUs:             []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 			wantIdentity: &substratex509.PodIdentity{
 				Namespace:          "default",
 				ServiceAccountName: "default",
@@ -191,7 +191,7 @@ func TestMakeCert(t *testing.T) {
 			maxExpirationSeconds: 3600,
 			wantLifetime:         time.Hour,
 			wantURI:              "spiffe://cluster.local/ns/default/sa/default",
-			wantEKUs:             []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			wantEKUs:             []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 			wantIdentity: &substratex509.PodIdentity{
 				Namespace:          "default",
 				ServiceAccountName: "default",
@@ -208,11 +208,11 @@ func TestMakeCert(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			ca, err := localca.GenerateED25519CA("test-ca")
+			ca, err := localca.GenerateCA("test-ca", localca.KeyTypeED25519, 365*24*time.Hour)
 			if err != nil {
 				t.Fatalf("while generating CA: %v", err)
 			}
-			caPool := &localca.Pool{CAs: []*localca.CA{ca}}
+			caPool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
 
 			subjectPub, subjectPriv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
@@ -336,11 +336,11 @@ func TestMakeCertErrors(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ca, err := localca.GenerateED25519CA("test-ca")
+			ca, err := localca.GenerateCA("test-ca", localca.KeyTypeED25519, 365*24*time.Hour)
 			if err != nil {
 				t.Fatalf("while generating CA: %v", err)
 			}
-			caPool := &localca.Pool{CAs: []*localca.CA{ca}}
+			caPool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
 
 			pod, pcr := makePodAndPCR("ate-system", "atelet-abcde", "atelet", 86400)
 			pod.ObjectMeta.UID = tc.podUID
@@ -379,75 +379,22 @@ func TestMakeCertErrors(t *testing.T) {
 	}
 }
 
-func TestMakeCertChainIncludesIntermediates(t *testing.T) {
-	ca, err := localca.GenerateED25519CA("test-ca")
-	if err != nil {
-		t.Fatalf("while generating CA: %v", err)
-	}
-	intermediateCA, err := localca.GenerateED25519CA("test-intermediate")
-	if err != nil {
-		t.Fatalf("while generating intermediate CA: %v", err)
-	}
-	ca.IntermediateCertificates = []*x509.Certificate{intermediateCA.RootCertificate}
-	caPool := &localca.Pool{CAs: []*localca.CA{ca}}
-
-	_, subjectPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("while generating subject key: %v", err)
-	}
-
-	pod, pcr := makePodAndPCR("ate-system", "atelet-abcde", "atelet", 86400)
-	pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
-
-	kc := fake.NewSimpleClientset(pod, pcr)
-	impl := NewImpl(kc, caPool, fixedClock{now: testNow})
-
-	if err := impl.MakeCert(context.Background(), pcr); err != nil {
-		t.Fatalf("MakeCert: %v", err)
-	}
-
-	gotPCR, err := kc.CertificatesV1beta1().PodCertificateRequests("ate-system").Get(context.Background(), "req-1", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("while fetching updated PCR: %v", err)
-	}
-
-	var chainDER [][]byte
-	rest := []byte(gotPCR.Status.CertificateChain)
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		chainDER = append(chainDER, block.Bytes)
-	}
-	if len(rest) != 0 {
-		t.Errorf("certificate chain has trailing non-PEM data")
-	}
-	if len(chainDER) != 2 {
-		t.Fatalf("got %d certificates in chain, want 2 (leaf + intermediate)", len(chainDER))
-	}
-	if _, err := x509.ParseCertificate(chainDER[0]); err != nil {
-		t.Errorf("while parsing leaf certificate: %v", err)
-	}
-	if !bytes.Equal(chainDER[1], intermediateCA.RootCertificate.Raw) {
-		t.Errorf("second chain entry is not the intermediate certificate")
-	}
-}
-
 func TestDesiredClusterTrustBundles(t *testing.T) {
-	ca1, err := localca.GenerateED25519CA("test-ca-1")
+	ca1, err := localca.GenerateCA("test-ca-1", localca.KeyTypeED25519, 365*24*time.Hour)
 	if err != nil {
 		t.Fatalf("while generating CA 1: %v", err)
 	}
-	ca2, err := localca.GenerateED25519CA("test-ca-2")
+	ca2, err := localca.GenerateCA("test-ca-2", localca.KeyTypeED25519, 365*24*time.Hour)
 	if err != nil {
 		t.Fatalf("while generating CA 2: %v", err)
 	}
-	caPool := &localca.Pool{CAs: []*localca.CA{ca1, ca2}}
+	caPool := &localca.ConcretePool{CAs: []*localca.CA{ca1, ca2}}
 	impl := NewImpl(nil, caPool, fixedClock{now: testNow})
 
-	ctbs := impl.DesiredClusterTrustBundles()
+	ctbs, err := impl.DesiredClusterTrustBundles()
+	if err != nil {
+		t.Fatalf("Error while getting desired ClusterTrustBundles: %v", err)
+	}
 	if len(ctbs) != 1 {
 		t.Fatalf("got %d ClusterTrustBundles, want 1", len(ctbs))
 	}

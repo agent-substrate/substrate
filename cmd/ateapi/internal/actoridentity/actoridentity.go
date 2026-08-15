@@ -51,7 +51,7 @@ type Server struct {
 
 	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
 	actorIDJWTPoolFile string
-	actorIDCAPoolFile  string
+	actorIDCAPool      localca.Pool
 
 	// store is the actor database. MintCert consults it to confirm the caller
 	// is entitled to the actor it is asking for a credential for.
@@ -61,11 +61,11 @@ type Server struct {
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer, actorIDJWTPoolFile, actorIDCAPoolFile string, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPoolFile:     actorIDJWTPoolFile,
-		actorIDCAPoolFile:      actorIDCAPoolFile,
+		actorIDCAPool:          actorIDCAPool,
 		store:                  store,
 		workers:                workers,
 	}
@@ -179,18 +179,6 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		return nil, status.Error(codes.FailedPrecondition, "worker assignment changed while minting actor certificate")
 	}
 
-	// Load the CA pool for signing
-	poolBytes, err := os.ReadFile(s.actorIDCAPoolFile)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to read actor CA pool file", slog.Any("err", err))
-		return nil, status.Errorf(codes.Internal, "Failed to load actor CA")
-	}
-	caPool, err := localca.Unmarshal(poolBytes)
-	if err != nil || len(caPool.CAs) == 0 {
-		slog.ErrorContext(ctx, "Failed to load actor CA", slog.Any("err", err))
-		return nil, status.Errorf(codes.Internal, "Failed to load actor CA")
-	}
-
 	// Parse the CSR
 	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
 	if err != nil {
@@ -231,20 +219,14 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	}
 
 	// Sign and return the actor cert.
-	ca := caPool.CAs[0]
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, ca.RootCertificate, csr.PublicKey, ca.SigningKey)
+	chain, err := s.actorIDCAPool.CreateCertificate(template, csr.PublicKey)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to sign certificate", slog.Any("err", err))
 		return nil, status.Errorf(codes.Internal, "Failed to sign certificate")
 	}
 
-	certificates := [][]byte{derBytes}
-	for _, intermed := range ca.IntermediateCertificates {
-		certificates = append(certificates, intermed.Raw)
-	}
-
 	return &ateapipb.MintCertResponse{
-		ActorCertificates: certificates,
+		ActorCertificates: chain,
 	}, nil
 }
 
