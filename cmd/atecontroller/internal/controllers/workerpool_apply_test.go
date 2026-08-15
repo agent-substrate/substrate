@@ -734,10 +734,10 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithImage(wp.Spec.AteomImage).
 			WithArgs(
 				"--pod-uid=$(POD_UID)",
-				"--atunnel-listen-address=0.0.0.0:443",
+				"--atunnel-listen-address=:443",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
-				"--atunnel-egress-listen-address=0.0.0.0:15001",
+				"--atunnel-egress-listen-address=:15001",
 				"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
 			).
 			WithPorts(corev1ac.ContainerPort().
