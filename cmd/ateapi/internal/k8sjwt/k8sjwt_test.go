@@ -30,8 +30,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	utilcache "k8s.io/apimachinery/pkg/util/cache"
+	"k8s.io/utils/clock"
 )
 
 const testAudience = "ate-api"
@@ -40,9 +44,12 @@ func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 // testIssuer serves the OIDC discovery document and a JWKS built from the keys
 // registered on it, standing in for a Kubernetes API server's OIDC endpoints.
+// The hit counters let tests observe how often Verify fetches from it.
 type testIssuer struct {
-	server *httptest.Server
-	jwks   jwkSetT
+	server        *httptest.Server
+	jwks          jwkSetT
+	discoveryHits atomic.Int64
+	jwksHits      atomic.Int64
 }
 
 func newTestIssuer(t *testing.T) *testIssuer {
@@ -50,9 +57,11 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	ti := &testIssuer{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		ti.discoveryHits.Add(1)
 		writeJSON(t, w, oidcConfigT{JWKSURI: ti.server.URL + "/jwks"})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		ti.jwksHits.Add(1)
 		writeJSON(t, w, ti.jwks)
 	})
 	ti.server = httptest.NewServer(mux)
@@ -233,7 +242,7 @@ func TestVerifyECDSA(t *testing.T) {
 			ti.addEC(t, "ec-1", tc.crv, &key.PublicKey)
 			tok := mintJWT(t, tc.alg, "ec-1", key, validClaims(ti.issuer()))
 
-			if _, err := Verify(context.Background(), ti.server.Client(), tok, ti.issuer(), testAudience, time.Now()); err != nil {
+			if _, err := Verify(context.Background(), ti.server.Client(), nil, tok, ti.issuer(), testAudience, time.Now()); err != nil {
 				t.Fatalf("Verify(%s) = %v, want nil", tc.alg, err)
 			}
 		})
@@ -253,7 +262,7 @@ func TestVerifyRejectsECKeyForRSAlg(t *testing.T) {
 	// RS256 header pointing at the EC key; the RSA signing key is irrelevant because
 	// the key-type check fails before signature verification.
 	tok := mintJWT(t, "RS256", "ec-1", testRSAKey(t), validClaims(ti.issuer()))
-	if _, err := Verify(context.Background(), ti.server.Client(), tok, ti.issuer(), testAudience, time.Now()); err == nil {
+	if _, err := Verify(context.Background(), ti.server.Client(), nil, tok, ti.issuer(), testAudience, time.Now()); err == nil {
 		t.Fatal("Verify accepted an RS256 token whose kid names an EC key")
 	}
 }
@@ -272,7 +281,7 @@ func TestVerifyMixedJWKS(t *testing.T) {
 	ti.addEC(t, "ec-1", "P-256", &ecKey.PublicKey)
 
 	tok := mintJWT(t, "RS256", "rsa-1", rsaKey, validClaims(ti.issuer()))
-	if _, err := Verify(context.Background(), ti.server.Client(), tok, ti.issuer(), testAudience, time.Now()); err != nil {
+	if _, err := Verify(context.Background(), ti.server.Client(), nil, tok, ti.issuer(), testAudience, time.Now()); err != nil {
 		t.Fatalf("Verify with a mixed RSA+EC JWKS = %v, want nil", err)
 	}
 }
@@ -291,12 +300,12 @@ func TestVerifyUnusableJWKSKeySkipped(t *testing.T) {
 	})
 
 	good := mintJWT(t, "RS256", "rsa-1", rsaKey, validClaims(ti.issuer()))
-	if _, err := Verify(context.Background(), ti.server.Client(), good, ti.issuer(), testAudience, time.Now()); err != nil {
+	if _, err := Verify(context.Background(), ti.server.Client(), nil, good, ti.issuer(), testAudience, time.Now()); err != nil {
 		t.Fatalf("Verify with an unusable key in the JWKS = %v, want nil (bad key should be skipped)", err)
 	}
 
 	referencesSkipped := mintJWT(t, "RS256", "ec-bad", rsaKey, validClaims(ti.issuer()))
-	if _, err := Verify(context.Background(), ti.server.Client(), referencesSkipped, ti.issuer(), testAudience, time.Now()); err == nil {
+	if _, err := Verify(context.Background(), ti.server.Client(), nil, referencesSkipped, ti.issuer(), testAudience, time.Now()); err == nil {
 		t.Fatal("Verify accepted a token whose kid names a key that was skipped")
 	}
 }
@@ -360,5 +369,164 @@ func TestEllipticCurveForJWK(t *testing.T) {
 	}
 	if _, err := ellipticCurveForJWK("P-192"); err == nil {
 		t.Error("ellipticCurveForJWK(P-192) = nil, want error")
+	}
+}
+
+// fakeClock embeds clock.RealClock so it satisfies clock.Clock (which requires
+// After, NewTimer, Sleep, Tick in addition to Now/Since), while overriding
+// Now/Since to a controllable value. utilcache.Expiring only ever calls
+// Now(), so the promoted real methods are never invoked by the cache.
+type fakeClock struct {
+	clock.RealClock
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock(now time.Time) *fakeClock {
+	return &fakeClock{now: now}
+}
+
+func (f *fakeClock) Now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.now
+}
+
+func (f *fakeClock) Since(ts time.Time) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.now.Sub(ts)
+}
+
+func (f *fakeClock) step(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.now = f.now.Add(d)
+}
+
+// newKeyCacheWithClock is the test-only constructor that injects a clock so
+// cache expiry can be driven deterministically.
+func newKeyCacheWithClock(ttl time.Duration, clk clock.Clock) *KeyCache {
+	return &KeyCache{ttl: ttl, cache: utilcache.NewExpiringWithClock(clk)}
+}
+
+func TestVerifyKeyCacheHit(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("rsa-1", &key.PublicKey)
+	tok := mintJWT(t, "RS256", "rsa-1", key, validClaims(ti.issuer()))
+	cache := NewKeyCache(time.Hour)
+	now := time.Now()
+
+	for i := 0; i < 3; i++ {
+		if _, err := Verify(context.Background(), ti.server.Client(), cache, tok, ti.issuer(), testAudience, now); err != nil {
+			t.Fatalf("Verify #%d = %v, want nil", i, err)
+		}
+	}
+	if got := ti.discoveryHits.Load(); got != 1 {
+		t.Errorf("discovery hits = %d, want 1", got)
+	}
+	if got := ti.jwksHits.Load(); got != 1 {
+		t.Errorf("jwks hits = %d, want 1", got)
+	}
+}
+
+func TestVerifyKeyCacheExpiry(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("rsa-1", &key.PublicKey)
+	tok := mintJWT(t, "RS256", "rsa-1", key, validClaims(ti.issuer()))
+	fc := newFakeClock(time.Now())
+	cache := newKeyCacheWithClock(time.Minute, fc)
+	now := time.Now()
+
+	if _, err := Verify(context.Background(), ti.server.Client(), cache, tok, ti.issuer(), testAudience, now); err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+	// Advance the cache's clock past its 1-minute TTL so the entry expires;
+	// the JWT itself is valid for an hour, so stepping a couple minutes is fine.
+	fc.step(2 * time.Minute)
+	if _, err := Verify(context.Background(), ti.server.Client(), cache, tok, ti.issuer(), testAudience, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("Verify after cache expiry = %v, want nil", err)
+	}
+	if got := ti.discoveryHits.Load(); got != 2 {
+		t.Errorf("discovery hits = %d, want 2", got)
+	}
+	if got := ti.jwksHits.Load(); got != 2 {
+		t.Errorf("jwks hits = %d, want 2", got)
+	}
+}
+
+func TestVerifyKeyCacheRefreshesOnUnknownKeyID(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("k1", &key.PublicKey)
+	cache := NewKeyCache(time.Hour)
+	now := time.Now()
+
+	tok1 := mintJWT(t, "RS256", "k1", key, validClaims(ti.issuer()))
+	if _, err := Verify(context.Background(), ti.server.Client(), cache, tok1, ti.issuer(), testAudience, now); err != nil {
+		t.Fatalf("Verify(k1) = %v, want nil", err)
+	}
+
+	// Simulate a rotation: the issuer publishes a new key after the cache
+	// was populated. The unknown kid must trigger a refresh, not a rejection.
+	ti.addRSA("k2", &key.PublicKey)
+	tok2 := mintJWT(t, "RS256", "k2", key, validClaims(ti.issuer()))
+	if _, err := Verify(context.Background(), ti.server.Client(), cache, tok2, ti.issuer(), testAudience, now); err != nil {
+		t.Fatalf("Verify after key rotation = %v, want nil", err)
+	}
+	if got := ti.jwksHits.Load(); got != 2 {
+		t.Errorf("jwks hits = %d, want 2 (one refresh on unknown kid)", got)
+	}
+
+	// The refreshed set is cached again: no further fetches.
+	if _, err := Verify(context.Background(), ti.server.Client(), cache, tok2, ti.issuer(), testAudience, now); err != nil {
+		t.Fatalf("Verify(tok2) after refresh = %v, want nil", err)
+	}
+	if got := ti.discoveryHits.Load(); got != 2 {
+		t.Errorf("discovery hits = %d, want 2", got)
+	}
+	if got := ti.jwksHits.Load(); got != 2 {
+		t.Errorf("jwks hits = %d, want 2", got)
+	}
+}
+
+func TestVerifyNilCacheFetchesEveryTime(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("rsa-1", &key.PublicKey)
+	tok := mintJWT(t, "RS256", "rsa-1", key, validClaims(ti.issuer()))
+
+	for i := 0; i < 2; i++ {
+		if _, err := Verify(context.Background(), ti.server.Client(), nil, tok, ti.issuer(), testAudience, time.Now()); err != nil {
+			t.Fatalf("Verify #%d = %v, want nil", i, err)
+		}
+	}
+	if got := ti.discoveryHits.Load(); got != 2 {
+		t.Errorf("discovery hits = %d, want 2", got)
+	}
+	if got := ti.jwksHits.Load(); got != 2 {
+		t.Errorf("jwks hits = %d, want 2", got)
+	}
+}
+
+func TestVerifyKeyCacheNonPositiveTTLDisables(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("rsa-1", &key.PublicKey)
+	tok := mintJWT(t, "RS256", "rsa-1", key, validClaims(ti.issuer()))
+	cache := NewKeyCache(0) // non-positive TTL: every lookup misses
+
+	for i := 0; i < 2; i++ {
+		if _, err := Verify(context.Background(), ti.server.Client(), cache, tok, ti.issuer(), testAudience, time.Now()); err != nil {
+			t.Fatalf("Verify #%d = %v, want nil", i, err)
+		}
+	}
+	if got := ti.discoveryHits.Load(); got != 2 {
+		t.Errorf("discovery hits = %d, want 2", got)
+	}
+	if got := ti.jwksHits.Load(); got != 2 {
+		t.Errorf("jwks hits = %d, want 2", got)
 	}
 }

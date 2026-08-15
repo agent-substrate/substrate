@@ -32,6 +32,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	utilcache "k8s.io/apimachinery/pkg/util/cache"
 )
 
 // KeyAndID wraps a crypto.PublicKey along with the key ID that will identify it during
@@ -42,6 +44,42 @@ import (
 type KeyAndID struct {
 	KeyID     string
 	PublicKey crypto.PublicKey
+}
+
+// KeyCache caches the keys Verify fetches from issuers so that repeated
+// verifications skip OIDC discovery and JWKS fetches. Entries expire after
+// ttl; in addition, a verification whose key ID is missing from the cached
+// set triggers a single refresh so key rotations are picked up promptly.
+// A nil *KeyCache disables caching.
+type KeyCache struct {
+	ttl   time.Duration
+	cache *utilcache.Expiring
+}
+
+// NewKeyCache returns a cache whose entries expire after ttl. A non-positive
+// ttl makes every lookup miss, effectively disabling the cache.
+func NewKeyCache(ttl time.Duration) *KeyCache {
+	return &KeyCache{
+		ttl:   ttl,
+		cache: utilcache.NewExpiring(),
+	}
+}
+
+// lookup returns the cached keys for issuer if they are still fresh.
+func (c *KeyCache) lookup(issuer string) ([]*KeyAndID, bool) {
+	val, ok := c.cache.Get(issuer)
+	if !ok {
+		return nil, false
+	}
+	keys, ok := val.([]*KeyAndID)
+	if !ok {
+		return nil, false
+	}
+	return keys, true
+}
+
+func (c *KeyCache) store(issuer string, keys []*KeyAndID) {
+	c.cache.Set(issuer, keys, c.ttl)
 }
 
 type parseHeader struct {
@@ -124,8 +162,10 @@ var (
 // cluster.
 //
 // httpClient is used for OIDC discovery and JWKS fetches; nil uses a default
-// client with a whole-request timeout.
-func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
+// client with a whole-request timeout. cache, when non-nil, serves the
+// issuer's keys from a TTL'd cache instead of fetching them on every call;
+// see KeyCache.
+func Verify(ctx context.Context, httpClient *http.Client, cache *KeyCache, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
 	segments := strings.Split(jwt, ".")
 	if len(segments) != 3 {
 		return nil, fmt.Errorf("malformed JWT")
@@ -174,8 +214,7 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 		return nil, fmt.Errorf("unexpected issuer %q", rawClaims.Issuer)
 	}
 
-	// TODO: Cache keys, and only fetch new keys if the JWT's key ID is not in the cache.
-	keys, err := discoverKeysForIssuer(ctx, httpClient, rawClaims.Issuer)
+	keys, fromCache, err := keysForIssuer(ctx, cache, httpClient, rawClaims.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
 	}
@@ -187,6 +226,20 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 	selectedKeyIndex := slices.IndexFunc(keys, func(k *KeyAndID) bool {
 		return k.KeyID == header.KeyID
 	})
+	if selectedKeyIndex == -1 && fromCache {
+		// The issuer may have rotated its keys since the cache was populated;
+		// refresh once before declaring the key unknown.
+		refreshed, refreshErr := discoverKeysForIssuer(ctx, httpClient, rawClaims.Issuer)
+		if refreshErr != nil {
+			slog.WarnContext(ctx, "Failed to refresh keys for unknown key ID; using cached keys", slog.Any("err", refreshErr))
+		} else {
+			cache.store(rawClaims.Issuer, refreshed)
+			keys = refreshed
+			selectedKeyIndex = slices.IndexFunc(keys, func(k *KeyAndID) bool {
+				return k.KeyID == header.KeyID
+			})
+		}
+	}
 	if selectedKeyIndex == -1 {
 		return nil, fmt.Errorf("unknown key ID %q", header.KeyID)
 	}
@@ -379,6 +432,25 @@ type jwkT struct {
 	RSAE string `json:"e"`
 }
 
+// keysForIssuer returns the issuer's verification keys. When cache holds a
+// fresh entry for the issuer it is returned with fromCache true; otherwise
+// the keys are discovered over OIDC and stored in the cache (if non-nil).
+func keysForIssuer(ctx context.Context, cache *KeyCache, httpClient *http.Client, issuer string) (keys []*KeyAndID, fromCache bool, err error) {
+	if cache != nil {
+		if keys, ok := cache.lookup(issuer); ok {
+			return keys, true, nil
+		}
+	}
+	keys, err = discoverKeysForIssuer(ctx, httpClient, issuer)
+	if err != nil {
+		return nil, false, err
+	}
+	if cache != nil {
+		cache.store(issuer, keys)
+	}
+	return keys, false, nil
+}
+
 func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer string) ([]*KeyAndID, error) {
 	var discoveryDocURL string
 	if strings.HasSuffix(issuer, "/") {
@@ -409,7 +481,8 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 			// Skip an unusable key instead of failing the whole issuer; it's safe because
 			// keys are selected by kid and the signature is still verified, so a skipped
 			// key can't be abused. Debug, not Warn: unsupported key types are a normal
-			// config and discovery runs on every Verify (no cache yet), so Warn would spam.
+			// config and discovery repeats whenever the cache misses or refreshes, so
+			// Warn would spam.
 			slog.DebugContext(ctx, "Skipping unusable JWK from issuer",
 				slog.String("kid", jwk.KeyID), slog.String("kty", jwk.KeyType), slog.Any("err", err))
 			skipped++

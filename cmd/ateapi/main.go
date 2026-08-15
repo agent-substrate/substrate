@@ -87,6 +87,8 @@ var (
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag    = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
+
+	clientJWTKeyCacheTTL = pflag.Duration("client-jwt-key-cache-ttl", 10*time.Minute, "How long the issuer's JWKS keys remain cached for client JWT verification before being re-fetched. Tokens carrying an unknown key ID trigger an immediate refresh. Non-positive values disable the cache.")
 )
 
 func main() {
@@ -190,8 +192,9 @@ func main() {
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
+	jwtKeyCache := k8sjwt.NewKeyCache(*clientJWTKeyCacheTTL)
 
-	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence, workerCache)
+	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, jwtKeyCache, redisPersistence, workerCache)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
@@ -202,7 +205,7 @@ func main() {
 
 	authCfg := ateapiauth.ServerConfig{
 		VerifyBearerToken: func(ctx context.Context, bearer string) (string, error) {
-			claims, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
+			claims, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, jwtKeyCache, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
 			if err != nil {
 				return "", err
 			}
@@ -317,6 +320,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
+		slog.Duration("client-jwt-key-cache-ttl", *clientJWTKeyCacheTTL),
 	)
 }
 

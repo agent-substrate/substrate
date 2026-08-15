@@ -157,7 +157,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", "audience", "", poolFile, "", nil, st, workers)
+	return New("issuer", "audience", "", poolFile, "", nil, nil, st, workers)
 }
 
 // newCSR returns a DER-encoded, correctly self-signed CSR.
@@ -697,7 +697,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 	if err := workers.Start(cacheCtx); err != nil {
 		t.Fatal(err)
 	}
-	srv := New("issuer", "audience", "", filepath.Join(t.TempDir(), "missing.json"), "", nil, st, workers)
+	srv := New("issuer", "audience", "", filepath.Join(t.TempDir(), "missing.json"), "", nil, nil, st, workers)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {

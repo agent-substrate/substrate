@@ -51,6 +51,7 @@ type Server struct {
 
 	clientJWTIssuer   string
 	clientJWTAudience string
+	clientJWTKeys     *k8sjwt.KeyCache
 
 	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
 	actorIDJWTPoolFile string
@@ -67,10 +68,11 @@ type Server struct {
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(clientJWTIssuer, clientJWTAudience, actorIDJWTPoolFile, actorIDCAPoolFile, workerCACerts string, httpClient *http.Client, store store.Interface, workers *workercache.Cache) *Server {
+func New(clientJWTIssuer, clientJWTAudience, actorIDJWTPoolFile, actorIDCAPoolFile, workerCACerts string, httpClient *http.Client, clientJWTKeys *k8sjwt.KeyCache, store store.Interface, workers *workercache.Cache) *Server {
 	return &Server{
 		clientJWTIssuer:    clientJWTIssuer,
 		clientJWTAudience:  clientJWTAudience,
+		clientJWTKeys:      clientJWTKeys,
 		actorIDJWTPoolFile: actorIDJWTPoolFile,
 		actorIDCAPoolFile:  actorIDCAPoolFile,
 		workerCACerts:      workerCACerts,
@@ -107,7 +109,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	clientJWT := strings.TrimPrefix(authorization[0], "Bearer ")
 
-	clientClaims, err := k8sjwt.Verify(ctx, s.httpClient, clientJWT, s.clientJWTIssuer, s.clientJWTAudience, time.Now())
+	clientClaims, err := k8sjwt.Verify(ctx, s.httpClient, s.clientJWTKeys, clientJWT, s.clientJWTIssuer, s.clientJWTAudience, time.Now())
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while verifying client JWT", slog.Any("err", err))
 		return nil, status.Errorf(codes.Unauthenticated, "Unauthenticated")
