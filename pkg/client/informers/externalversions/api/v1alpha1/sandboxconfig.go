@@ -26,16 +26,45 @@ import (
 	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	watch "k8s.io/apimachinery/pkg/watch"
 	cache "k8s.io/client-go/tools/cache"
 )
 
 // SandboxConfigInformer provides access to a shared informer and lister for
-// SandboxConfigs.
+// SandboxConfigs. Prefer using the type-safe variant (see [TypedSandboxConfigInformer]).
 type SandboxConfigInformer interface {
 	Informer() cache.SharedIndexInformer
 	Lister() apiv1alpha1.SandboxConfigLister
 }
+
+// TypedSandboxConfigInformer provides access to a shared informer and lister for
+// SandboxConfigs, including the type-safe TypedInformer variant.
+// It is a superset of SandboxConfigInformer.
+type TypedSandboxConfigInformer interface {
+	Informer() cache.SharedIndexInformer
+	TypedInformer() SandboxConfigIndexInformer
+	Lister() apiv1alpha1.SandboxConfigLister
+}
+
+// SandboxConfigIndexInformer is a wrapper around the underlying [cache.SharedIndexInformer]
+// with type-safe variants of several methods.
+type SandboxConfigIndexInformer cache.TypedSharedIndexInformer[*pkgapiv1alpha1.SandboxConfig]
+
+// SandboxConfigHandlerFuncs is a specialization of [cache.TypedResourceEventHandlerFuncs] for SandboxConfig.
+type SandboxConfigHandlerFuncs = cache.TypedResourceEventHandlerFuncs[*pkgapiv1alpha1.SandboxConfig]
+
+// SandboxConfigDetailedHandlerFuncs is a specialization of [cache.TypedResourceEventHandlerDetailedFuncs] for SandboxConfig.
+type SandboxConfigDetailedHandlerFuncs = cache.TypedResourceEventHandlerDetailedFuncs[*pkgapiv1alpha1.SandboxConfig]
+
+// SandboxConfigFilteringHandler is a specialization of [cache.TypedFilteringResourceEventHandler] for SandboxConfig.
+type SandboxConfigFilteringHandler = cache.TypedFilteringResourceEventHandler[*pkgapiv1alpha1.SandboxConfig]
+
+// SandboxConfigIndexers is a specialization of [cache.TypedIndexers] for SandboxConfig.
+type SandboxConfigIndexers = cache.TypedIndexers[*pkgapiv1alpha1.SandboxConfig]
+
+// DeletedSandboxConfig is a specialization of [cache.DeletedObject] for SandboxConfig.
+type DeletedSandboxConfig = cache.DeletedObject[*pkgapiv1alpha1.SandboxConfig]
 
 type sandboxConfigInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
@@ -45,55 +74,132 @@ type sandboxConfigInformer struct {
 // NewSandboxConfigInformer constructs a new informer for SandboxConfig type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
+// If you really need an independent one, prefer using the type-safe variant (see [NewTypedSandboxConfigInformer]).
 func NewSandboxConfigInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredSandboxConfigInformer(client, resyncPeriod, indexers, nil)
+	return NewSandboxConfigInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers})
+}
+
+// NewTypedSandboxConfigInformer constructs a new informer for SandboxConfig type.
+// Always prefer using an informer factory to get a shared informer instead of getting an independent
+// one. This reduces memory footprint and number of connections to the server.
+func NewTypedSandboxConfigInformer(client versioned.Interface, resyncPeriod time.Duration, indexers SandboxConfigIndexers) SandboxConfigIndexInformer {
+	return NewTypedSandboxConfigInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.TypedIndexersToIndexers(indexers)})
 }
 
 // NewFilteredSandboxConfigInformer constructs a new informer for SandboxConfig type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
+// If you really need an independent one, prefer using the type-safe variant (see [NewTypedFilteredSandboxConfigInformer]).
 func NewFilteredSandboxConfigInformer(client versioned.Interface, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
-	return cache.NewSharedIndexInformer(
+	return NewTypedSandboxConfigInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: indexers, TweakListOptions: tweakListOptions})
+}
+
+// NewTypedFilteredSandboxConfigInformer constructs a new informer for SandboxConfig type.
+// Always prefer using an informer factory to get a shared informer instead of getting an independent
+// one. This reduces memory footprint and number of connections to the server.
+func NewTypedFilteredSandboxConfigInformer(client versioned.Interface, resyncPeriod time.Duration, indexers SandboxConfigIndexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) SandboxConfigIndexInformer {
+	return NewTypedSandboxConfigInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.TypedIndexersToIndexers(indexers), TweakListOptions: tweakListOptions})
+}
+
+// NewSandboxConfigInformerWithOptions constructs a new informer for SandboxConfig type with additional options.
+// Always prefer using an informer factory to get a shared informer instead of getting an independent
+// one. This reduces memory footprint and number of connections to the server.
+// If you really need an independent one, prefer using the type-safe variant (see [NewTypedSandboxConfigInformerWithOptions]).
+func NewSandboxConfigInformerWithOptions(client versioned.Interface, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
+	return NewTypedSandboxConfigInformerWithOptions(client, options)
+}
+
+// NewTypedSandboxConfigInformerWithOptions constructs a new informer for SandboxConfig type with additional options.
+// Always prefer using an informer factory to get a shared informer instead of getting an independent
+// one. This reduces memory footprint and number of connections to the server.
+func NewTypedSandboxConfigInformerWithOptions(client versioned.Interface, options internalinterfaces.InformerOptions) SandboxConfigIndexInformer {
+	gvr := schema.GroupVersionResource{Group: "api", Version: "v1alpha1", Resource: "sandboxconfigs"}
+	identifier := options.InformerName.WithResource(gvr)
+	tweakListOptions := options.TweakListOptions
+	return cache.NewTypedSharedIndexInformer[*pkgapiv1alpha1.SandboxConfig](cache.NewSharedIndexInformerWithOptions(
 		cache.ToListWatcherWithWatchListSemantics(&cache.ListWatch{
-			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
+			ListFunc: func(opts v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&options)
+					tweakListOptions(&opts)
 				}
-				return client.ApiV1alpha1().SandboxConfigs().List(context.Background(), options)
+				return client.ApiV1alpha1().SandboxConfigs().List(context.Background(), opts)
 			},
-			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
+			WatchFunc: func(opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&options)
+					tweakListOptions(&opts)
 				}
-				return client.ApiV1alpha1().SandboxConfigs().Watch(context.Background(), options)
+				return client.ApiV1alpha1().SandboxConfigs().Watch(context.Background(), opts)
 			},
-			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
+			ListWithContextFunc: func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&options)
+					tweakListOptions(&opts)
 				}
-				return client.ApiV1alpha1().SandboxConfigs().List(ctx, options)
+				return client.ApiV1alpha1().SandboxConfigs().List(ctx, opts)
 			},
-			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
+			WatchFuncWithContext: func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
-					tweakListOptions(&options)
+					tweakListOptions(&opts)
 				}
-				return client.ApiV1alpha1().SandboxConfigs().Watch(ctx, options)
+				return client.ApiV1alpha1().SandboxConfigs().Watch(ctx, opts)
 			},
 		}, client),
 		&pkgapiv1alpha1.SandboxConfig{},
-		resyncPeriod,
-		indexers,
-	)
+		cache.SharedIndexInformerOptions{
+			ResyncPeriod: options.ResyncPeriod,
+			Indexers:     options.Indexers,
+			Identifier:   identifier,
+		},
+	))
 }
 
 func (f *sandboxConfigInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredSandboxConfigInformer(client, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+	return NewTypedSandboxConfigInformerWithOptions(client, internalinterfaces.InformerOptions{ResyncPeriod: resyncPeriod, Indexers: cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, InformerName: f.factory.InformerName(), TweakListOptions: f.tweakListOptions})
 }
 
 func (f *sandboxConfigInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&pkgapiv1alpha1.SandboxConfig{}, f.defaultInformer)
+	return f.TypedInformer()
+}
+
+func (f *sandboxConfigInformer) TypedInformer() SandboxConfigIndexInformer {
+	return cache.NewTypedSharedIndexInformer[*pkgapiv1alpha1.SandboxConfig](f.factory.InformerFor(&pkgapiv1alpha1.SandboxConfig{}, f.defaultInformer))
 }
 
 func (f *sandboxConfigInformer) Lister() apiv1alpha1.SandboxConfigLister {
 	return apiv1alpha1.NewSandboxConfigLister(f.Informer().GetIndexer())
+}
+
+// ToTypedSandboxConfigInformer converts an untyped informer into a TypedSandboxConfigInformer.
+//
+// WARNING: this conversion is only safe if the informer handles objects of type
+// *SandboxConfig. If that is not the case, calling type-safe methods of the returned
+// TypedSandboxConfigInformer leads to runtime panics. A safer alternative is to pass
+// around a TypedSandboxConfigInformer instances that was obtained from a
+// SharedInformerFactory.
+func ToTypedSandboxConfigInformer(informer SandboxConfigInformer) TypedSandboxConfigInformer {
+	if informer, ok := informer.(TypedSandboxConfigInformer); ok {
+		return informer
+	}
+	return &sandboxConfigTypedInformerAdapter{informer}
+}
+
+type sandboxConfigTypedInformerAdapter struct {
+	SandboxConfigInformer
+}
+
+func (a *sandboxConfigTypedInformerAdapter) TypedInformer() SandboxConfigIndexInformer {
+	return cache.NewTypedSharedIndexInformer[*pkgapiv1alpha1.SandboxConfig](a.Informer())
+}
+
+// ToSandboxConfigIndexInformer converts an untyped informer into a SandboxConfigIndexInformer.
+//
+// WARNING: this conversion is only safe if the informer handles objects of type
+// *SandboxConfig. If that is not the case, calling type-safe methods of the returned
+// SandboxConfigIndexInformer leads to runtime panics. A safer alternative is to pass
+// around a SandboxConfigIndexInformer instances that was obtained from a
+// SharedInformerFactory.
+func ToSandboxConfigIndexInformer(informer cache.SharedIndexInformer) SandboxConfigIndexInformer {
+	if informer, ok := informer.(SandboxConfigIndexInformer); ok {
+		return informer
+	}
+	return cache.NewTypedSharedIndexInformer[*pkgapiv1alpha1.SandboxConfig](informer)
 }
