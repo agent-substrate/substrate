@@ -135,6 +135,9 @@ func MergeDeltaIntoBase(ctx context.Context, baseFile, deltaFile string) error {
 	// this actor's local pause snapshot rather than copying it, so a second link means
 	// the overlay would rewrite that cached snapshot too, corrupting the actor's only
 	// local restore point. Copy in that case, which is what MergeSparseOverlay does.
+	// atelet holds that snapshot for the whole checkpoint, so this is the normal path
+	// for a locally staged restore; the in-place path below is for one staged from
+	// object storage.
 	if st, ok := bi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
 		return MergeSparseOverlay(ctx, baseFile, deltaFile, deltaFile)
 	}

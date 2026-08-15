@@ -577,20 +577,6 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, err
 	}
 
-	// Drop earlier pause snapshots BEFORE checkpointing, not after. No earlier one
-	// can be restored again: the control plane tracks a single local snapshot, which
-	// this checkpoint either overwrites (pause) or clears (suspend). Ordering it here
-	// matters because restore staged this actor's memory image by linking to that
-	// snapshot, and MergeDeltaIntoBase can only take its cheap in-place path while
-	// the staged image is the sole name for those bytes. Releasing the other name
-	// first leaves the image untouched (the staged link still holds the inode) and
-	// keeps the merge off the copying path.
-	//
-	// The cost is that a checkpoint failing from here on leaves no earlier snapshot
-	// to fall back to. That is survivable: the guest stays paused when
-	// CheckpointWorkload fails, so the checkpoint can simply be retried.
-	pruneLocalCheckpoints(ctx, actorUID)
-
 	// Tell ateom to take the checkpoint and delete containers. ateom reports the
 	// exact files it wrote so we ship precisely that set (gVisor's image files,
 	// cloud-hypervisor's snapshot set, ...) rather than a hardcoded list.
@@ -624,6 +610,22 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.ActorTemplateNamespace = req.GetActorTemplateNamespace()
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 	sandboxRec.Scope = ateattr.SnapshotScopeValue(req.GetScope())
+
+	// No earlier pause snapshot can ever be restored again, so remove them
+	// all: the actor's current state was just captured by CheckpointWorkload,
+	// and the control plane tracks only a single local snapshot, which this
+	// checkpoint either overwrites (pause) or clears (suspend).
+	//
+	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
+	// in-place path: that leaves the whole checkpoint window with no local snapshot
+	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
+	// the actor for good (resume never falls back to object storage, RequiredNodes
+	// pins it to this node, nothing clears the field).
+	//
+	// Pruning stays outside the persist window: it collects superseded
+	// snapshots on both paths, so timing it as part of an external upload would
+	// mix local disk deletion into the object-storage measurement.
+	pruneLocalCheckpoints(ctx, actorUID)
 
 	tPersist := time.Now()
 	switch req.GetType() {
