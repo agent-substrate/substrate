@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
@@ -58,9 +59,18 @@ const (
 	defaultFileSize int64 = 8388608 // 8 MiB
 )
 
-// RegisterDurDir registers the DurDir benchmark task with boomer and returns
-// the task function + shutdown hook.
-func RegisterDurDir(cfg *Config) (taskFn func(), shutdown func(context.Context)) {
+func init() {
+	userclass.Add(userclass.Entry{
+		Name:       "durdir",
+		LocustFile: "durdir.py",
+		UserClass:  durDirUserClass,
+		Init:       initDurDir,
+	})
+}
+
+// initDurDir creates a runtime tied to cfg and returns a boomer-compatible task
+// function plus a Shutdown hook the caller should run before exit.
+func initDurDir(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("substrate-boomer/glutton-durdir")
 	}
@@ -69,7 +79,7 @@ func RegisterDurDir(cfg *Config) (taskFn func(), shutdown func(context.Context))
 }
 
 type durDirRuntime struct {
-	cfg   *Config
+	cfg   *userclass.Config
 	users sync.Map // goroutineID -> *durDirUser
 }
 
@@ -148,7 +158,7 @@ func (r *durDirRuntime) shutdown(ctx context.Context) {
 }
 
 type durDirUser struct {
-	cfg            *Config
+	cfg            *userclass.Config
 	actorName      string
 	hostHeader     string
 	templateName   string

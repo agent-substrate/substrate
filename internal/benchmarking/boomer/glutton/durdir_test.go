@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 )
 
@@ -53,7 +54,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &diskServer{data: []byte("seq content")}
 			fakeCtrl := &fakeControlClient{}
-			cfg := &Config{
+			cfg := &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.NewHolder(dynconfig.Config{
 					ResumeMode: tc.resumeMode,
@@ -165,7 +166,7 @@ func TestDurDirReadModeSentOnWire(t *testing.T) {
 func TestDurDirBootstrapDoesNotBoot(t *testing.T) {
 	srv := &diskServer{data: []byte("data")}
 	fakeCtrl := &fakeControlClient{}
-	cfg := newTestConfig(t, srv, &Config{
+	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub: fakeCtrl,
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
 			DurDirFileSize: int64(len(srv.data)),
@@ -209,7 +210,7 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := &diskServer{data: []byte("data")}
 			fakeCtrl := &fakeControlClient{}
-			cfg := newTestConfig(t, srv, &Config{
+			cfg := newTestConfig(t, srv, &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.NewHolder(dynconfig.Config{
 					DurDirFileSize: int64(len(srv.data)),
@@ -234,7 +235,7 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 
 func TestImplicitResumeDoesNotClaimRunningOnFailedServe(t *testing.T) {
 	srv := &diskServer{status: http.StatusInternalServerError}
-	cfg := &Config{
+	cfg := &userclass.Config{
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
 			ResumeMode: dynconfig.ResumeModeImplicit,
 		}),

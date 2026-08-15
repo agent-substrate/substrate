@@ -26,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
@@ -226,11 +227,11 @@ func (s *diskServer) serve(w http.ResponseWriter, r *http.Request) {
 
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures
 // APIStub, Tracer, and Dyn are populated if nil.
-func newTestConfig(t *testing.T, srv *diskServer, cfg *Config) *Config {
+func newTestConfig(t *testing.T, srv *diskServer, cfg *userclass.Config) *userclass.Config {
 	t.Helper()
 	ts := srv.start(t)
 	if cfg == nil {
-		cfg = &Config{}
+		cfg = &userclass.Config{}
 	}
 	if cfg.APIStub == nil {
 		cfg.APIStub = &fakeControlClient{}
@@ -246,7 +247,7 @@ func newTestConfig(t *testing.T, srv *diskServer, cfg *Config) *Config {
 	return cfg
 }
 
-func newTestDurDirUser(t *testing.T, srv *diskServer, cfg *Config) *durDirUser {
+func newTestDurDirUser(t *testing.T, srv *diskServer, cfg *userclass.Config) *durDirUser {
 	t.Helper()
 	c := newTestConfig(t, srv, cfg)
 	return &durDirUser{
