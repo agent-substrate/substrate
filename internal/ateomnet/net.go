@@ -223,11 +223,17 @@ func EnableIPv4Forwarding() error {
 }
 
 // writeSysctlIfUnset writes "1\n" to a sysctl path unless it already reads "1".
+// If the path does not exist (e.g. IPv6 sysctls on a kernel with IPv6 disabled),
+// it returns nil — IPv6 forwarding is simply unavailable, not an error.
 func writeSysctlIfUnset(path string) error {
 	if b, err := os.ReadFile(path); err == nil && len(b) > 0 && b[0] == '1' {
 		return nil
 	}
 	if err := os.WriteFile(path, []byte("1\n"), 0o644); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Path absent (e.g. IPv6 disabled in kernel): nothing to enable.
 		return nil
 	}
 	// Without privileged, the container runtime bind-mounts /proc/sys read-only.
