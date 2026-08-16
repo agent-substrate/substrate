@@ -34,7 +34,7 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersR
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing workers in db: %w", err))
 	}
@@ -61,7 +61,7 @@ func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerReque
 	}
 	name := req.GetWorker().GetName()
 
-	worker, err := s.persistence.GetWorker(ctx, name)
+	worker, err := s.impl.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 	}
@@ -87,7 +87,7 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 	worker := proto.Clone(req.GetWorker()).(*ateapipb.Worker)
 	worker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
 
-	created, err := s.persistence.CreateWorker(ctx, worker)
+	created, err := s.impl.CreateWorker(ctx, worker)
 	if errors.Is(err, store.ErrAlreadyExists) {
 		return nil, status.Errorf(codes.AlreadyExists, "Worker %s already exists", name)
 	}
@@ -151,7 +151,7 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorke
 	}
 	name := req.GetWorker().GetName()
 
-	worker, err := s.persistence.DeleteWorker(ctx, name, store.DeletePreconditions{
+	worker, err := s.impl.DeleteWorker(ctx, name, store.DeletePreconditions{
 		UID:     req.GetOptions().GetUid(),
 		Version: req.GetOptions().GetVersion(),
 	})
@@ -198,7 +198,7 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 	// the store requires come from a read here rather than from the client. A
 	// write that lands in between is reported as a conflict for the caller to
 	// retry, the same as any other guarded update.
-	observed, err := s.persistence.GetWorker(ctx, name)
+	observed, err := s.impl.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 	}
@@ -228,7 +228,7 @@ func validateDrainWorkerRequest(req *ateapipb.DrainWorkerRequest) field.ErrorLis
 // back into the RPC's result. A mutation that found nothing to do reports the
 // Worker it saw; anything else is a store error.
 func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error) {
-	worker, err := s.persistence.UpdateWorker(ctx, name, precondition, mutate)
+	worker, err := s.impl.UpdateWorker(ctx, name, precondition, mutate)
 	if err == nil {
 		return worker, nil
 	}

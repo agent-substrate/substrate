@@ -50,7 +50,7 @@ func TestCreateActor_AtespaceDeletedAfterPrecheck(t *testing.T) {
 		t.Fatalf("add ActorTemplate: %v", err)
 	}
 	s := &RPCService{
-		persistence:         &createActorErrorStore{err: store.ErrFailedPrecondition},
+		impl:                &createActorErrorStore{err: store.ErrFailedPrecondition},
 		actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer),
 	}
 
@@ -583,7 +583,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{persistence: racing}
+	svc := &RPCService{impl: racing}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -645,7 +645,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{persistence: racing}
+	svc := &RPCService{impl: racing}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
@@ -705,7 +705,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 	t.Cleanup(cleanup)
 
 	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
-	return &RPCService{persistence: persistence}, created
+	return &RPCService{impl: persistence}, created
 }
 
 func TestValidateDeleteActorRequest(t *testing.T) {

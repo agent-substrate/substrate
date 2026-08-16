@@ -103,7 +103,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.persistence.CreateActor(ctx, outActor)
+	stored, err := s.impl.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
@@ -145,14 +145,14 @@ func scrubResourceMetadata(in *ateapipb.ResourceMetadata) {
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
 func (s *RPCService) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
-	tag, err := s.persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
+	tag, err := s.impl.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
 	}
-	snapshot, err := s.persistence.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(tag.GetSnapshot()))
+	snapshot, err := s.impl.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(tag.GetSnapshot()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -233,7 +233,7 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	actor, err := s.persistence.GetActor(ctx, actorRef)
+	actor, err := s.impl.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 	} else if err != nil {
@@ -260,7 +260,7 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.persistence.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
@@ -294,7 +294,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 	actorRef := resources.ActorRefFromActor(in)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
 		// Whole-object replace: clear first, so a field the client left unset is

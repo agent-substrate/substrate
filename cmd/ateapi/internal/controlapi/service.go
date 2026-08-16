@@ -28,11 +28,14 @@ import (
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// RPCService implements ateapipb.ControlServer.  This is the user-facing RPC
-// interface.
+// RPCService implements ateapipb.ControlServer and provides the implementation of
+// the RPC service.
+//
+// Methods on this service should be as light as possible, delegating to the
+// ServiceImpl for business logic and invariants.
 type RPCService struct {
 	ateapipb.UnimplementedControlServer
-	persistence           serviceStore
+	impl                  serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
 	actorTemplateLister   listersv1alpha1.ActorTemplateLister
@@ -52,7 +55,10 @@ type VolumePluginRegistry interface {
 	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
 }
 
-// NewRPCService creates a RPC service. instruments may be nil; the record helpers no-op.
+// NewRPCService creates an instance of the ControlServer service. This is what
+// implements the outward-facing RPC interface.
+//
+// instruments may be nil; the record helpers no-op.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -66,8 +72,9 @@ func NewRPCService(
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 ) *RPCService {
+	impl := newServiceImpl(persistence)
 	s := &RPCService{
-		persistence:           persistence,
+		impl:                  impl,
 		workerCache:           workerCache,
 		actorTemplateLister:   actorTemplateLister,
 		workerPoolLister:      workerPoolLister,
@@ -77,7 +84,7 @@ func NewRPCService(
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
 	}
-	s.actorWorkflow = NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
 	return s
 }
 
@@ -128,4 +135,26 @@ func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.V
 	s.volumePlugins[driverName] = csiPlugin
 	s.mu.Unlock()
 	return csiPlugin, nil
+}
+
+// ServiceImpl implements store.Interface and provides the "middleware" layer
+// between the RPC and storage layers.  It enforces invariants and validation
+// rules, and may implement additional logic beyond the storage layer.
+//
+// Methods on this service should hold most of the logic.
+type ServiceImpl struct {
+	// FIXME: name this field and explicitly pass-thru each method, to prevent
+	// accidentally satisfying methods we need to trap
+	store.Interface
+}
+
+var _ store.Interface = (*ServiceImpl)(nil)
+
+// newServiceImpl creates an instance of the service's middleware
+// implementation layer.
+func newServiceImpl(persistence store.Interface) *ServiceImpl {
+	s := &ServiceImpl{
+		Interface: persistence,
+	}
+	return s
 }

@@ -38,7 +38,7 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 			Name: name,
 		},
 	}
-	stored, err := s.persistence.CreateAtespace(ctx, atespace)
+	stored, err := s.impl.CreateAtespace(ctx, atespace)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Atespace %s already exists", name)
@@ -82,7 +82,7 @@ func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceR
 	}
 
 	name := req.GetAtespace().GetName()
-	atespace, err := s.persistence.GetAtespace(ctx, name)
+	atespace, err := s.impl.GetAtespace(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)
 	} else if err != nil {
@@ -102,7 +102,7 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.persistence.ListAtespaces(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))
 	}
@@ -129,7 +129,7 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAte
 	}
 
 	name := req.GetAtespace().GetName()
-	deleted, err := s.persistence.DeleteAtespace(ctx, name)
+	deleted, err := s.impl.DeleteAtespace(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)

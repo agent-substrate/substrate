@@ -51,7 +51,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 		Resources:       in.GetResources(),
 		Status:          &ateapipb.ActorTemplateStatus{Phase: ateapipb.ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_INITIAL},
 	}
-	stored, err := s.persistence.CreateActorTemplate(ctx, template)
+	stored, err := s.impl.CreateActorTemplate(ctx, template)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "ActorTemplate %s already exists", templateRef)
@@ -148,7 +148,7 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActo
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
-	template, err := s.persistence.GetActorTemplate(ctx, templateRef)
+	template, err := s.impl.GetActorTemplate(ctx, templateRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
 	} else if err != nil {
@@ -176,7 +176,7 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListA
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.persistence.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing actor templates in db: %w", err)
 	}
@@ -208,7 +208,7 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.Dele
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
-	deleted, err := s.persistence.DeleteActorTemplate(ctx, templateRef)
+	deleted, err := s.impl.DeleteActorTemplate(ctx, templateRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
