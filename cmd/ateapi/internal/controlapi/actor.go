@@ -88,7 +88,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	name := inActor.GetMetadata().GetName()
 
 	// The atespace must already exist.
-	exists, err := s.persistence.AtespaceExists(ctx, atespace)
+	exists, err := s.impl.AtespaceExists(ctx, atespace)
 	if err != nil {
 		return nil, fmt.Errorf("while checking atespace: %w", err)
 	}
@@ -113,7 +113,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.persistence.CreateActor(ctx, outActor)
+	stored, err := s.impl.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
@@ -164,7 +164,7 @@ func scrubResourceMetadata(in *ateapipb.ResourceMetadata) {
 // an Actor in actorAtespace from template.
 func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace string, src *ateapipb.ActorSnapshotSource, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSnapshotSource, error) {
 	tagRef := src.GetTag()
-	tag, err := s.persistence.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
+	tag, err := s.impl.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -172,7 +172,7 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
 	}
 	snapshotRef := tag.GetSnapshot()
-	snapshot, err := s.persistence.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
+	snapshot, err := s.impl.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -252,7 +252,7 @@ func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	actor, err := s.persistence.GetActor(ctx, actorRef)
+	actor, err := s.impl.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 	} else if err != nil {
@@ -279,7 +279,7 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.persistence.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing actors in db: %w", err)
 	}
@@ -320,7 +320,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	actorRef := resources.ActorRefFromActor(in)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(in, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.WithPrecondition(in, func(toUpdate *ateapipb.Actor) error {
 		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
 		return nil
 	}))
