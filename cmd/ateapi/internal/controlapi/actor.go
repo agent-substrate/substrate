@@ -47,10 +47,6 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 		return nil, toGRPCStatusError(errs)
 	}
 
-	//
-	// Handle the request
-	//
-
 	start := time.Now()
 	// Recorded only after validation, so every operation uniformly measures a
 	// validated request; malformed ones stay visible in rpc.server.call.duration.
@@ -60,11 +56,23 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 			ateattr.TemplateNamespaceKey.String(inActor.GetActorTemplateNamespace()),
 		)
 	}()
-	templateNamespace := inActor.GetActorTemplateNamespace()
-	templateName := inActor.GetActorTemplateName()
 
 	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
+	// Handle the creation, including validation of the final stored object.
+	stored, err := s.impl.CreateActor(ctx, inActor)
+	setSpanActorAttributes(ctx, stored)
 
+	return stored, err
+}
+
+func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	// Check that the referenced ActorTemplate exists.
+	// FIXME: This is not atomic and it is not a guarantee that the template
+	// will still exist later.  Checking it here produces a nice error UX, but
+	// we still have to handle the template not existing later, which makes the
+	// UX inconsistent, at best.  Is it actually worth checking at all?
+	templateNamespace := inActor.GetActorTemplateNamespace()
+	templateName := inActor.GetActorTemplateName()
 	template, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
@@ -73,6 +81,8 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 
+	// If a source snapshot tag is requested, resolve it to a concrete
+	// snapshot.
 	var sourceSnapshotStatus *ateapipb.ActorSourceSnapshotStatus
 	if tag := inActor.GetSourceSnapshotTag(); tag != nil {
 		sourceSnapshotStatus, err = s.resolveSnapshotSource(ctx, inActor.GetMetadata().GetAtespace(), tag, template)
@@ -103,7 +113,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.impl.CreateActor(ctx, outActor)
+	stored, err := s.Interface.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
@@ -114,7 +124,6 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
-	setSpanActorAttributes(ctx, stored)
 	return stored, nil
 }
 
@@ -144,15 +153,15 @@ func scrubResourceMetadata(in *ateapipb.ResourceMetadata) {
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
-func (s *RPCService) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
-	tag, err := s.impl.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
+func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
+	tag, err := s.Interface.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
 	}
-	snapshot, err := s.impl.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(tag.GetSnapshot()))
+	snapshot, err := s.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(tag.GetSnapshot()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}

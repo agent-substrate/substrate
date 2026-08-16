@@ -38,10 +38,8 @@ type RPCService struct {
 	impl                  serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
-	actorTemplateLister   listersv1alpha1.ActorTemplateLister
 	workerPoolLister      listersv1alpha1.WorkerPoolLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
-	storageClassLister    storagev1listers.StorageClassLister
 	actorWorkflow         *ActorWorkflow
 	instruments           *Instruments
 	mu                    sync.RWMutex
@@ -72,14 +70,12 @@ func NewRPCService(
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 ) *RPCService {
-	impl := newServiceImpl(persistence)
+	impl := newServiceImpl(persistence, actorTemplateLister, storageClassLister)
 	s := &RPCService{
 		impl:                  impl,
 		workerCache:           workerCache,
-		actorTemplateLister:   actorTemplateLister,
 		workerPoolLister:      workerPoolLister,
 		csiDriverConfigLister: csiDriverConfigLister,
-		storageClassLister:    storageClassLister,
 		dialer:                dialer,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
@@ -146,15 +142,24 @@ type ServiceImpl struct {
 	// FIXME: name this field and explicitly pass-thru each method, to prevent
 	// accidentally satisfying methods we need to trap
 	store.Interface
+
+	actorTemplateLister listersv1alpha1.ActorTemplateLister
+	storageClassLister  storagev1listers.StorageClassLister
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)
 
 // newServiceImpl creates an instance of the service's middleware
 // implementation layer.
-func newServiceImpl(persistence store.Interface) *ServiceImpl {
+func newServiceImpl(
+	persistence store.Interface,
+	actorTemplateLister listersv1alpha1.ActorTemplateLister,
+	storageClassLister storagev1listers.StorageClassLister,
+) *ServiceImpl {
 	s := &ServiceImpl{
-		Interface: persistence,
+		Interface:           persistence,
+		actorTemplateLister: actorTemplateLister,
+		storageClassLister:  storageClassLister,
 	}
 	return s
 }
