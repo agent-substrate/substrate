@@ -28,7 +28,7 @@ import (
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// Service implements ateapipb.Control
+// Service implements ateapipb.ControlServer
 type Service struct {
 	ateapipb.UnimplementedControlServer
 	persistence           serviceStore
