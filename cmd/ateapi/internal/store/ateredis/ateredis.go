@@ -727,17 +727,12 @@ func (s *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
 	dbKey := actorDBKey(resources.ActorRefFromActor(actor))
 
-	// Clone so we don't stomp the caller's copy, then attach fresh server-owned
-	// metadata carrying the caller-specified identity.
-	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	dbActor.Metadata = newCreateMetadata(actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName())
-
-	dbActorBytes, err := protojson.Marshal(dbActor)
+	actorBytes, err := protojson.Marshal(actor)
 	if err != nil {
 		return nil, fmt.Errorf("in protojson.Marshal: %w", err)
 	}
 
-	ok, err := s.rdb.SetNX(ctx, dbKey, dbActorBytes, 0).Result()
+	ok, err := s.rdb.SetNX(ctx, dbKey, actorBytes, 0).Result()
 	if err != nil {
 		return nil, fmt.Errorf("while executing redis set: %w", err)
 	}
@@ -745,7 +740,7 @@ func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, store.ErrAlreadyExists
 	}
 
-	return dbActor, nil
+	return actor, nil
 }
 
 func (s *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error) {
