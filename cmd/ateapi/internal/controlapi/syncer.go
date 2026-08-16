@@ -54,14 +54,26 @@ type workerKey struct {
 // key against the current informer cache state, requeuing with rate-limited
 // backoff on transient failures such as store.ErrVersionConflict.
 type WorkerPoolSyncer struct {
-	persistence      store.Interface
+	persistence      workerPoolSyncerStore
 	workerInformer   cache.SharedIndexInformer
 	workerPoolLister listersv1alpha1.WorkerPoolLister
 	queue            workqueue.TypedRateLimitingInterface[workerKey]
 }
 
+// workerPoolSyncerStore enumerates the exact storage methods needed by
+// WorkerPoolSyncer and nothing more.
+type workerPoolSyncerStore interface {
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
+	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
+	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
+}
+
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(persistence store.Interface, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(persistence workerPoolSyncerStore, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		persistence:      persistence,
 		workerInformer:   workerInformer,

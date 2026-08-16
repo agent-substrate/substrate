@@ -31,7 +31,7 @@ import (
 
 // maybeCrashActor inspects err returned by an atelet RPC and crashes the actor
 // if err carries the actorCrashed=true metadata directive.
-func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, err error, wrapMsg, opName string) error {
+func maybeCrashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, err error, wrapMsg, opName string) error {
 	if err == nil {
 		return nil
 	}
@@ -53,7 +53,7 @@ func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
 // assigned to, if any, so the worker can host other actors.
-func crashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, opName, reason string) error {
+func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, reason string) error {
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
@@ -97,10 +97,19 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 	return errors.Join(errCollected...)
 }
 
+// crashActorStore encapsulates the subset of store operations needed to crash
+// an actor.
+type crashActorStore interface {
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+}
+
 // releaseWorker clears the worker's assignment if it still points at the given
 // actor. A missing worker or an already-cleared assignment is not an error.
 // It returns the worker's sandboxClass if found.
-func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Actor) (string, error) {
+func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) (string, error) {
 	assignment := actor.GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
