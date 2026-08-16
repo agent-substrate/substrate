@@ -644,10 +644,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
-	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	dbActor.Metadata = newCreateMetadata(atespace, name)
-
-	protoBytes, err := proto.Marshal(dbActor)
+	protoBytes, err := proto.Marshal(actor)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
@@ -655,7 +652,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	_, err = p.pool.Exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
-		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
+		atespace, name, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -667,7 +664,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		}
 		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
 	}
-	return dbActor, nil
+	return actor, nil
 }
 
 func getActorRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.Actor, error) {
