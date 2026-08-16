@@ -594,10 +594,6 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if err != nil {
 		return nil, apierror.InvalidArgument("%v", err)
 	}
-	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-	if err != nil {
-		return nil, err
-	}
 
 	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
@@ -624,39 +620,64 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
-	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	client, err := s.dialWorker(ctx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
-
-	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), containerSpecs)
+	if err := s.prepareOCIPrerequisites(actorUID, req.GetSpec()); err != nil {
+		return nil, err
+	}
+	spec, err := buildWorkerWorkloadSpec(req.GetSpec(), nil)
 	if err != nil {
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
-
-	// Tell worker to start the workload. gVisor uses RunscPath; the micro-VM
-	// runtime uses the full RuntimeAssetPaths set.
-	if _, err := client.RunWorkload(ctx, &ateworkerpb.RunWorkloadRequest{
+	workload := &ateworkerpb.RunWorkloadRequest{
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
 		ActorTemplateName:     req.GetActorTemplateName(),
-		RunscPath:             runscPathFor(assetPaths),
-		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
 		ActorUid:              actorUID,
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
-	}); err != nil {
+	}
+	var containerSpecs []*ateworkerpb.ContainerSpec
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		dependencies, depCtx := errgroup.WithContext(gctx)
+		dependencies.Go(func() error {
+			paths, err := s.ensureSandboxAssets(depCtx, sandboxRec)
+			workload.RuntimeAssetPaths = paths
+			workload.RunscPath = runscPathFor(paths)
+			return err
+		})
+		dependencies.Go(func() error {
+			return s.preparePauseOCIBundle(depCtx, actorUID, sandboxRec.PauseImage)
+		})
+		if err := dependencies.Wait(); err != nil {
+			return err
+		}
+		_, err := client.PrepareSandbox(gctx, &ateworkerpb.PrepareSandboxRequest{Workload: workload})
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		containerSpecs, err = s.prepareApplicationOCIBundles(gctx, actorUID, req.GetSpec())
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		discardPreparedSandbox(ctx, client, actorUID)
+		return nil, err
+	}
+	workload.Spec, err = buildWorkerWorkloadSpec(req.GetSpec(), containerSpecs)
+	if err != nil {
+		discardPreparedSandbox(ctx, client, actorUID)
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
+	}
+	if _, err := client.RunWorkload(ctx, workload); err != nil {
+		discardPreparedSandbox(ctx, client, actorUID)
 		return nil, fmt.Errorf("while calling worker RunWorkload: %w", err)
 	}
 
@@ -1615,34 +1636,47 @@ func prepareDurableDirVolume(path string) error {
 // with. It is empty for sandboxes without a pause container, which get no
 // pause bundle. It returns each application container's spec, indexed like
 // spec.GetContainers().
-func (s *Atelet) prepareOCIBundles(
-	ctx context.Context,
-	actorUID string,
-	actorRef resources.ActorRef,
-	spec *ateletpb.WorkloadSpec,
-	pauseImage string,
-) ([]*ateworkerpb.ContainerSpec, error) {
-	// Prepare host folders for volume types that need them.
+func (s *Atelet) prepareOCIBundles(ctx context.Context, actorUID string, actorRef resources.ActorRef, spec *ateletpb.WorkloadSpec, pauseImage string) ([]*ateworkerpb.ContainerSpec, error) {
+	if err := s.prepareOCIPrerequisites(actorUID, spec); err != nil {
+		return nil, err
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return s.preparePauseOCIBundle(gctx, actorUID, pauseImage) })
+	var containerSpecs []*ateworkerpb.ContainerSpec
+	g.Go(func() error {
+		var err error
+		containerSpecs, err = s.prepareApplicationOCIBundles(gctx, actorUID, spec)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return containerSpecs, nil
+}
+
+func (s *Atelet) prepareOCIPrerequisites(actorUID string, spec *ateletpb.WorkloadSpec) error {
 	for _, vol := range spec.GetVolumes() {
 		if vol.GetDurableDir() != nil {
 			if err := prepareDurableDirVolume(ateletpath.DurableDirVolumeMountPoint(actorUID, vol.GetName())); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
+	return nil
+}
 
-	g, gCtx := errgroup.WithContext(ctx)
-
-	if pauseImage != "" {
-		g.Go(func() error {
-			// pause is sandbox infra; it mounts no volumes.
-			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil); err != nil {
-				return wrapFileSystemErr("while creating pause OCI bundle", err)
-			}
-			return nil
-		})
+func (s *Atelet) preparePauseOCIBundle(ctx context.Context, actorUID, pauseImage string) error {
+	if pauseImage == "" {
+		return nil
 	}
+	if _, err := prepareOCIDirectory(ctx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil); err != nil {
+		return wrapFileSystemErr("while creating pause OCI bundle", err)
+	}
+	return nil
+}
 
+func (s *Atelet) prepareApplicationOCIBundles(ctx context.Context, actorUID string, spec *ateletpb.WorkloadSpec) ([]*ateworkerpb.ContainerSpec, error) {
+	g, gCtx := errgroup.WithContext(ctx)
 	// Application containers.
 	containerSpecs := make([]*ateworkerpb.ContainerSpec, len(spec.GetContainers()))
 	for i, ctr := range spec.GetContainers() {
@@ -1672,6 +1706,14 @@ func (s *Atelet) prepareOCIBundles(
 		return nil, err
 	}
 	return containerSpecs, nil
+}
+
+func discardPreparedSandbox(ctx context.Context, client ateworkerpb.WorkerClient, actorUID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if _, err := client.DiscardPreparedSandbox(cleanupCtx, &ateworkerpb.DiscardPreparedSandboxRequest{ActorUid: actorUID}); err != nil {
+		slog.WarnContext(cleanupCtx, "Failed to discard prepared sandbox", slog.Any("err", err))
+	}
 }
 
 // dialWorker opens (or reuses) the gRPC connection to the target worker

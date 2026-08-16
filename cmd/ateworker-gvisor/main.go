@@ -425,6 +425,11 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 		slog.ErrorContext(ctx, "Giving up waiting for in-flight RPCs during graceful shutdown",
 			slog.Any("rpcs", s.inFlight.Names()))
 	}
+	for _, h := range s.hostedActors() {
+		if _, err := s.DiscardPreparedSandbox(waitCtx, &ateworkerpb.DiscardPreparedSandboxRequest{ActorUid: h.attribution.UID}); err != nil {
+			slog.WarnContext(ctx, "Failed to discard prepared sandbox during shutdown", slog.Any("err", err))
+		}
+	}
 	sessions := s.hostedSessions()
 
 	if len(sessions) == 0 {
@@ -607,12 +612,18 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	defer release()
-	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
-		return nil, err
-	}
-
-	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
-		return nil, err
+	prepared := s.preparedSandbox(req.GetActorUid())
+	if prepared != nil {
+		if err := prepared.validate(&ateworkerpb.PrepareSandboxRequest{Workload: req}); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
+			return nil, err
+		}
+		if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
+			return nil, err
+		}
 	}
 
 	attribution := workerstats.ActorAttributionFromRequest(req)
@@ -628,9 +639,12 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
-	if err != nil {
-		return nil, err
+	hosted := s.lookupActor(req.GetActorUid())
+	if prepared == nil {
+		hosted, err = s.hostActor(ctx, attribution, req.GetActorDirs())
+		if err != nil {
+			return nil, err
+		}
 	}
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
@@ -642,6 +656,10 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		flags:          s.flags,
 	}
 	var containersToDelete []string
+	if prepared != nil {
+		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+		hosted.prepared = nil
+	}
 	defer func() {
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -663,26 +681,29 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 			}
 		}
 	}()
-	// Create and start pause container. The bundle rootfs is composed here —
-	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateworker's job (atelet runs with no
-	// capabilities); runsc's gofer resolves the mount in this pod's mount
-	// namespace.
-	if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
-	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-	// Attribute runsc CLI output and the pause container's stdio to the actor.
-	pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
-	if err != nil {
-		return nil, fmt.Errorf("while starting pause log pipe: %w", err)
-	}
-	defer pw.Close()
-	if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
-	}
-	if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
+	if prepared == nil {
+		// Create and start pause container. The bundle rootfs is composed here —
+		// an overlay of the node's cached image layers plus the bundle's private
+		// upper — because mounting is ateworker's job (atelet runs with no
+		// capabilities); runsc's gofer resolves the mount in this pod's mount
+		// namespace.
+		if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
+			return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+		}
+		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+		// Attribute runsc CLI output and the pause container's stdio to the actor.
+		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
+		if err != nil {
+			return nil, fmt.Errorf("while starting pause log pipe: %w", err)
+		}
+		defer pw.Close()
+		if err := rcmd.cmdCreate(ctx, pw, ocispec.PauseContainer, nil); err != nil {
+			return nil, fmt.Errorf("while creating pause container: %w", err)
+		}
+		if err := rcmd.cmdStart(ctx, pw, ocispec.PauseContainer); err != nil {
+			return nil, fmt.Errorf("while starting pause container: %w", err)
+		}
+
 	}
 
 	// Create and start each application container, each with its own log pipe so
@@ -738,6 +759,9 @@ func (s *AteWorkerService) CheckpointWorkload(ctx context.Context, req *ateworke
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
+	if s.preparedSandbox(req.GetActorUid()) != nil {
+		return nil, apierror.FailedPrecondition("actor has an unconsumed prepared sandbox")
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -967,6 +991,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
+	if s.preparedSandbox(req.GetActorUid()) != nil {
+		return nil, apierror.FailedPrecondition("actor has an unconsumed prepared sandbox")
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
