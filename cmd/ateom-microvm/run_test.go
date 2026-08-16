@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -92,5 +94,83 @@ func TestDialAgentRetryContextCanceled(t *testing.T) {
 
 	if _, err := dialAgentRetry(ctx, path, time.Minute); !errors.Is(err, context.Canceled) {
 		t.Errorf("dialAgentRetry(%q) error = %v, want context.Canceled", path, err)
+	}
+}
+
+// resolveGuestMemMiB must honor a declared limit (minus the VMM reserve), fall back
+// to the kata default only when the limit is unset, and error — never silently boot
+// bigger than declared — when the reserve leaves too little to boot a guest.
+func TestResolveGuestMemMiB(t *testing.T) {
+	const (
+		mib      = 1024 * 1024
+		reserve  = 256  // vmmMemReserveMiB
+		fallback = 2048 // kata-config default
+	)
+	tests := []struct {
+		name        string
+		declaredMiB int64 // 0 => unset
+		wantMiB     int
+		wantErr     bool
+	}{
+		{name: "unset falls back to kata default", declaredMiB: 0, wantMiB: fallback},
+		{name: "declared honored minus reserve", declaredMiB: 1536, wantMiB: 1536 - reserve},
+		{name: "just above minimum", declaredMiB: reserve + minGuestMemMiB, wantMiB: minGuestMemMiB},
+		{name: "reserve exactly swallows limit", declaredMiB: reserve, wantErr: true},
+		{name: "limit below reserve", declaredMiB: 128, wantErr: true},
+		{name: "boot-hang band (too little guest RAM)", declaredMiB: 320, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveGuestMemMiB(tc.declaredMiB*mib, reserve, fallback)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolveGuestMemMiB(%dMiB) = %d, nil; want an error", tc.declaredMiB, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveGuestMemMiB(%dMiB) unexpected error: %v", tc.declaredMiB, err)
+			}
+			if got != tc.wantMiB {
+				t.Errorf("resolveGuestMemMiB(%dMiB) = %d, want %d", tc.declaredMiB, got, tc.wantMiB)
+			}
+		})
+	}
+}
+
+// guestSize translates an actor's declared limits to effective in-guest limits:
+// CPU is preserved while memory is reduced by the VMM reserve.
+func TestGuestSize(t *testing.T) {
+	const (
+		mib     = 1024 * 1024
+		reserve = 256
+	)
+	s := &AteomService{memReserveMiB: reserve}
+
+	// Declared memory limit is reduced by reserve.
+	got, err := s.guestSize(sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: 1024 * mib})
+	want := sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: (1024 - reserve) * mib}
+	if err != nil {
+		t.Fatalf("guestSize(1024MiB) unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("guestSize(1024MiB) = %+v, want %+v", got, want)
+	}
+
+	// Unset memory (0) is left unset.
+	gotUnset, err := s.guestSize(sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0})
+	wantUnset := sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0}
+	if err != nil {
+		t.Fatalf("guestSize(unset) unexpected error: %v", err)
+	}
+	if gotUnset != wantUnset {
+		t.Errorf("guestSize(unset) = %+v, want %+v", gotUnset, wantUnset)
+	}
+
+	// A limit the reserve leaves too small to boot errors rather than returning
+	// the unreduced size, which would leave the cgroup limit above the VM's RAM.
+	tooSmall := sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: (reserve + 1) * mib}
+	if gotErr, err := s.guestSize(tooSmall); err == nil {
+		t.Errorf("guestSize(%dMiB) = %+v, nil; want an error", reserve+1, gotErr)
 	}
 }

@@ -105,12 +105,12 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	}()
 
 	// 1. Verify no workers in Redis initially
-	workers, _, err := persistence.ListWorkers(context.Background(), 1000, "")
+	workers, err := persistence.ListWorkers(context.Background(), store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("failed to list workers: %v", err)
 	}
-	if len(workers) != 0 {
-		t.Fatalf("expected 0 workers, got %d", len(workers))
+	if len(workers.Items) != 0 {
+		t.Fatalf("expected 0 workers, got %d", len(workers.Items))
 	}
 
 	// 2. Add pod with no IP
@@ -1209,10 +1209,11 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 	}
 
 	// Verify via ListWorkers that no stale worker record with oldUID remains in the store.
-	workers, _, err := persistence.ListWorkers(context.Background(), 100, "")
+	workersResp, err := persistence.ListWorkers(context.Background(), store.ListOptions{PageSize: 100})
 	if err != nil {
 		t.Fatalf("failed to list workers: %v", err)
 	}
+	workers := workersResp.Items
 	if len(workers) != 1 {
 		t.Fatalf("expected exactly 1 worker in store, got %d", len(workers))
 	}
@@ -1271,12 +1272,12 @@ func TestSyncer_DeleteNeverEligiblePod(t *testing.T) {
 	// The store must stay empty throughout: the pod never had an IP so no row
 	// was created, and the delete path is an idempotent no-op.
 	err := wait.PollUntilContextTimeout(context.Background(), 50*time.Millisecond, 500*time.Millisecond, true, func(ctx context.Context) (bool, error) {
-		workers, _, err := persistence.ListWorkers(ctx, 1000, "")
+		workers, err := persistence.ListWorkers(ctx, store.ListOptions{PageSize: 1000})
 		if err != nil {
 			return false, err
 		}
-		if len(workers) != 0 {
-			return false, fmt.Errorf("expected 0 workers, got %d", len(workers))
+		if len(workers.Items) != 0 {
+			return false, fmt.Errorf("expected 0 workers, got %d", len(workers.Items))
 		}
 		return false, nil // keep polling until timeout
 	})

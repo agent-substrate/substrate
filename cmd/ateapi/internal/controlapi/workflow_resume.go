@@ -546,11 +546,32 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 	}
 }
 
+// actorResourceLimits returns the actor's declared CPU (millicores) and memory
+// (bytes) limits from its ActorTemplate, or 0 for a dimension the template did
+// not set. These size the sandbox (supplied over the actor RPCs) and gate
+// scheduling (a worker must have >= capacity).
+func actorResourceLimits(tmpl *atev1alpha1.ActorTemplate) (cpuMilli, memBytes int64) {
+	res := tmpl.Spec.Resources
+	if res == nil {
+		return 0, 0
+	}
+	if c := res.Limits.Cpu(); c != nil {
+		cpuMilli = c.MilliValue()
+	}
+	if m := res.Limits.Memory(); m != nil {
+		memBytes = m.Value()
+	}
+	return cpuMilli, memBytes
+}
+
 func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplate) (scheduling.Constraints, error) {
+	cpuMilli, memBytes := actorResourceLimits(tmpl)
 	c := scheduling.Constraints{
 		SandboxClass:  string(tmpl.Spec.SandboxClass),
 		ActorSelector: labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
 		RequiredNodes: actor.GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(),
+		CPUMilli:      cpuMilli,
+		MemoryBytes:   memBytes,
 	}
 	if tmpl.Spec.WorkerSelector != nil {
 		sel, err := metav1.LabelSelectorAsSelector(tmpl.Spec.WorkerSelector)
@@ -613,6 +634,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 	egressGateway := w.egressGateway()
 
+	// The actor's declared limits ride the RPC down to the sandbox so it is sized
+	// to the actor (replacing the worker-pod downward-API approach).
+	cpuMilli, memBytes := actorResourceLimits(actorTemplate)
+
 	if local := actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
@@ -626,6 +651,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                   workloadSpec,
 			ActorUid:               actor.GetMetadata().Uid,
 			EgressGateway:          egressGateway,
+			CpuMilli:               cpuMilli,
+			MemoryBytes:            memBytes,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
@@ -681,6 +708,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			GoldenSnapshotUri: src.GoldenSnapshotURI.String(),
 			ActorUid:          actor.GetMetadata().Uid,
 			EgressGateway:     egressGateway,
+			CpuMilli:          cpuMilli,
+			MemoryBytes:       memBytes,
 		}
 		_, err = client.Restore(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
@@ -706,6 +735,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			Spec:                   workloadSpec,
 			ActorUid:               actor.GetMetadata().Uid,
 			EgressGateway:          egressGateway,
+			CpuMilli:               cpuMilli,
+			MemoryBytes:            memBytes,
 		}
 		_, err = client.Run(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while creating workload from spec", ateattr.OperationResume)

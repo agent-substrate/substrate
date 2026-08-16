@@ -31,9 +31,10 @@ type dataplaneHealthCheck struct {
 	expectedBody string
 }
 
-func (r atenetRouter) routeViaAuthority() bool {
-	return r == atenetRouterAgentgateway
-}
+// Both dataplanes resolve the worker address from ext_proc's dynamic
+// metadata (see ingress.OriginalDstMetadataKey) and leave :authority/Host
+// untouched, so atunnel always authorizes by the actor's own DNS name --
+// ingress.New needs no per-dataplane routing mode.
 
 func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	switch r {
@@ -61,6 +62,7 @@ func (s *RouterServer) startDataplane(ctx context.Context, g *errgroup.Group, pa
 func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Group, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) {
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
+	xdsSrv.SetConnectPorts(s.cfg.ConnectPlainTextPort, s.cfg.ConnectTLSPort)
 	setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
 	xdsSrv.SetTraceRootSamplingPercent(traceRootSamplingPercent)
 

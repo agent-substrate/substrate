@@ -41,8 +41,9 @@ const (
 	Control_ResumeActor_FullMethodName                = "/ateapi.Control/ResumeActor"
 	Control_DeleteActor_FullMethodName                = "/ateapi.Control/DeleteActor"
 	Control_GetActorSnapshot_FullMethodName           = "/ateapi.Control/GetActorSnapshot"
+	Control_GetActorSnapshotTag_FullMethodName        = "/ateapi.Control/GetActorSnapshotTag"
 	Control_ListActorSnapshots_FullMethodName         = "/ateapi.Control/ListActorSnapshots"
-	Control_TagActorSnapshot_FullMethodName           = "/ateapi.Control/TagActorSnapshot"
+	Control_CreateActorSnapshotTag_FullMethodName     = "/ateapi.Control/CreateActorSnapshotTag"
 	Control_UpdateActorSnapshotTag_FullMethodName     = "/ateapi.Control/UpdateActorSnapshotTag"
 	Control_DeleteActorSnapshotTag_FullMethodName     = "/ateapi.Control/DeleteActorSnapshotTag"
 	Control_ListWorkers_FullMethodName                = "/ateapi.Control/ListWorkers"
@@ -86,10 +87,12 @@ type ControlClient interface {
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Get an ActorSnapshot.
 	GetActorSnapshot(ctx context.Context, in *GetActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshot, error)
+	// Get an ActorSnapshot tag.
+	GetActorSnapshotTag(ctx context.Context, in *GetActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
 	// List ActorSnapshots.
 	ListActorSnapshots(ctx context.Context, in *ListActorSnapshotsRequest, opts ...grpc.CallOption) (*ListActorSnapshotsResponse, error)
 	// Add an Atespace-owned, stable name for an ActorSnapshot.
-	TagActorSnapshot(ctx context.Context, in *TagActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
+	CreateActorSnapshotTag(ctx context.Context, in *CreateActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
 	// Publish or unpublish an ActorSnapshot tag without changing its address.
 	UpdateActorSnapshotTag(ctx context.Context, in *UpdateActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
 	// Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
@@ -219,6 +222,16 @@ func (c *controlClient) GetActorSnapshot(ctx context.Context, in *GetActorSnapsh
 	return out, nil
 }
 
+func (c *controlClient) GetActorSnapshotTag(ctx context.Context, in *GetActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorSnapshotTag)
+	err := c.cc.Invoke(ctx, Control_GetActorSnapshotTag_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) ListActorSnapshots(ctx context.Context, in *ListActorSnapshotsRequest, opts ...grpc.CallOption) (*ListActorSnapshotsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorSnapshotsResponse)
@@ -229,10 +242,10 @@ func (c *controlClient) ListActorSnapshots(ctx context.Context, in *ListActorSna
 	return out, nil
 }
 
-func (c *controlClient) TagActorSnapshot(ctx context.Context, in *TagActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error) {
+func (c *controlClient) CreateActorSnapshotTag(ctx context.Context, in *CreateActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ActorSnapshotTag)
-	err := c.cc.Invoke(ctx, Control_TagActorSnapshot_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Control_CreateActorSnapshotTag_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -433,10 +446,12 @@ type ControlServer interface {
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
 	// Get an ActorSnapshot.
 	GetActorSnapshot(context.Context, *GetActorSnapshotRequest) (*ActorSnapshot, error)
+	// Get an ActorSnapshot tag.
+	GetActorSnapshotTag(context.Context, *GetActorSnapshotTagRequest) (*ActorSnapshotTag, error)
 	// List ActorSnapshots.
 	ListActorSnapshots(context.Context, *ListActorSnapshotsRequest) (*ListActorSnapshotsResponse, error)
 	// Add an Atespace-owned, stable name for an ActorSnapshot.
-	TagActorSnapshot(context.Context, *TagActorSnapshotRequest) (*ActorSnapshotTag, error)
+	CreateActorSnapshotTag(context.Context, *CreateActorSnapshotTagRequest) (*ActorSnapshotTag, error)
 	// Publish or unpublish an ActorSnapshot tag without changing its address.
 	UpdateActorSnapshotTag(context.Context, *UpdateActorSnapshotTagRequest) (*ActorSnapshotTag, error)
 	// Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
@@ -510,11 +525,14 @@ func (UnimplementedControlServer) DeleteActor(context.Context, *DeleteActorReque
 func (UnimplementedControlServer) GetActorSnapshot(context.Context, *GetActorSnapshotRequest) (*ActorSnapshot, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorSnapshot not implemented")
 }
+func (UnimplementedControlServer) GetActorSnapshotTag(context.Context, *GetActorSnapshotTagRequest) (*ActorSnapshotTag, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActorSnapshotTag not implemented")
+}
 func (UnimplementedControlServer) ListActorSnapshots(context.Context, *ListActorSnapshotsRequest) (*ListActorSnapshotsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActorSnapshots not implemented")
 }
-func (UnimplementedControlServer) TagActorSnapshot(context.Context, *TagActorSnapshotRequest) (*ActorSnapshotTag, error) {
-	return nil, status.Error(codes.Unimplemented, "method TagActorSnapshot not implemented")
+func (UnimplementedControlServer) CreateActorSnapshotTag(context.Context, *CreateActorSnapshotTagRequest) (*ActorSnapshotTag, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateActorSnapshotTag not implemented")
 }
 func (UnimplementedControlServer) UpdateActorSnapshotTag(context.Context, *UpdateActorSnapshotTagRequest) (*ActorSnapshotTag, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateActorSnapshotTag not implemented")
@@ -732,6 +750,24 @@ func _Control_GetActorSnapshot_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_GetActorSnapshotTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActorSnapshotTagRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetActorSnapshotTag(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetActorSnapshotTag_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetActorSnapshotTag(ctx, req.(*GetActorSnapshotTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListActorSnapshots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorSnapshotsRequest)
 	if err := dec(in); err != nil {
@@ -750,20 +786,20 @@ func _Control_ListActorSnapshots_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_TagActorSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(TagActorSnapshotRequest)
+func _Control_CreateActorSnapshotTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateActorSnapshotTagRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ControlServer).TagActorSnapshot(ctx, in)
+		return srv.(ControlServer).CreateActorSnapshotTag(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Control_TagActorSnapshot_FullMethodName,
+		FullMethod: Control_CreateActorSnapshotTag_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).TagActorSnapshot(ctx, req.(*TagActorSnapshotRequest))
+		return srv.(ControlServer).CreateActorSnapshotTag(ctx, req.(*CreateActorSnapshotTagRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1114,12 +1150,16 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_GetActorSnapshot_Handler,
 		},
 		{
+			MethodName: "GetActorSnapshotTag",
+			Handler:    _Control_GetActorSnapshotTag_Handler,
+		},
+		{
 			MethodName: "ListActorSnapshots",
 			Handler:    _Control_ListActorSnapshots_Handler,
 		},
 		{
-			MethodName: "TagActorSnapshot",
-			Handler:    _Control_TagActorSnapshot_Handler,
+			MethodName: "CreateActorSnapshotTag",
+			Handler:    _Control_CreateActorSnapshotTag_Handler,
 		},
 		{
 			MethodName: "UpdateActorSnapshotTag",

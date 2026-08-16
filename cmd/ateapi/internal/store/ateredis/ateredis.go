@@ -183,9 +183,9 @@ func (s *Persistence) AtespaceExists(ctx context.Context, name string) (bool, er
 	return n > 0, nil
 }
 
-func (s *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Atespace, string, error) {
+func (s *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
 	var result []*ateapipb.Atespace
-	nextToken, err := s.listPage(ctx, "atespace:*", pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+	nextToken, err := s.listPage(ctx, "atespace:*", opts.PageSize, opts.PageToken, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
 		atespaces, err := fetchProtos(ctx, master, keys, func() *ateapipb.Atespace { return &ateapipb.Atespace{} })
 		if err != nil {
 			return 0, err
@@ -194,9 +194,9 @@ func (s *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTok
 		return len(atespaces), nil
 	})
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.Atespace]{}, err
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.Atespace]{Items: result, NextPageToken: nextToken}, nil
 }
 
 // DeleteAtespace deletes an empty atespace. Returns store.ErrNotFound if the
@@ -221,11 +221,11 @@ func (s *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 	}
 
 	// Reject a non-empty atespace.
-	actors, _, err := s.ListActors(ctx, name, 1, "")
+	actors, err := s.ListActors(ctx, name, store.ListOptions{PageSize: 1})
 	if err != nil {
 		return nil, fmt.Errorf("while checking atespace emptiness: %w", err)
 	}
-	if len(actors) > 0 {
+	if len(actors.Items) > 0 {
 		return nil, store.ErrFailedPrecondition
 	}
 	hasTags, err := s.hasMatching(ctx, actorSnapshotTagScanPattern(name))
@@ -432,9 +432,9 @@ func (s *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	return nil, store.ErrVersionConflict
 }
 
-func (s *Persistence) ListActorTemplates(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorTemplate, string, error) {
+func (s *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
 	var result []*ateapipb.ActorTemplate
-	nextToken, err := s.listPage(ctx, actorTemplateScanPattern(atespace), pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+	nextToken, err := s.listPage(ctx, actorTemplateScanPattern(atespace), opts.PageSize, opts.PageToken, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
 		templates, err := fetchProtos(ctx, master, keys, func() *ateapipb.ActorTemplate { return &ateapipb.ActorTemplate{} })
 		if err != nil {
 			return 0, err
@@ -443,9 +443,9 @@ func (s *Persistence) ListActorTemplates(ctx context.Context, atespace string, p
 		return len(templates), nil
 	})
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
 // DeleteActorTemplate deletes an ActorTemplate with no remaining versions.
@@ -473,11 +473,11 @@ func (s *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 	// Reject while any version still names this template as parent. The
 	// parent lives in the stored value, not the key, so probe via the
 	// filtered list (pageSize 1 stops at the first match).
-	versions, _, err := s.ListActorTemplateVersions(ctx, globalAtespace, templateRef, 1, "")
+	versions, err := s.ListActorTemplateVersions(ctx, globalAtespace, templateRef, store.ListOptions{PageSize: 1})
 	if err != nil {
 		return nil, fmt.Errorf("while checking for remaining versions: %w", err)
 	}
-	if len(versions) > 0 {
+	if len(versions.Items) > 0 {
 		return nil, store.ErrFailedPrecondition
 	}
 	if err := s.rdb.Del(ctx, dbKey).Err(); err != nil {
@@ -530,9 +530,9 @@ func (s *Persistence) GetActorTemplateVersion(ctx context.Context, versionRef re
 // actorTemplateRef is non-zero. atespace scopes the versions scanned, not the
 // parent: stored parent refs are fully qualified, so the filter matches the
 // parent's atespace and name.
-func (s *Persistence) ListActorTemplateVersions(ctx context.Context, atespace string, actorTemplateRef resources.ActorTemplateRef, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorTemplateVersion, string, error) {
+func (s *Persistence) ListActorTemplateVersions(ctx context.Context, atespace string, actorTemplateRef resources.ActorTemplateRef, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplateVersion], error) {
 	var result []*ateapipb.ActorTemplateVersion
-	nextToken, err := s.listPage(ctx, actorTemplateVersionScanPattern(atespace), pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+	nextToken, err := s.listPage(ctx, actorTemplateVersionScanPattern(atespace), opts.PageSize, opts.PageToken, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
 		versions, err := fetchProtos(ctx, master, keys, func() *ateapipb.ActorTemplateVersion { return &ateapipb.ActorTemplateVersion{} })
 		if err != nil {
 			return 0, err
@@ -548,9 +548,9 @@ func (s *Persistence) ListActorTemplateVersions(ctx context.Context, atespace st
 		return matched, nil
 	})
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.ActorTemplateVersion]{}, err
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.ActorTemplateVersion]{Items: result, NextPageToken: nextToken}, nil
 }
 
 // DeleteActorTemplateVersion deletes an ActorTemplateVersion together with
@@ -782,25 +782,24 @@ func (s *Persistence) GetActorSnapshot(ctx context.Context, atespace, name strin
 	return snapshot, nil
 }
 
-func (s *Persistence) GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error) {
+func (s *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
 	b, err := s.rdb.Get(ctx, actorSnapshotTagDBKey(atespace, name)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return nil, nil, store.ErrNotFound
+			return nil, store.ErrNotFound
 		}
-		return nil, nil, fmt.Errorf("while resolving actor snapshot tag %s/%s: %w", atespace, name, err)
+		return nil, fmt.Errorf("while getting actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
 	tag := &ateapipb.ActorSnapshotTag{}
 	if err := protojson.Unmarshal(b, tag); err != nil {
-		return nil, nil, fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
+		return nil, fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
-	snapshot, err := s.GetActorSnapshot(ctx, tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName())
-	return snapshot, tag, err
+	return tag, nil
 }
 
-func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
+func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error) {
 	var result []*ateapipb.ActorSnapshot
-	nextToken, err := s.listPage(ctx, actorSnapshotScanPattern(atespace), pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+	nextToken, err := s.listPage(ctx, actorSnapshotScanPattern(atespace), opts.PageSize, opts.PageToken, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
 		cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 			for _, key := range keys {
 				pipe.Get(ctx, key)
@@ -829,12 +828,12 @@ func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, p
 		return collected, nil
 	})
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.ActorSnapshot]{}, err
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.ActorSnapshot]{Items: result, NextPageToken: nextToken}, nil
 }
 
-func (s *Persistence) TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+func (s *Persistence) CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
 	if _, err := s.GetActorSnapshot(ctx, atespace, name); err != nil {
 		return nil, err
 	}
@@ -960,7 +959,7 @@ func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 }
 
 func (s *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
-	_, tag, err := s.GetActorSnapshotByTag(ctx, atespace, name)
+	tag, err := s.GetActorSnapshotTag(ctx, atespace, name)
 	if err != nil {
 		return nil, err
 	}
@@ -1230,9 +1229,9 @@ func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	return nil, store.ErrVersionConflict
 }
 
-func (s *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Worker, string, error) {
+func (s *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
 	var result []*ateapipb.Worker
-	nextToken, err := s.listPage(ctx, "worker:*", pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+	nextToken, err := s.listPage(ctx, "worker:*", opts.PageSize, opts.PageToken, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
 		workers, err := fetchProtos(ctx, master, keys, func() *ateapipb.Worker { return &ateapipb.Worker{} })
 		if err != nil {
 			return 0, err
@@ -1241,9 +1240,9 @@ func (s *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageToken
 		return len(workers), nil
 	})
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.Worker]{}, err
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }
 
 type pageToken struct {
@@ -1277,9 +1276,9 @@ func hashShardAddr(addr string) string {
 // ListActors lists actors, scoped to the given atespace. An empty atespace lists
 // across all atespaces (SCAN actor:*); a non-empty atespace restricts the scan to
 // that atespace (SCAN actor:<atespace>:*).
-func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+func (s *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
 	var result []*ateapipb.Actor
-	nextToken, err := s.listPage(ctx, actorScanPattern(atespace), pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+	nextToken, err := s.listPage(ctx, actorScanPattern(atespace), opts.PageSize, opts.PageToken, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
 		actors, err := fetchProtos(ctx, master, keys, func() *ateapipb.Actor { return &ateapipb.Actor{} })
 		if err != nil {
 			return 0, err
@@ -1288,9 +1287,9 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize 
 		return len(actors), nil
 	})
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.Actor]{}, err
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.Actor]{Items: result, NextPageToken: nextToken}, nil
 }
 
 // listPage SCANs pattern across the redis masters from the page token, feeding key batches to collect and returns the next-page token.

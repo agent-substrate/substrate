@@ -29,11 +29,15 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 type runsc struct {
 	path     string
 	actorUID string
+	// size is the actor's declared limits, supplied on the RunWorkload /
+	// RestoreWorkload RPC; ensureContainerCgroupsPath writes it into the OCI spec.
+	size sizing.SandboxSize
 }
 
 // nvproxyGlobalArgs returns the runsc global flags for GPU sandboxes, enabling
@@ -74,10 +78,13 @@ func (r *runsc) ensureContainerCgroupsPath(containerName string) error {
 	if spec.Linux == nil {
 		spec.Linux = &specs.Linux{}
 	}
-	if spec.Linux.CgroupsPath != "" {
-		return nil
+	if spec.Linux.CgroupsPath == "" {
+		spec.Linux.CgroupsPath = "/" + containerName
 	}
-	spec.Linux.CgroupsPath = "/" + containerName
+	// Right-size the per-container cgroup leaf to the actor's declared limits;
+	// runsc applies spec.Linux.Resources when it creates the leaf. Shared with the
+	// micro-VM runtime via internal/sizing.
+	r.size.ApplyToOCISpec(&spec)
 	out, err := json.MarshalIndent(&spec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling %q: %w", specPath, err)
@@ -107,6 +114,10 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		// "-log-packets",
 		// "-strace",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
+		// Provision the sentry's vCPU count from the cgroup CPU quota written by
+		// sizing.ApplyToOCISpec, so the sandbox is sized to the pod's limit (runsc
+		// otherwise sizes to all host CPUs). Global flag: before the subcommand.
+		"--cpu-num-from-quota",
 	}
 	args = append(args, nvproxyGlobalArgs()...)
 	args = append(args,
@@ -253,6 +264,8 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		// "-log-packets",
 		// "-strace",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
+		// Match cmdCreate: size the restored sentry from the cgroup CPU quota.
+		"--cpu-num-from-quota",
 	}
 	restoreArgs = append(restoreArgs, nvproxyGlobalArgs()...)
 	restoreArgs = append(restoreArgs,

@@ -347,6 +347,16 @@ Handles actor-aware routing and automatic re-animation.
     its private veth interface. Worker pod port 80 is not a direct Actor ingress
     path.
 
+  * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
+    its default (80) with an HTTP `CONNECT` request naming the port in the
+    authority (e.g. `CONNECT <actor-dns>:9090`), rather than a separate header
+    or field. `atenet-router` terminates the `CONNECT` on a dedicated listener
+    and re-enters the tunneled traffic through the same ingress path as
+    ordinary requests, so each request inside a long-lived tunnel still
+    resumes the Actor and re-routes it independently if it moves workers. Only
+    HTTP(S) traffic over the tunnel is supported today; raw TCP or other
+    non-HTTP protocols on a non-default port are not yet reachable this way.
+
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
 ## Actor Lifecycle

@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -42,10 +43,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/hashicorp/go-reap"
 	"github.com/spf13/pflag"
@@ -71,6 +74,9 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+
+	otlpRelaySocket = pflag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
+		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
 	reapLock sync.RWMutex
 )
@@ -112,16 +118,39 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom booting")
 
 	const serviceName = "ateom-gvisor"
+	// Export through atelet's node-local relay when it is there, so telemetry
+	// never touches the worker pod's network. A nil conn means it is not, and
+	// both providers fall back to dialing the collector directly.
+	//
+	// A relay that cannot be dialed is logged rather than fatal, matching both
+	// ends of the same decision: Dial already treats an absent socket as a
+	// fallback rather than an error, and atelet logs and keeps going when it
+	// cannot serve the relay at all. What is lost here is the node-local export
+	// path, not the ateom's ability to run actors, and failing the worker pod
+	// over its telemetry route would turn a misconfigured flag into an outage.
+	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; exporting telemetry directly over the pod network",
+			slog.String("socket", *otlpRelaySocket), slog.Any("err", err))
+	}
+	if relayConn != nil {
+		defer relayConn.Close()
+	}
+
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: serviceName,
-		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ServiceName:  serviceName,
+		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ExporterConn: relayConn,
+		// So the spans say which path they took, including when relayConn is nil
+		// because the dial above failed and this ateom is exporting directly.
+		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName)
+	mp, err := serverboot.InitMetricsPushOnlyVia(ctx, serviceName, relayConn)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
@@ -365,6 +394,12 @@ type AteomService struct {
 	// own cgroup scope, which setupCgroupDelegation prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
+
+	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
+	// it is the seam that lets them interleave a lifecycle transition with the
+	// stats handlers' lock-free read, the way containerStatsReader does for the
+	// micro-VM runtime. nil means the real read.
+	readSandboxCgroup func(dir string) (cgroupstats.Sample, error)
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
@@ -590,6 +625,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	rcmd := &runsc{
 		path:     req.GetRunscPath(),
 		actorUID: req.GetActorUid(),
+		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -614,7 +650,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			}
 		}
 	}()
-
 	// Create and start pause container. The bundle rootfs is composed here —
 	// an overlay of the node's cached image layers plus the bundle's private
 	// upper — because mounting is ateom's job (atelet runs with no
@@ -691,6 +726,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//   * After we exit, atelet will upload checkpoint to GCS
 	//   * After we exit, atelet will tear down OCI bundles and reset the actor directory.
 
+	// Checkpoint only saves state; no sizing is applied, so size is left zero.
 	rcmd := &runsc{
 		path:     req.GetRunscPath(),
 		actorUID: req.GetActorUid(),
@@ -865,6 +901,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	rcmd := &runsc{
 		path:     req.GetRunscPath(),
 		actorUID: req.GetActorUid(),
+		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -886,7 +923,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			}
 		}
 	}()
-
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
 
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore

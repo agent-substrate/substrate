@@ -95,7 +95,12 @@ type routerConfig struct {
 	StatusPort     int
 	HealthInterval time.Duration
 	HttpsPort      int
-	EnvoyCertPath  string
+	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS
+	// listener ports for CONNECT-tunneled traffic. Non-positive disables the
+	// corresponding listener.
+	ConnectPlainTextPort int
+	ConnectTLSPort       int
+	EnvoyCertPath        string
 
 	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
 	// (cert+key) presented as the client cert when dialing the actor's atunnel

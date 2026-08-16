@@ -22,25 +22,22 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"os"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -49,15 +46,11 @@ import (
 type Server struct {
 	ateapipb.UnimplementedActorIdentityServer
 
-	clientJWTIssuer   string
-	clientJWTAudience string
+	actorIdentityJWTIssuer string
 
 	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
 	actorIDJWTPoolFile string
 	actorIDCAPoolFile  string
-
-	workerCACerts string
-	httpClient    *http.Client
 
 	// store is the actor database. MintCert consults it to confirm the caller
 	// is entitled to the actor it is asking for a credential for.
@@ -67,16 +60,13 @@ type Server struct {
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(clientJWTIssuer, clientJWTAudience, actorIDJWTPoolFile, actorIDCAPoolFile, workerCACerts string, httpClient *http.Client, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer, actorIDJWTPoolFile, actorIDCAPoolFile string, store store.Interface, workers *workercache.Cache) *Server {
 	return &Server{
-		clientJWTIssuer:    clientJWTIssuer,
-		clientJWTAudience:  clientJWTAudience,
-		actorIDJWTPoolFile: actorIDJWTPoolFile,
-		actorIDCAPoolFile:  actorIDCAPoolFile,
-		workerCACerts:      workerCACerts,
-		httpClient:         httpClient,
-		store:              store,
-		workers:            workers,
+		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
+		actorIDJWTPoolFile:     actorIDJWTPoolFile,
+		actorIDCAPoolFile:      actorIDCAPoolFile,
+		store:                  store,
+		workers:                workers,
 	}
 }
 
@@ -95,29 +85,15 @@ const (
 )
 
 func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*ateapipb.MintJWTResponse, error) {
-	reqMetadata, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil, fmt.Errorf("no metadata found")
+	caller, ok := principal.FromContext(ctx)
+	if !ok || caller.Kind != principal.KindJWT {
+		return nil, status.Errorf(codes.Unauthenticated, "JWT authentication is required")
+	}
+	if caller.Issuer != s.actorIdentityJWTIssuer {
+		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor JWTs")
 	}
 
-	authorization := reqMetadata["authorization"]
-	if len(authorization) != 1 {
-		return nil, status.Errorf(codes.Unauthenticated, "Need authorization header")
-	}
-
-	clientJWT := strings.TrimPrefix(authorization[0], "Bearer ")
-
-	clientClaims, err := k8sjwt.Verify(ctx, s.httpClient, clientJWT, s.clientJWTIssuer, s.clientJWTAudience, time.Now())
-	if err != nil {
-		slog.ErrorContext(ctx, "Error while verifying client JWT", slog.Any("err", err))
-		return nil, status.Errorf(codes.Unauthenticated, "Unauthenticated")
-	}
-
-	slog.InfoContext(ctx, "Verified client JWT", slog.Any("claims", clientClaims))
-
-	// TODO: Extract K8s identity from incoming JWT
-
-	// TODO: Cross-check requested actor and user claims against the actor database.
+	// TODO: Cross-check the verified caller and requested actor against the actor database.
 
 	// TODO: Cache signing keys in memory, so we don't read from disk every time.
 	signingPoolBytes, err := os.ReadFile(s.actorIDJWTPoolFile)

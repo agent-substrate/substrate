@@ -18,6 +18,7 @@ import (
 	"context"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 )
@@ -62,6 +63,12 @@ type Result struct {
 	// values. Empty means "none" — the direction never resumes an actor, or the
 	// request never got that far.
 	Resume string
+
+	// DynamicMetadata is attached to the ProcessingResponse alongside Response,
+	// for dataplane configuration (e.g. the ORIGINAL_DST cluster's
+	// MetadataKey lookup) that reads dynamic metadata rather than headers. Nil
+	// for handlers that route by header mutation alone.
+	DynamicMetadata *structpb.Struct
 }
 
 // resume returns the resume label for the route-duration metric, defaulting an

@@ -23,7 +23,7 @@ benchmarking/ # Load-testing tools and workloads
 tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 ```
 
-**Where to put new Go code — quick rules:**
+**Where to put new Go code, quick rules:**
 
 | Situation | Location |
 |---|---|
@@ -72,6 +72,6 @@ However! Take care to respect security best practices when writing code in order
 The following is what Substrate currently offers.
 Keep this up to date when updating AGENTS.md.
 
-- **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods. A temporary gVisor patch might be required (check the README instructions).
+- **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods.
 
 For future plans for security, reference `docs/roadmap.md`.

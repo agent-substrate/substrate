@@ -66,6 +66,7 @@ These flags can be appended to any command:
 | `--kubeconfig` | | Path to your kubeconfig file | `~/.kube/config` |
 | `--context` | | Name of the kubeconfig context to use | current context |
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
+| `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
 

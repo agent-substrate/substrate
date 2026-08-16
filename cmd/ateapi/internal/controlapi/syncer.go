@@ -216,6 +216,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
 			State:           ateapipb.Worker_STATE_ACTIVE,
+			Capacity:        workerCapacity(pod),
 		}
 		// TODO(thockin): for now this is the only place Workers are
 		// created.  If/when this becomes a regular API, validation should
@@ -273,6 +274,38 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
 }
 
+// ateomContainerName is the name of the container in a worker pod that hosts the
+// actor's sandbox; its resource limits bound what an actor placed here can use.
+const ateomContainerName = "ateom"
+
+// workerCapacity returns the worker pod's capacity for hosting an actor — CPU
+// in millicores and memory in bytes — taken from the ateom container's resource
+// limits. A dimension the pod does not limit reports 0, which the scheduler
+// treats as "unknown" (unconstrained); a pod that limits neither reports nil
+// rather than an all-zero message that says the same thing. The actor sandbox
+// runs nested in the ateom container's cgroup, so that container's limits — not
+// the pod total — are the relevant envelope.
+func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
+	var capacity ateapipb.WorkerCapacity
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		if c.Name != ateomContainerName {
+			continue
+		}
+		if v := c.Resources.Limits.Cpu(); v != nil {
+			capacity.CpuMilli = v.MilliValue()
+		}
+		if v := c.Resources.Limits.Memory(); v != nil {
+			capacity.MemoryBytes = v.Value()
+		}
+		break
+	}
+	if capacity.CpuMilli == 0 && capacity.MemoryBytes == 0 {
+		return nil
+	}
+	return &capacity
+}
+
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler
 // stops routing new actors to it while its pod is Terminating. If the worker is
 // already gone or already draining there is nothing more to do — the Pod
@@ -313,18 +346,18 @@ func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, namespace, p
 func (s *WorkerPoolSyncer) enqueueStoredWorkers(ctx context.Context) {
 	var pageToken string
 	for {
-		workers, nextToken, err := s.persistence.ListWorkers(ctx, 1000, pageToken)
+		page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: 1000, PageToken: pageToken})
 		if err != nil {
 			slog.ErrorContext(ctx, "Syncer: failed to list workers for orphan reconcile", slog.Any("err", err))
 			return
 		}
-		for _, w := range workers {
+		for _, w := range page.Items {
 			s.queue.Add(workerKey{namespace: w.GetWorkerNamespace(), pool: w.GetWorkerPool(), name: w.GetWorkerPod()})
 		}
-		if nextToken == "" {
+		if !page.HasNextPage() {
 			return
 		}
-		pageToken = nextToken
+		pageToken = page.NextPageToken
 	}
 }
 

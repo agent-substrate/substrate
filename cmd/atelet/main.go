@@ -44,6 +44,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -97,6 +98,8 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+
+	otlpRelaySocket = pflag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(), "Unix socket to serve the OTLP relay on, which forwards the node's ateom telemetry to OTEL_EXPORTER_OTLP_ENDPOINT so worker pods need no network path to the collector. Empty disables the relay.")
 
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
@@ -152,6 +155,27 @@ func main() {
 		Readiness:     readiness,
 		EnableHealthz: true,
 	})
+
+	// The OTLP relay lets the ateom pods on this node export telemetry over a
+	// unix socket instead of their own network (see internal/otlprelay). Started
+	// early: an ateom that finds no socket at startup falls back to exporting
+	// directly for its whole life, so the socket should exist before any worker
+	// pod on this node boots.
+	if relay, err := otlprelay.NewServer(ctx, *otlpRelaySocket); err != nil {
+		slog.ErrorContext(ctx, "Failed to create the OTLP relay; ateoms will export directly", slog.Any("err", err))
+	} else if relay != nil {
+		// Deferred rather than tied to the drain: the relay carries other
+		// processes' telemetry, so it should outlive atelet's own RPC serving
+		// and stay up while the ateoms it serves are themselves shutting down.
+		defer relay.Stop()
+		go func() {
+			if err := relay.Serve(ctx); err != nil {
+				// Not fatal: atelet's actual job does not depend on the relay,
+				// and the ateoms fall back to exporting directly.
+				slog.ErrorContext(ctx, "OTLP relay stopped", slog.Any("err", err))
+			}
+		}()
+	}
 
 	ateomDialer := &AteomDialer{
 		conns: lru.New(256),
@@ -454,6 +478,8 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		ActorUid:               actorUID,
 		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
+		CpuMilli:               req.GetCpuMilli(),
+		MemoryBytes:            req.GetMemoryBytes(),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
@@ -1091,6 +1117,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               req.GetActorUid(),
 		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
+		CpuMilli:               req.GetCpuMilli(),
+		MemoryBytes:            req.GetMemoryBytes(),
 		// Informational: for DATA_ON_GOLDEN the golden snapshot's files are
 		// already staged into the restore dir by the combined download above;
 		// ateom restores from the shared dir and never fetches this URI.

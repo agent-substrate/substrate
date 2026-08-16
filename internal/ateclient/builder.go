@@ -19,7 +19,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/agent-substrate/substrate/internal/portforward"
@@ -76,7 +78,7 @@ func (c *Client) Close() {
 
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically port-forwards
 // to the ate-api-server pod in the ate-system namespace.
-func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) (*Client, error) {
+func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
 	tp, err := initTracing(ctx, traceEnabled)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize tracing: %w", err)
@@ -84,9 +86,9 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 
 	var cli *Client
 	if endpoint != "" {
-		cli, err = dialDirect(ctx, kubeconfigPath, k8sContext, endpoint, traceEnabled)
+		cli, err = dialDirect(ctx, kubeconfigPath, k8sContext, endpoint, tokenFile, traceEnabled)
 	} else {
-		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, traceEnabled)
+		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, tokenFile, traceEnabled)
 	}
 
 	if err != nil {
@@ -100,7 +102,7 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 	return cli, nil
 }
 
-func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) (*Client, error) {
+func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
 	clientset, err := NewK8sClientset(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
@@ -116,7 +118,7 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint string
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	tokenOpt, err := bearerTokenDialOption(ctx, clientset)
+	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +148,7 @@ func LoadConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
 }
 
-func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, traceEnabled bool) (*Client, error) {
+func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool) (*Client, error) {
 	config, err := LoadConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
@@ -174,7 +176,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	tokenOpt, err := bearerTokenDialOption(ctx, clientset)
+	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
 	if err != nil {
 		stopForward()
 		return nil, err
@@ -229,9 +231,19 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 	}, nil
 }
 
-// bearerTokenDialOption attaches a ServiceAccount token for the ate-client SA
-// as per-RPC credentials.
-func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset) (grpc.DialOption, error) {
+// bearerTokenDialOption attaches the configured token, or mints an ate-client
+// ServiceAccount token when tokenFile is empty.
+func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset, tokenFile string) (grpc.DialOption, error) {
+	if tokenFile == "-" {
+		creds, err := readBearerToken(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read bearer token from stdin: %w", err)
+		}
+		return grpc.WithPerRPCCredentials(creds), nil
+	}
+	if tokenFile != "" {
+		return grpc.WithPerRPCCredentials(fileBearerTokenCreds(tokenFile)), nil
+	}
 	expirationSeconds := int64(3600)
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
@@ -249,6 +261,18 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset)
 	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
 }
 
+func readBearerToken(r io.Reader) (bearerTokenCreds, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", fmt.Errorf("bearer token is empty")
+	}
+	return bearerTokenCreds(token), nil
+}
+
 type bearerTokenCreds string
 
 func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
@@ -259,6 +283,22 @@ func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (ma
 }
 
 func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
+
+type fileBearerTokenCreds string
+
+func (c fileBearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	b, err := os.ReadFile(string(c))
+	if err != nil {
+		return nil, fmt.Errorf("read bearer token file %q: %w", c, err)
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return nil, fmt.Errorf("bearer token file %q is empty", c)
+	}
+	return map[string]string{"authorization": "Bearer " + token}, nil
+}
+
+func (c fileBearerTokenCreds) RequireTransportSecurity() bool { return true }
 
 // initTracing returns (nil, nil) when tracing is disabled: the OTel globals
 // stay noop so no traceparent is injected, the server roots the trace, and the

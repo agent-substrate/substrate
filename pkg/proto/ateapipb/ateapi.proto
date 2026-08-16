@@ -49,11 +49,14 @@ service Control {
   // Get an ActorSnapshot.
   rpc GetActorSnapshot(GetActorSnapshotRequest) returns (ActorSnapshot) {}
 
+  // Get an ActorSnapshot tag.
+  rpc GetActorSnapshotTag(GetActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+
   // List ActorSnapshots.
   rpc ListActorSnapshots(ListActorSnapshotsRequest) returns (ListActorSnapshotsResponse) {}
 
   // Add an Atespace-owned, stable name for an ActorSnapshot.
-  rpc TagActorSnapshot(TagActorSnapshotRequest) returns (ActorSnapshotTag) {}
+  rpc CreateActorSnapshotTag(CreateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
   // Publish or unpublish an ActorSnapshot tag without changing its address.
   rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
@@ -132,11 +135,13 @@ enum SnapshotContentScope {
 }
 
 enum ActorSnapshotTagScope {
+  // Not set and rejected wherever a client supplies a scope
+  ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED = 0;
   // May initialize Actors only in the tag's owning Atespace.
-  ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE = 0;
+  ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE = 1;
   // Published for use by Actors in any Atespace. The tag remains addressed
   // through its owning Atespace.
-  ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED = 1;
+  ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED = 2;
 }
 
 // Selector matches worker pools by label.
@@ -244,6 +249,11 @@ message Actor {
   repeated ExternalVolume actor_volumes = 11;
 
   string in_progress_local_snapshot_name = 12;
+
+  // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
+  // the Actor was not created from a snapshot. Set once at creation and
+  // immutable afterward.
+  ActorSnapshotSource source_snapshot = 14;
 }
 
 // WorkerAssignment identifies the Worker currently hosting an Actor.
@@ -304,13 +314,20 @@ message ObjectRef {
   string name = 2;
 }
 
-// ActorSnapshotRef addresses a snapshot by its canonical identity or by an
-// Atespace-owned tag. Tag addresses remain stable when tags are published.
-message ActorSnapshotRef {
-  oneof reference {
-    ObjectRef snapshot = 1;
-    ObjectRef tag = 2;
-  }
+// ActorSnapshotSource records how an Actor was seeded from an ActorSnapshot.
+// Set once at CreateActor; every field is immutable afterward.
+message ActorSnapshotSource {
+  // The tag specified by the caller at CreateActor.
+  ObjectRef tag = 1;
+
+  // Output only. Canonical (atespace, name) of the snapshot the tag
+  // resolved to at creation time.
+  ObjectRef snapshot = 2;
+
+  // Output only. UID of the snapshot resolved at creation time. Stays a
+  // permanent trail even if that snapshot is later deleted and its name
+  // reused by an unrelated snapshot.
+  string snapshot_uid = 3;
 }
 
 // SandboxClass selects the sandbox runtime family. Snapshots are not portable
@@ -319,15 +336,6 @@ enum SandboxClass {
   SANDBOX_CLASS_UNSPECIFIED = 0;
   SANDBOX_CLASS_GVISOR = 1;
   SANDBOX_CLASS_MICROVM = 2;
-}
-
-// ActorTemplateRef addresses a template by its canonical identity or by an
-// Atespace-owned ActorTemplateVersion.
-message ActorTemplateRef {
-  oneof reference {
-    ObjectRef actor_template_version = 1;
-    ObjectRef actor_template = 2;
-  }
 }
 
 // ActorTemplate an mutable, Atespace-owned resource that points to a default
@@ -710,9 +718,6 @@ message GetActorRequest {
 message CreateActorRequest {
   // The actor to create.
   Actor actor = 1;
-
-  // Optional durable snapshot used to initialize the Actor.
-  ActorSnapshotRef source_snapshot = 2;
 }
 
 // Request to update mutable fields on an existing Actor.
@@ -769,7 +774,11 @@ message DeleteActorRequest {
 }
 
 message GetActorSnapshotRequest {
-  ActorSnapshotRef snapshot = 1;
+  ObjectRef snapshot = 1;
+}
+
+message GetActorSnapshotTagRequest {
+  ObjectRef tag = 1;
 }
 
 message ListActorSnapshotsRequest {
@@ -783,9 +792,9 @@ message ListActorSnapshotsResponse {
   string next_page_token = 2;
 }
 
-message TagActorSnapshotRequest {
-  ActorSnapshotRef snapshot = 1;
-  ActorSnapshotTag tag = 2;
+message CreateActorSnapshotTagRequest {
+  // The tag to create.
+  ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
 // Request to update mutable fields on an existing ActorSnapshotTag.
@@ -871,6 +880,20 @@ message Worker {
     STATE_DRAINING = 2;
   }
   State state = 11;
+
+  // The compute capacity this worker can give an actor sandbox.
+  WorkerCapacity capacity = 12;
+}
+
+// WorkerCapacity is the worker pod's compute capacity available to host an
+// actor sandbox, taken from the ateom container's resource limits. The
+// scheduler only places an actor on a worker whose capacity is >= the actor's
+// declared resource limits. An unset message, or a zero field within it, means
+// "unknown/unset" for that dimension: treated as unconstrained so placement is
+// not blocked (matching the pre-capacity behavior).
+message WorkerCapacity {
+  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
+  int64 memory_bytes = 2; // Memory capacity in bytes.
 }
 
 message Assignment {

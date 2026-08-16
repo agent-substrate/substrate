@@ -211,7 +211,9 @@ To visualize traces locally:
    ```
    The kind overlay pins `ateapi` to `parentbased_always_on`, so API calls show up even without `--trace`; the flag additionally prints the trace ID and forces sampling on every hop.
 
-4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi` or `atelet` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
+4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi`, `atelet`, or `ateom-gvisor` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
+
+> ateom carries no manual spans — its only instrumentation is the `otelgrpc` interceptor on the gRPC surface `atelet` calls. So it produces a span for an actor lifecycle operation (`suspend`, `resume`) and nothing at all for a read like `kubectl ate get actor`. Its sampler is parent based, so a lifecycle command is traced end to end into ateom whenever `ateapi` roots a sampled trace, which the kind overlay makes unconditional; the per-component ratio never enters into it. To check whether ateom exported its spans through the [OTLP relay](#the-ateom-otlp-relay) rather than falling back to direct network egress, inspect the span's resource attributes: `ate.otlp.relay` will be set to `"relay"` (instead of `"direct"`).
 
 > **Developer Guide:** For detailed instructions on configuring OpenTelemetry tracer providers, middleware, and exporters in your servers or clients, please refer to the [Tracing Best Practices](dev/best-practices/tracing.md) guide.
 
@@ -233,6 +235,24 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 > Every component reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
 > ateom workers don't read the ConfigMap at all — `ate-controller` copies the value into each worker pod at creation. A new endpoint reaches them only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
+
+### The ateom OTLP relay
+
+ateom is the one component that does not talk to the collector directly. It exports over a unix socket at `/var/lib/ateom-gvisor/atelet-otlp.sock`, which `atelet` serves and forwards to the collector on the node's network ([`internal/otlprelay`](../internal/otlprelay)):
+
+```
+ateom ──OTLP/gRPC over unix socket──► atelet relay ──OTLP/gRPC──► collector
+```
+
+The socket sits in the `BasePath` hostPath already mounted into both, so nothing new is mounted. `atelet` is a DaemonSet, so every ateom on a node shares one relay, and the many per-pod collector connections collapse into one per node. Four things motivate it: the worker pod runs untrusted agent code and will not need egress to the collector once direct fallback is phased out; the connection count drops; ateom's own telemetry stays clear of the transparent egress redirect it installs for the actor; and `atelet` outlives the worker pod, so spans still queued at teardown are not lost with it.
+
+The relay is best-effort. If the socket is absent when ateom starts — `atelet` not up yet, `--otlp-relay-socket=""`, or no collector configured for the relay to forward to — ateom logs it and exports directly to `OTEL_EXPORTER_OTLP_ENDPOINT` as before. That fallback is decided once at startup, not per export, and is stamped on telemetry as the `ate.otlp.relay` resource attribute (`relay` vs `direct`).
+
+> **Note on Network Egress Lockdown:** Complete network policy lockdown of worker pod egress to the collector is planned as a Phase 2 milestone once the relay path is fully proven and direct fallback is deprecated. While the fallback path remains active, worker pods retain network egress to the collector and `ate-controller` continues to inject `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+For verified ateom sources, the relay forwards each request verbatim rather than decoding and re-exporting, which is what keeps every ateom its own service in Jaeger/GCP Trace instead of being absorbed into `atelet`'s. `ate-controller` injects `k8s.pod.name`, `k8s.namespace.name`, `k8s.pod.uid`, and `service.instance.id` directly into `OTEL_RESOURCE_ATTRIBUTES` via the Kubernetes Downward API; because the relay preserves resources verbatim, Kubernetes attributes remain intact even though the TCP connection to the collector originates from `atelet` rather than the worker pod IP (bypassing reliance on collector-side IP-based `k8sattributes` enrichment).
+
+Verbatim forwarding is restricted to known ateom sources and refuses anything else with `PermissionDenied`. Actor telemetry is what that excludes: actors share a hostname (`runsc`) and an interior IP, so their series merge unless identity is injected from outside the actor ([#761](https://github.com/agent-substrate/substrate/issues/761)) — a rewrite, which will be implemented as an explicit rewriting path alongside this forwarder.
 
 ---
 
