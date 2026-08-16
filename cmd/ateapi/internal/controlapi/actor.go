@@ -50,10 +50,6 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, toGRPCStatusError(errs)
 	}
 
-	//
-	// Handle the request
-	//
-
 	start := time.Now()
 	// Recorded only after validation, so every operation uniformly measures a
 	// validated request; malformed ones stay visible in rpc.server.call.duration.
@@ -63,11 +59,23 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 			ateattr.TemplateNamespaceKey.String(inActor.GetActorTemplateNamespace()),
 		)
 	}()
-	templateNamespace := inActor.GetActorTemplateNamespace()
-	templateName := inActor.GetActorTemplateName()
 
 	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
+	// Handle the creation, including validation of the final stored object.
+	stored, err := s.impl.CreateActor(ctx, inActor)
+	setSpanActorAttributes(ctx, stored)
 
+	return stored, err
+}
+
+func (s *ServiceImpl) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	// Check that the referenced ActorTemplate exists.
+	// FIXME: This is not atomic and it is not a guarantee that the template
+	// will still exist later.  Checking it here produces a nice error UX, but
+	// we still have to handle the template not existing later, which makes the
+	// UX inconsistent, at best.  Is it actually worth checking at all?
+	templateNamespace := actor.GetActorTemplateNamespace()
+	templateName := actor.GetActorTemplateName()
 	template, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
@@ -76,19 +84,24 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 
+	// If a source snapshot tag is requested, resolve it to a concrete
+	// snapshot.
 	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
-	if src := inActor.GetSourceSnapshot(); src != nil {
-		sourceSnapshotInfo, err = s.resolveSnapshotSource(ctx, inActor.GetMetadata().GetAtespace(), src, template)
+	if src := actor.GetSourceSnapshot(); src != nil {
+		sourceSnapshotInfo, err = s.resolveSnapshotSource(ctx, actor.GetMetadata().GetAtespace(), src, template)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	atespace := inActor.GetMetadata().GetAtespace()
-	name := inActor.GetMetadata().GetName()
+	atespace := actor.GetMetadata().GetAtespace()
+	name := actor.GetMetadata().GetName()
 
 	// The atespace must already exist.
-	exists, err := s.impl.AtespaceExists(ctx, atespace)
+	// FIXME: This is not atomic and it is not a guarantee that the atespace
+	// will still exist when we store the object.  This needs to be part of the
+	// storage operation's contract.
+	exists, err := s.AtespaceExists(ctx, atespace)
 	if err != nil {
 		return nil, fmt.Errorf("while checking atespace: %w", err)
 	}
@@ -102,26 +115,25 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, err
 	}
 
-	// Verify that the result is properly valid before storing it.
-	outActor := proto.CloneOf(inActor)
+	// Verify that the result is valid before storing it.
+	outActor := proto.CloneOf(actor)
 	outActor.Status = ateapipb.Actor_STATUS_SUSPENDED
 	outActor.ActorVolumes = initVols
 	outActor.LatestSnapshot = sourceSnapshotInfo.GetSnapshot()
 	outActor.SourceSnapshot = sourceSnapshotInfo
-	if errs := validateActorUpdate(ctx, outActor, inActor); len(errs) > 0 {
+	if errs := validateActorUpdate(ctx, outActor, actor); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.impl.CreateActor(ctx, outActor)
+	stored, err := s.Interface.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}
-		return nil, fmt.Errorf("while recording actor: %w", err)
+		return nil, fmt.Errorf("while creating actor: %w", err)
 	}
 
-	setSpanActorAttributes(ctx, stored)
 	return stored, nil
 }
 
@@ -162,9 +174,9 @@ func scrubResourceMetadata(in *ateapipb.ResourceMetadata) {
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
-func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace string, src *ateapipb.ActorSnapshotSource, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSnapshotSource, error) {
+func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace string, src *ateapipb.ActorSnapshotSource, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSnapshotSource, error) {
 	tagRef := src.GetTag()
-	tag, err := s.impl.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
+	tag, err := s.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -172,7 +184,7 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
 	}
 	snapshotRef := tag.GetSnapshot()
-	snapshot, err := s.impl.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
+	snapshot, err := s.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
