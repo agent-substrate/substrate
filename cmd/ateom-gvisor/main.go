@@ -302,6 +302,7 @@ func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunn
 }
 
 const (
+	rpcPrepareSandbox     = "PrepareSandbox"
 	rpcRunWorkload        = "RunWorkload"
 	rpcRestoreWorkload    = "RestoreWorkload"
 	rpcCheckpointWorkload = "CheckpointWorkload"
@@ -318,6 +319,24 @@ type activeRPCInfo struct {
 type workloadSession struct {
 	rcmd       *runsc
 	containers []string
+}
+
+// preparedSandbox is the root container started by PrepareSandbox and waiting
+// for the matching RunWorkload call. It is guarded by AteomService.lock.
+type preparedSandbox struct {
+	actorUID       string
+	runscPath      string
+	redirectEgress bool
+	cpuMilli       int64
+	memoryBytes    int64
+	durableVolumes []string
+	// rootDeleted makes DiscardPreparedSandbox retryable when later cleanup fails.
+	rootDeleted bool
+}
+
+func (p *preparedSandbox) matches(actorUID, runscPath string, redirectEgress bool, cpuMilli, memoryBytes int64, durableVolumes []string) bool {
+	return p.actorUID == actorUID && p.runscPath == runscPath && p.redirectEgress == redirectEgress &&
+		p.cpuMilli == cpuMilli && p.memoryBytes == memoryBytes && slices.Equal(p.durableVolumes, durableVolumes)
 }
 
 type cancelableMutex struct {
@@ -403,6 +422,10 @@ type AteomService struct {
 	// RunWorkload/RestoreWorkload, cleared by CheckpointWorkload. Guarded by lock.
 	activeSession *workloadSession
 
+	// prepared is non-nil between PrepareSandbox and the matching RunWorkload,
+	// or until DiscardPreparedSandbox tears the sandbox down.
+	prepared *preparedSandbox
+
 	activeRPCMu sync.Mutex
 	activeRPC   *activeRPCInfo
 
@@ -457,10 +480,10 @@ func (s *AteomService) clearActiveRPC() {
 	s.activeRPC = nil
 }
 
-func (s *AteomService) cancelActiveRestoreOrRunRPC() {
+func (s *AteomService) cancelActiveStartupRPC() {
 	s.activeRPCMu.Lock()
 	defer s.activeRPCMu.Unlock()
-	if s.activeRPC != nil && (s.activeRPC.name == rpcRestoreWorkload || s.activeRPC.name == rpcRunWorkload) {
+	if s.activeRPC != nil && (s.activeRPC.name == rpcPrepareSandbox || s.activeRPC.name == rpcRestoreWorkload || s.activeRPC.name == rpcRunWorkload) {
 		slog.Info("Cancelling in-progress workload startup RPC due to graceful shutdown", slog.String("rpc", s.activeRPC.name))
 		s.activeRPC.cancel()
 	}
@@ -470,10 +493,10 @@ func (s *AteomService) cancelActiveRestoreOrRunRPC() {
 // containers to exit.
 func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	s.shuttingDown.Store(true)
-	// If there is an active run or restore RPC, try to cancel it. This is considered
+	// If there is an active startup RPC, try to cancel it. This is considered
 	// less disruptive than waiting for it to complete and then immediately sending
 	// a SIGTERM.
-	s.cancelActiveRestoreOrRunRPC()
+	s.cancelActiveStartupRPC()
 
 	// Attempt to acquire the lock used to serialize ateom RPCs. This will wait for any
 	// pending RPCs to finish (suspend, resume, etc...). After the RPCs finish there
@@ -594,6 +617,130 @@ func containerNames(containers []*ateompb.Container) []string {
 	return names
 }
 
+// PrepareSandbox starts gVisor's root container while atelet continues pulling
+// and unpacking the application images.
+func (s *AteomService) PrepareSandbox(ctx context.Context, req *ateompb.PrepareSandboxRequest) (resp *ateompb.PrepareSandboxResponse, retErr error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if err := s.rejectIfDraining(); err != nil {
+		return nil, err
+	}
+	if req.GetActorUid() == "" || req.GetRunscPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "actor_uid and runsc_path are required")
+	}
+	if s.prepared != nil {
+		if s.prepared.rootDeleted {
+			return nil, status.Error(codes.FailedPrecondition, "prepared sandbox cleanup is incomplete")
+		}
+		if s.prepared.matches(req.GetActorUid(), req.GetRunscPath(), req.GetRedirectEgress(), req.GetCpuMilli(), req.GetMemoryBytes(), durableVolumeNames(req.GetSpec())) {
+			return &ateompb.PrepareSandboxResponse{}, nil
+		}
+		return nil, status.Error(codes.FailedPrecondition, "ateom already has a different prepared sandbox")
+	}
+	if s.activeSession != nil {
+		return nil, status.Error(codes.FailedPrecondition, "ateom already has a running workload")
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.setActiveRPC(rpcPrepareSandbox, cancel)
+	defer s.clearActiveRPC()
+
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
+	rcmd := &runsc{
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
+	}
+	rootCreated := false
+	networkConfigured := false
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cleanupCancel()
+		if rootCreated {
+			deleteContainers(cleanupCtx, rcmd, []string{"pause"}, "PrepareSandbox")
+		}
+		if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
+			slog.WarnContext(cleanupCtx, "Failed to unmount rootfs after PrepareSandbox failure", "actorUID", req.GetActorUid(), "err", err)
+		}
+		if networkConfigured {
+			if err := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after PrepareSandbox failure", slog.Any("err", err))
+			}
+		}
+	}()
+
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		DumpNetInfo:        true,
+		EgressRedirectPort: s.egressRedirectPort(req.GetRedirectEgress()),
+	}); err != nil {
+		return nil, fmt.Errorf("while setting up actor network: %w", err)
+	}
+	networkConfigured = true
+	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	}
+	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+		return nil, fmt.Errorf("while creating pause container: %w", err)
+	}
+	rootCreated = true
+	if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+		return nil, fmt.Errorf("while starting pause container: %w", err)
+	}
+
+	s.prepared = &preparedSandbox{
+		actorUID:       req.GetActorUid(),
+		runscPath:      req.GetRunscPath(),
+		redirectEgress: req.GetRedirectEgress(),
+		cpuMilli:       req.GetCpuMilli(),
+		memoryBytes:    req.GetMemoryBytes(),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
+	}
+	return &ateompb.PrepareSandboxResponse{}, nil
+}
+
+// DiscardPreparedSandbox releases a root sandbox when another concurrent
+// preparation step failed before RunWorkload could use it.
+func (s *AteomService) DiscardPreparedSandbox(ctx context.Context, req *ateompb.DiscardPreparedSandboxRequest) (*ateompb.DiscardPreparedSandboxResponse, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.prepared == nil {
+		return &ateompb.DiscardPreparedSandboxResponse{}, nil
+	}
+	if req.GetActorUid() != s.prepared.actorUID {
+		return nil, status.Errorf(codes.FailedPrecondition, "prepared sandbox belongs to actor %q", s.prepared.actorUID)
+	}
+
+	p := s.prepared
+	s.activeActor.Store(nil)
+	rcmd := &runsc{path: p.runscPath, actorUID: p.actorUID}
+	var cleanupErr error
+	if !p.rootDeleted {
+		if err := rcmd.cmdDelete(ctx, "pause"); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while deleting prepared pause container: %w", err))
+		} else {
+			p.rootDeleted = true
+		}
+	}
+	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(p.actorUID)); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while unmounting prepared sandbox rootfs: %w", err))
+	}
+	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while cleaning up prepared sandbox network: %w", err))
+	}
+	if cleanupErr == nil {
+		s.prepared = nil
+	}
+	return &ateompb.DiscardPreparedSandboxResponse{}, cleanupErr
+}
+
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -606,8 +753,17 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	s.setActiveRPC(rpcRunWorkload, cancel)
 	defer s.clearActiveRPC()
 
-	if err := s.deactivateActorNetworking(ctx); err != nil {
-		return nil, err
+	prepared := s.prepared != nil
+	if prepared && s.prepared.rootDeleted {
+		return nil, status.Error(codes.FailedPrecondition, "prepared sandbox cleanup is incomplete")
+	}
+	if prepared && !s.prepared.matches(req.GetActorUid(), req.GetRunscPath(), req.GetEgressGateway() != nil, req.GetCpuMilli(), req.GetMemoryBytes(), durableVolumeNames(req.GetSpec())) {
+		return nil, status.Error(codes.FailedPrecondition, "prepared sandbox does not match RunWorkload request")
+	}
+	if !prepared {
+		if err := s.deactivateActorNetworking(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
@@ -627,15 +783,15 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err != nil {
 		return nil, err
 	}
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
-		InteriorNetNS:      s.interiorNetNS,
-		DumpNetInfo:        true,
-		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
-	}); err != nil {
-		// Cleared here as well as in the deferred cleanup below, because that
-		// defer is not registered until after this check.
-		s.activeActor.Store(nil)
-		return nil, fmt.Errorf("while setting up actor network: %w", err)
+	if !prepared {
+		if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+			InteriorNetNS:      s.interiorNetNS,
+			DumpNetInfo:        true,
+			EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
+		}); err != nil {
+			s.activeActor.Store(nil)
+			return nil, fmt.Errorf("while setting up actor network: %w", err)
+		}
 	}
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
@@ -644,21 +800,21 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
 	var containersToDelete []string
+	if prepared {
+		containersToDelete = append(containersToDelete, "pause")
+		s.prepared = nil
+	}
 	defer func() {
 		if retErr != nil {
 			s.activeActor.Store(nil)
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cleanupCancel()
 			if err := s.deactivateActorNetworking(cleanupCtx); err != nil {
 				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
 			}
 			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Run")
-			// Detach any bundle rootfs overlays a partially-completed setup
-			// mounted, mirroring the post-checkpoint cleanup — otherwise they
-			// linger in this namespace until atelet wipes the bundle dirs.
-			// Run before the network cleanup.
 			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
+				slog.WarnContext(cleanupCtx, "Failed to unmount bundle rootfs overlays after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
 			if err := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); err != nil {
@@ -666,20 +822,22 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			}
 		}
 	}()
-	// Create and start pause container. The bundle rootfs is composed here —
-	// an overlay of the node's cached image layers plus the bundle's private
-	// upper — because mounting is ateom's job (atelet runs with no
-	// capabilities); runsc's gofer resolves the mount in this pod's mount
-	// namespace.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
-	}
-	containersToDelete = append(containersToDelete, "pause")
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
-	}
-	if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
+	if !prepared {
+		// Create and start pause container. The bundle rootfs is composed here —
+		// an overlay of the node's cached image layers plus the bundle's private
+		// upper — because mounting is ateom's job (atelet runs with no
+		// capabilities); runsc's gofer resolves the mount in this pod's mount
+		// namespace.
+		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+			return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+		}
+		containersToDelete = append(containersToDelete, "pause")
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+			return nil, fmt.Errorf("while creating pause container: %w", err)
+		}
+		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+			return nil, fmt.Errorf("while starting pause container: %w", err)
+		}
 	}
 
 	// Create and start each application container, each with its own log pipe so
@@ -724,6 +882,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if s.prepared != nil {
+		return nil, status.Error(codes.FailedPrecondition, "cannot checkpoint a prepared sandbox")
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -870,6 +1031,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	defer s.lock.Unlock()
 	if err := s.rejectIfDraining(); err != nil {
 		return nil, err
+	}
+	if s.prepared != nil {
+		return nil, status.Error(codes.FailedPrecondition, "cannot restore over a prepared sandbox")
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

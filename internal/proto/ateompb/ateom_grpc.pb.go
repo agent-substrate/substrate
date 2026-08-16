@@ -33,6 +33,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	Ateom_PrepareSandbox_FullMethodName         = "/ateom.Ateom/PrepareSandbox"
+	Ateom_DiscardPreparedSandbox_FullMethodName = "/ateom.Ateom/DiscardPreparedSandbox"
 	Ateom_RunWorkload_FullMethodName            = "/ateom.Ateom/RunWorkload"
 	Ateom_CheckpointWorkload_FullMethodName     = "/ateom.Ateom/CheckpointWorkload"
 	Ateom_RestoreWorkload_FullMethodName        = "/ateom.Ateom/RestoreWorkload"
@@ -48,7 +50,8 @@ const (
 // Ateom is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
-// Each ateom server has two main states, "available" and "executing".
+// Each ateom server may be available, have a prepared root sandbox, or be
+// executing a workload.
 //
 // When the ateom is "available", the substrate control plane is free to either
 // boot a new workload (using RunWorkload), or restore an existing workload from
@@ -59,6 +62,12 @@ const (
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
 type AteomClient interface {
+	// PrepareSandbox starts the root sandbox before application images finish
+	// downloading. RunWorkload later attaches and starts the applications.
+	PrepareSandbox(ctx context.Context, in *PrepareSandboxRequest, opts ...grpc.CallOption) (*PrepareSandboxResponse, error)
+	// DiscardPreparedSandbox tears down a sandbox that cannot be used because
+	// another concurrent preparation step failed.
+	DiscardPreparedSandbox(ctx context.Context, in *DiscardPreparedSandboxRequest, opts ...grpc.CallOption) (*DiscardPreparedSandboxResponse, error)
 	// RunWorkload tells ateom to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error)
@@ -134,6 +143,26 @@ func NewAteomClient(cc grpc.ClientConnInterface) AteomClient {
 	return &ateomClient{cc}
 }
 
+func (c *ateomClient) PrepareSandbox(ctx context.Context, in *PrepareSandboxRequest, opts ...grpc.CallOption) (*PrepareSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareSandboxResponse)
+	err := c.cc.Invoke(ctx, Ateom_PrepareSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) DiscardPreparedSandbox(ctx context.Context, in *DiscardPreparedSandboxRequest, opts ...grpc.CallOption) (*DiscardPreparedSandboxResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscardPreparedSandboxResponse)
+	err := c.cc.Invoke(ctx, Ateom_DiscardPreparedSandbox_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *ateomClient) RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunWorkloadResponse)
@@ -201,7 +230,8 @@ func (c *ateomClient) TerminateWorkload(ctx context.Context, in *TerminateWorklo
 // Ateom is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.
 //
-// Each ateom server has two main states, "available" and "executing".
+// Each ateom server may be available, have a prepared root sandbox, or be
+// executing a workload.
 //
 // When the ateom is "available", the substrate control plane is free to either
 // boot a new workload (using RunWorkload), or restore an existing workload from
@@ -212,6 +242,12 @@ func (c *ateomClient) TerminateWorkload(ctx context.Context, in *TerminateWorklo
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
 type AteomServer interface {
+	// PrepareSandbox starts the root sandbox before application images finish
+	// downloading. RunWorkload later attaches and starts the applications.
+	PrepareSandbox(context.Context, *PrepareSandboxRequest) (*PrepareSandboxResponse, error)
+	// DiscardPreparedSandbox tears down a sandbox that cannot be used because
+	// another concurrent preparation step failed.
+	DiscardPreparedSandbox(context.Context, *DiscardPreparedSandboxRequest) (*DiscardPreparedSandboxResponse, error)
 	// RunWorkload tells ateom to begin running a new workload (one or more
 	// containers, potentially with shared filesystems).
 	RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error)
@@ -287,6 +323,12 @@ type AteomServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAteomServer struct{}
 
+func (UnimplementedAteomServer) PrepareSandbox(context.Context, *PrepareSandboxRequest) (*PrepareSandboxResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareSandbox not implemented")
+}
+func (UnimplementedAteomServer) DiscardPreparedSandbox(context.Context, *DiscardPreparedSandboxRequest) (*DiscardPreparedSandboxResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DiscardPreparedSandbox not implemented")
+}
 func (UnimplementedAteomServer) RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RunWorkload not implemented")
 }
@@ -324,6 +366,42 @@ func RegisterAteomServer(s grpc.ServiceRegistrar, srv AteomServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&Ateom_ServiceDesc, srv)
+}
+
+func _Ateom_PrepareSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).PrepareSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_PrepareSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).PrepareSandbox(ctx, req.(*PrepareSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Ateom_DiscardPreparedSandbox_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiscardPreparedSandboxRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).DiscardPreparedSandbox(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_DiscardPreparedSandbox_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).DiscardPreparedSandbox(ctx, req.(*DiscardPreparedSandboxRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Ateom_RunWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -441,6 +519,14 @@ var Ateom_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "ateom.Ateom",
 	HandlerType: (*AteomServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PrepareSandbox",
+			Handler:    _Ateom_PrepareSandbox_Handler,
+		},
+		{
+			MethodName: "DiscardPreparedSandbox",
+			Handler:    _Ateom_DiscardPreparedSandbox_Handler,
+		},
 		{
 			MethodName: "RunWorkload",
 			Handler:    _Ateom_RunWorkload_Handler,

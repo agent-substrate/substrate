@@ -472,11 +472,6 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-	if err != nil {
-		return nil, err
-	}
-
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -492,20 +487,48 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
-	); err != nil {
-		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
-	}
-
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
 		return nil, err
 	}
-
+	if err := s.prepareOCIPrerequisites(ctx, actorUID, actorRef, req.GetSpec()); err != nil {
+		return nil, err
+	}
 	spec, err := buildAteomWorkloadSpec(req.GetSpec())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+	}
+
+	var assetPaths map[string]string
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		dependencies, dependenciesCtx := errgroup.WithContext(gctx)
+		dependencies.Go(func() (err error) {
+			assetPaths, err = s.ensureSandboxAssets(dependenciesCtx, sandboxRec)
+			return err
+		})
+		dependencies.Go(func() error {
+			return s.preparePauseOCIBundle(dependenciesCtx, actorUID, req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid())
+		})
+		if err := dependencies.Wait(); err != nil {
+			return err
+		}
+		return prepareSandbox(gctx, client, &ateompb.PrepareSandboxRequest{
+			ActorUid:          actorUID,
+			RunscPath:         runscPathFor(assetPaths),
+			RuntimeAssetPaths: assetPaths,
+			Spec:              spec,
+			RedirectEgress:    req.GetEgressGateway() != nil,
+			CpuMilli:          req.GetCpuMilli(),
+			MemoryBytes:       req.GetMemoryBytes(),
+		})
+	})
+	g.Go(func() error {
+		return s.prepareApplicationOCIBundles(gctx, actorUID, req.GetSpec(), req.GetTargetAteomUid())
+	})
+	if err := g.Wait(); err != nil {
+		discardPreparedSandbox(ctx, client, actorUID)
+		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
 	}
 
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
@@ -523,6 +546,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
 	}); err != nil {
+		discardPreparedSandbox(ctx, client, actorUID)
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
 
@@ -1546,6 +1570,20 @@ func (s *AteomHerder) prepareOCIBundles(
 	pauseImage string,
 	targetAteomUid string,
 ) error {
+	if err := s.prepareOCIPrerequisites(ctx, actorUID, actorRef, spec); err != nil {
+		return err
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return s.preparePauseOCIBundle(gctx, actorUID, spec, pauseImage, targetAteomUid)
+	})
+	g.Go(func() error {
+		return s.prepareApplicationOCIBundles(gctx, actorUID, spec, targetAteomUid)
+	})
+	return g.Wait()
+}
+
+func (s *AteomHerder) prepareOCIPrerequisites(ctx context.Context, actorUID string, actorRef resources.ActorRef, spec *ateletpb.WorkloadSpec) error {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
 		switch volSrc := vol.GetSource().(type) {
@@ -1562,32 +1600,32 @@ func (s *AteomHerder) prepareOCIBundles(
 			}
 		}
 	}
+	return nil
+}
 
-	g, gCtx := errgroup.WithContext(ctx)
+func (s *AteomHerder) preparePauseOCIBundle(ctx context.Context, actorUID string, spec *ateletpb.WorkloadSpec, pauseImage, targetAteomUID string) error {
+	if err := prepareOCIDirectory(
+		ctx,
+		s.imageCache,
+		actorUID,
+		ocispec.PauseContainer,
+		pauseImage,
+		[]string{"/pause"},
+		nil,
+		nil,
+		ateompath.AteomNetNSPath(targetAteomUID),
+		nil, // pause is sandbox infra; it mounts no volumes.
+		nil,
+		nil, // pause only reaps; it needs no capabilities.
+		nil, // pause carries no user-declared limits.
+	); err != nil {
+		return wrapFileSystemErr("while creating pause OCI bundle", err)
+	}
+	return nil
+}
 
-	// Pause container.
-	g.Go(func() error {
-		if err := prepareOCIDirectory(
-			gCtx,
-			s.imageCache,
-			actorUID,
-			ocispec.PauseContainer,
-			pauseImage,
-			[]string{"/pause"},
-			nil,
-			nil,
-			ateompath.AteomNetNSPath(targetAteomUid),
-			nil, // pause is sandbox infra; it mounts no volumes.
-			nil,
-			nil, // pause only reaps; it needs no capabilities.
-			nil, // pause carries no user-declared limits.
-		); err != nil {
-			return wrapFileSystemErr("while creating pause OCI bundle", err)
-		}
-		return nil
-	})
-
-	// Application containers.
+func (s *AteomHerder) prepareApplicationOCIBundles(ctx context.Context, actorUID string, spec *ateletpb.WorkloadSpec, targetAteomUID string) error {
+	g, gctx := errgroup.WithContext(ctx)
 	for _, ctr := range spec.GetContainers() {
 		ctr := ctr
 		var envs []string
@@ -1596,7 +1634,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		}
 		g.Go(func() error {
 			if err := prepareOCIDirectory(
-				gCtx,
+				gctx,
 				s.imageCache,
 				actorUID,
 				ctr.GetName(),
@@ -1604,7 +1642,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				ctr.GetCommand(),
 				ctr.GetArgs(),
 				envs,
-				ateompath.AteomNetNSPath(targetAteomUid),
+				ateompath.AteomNetNSPath(targetAteomUID),
 				spec.GetVolumes(),
 				ctr.GetVolumeMounts(),
 				resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
@@ -1615,7 +1653,6 @@ func (s *AteomHerder) prepareOCIBundles(
 			return nil
 		})
 	}
-
 	return g.Wait()
 }
 
@@ -1703,6 +1740,25 @@ func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
 		return fmt.Errorf("while writing system-info file %q: %w", dst, err)
 	}
 	return nil
+}
+
+// prepareSandbox is a no-op for runtimes and older ateom versions that do not
+// implement the split startup RPC; their RunWorkload path remains unchanged.
+func prepareSandbox(ctx context.Context, client ateompb.AteomClient, req *ateompb.PrepareSandboxRequest) error {
+	_, err := client.PrepareSandbox(ctx, req)
+	if status.Code(err) == codes.Unimplemented {
+		return nil
+	}
+	return err
+}
+
+func discardPreparedSandbox(ctx context.Context, client ateompb.AteomClient, actorUID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	_, err := client.DiscardPreparedSandbox(cleanupCtx, &ateompb.DiscardPreparedSandboxRequest{ActorUid: actorUID})
+	if err != nil && status.Code(err) != codes.Unimplemented {
+		slog.WarnContext(cleanupCtx, "Failed to discard prepared sandbox", slog.Any("err", err))
+	}
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
