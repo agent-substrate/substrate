@@ -256,7 +256,6 @@ func newTestDurDirUser(t *testing.T, srv *diskServer, cfg *userclass.Config) *du
 		hostHeader:   "duractor.benchmark." + actorDomain,
 		templateName: defaultDurTemplate,
 		userClass:    durDirUserClass,
-		actorRunning: true,
 		expectedSize: int64(len(srv.data)),
 	}
 }

@@ -138,7 +138,7 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) 
 		return nil, err
 	}
 	if err := u.bootstrap(ctx, dynCfg); err != nil {
-		u.delete(ctx)
+		u.suspendAndDelete(ctx)
 		bmetrics.UpdateUsers(durDirUserClass, -1)
 		return nil, err
 	}
@@ -148,10 +148,7 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) 
 func (r *durDirRuntime) shutdown(ctx context.Context) {
 	r.users.Range(func(_, val any) bool {
 		u := val.(*durDirUser)
-		if u.actorRunning {
-			u.suspend(ctx)
-		}
-		u.delete(ctx)
+		u.suspendAndDelete(ctx)
 		bmetrics.UpdateUsers(durDirUserClass, -1)
 		return true
 	})
@@ -163,7 +160,6 @@ type durDirUser struct {
 	hostHeader     string
 	templateName   string
 	userClass      string
-	actorRunning   bool
 	expectedDigest string
 	expectedSize   int64
 }
@@ -215,11 +211,7 @@ func (u *durDirUser) resume(ctx context.Context, mode string) bool {
 		}, grpc.Trailer(tr))
 		return err
 	})
-	if err != nil {
-		return false
-	}
-	u.actorRunning = true
-	return true
+	return err == nil
 }
 
 func (u *durDirUser) suspend(ctx context.Context) {
@@ -229,7 +221,17 @@ func (u *durDirUser) suspend(ctx context.Context) {
 		}, grpc.Trailer(tr))
 		return err
 	})
-	u.actorRunning = false
+}
+
+// suspendAndDelete suspends the actor before deleting it. DeleteActor requires
+// SUSPENDED or CRASHED; deleting a running actor leaks it. The suspend is
+// unmetered (teardown precondition, not benchmark latency), while the delete
+// is metered so true leaks still surface in failures.csv.
+func (u *durDirUser) suspendAndDelete(ctx context.Context) {
+	_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor: u.ref(),
+	})
+	u.delete(ctx)
 }
 
 func (u *durDirUser) delete(ctx context.Context) {
@@ -453,7 +455,6 @@ func (u *durDirUser) httpProtoCall(ctx context.Context, metricName, route string
 
 	logSampledTrace(span, metricName, clientLatency, sourceClient, nil)
 	bmetrics.RecordSuccess("http", metricName, u.userClass, clientLatency, int64(len(respBody)))
-	u.actorRunning = true
 	return respBody, nil
 }
 

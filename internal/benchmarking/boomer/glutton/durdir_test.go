@@ -72,9 +72,6 @@ func TestDurDirLoopSequence(t *testing.T) {
 			if got := srv.recordedPaths(); !reflect.DeepEqual(got, tc.wantHTTPCall) {
 				t.Errorf("HTTP calls: got %v, want %v", got, tc.wantHTTPCall)
 			}
-			if !du.actorRunning {
-				t.Errorf("actorRunning: got false, want true after successful step")
-			}
 		})
 	}
 }
@@ -233,20 +230,42 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 	}
 }
 
-func TestImplicitResumeDoesNotClaimRunningOnFailedServe(t *testing.T) {
+func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
 	srv := &diskServer{status: http.StatusInternalServerError}
-	cfg := &userclass.Config{
+	fakeCtrl := &fakeControlClient{}
+	cfg := newTestConfig(t, srv, &userclass.Config{
+		APIStub: fakeCtrl,
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			ResumeMode: dynconfig.ResumeModeImplicit,
+			DurDirFileSize: 1024,
+			ResumeMode:     dynconfig.ResumeModeExplicit,
 		}),
+	})
+
+	rt := &durDirRuntime{cfg: cfg}
+	_, err := rt.startUser(context.Background(), cfg.Dyn.Load())
+	if err == nil {
+		t.Fatalf("startUser expected error on failing server, got nil")
 	}
-	du := newTestDurDirUser(t, srv, cfg)
-	du.expectedDigest = "abcd"
 
-	dynCfg := cfg.Dyn.Load()
-	du.step(context.Background(), dynCfg)
+	calls := fakeCtrl.recordedCalls()
+	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
+		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
+	}
+}
 
-	if du.actorRunning {
-		t.Errorf("actorRunning: got true, want false after failed serve in implicit mode")
+func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
+	fakeCtrl := &fakeControlClient{}
+	cfg := &userclass.Config{
+		APIStub: fakeCtrl,
+	}
+	du := newTestDurDirUser(t, &diskServer{}, cfg)
+
+	rt := &durDirRuntime{cfg: du.cfg}
+	rt.users.Store(goroutineID(), du)
+	rt.shutdown(context.Background())
+
+	calls := fakeCtrl.recordedCalls()
+	if len(calls) < 2 || calls[len(calls)-2] != "SuspendActor" || calls[len(calls)-1] != "DeleteActor" {
+		t.Errorf("recordedCalls must end with [SuspendActor, DeleteActor], got %v", calls)
 	}
 }
