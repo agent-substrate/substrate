@@ -493,7 +493,21 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	if rec.PauseImage == "" {
 		return nil, fmt.Errorf("%w: sandbox record/manifest has no pauseImage", ateerrors.ReasonInvalidSandboxAsset)
 	}
+	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
+		return nil, fmt.Errorf("%w: sandbox record/manifest has invalid snapshotFiles: %w", ateerrors.ReasonInvalidSandboxAsset, err)
+	}
 	return rec, nil
+}
+
+// validateSnapshotFiles ensures that joining a reported snapshot path to its
+// checkpoint directory cannot escape that directory.
+func validateSnapshotFiles(files []string) error {
+	for i, name := range files {
+		if !filepath.IsLocal(name) {
+			return fmt.Errorf("snapshotFiles[%d] %q is not local to the checkpoint directory", i, name)
+		}
+	}
+	return nil
 }
 
 func wrapFileSystemErr(msg string, err error) error {
