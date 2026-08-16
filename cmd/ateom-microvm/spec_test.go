@@ -17,7 +17,10 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -25,6 +28,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/utils/ptr"
+
+	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // The device allowlist and CPU shares from defaultKataResources are the
@@ -209,5 +214,64 @@ func TestCheckResourceEnvelope(t *testing.T) {
 				t.Errorf("status code = %v, want InvalidArgument so a permanent misconfiguration does not read as a server fault", got)
 			}
 		})
+	}
+}
+
+// A container's own declared limit is what must bind inside the guest. The
+// actor-level size sizes the VM; stamping it over each container would replace
+// the declared value with the actor total and silently unbound the container.
+func TestEnsureKataCompatibleSpec_KeepsDeclaredContainerLimits(t *testing.T) {
+	const declared = 64 * 1024 * 1024
+	bundle := t.TempDir()
+	in := specs.Spec{Linux: &specs.Linux{Resources: &specs.LinuxResources{
+		Memory: &specs.LinuxMemory{Limit: ptr.To(int64(declared))},
+	}}}
+	b, err := json.Marshal(&in)
+	if err != nil {
+		t.Fatalf("marshaling input spec: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "config.json"), b, 0o600); err != nil {
+		t.Fatalf("writing config.json: %v", err)
+	}
+
+	// An actor-level size far larger than the container's own limit.
+	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net",
+		sizing.SandboxSize{MemoryBytes: 2048 * 1024 * 1024, MilliCPU: 4000})
+	if err != nil {
+		t.Fatalf("ensureKataCompatibleSpec() = %v", err)
+	}
+
+	if got.Linux.Resources.Memory == nil || got.Linux.Resources.Memory.Limit == nil {
+		t.Fatal("memory limit = nil, want the declared 64Mi")
+	}
+	if v := *got.Linux.Resources.Memory.Limit; v != declared {
+		t.Errorf("memory limit = %d, want %d (the container's own declared limit)", v, declared)
+	}
+}
+
+// A container that declares nothing must stay unbounded inside the guest: guest
+// RAM is the real ceiling, and a cap equal to the whole guest can never bind.
+func TestEnsureKataCompatibleSpec_LeavesUndeclaredContainerUnlimited(t *testing.T) {
+	bundle := t.TempDir()
+	in := specs.Spec{Linux: &specs.Linux{}}
+	b, err := json.Marshal(&in)
+	if err != nil {
+		t.Fatalf("marshaling input spec: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "config.json"), b, 0o600); err != nil {
+		t.Fatalf("writing config.json: %v", err)
+	}
+
+	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net",
+		sizing.SandboxSize{MemoryBytes: 2048 * 1024 * 1024, MilliCPU: 4000})
+	if err != nil {
+		t.Fatalf("ensureKataCompatibleSpec() = %v", err)
+	}
+
+	if m := got.Linux.Resources.Memory; m != nil && m.Limit != nil && *m.Limit > 0 {
+		t.Errorf("memory limit = %d, want unset for a container that declared none", *m.Limit)
+	}
+	if c := got.Linux.Resources.CPU; c != nil && c.Quota != nil && *c.Quota > 0 {
+		t.Errorf("cpu quota = %d, want unset for a container that declared none", *c.Quota)
 	}
 }
