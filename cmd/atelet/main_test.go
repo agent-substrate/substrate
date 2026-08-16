@@ -68,6 +68,20 @@ const (
 	goldenSnapshotURI = "gs://" + goldenSnapshotPath
 )
 
+type unimplementedPrepareClient struct {
+	ateompb.AteomClient
+}
+
+func (unimplementedPrepareClient) PrepareSandbox(context.Context, *ateompb.PrepareSandboxRequest, ...grpc.CallOption) (*ateompb.PrepareSandboxResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "runtime uses RunWorkload")
+}
+
+func TestPrepareSandboxFallsBackWhenUnimplemented(t *testing.T) {
+	if err := prepareSandbox(context.Background(), unimplementedPrepareClient{}, &ateompb.PrepareSandboxRequest{}); err != nil {
+		t.Fatalf("prepareSandbox returned an error for a runtime without the split RPC: %v", err)
+	}
+}
+
 // TestPortFlagDefault verifies the default value of the --port flag.
 func TestPortFlagDefault(t *testing.T) {
 	f := pflag.Lookup("port")
