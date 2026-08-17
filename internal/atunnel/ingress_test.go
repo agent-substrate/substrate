@@ -30,7 +30,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 	"time"
 )
@@ -287,8 +286,8 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := s.tlsConfig.NextProtos, []string{"h2", "http/1.1"}; !slices.Equal(got, want) {
-		t.Fatalf("ALPN protocols = %v, want %v", got, want)
+	if got := s.tlsConfig.NextProtos; len(got) != 0 {
+		t.Fatalf("ordinary ingress ALPN protocols = %v, want none", got)
 	}
 
 	untrustedCA := newTestCA(t)

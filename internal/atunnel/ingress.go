@@ -156,10 +156,6 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	s.tlsConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		// HTTP/1.1 CONNECT is relayed by hijacking the connection; HTTP/2
-		// CONNECT uses its request and response streams instead. Advertising both
-		// makes the choice an ALPN negotiation rather than a listener setting.
-		NextProtos: []string{"h2", "http/1.1"},
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return loadCredentialBundle(s.credentialBundlePath)
 		},
@@ -199,20 +195,25 @@ func loadCredentialBundle(path string) (*tls.Certificate, error) {
 
 // Serve serves HTTPS on lis until ctx is canceled or the server fails.
 func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
-	return s.serve(ctx, lis, s)
+	return s.serve(ctx, lis, s, s.tlsConfig)
 }
 
 // ServeConnect serves the mTLS CONNECT endpoint. CONNECT is deliberately on a
 // separate listener so ordinary actor ingress remains a request proxy, while
 // the router can use this listener for a bidirectional tunnel.
 func (s *Server) ServeConnect(ctx context.Context, lis net.Listener) error {
-	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP))
+	// Keep ALPN confined to the CONNECT listener. The established ingress
+	// listener is explicitly HTTP/1.1 in the router's upstream cluster, while
+	// the CONNECT listener supports either HTTP/1.1 or HTTP/2.
+	tlsConfig := s.tlsConfig.Clone()
+	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
+	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), tlsConfig)
 }
 
-func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handler) error {
+func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handler, tlsConfig *tls.Config) error {
 	httpServer := &http.Server{
 		Handler:           handler,
-		TLSConfig:         s.tlsConfig,
+		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	done := make(chan struct{})
