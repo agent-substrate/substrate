@@ -163,7 +163,7 @@ func TestUpdateActor_Success(t *testing.T) {
 	}
 
 	actorRef := resources.ActorRefFromActor(actor)
-	updated, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+	updated, err := s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
@@ -208,7 +208,7 @@ func TestUpdateActor_MutateErrorAreNotRetried(t *testing.T) {
 
 	actorRef := resources.ActorRefFromActor(actor)
 	callsToMutateFn := 0
-	_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+	_, err = s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 		callsToMutateFn++
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return fmt.Errorf("actor %s: %w", actorRef, mutationError)
@@ -241,7 +241,7 @@ func TestUpdateActor_DiscardsServerOwnedFieldsEdits(t *testing.T) {
 	}
 
 	actorRef := resources.ActorRefFromActor(actor)
-	updated, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+	updated, err := s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 		// Metadata is server-owned: a closure must not be able to change it.
 		toUpdate.Metadata.Uid = "forged-uid"
 		toUpdate.Metadata.Version = 99
@@ -309,7 +309,7 @@ func TestUpdateActor_RejectsImmutableFieldChange(t *testing.T) {
 			}
 
 			actorRef := resources.ActorRefFromActor(actor)
-			_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+			_, err = s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 				// Paired with a legitimate edit, so the rejection cannot be
 				// mistaken for a no-op mutation.
 				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
@@ -384,7 +384,7 @@ func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
 	}}
 	racing := &Persistence{rdb: interceptor, lockTTL: defaultLockTTL}
 
-	updated, err := racing.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+	updated, err := racing.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 		attempts++
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
@@ -407,7 +407,7 @@ func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
 
 func TestUpdateActor_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
-	_, err := s.UpdateActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}, func(toUpdate *ateapipb.Actor) error {
+	_, err := s.UpdateActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate must not run for a missing actor")
 		return nil
 	})
@@ -424,7 +424,7 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	actorRef := resources.ActorRefFromActor(original)
-	if _, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+	if _, err := s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 		return nil
 	}); err != nil {
@@ -441,16 +441,13 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 		t.Fatalf("recreated actor reused uid %s, want a fresh one", recreated.GetMetadata().GetUid())
 	}
 
-	// Pins the incarnation alone: the observed actor carries the original uid and
-	// no version.
-	pinUID := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Uid: original.GetMetadata().GetUid(), Version: store.AnyVersion},
-	}
-	_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(pinUID, func(toUpdate *ateapipb.Actor) error {
+	// Pins the incarnation alone, waiving the version.
+	pinUID := store.Precondition{UID: original.GetMetadata().GetUid()}
+	_, err = s.UpdateActor(ctx, actorRef, pinUID, func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate ran past its precondition once the pinned incarnation was gone")
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
-	}))
+	})
 	if !errors.Is(err, store.ErrUIDConflict) {
 		t.Errorf("UpdateActor error = %v, want one matching store.ErrUIDConflict", err)
 	}
@@ -478,7 +475,7 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 	}
 	actorRef := resources.ActorRefFromActor(created)
 
-	if _, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+	if _, err := s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	}); err != nil {
@@ -486,11 +483,11 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 	}
 
 	// The write above moved the version, so created is now a stale observation.
-	_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(created, func(toUpdate *ateapipb.Actor) error {
+	_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate ran past its precondition once the pinned version had moved")
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		return nil
-	}))
+	})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("UpdateActor error = %v, want one matching store.ErrVersionConflict", err)
 	}
@@ -992,7 +989,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if _, err := s.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("re-tag with different scope error = %v, want ErrAlreadyExists", err)
 	}
-	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 		return nil
 	})
@@ -1049,7 +1046,7 @@ func TestUpdateActorSnapshotTag_MutateErrorAreNotRetried(t *testing.T) {
 	var mutationError = errors.New("mutation error")
 
 	callsToMutateFn := 0
-	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		callsToMutateFn++
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 		return fmt.Errorf("tag %s/%s: %w", testAtespace, "tag-1", mutationError)
@@ -1076,7 +1073,7 @@ func TestUpdateActorSnapshotTag_DiscardsServerOwnedFieldsEdits(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	tagged := seedTaggedSnapshot(t, s, ctx, "snapshot-1", "tag-1")
 
-	updated, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	updated, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		// Metadata is server-owned: a closure must not be able to change it.
 		toUpdate.Metadata.Uid = "forged-uid"
 		toUpdate.Metadata.Version = 99
@@ -1140,7 +1137,7 @@ func TestUpdateActorSnapshotTag_RejectsImmutableFieldChange(t *testing.T) {
 			_, s, ctx := setupTest(t)
 			tagged := seedTaggedSnapshot(t, s, ctx, "snapshot-1", "tag-1")
 
-			_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", func(toUpdate *ateapipb.ActorSnapshotTag) error {
+			_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 				// Paired with a legitimate edit, so the rejection cannot be
 				// mistaken for a no-op mutation.
 				toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
@@ -1199,7 +1196,7 @@ func TestUpdateActorSnapshotTag_RetriesOnConcurrentWrite(t *testing.T) {
 	}}
 	racing := &Persistence{rdb: interceptor, lockTTL: defaultLockTTL}
 
-	updated, err := racing.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	updated, err := racing.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		attempts++
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 		return nil
@@ -1223,7 +1220,7 @@ func TestUpdateActorSnapshotTag_RetriesOnConcurrentWrite(t *testing.T) {
 
 func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
-	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "does-not-exist", func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "does-not-exist", store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		t.Error("mutate must not run for a missing tag")
 		return nil
 	})
@@ -1255,16 +1252,13 @@ func TestUpdateActorSnapshotTag_RejectsStaleUID(t *testing.T) {
 		t.Fatalf("recreated version = %d, want %d: the version cannot tell the lifecycles apart", got, want)
 	}
 
-	// Pins the incarnation alone: the observed tag carries the original uid and
-	// no version.
-	pinUID := &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Uid: original.GetMetadata().GetUid(), Version: store.AnyVersion},
-	}
-	_, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.WithPrecondition(pinUID, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	// Pins the incarnation alone, waiving the version.
+	pinUID := store.Precondition{UID: original.GetMetadata().GetUid()}
+	_, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", pinUID, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		t.Error("mutate ran past its precondition once the pinned incarnation was gone")
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 		return nil
-	}))
+	})
 	if !errors.Is(err, store.ErrUIDConflict) {
 		t.Errorf("UpdateActorSnapshotTag error = %v, want one matching store.ErrUIDConflict", err)
 	}
@@ -1288,7 +1282,7 @@ func TestUpdateActorSnapshotTag_RejectsStaleVersion(t *testing.T) {
 
 	tagged := seedTaggedSnapshot(t, s, ctx, "snapshot-1", "tag-1")
 
-	if _, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	if _, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 		return nil
 	}); err != nil {
@@ -1296,11 +1290,11 @@ func TestUpdateActorSnapshotTag_RejectsStaleVersion(t *testing.T) {
 	}
 
 	// The write above moved the version, so tagged is now a stale observation.
-	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.WithPrecondition(tagged, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.PreconditionFrom(tagged), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		t.Error("mutate ran past its precondition once the pinned version had moved")
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE
 		return nil
-	}))
+	})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("UpdateActorSnapshotTag error = %v, want one matching store.ErrVersionConflict", err)
 	}
@@ -2548,7 +2542,7 @@ func TestActorTemplateExists(t *testing.T) {
 
 func TestUpdateActorTemplate_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
-	_, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "non-existent"}, func(dbTemplate *ateapipb.ActorTemplate) error {
+	_, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "non-existent"}, store.NoPrecondition, func(dbTemplate *ateapipb.ActorTemplate) error {
 		t.Error("mutate must not run for a missing template")
 		return nil
 	})

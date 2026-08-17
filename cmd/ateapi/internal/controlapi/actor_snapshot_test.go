@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -483,7 +484,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUnguardedUpdate(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActorSnapshotTag(ctx, testAtespace, tagName, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+			if _, err := persistence.UpdateActorSnapshotTag(ctx, testAtespace, tagName, store.NoPrecondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 				toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE
 				return nil
 			}); err != nil {

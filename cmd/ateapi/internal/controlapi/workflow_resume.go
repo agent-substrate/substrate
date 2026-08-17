@@ -254,18 +254,19 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetActorVolumes())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
-	persistVolumes := store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	updatePrecondition := store.PreconditionFrom(actor)
+	persistVolumes := func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.ActorVolumes = volumes
 		return nil
-	})
+	}
 	if createErr != nil {
 		// Even if volume creation failed, we still want to persist any updated volume state.
-		if _, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes); updateErr != nil {
+		if _, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes); updateErr != nil {
 			slog.ErrorContext(ctx, "failed to update actor volumes on volume creation failure in resume", slog.Any("error", updateErr))
 		}
 		return nil, createErr
 	}
-	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes)
+	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes)
 	if updateErr != nil {
 		if errors.Is(updateErr, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -509,11 +510,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	newAssignment := workerAssignmentFrom(assignedWorker)
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
 		return nil
-	}))
+	})
 	if err != nil {
 		if !errors.Is(err, store.ErrVersionConflict) {
 			return nil, nil, err
@@ -763,10 +764,10 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil, err
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

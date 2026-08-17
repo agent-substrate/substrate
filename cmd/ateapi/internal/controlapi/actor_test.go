@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -404,7 +405,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+			if _, err := persistence.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 				return nil
 			}); err != nil {
@@ -487,7 +488,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+			if _, err := persistence.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
 				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 				return nil
 			}); err != nil {
