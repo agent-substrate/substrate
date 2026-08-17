@@ -40,6 +40,8 @@ demo-egress_deploy() {
   # ("egress"), the same way demo-counter gets "deployment/counter". The old
   # "egress-deployment" name was NotFound on every successful deploy.
   run_kubectl rollout status deployment/egress -n ate-demo-egress --timeout=300s
+  # The TCP origin for the non-HTTP egress tests.
+  run_kubectl rollout status deployment/bannerserver -n ate-demo-egress --timeout=300s
   run_kubectl wait --for=condition=Ready actortemplate/egress -n ate-demo-egress --timeout=300s
 }
 
