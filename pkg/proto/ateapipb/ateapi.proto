@@ -88,7 +88,7 @@ service Control {
 
   rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {}
 
-  rpc ListActorTemplate(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
+  rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
 
   // Delete an ActorTemplate together with its golden actor and golden
   // snapshot in the ActorTemplate's namespace.
@@ -323,36 +323,32 @@ message ActorTemplate {
   // Common resource metadata: atespace, name, uid, version, timestamps.
   ResourceMetadata metadata = 1;
 
-  // actor_template is the parent ActorTemplate. Required at creation and
-  // immutable.
-  ObjectRef actor_template = 2;
-
   // worker_selector restricts which worker pools actors from this template
   // may use.
-  Selector worker_selector = 3;
+  Selector worker_selector = 2;
 
-  repeated Container containers = 4;
+  repeated Container containers = 3;
 
-  repeated Volume volumes = 5;
+  repeated Volume volumes = 4;
 
-  SnapshotsConfig snapshots_config = 6;
+  SnapshotsConfig snapshots_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
   // Required. Resolved and frozen into resolved_sandbox at creation time.
-  SandboxConfig sandbox_config = 7;
+  SandboxConfig sandbox_config = 6;
 
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
   // READY.
-  ObjectRef golden_snapshot = 8;
+  ObjectRef golden_snapshot = 7;
 
   // State machine, mirroring the ActorTemplate CRD PhaseType:
   // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
   // READY and FAILED are terminal; the version is only usable once READY.
-  ActorTemplatePhase phase = 9;
+  ActorTemplatePhase phase = 8;
 
   // Resource usage configuration.
-  Resources resources = 10;
+  Resources resources = 9;
 }
 
 message Resources {

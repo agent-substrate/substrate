@@ -1412,9 +1412,6 @@ type ActorTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	// actor_template is the parent ActorTemplate. Required at creation and
-	// immutable.
-	ActorTemplate *ObjectRef `protobuf:"bytes,2,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	// worker_selector restricts which worker pools actors from this template
 	// may use.
 	WorkerSelector  *Selector        `protobuf:"bytes,3,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
@@ -1471,13 +1468,6 @@ func (*ActorTemplate) Descriptor() ([]byte, []int) {
 func (x *ActorTemplate) GetMetadata() *ResourceMetadata {
 	if x != nil {
 		return x.Metadata
-	}
-	return nil
-}
-
-func (x *ActorTemplate) GetActorTemplate() *ObjectRef {
-	if x != nil {
-		return x.ActorTemplate
 	}
 	return nil
 }
@@ -4847,10 +4837,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13ActorSnapshotSource\x12#\n" +
 	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\x12-\n" +
 	"\bsnapshot\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\bsnapshot\x12!\n" +
-	"\fsnapshot_uid\x18\x03 \x01(\tR\vsnapshotUid\"\xb8\x04\n" +
+	"\fsnapshot_uid\x18\x03 \x01(\tR\vsnapshotUid\"\xfe\x03\n" +
 	"\rActorTemplate\x124\n" +
-	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
-	"\x0eactor_template\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x129\n" +
+	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x129\n" +
 	"\x0fworker_selector\x18\x03 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x121\n" +
 	"\n" +
 	"containers\x18\x04 \x03(\v2\x11.ateapi.ContainerR\n" +
@@ -5098,7 +5087,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x14RESUME_SOURCE_GOLDEN\x10\x02*k\n" +
 	"\x17ActorCertificatePurpose\x12)\n" +
 	"%ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED\x10\x00\x12%\n" +
-	"!ACTOR_CERTIFICATE_PURPOSE_ATUNNEL\x10\x012\xea\r\n" +
+	"!ACTOR_CERTIFICATE_PURPOSE_ATUNNEL\x10\x012\xeb\r\n" +
 	"\aControl\x124\n" +
 	"\bGetActor\x12\x17.ateapi.GetActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
 	"\vCreateActor\x12\x1a.ateapi.CreateActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
@@ -5122,8 +5111,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rListAtespaces\x12\x1c.ateapi.ListAtespacesRequest\x1a\x1d.ateapi.ListAtespacesResponse\"\x00\x12C\n" +
 	"\x0eDeleteAtespace\x12\x1d.ateapi.DeleteAtespaceRequest\x1a\x10.ateapi.Atespace\"\x00\x12R\n" +
 	"\x13CreateActorTemplate\x12\".ateapi.CreateActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x00\x12L\n" +
-	"\x10GetActorTemplate\x12\x1f.ateapi.GetActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x00\x12\\\n" +
-	"\x11ListActorTemplate\x12!.ateapi.ListActorTemplatesRequest\x1a\".ateapi.ListActorTemplatesResponse\"\x00\x12R\n" +
+	"\x10GetActorTemplate\x12\x1f.ateapi.GetActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x00\x12]\n" +
+	"\x12ListActorTemplates\x12!.ateapi.ListActorTemplatesRequest\x1a\".ateapi.ListActorTemplatesResponse\"\x00\x12R\n" +
 	"\x13DeleteActorTemplate\x12\".ateapi.DeleteActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x002N\n" +
 	"\x05Debug\x12E\n" +
 	"\n" +
@@ -5261,126 +5250,125 @@ var file_ateapi_proto_depIdxs = []int32{
 	18,  // 23: ateapi.ActorSnapshotSource.tag:type_name -> ateapi.ObjectRef
 	18,  // 24: ateapi.ActorSnapshotSource.snapshot:type_name -> ateapi.ObjectRef
 	11,  // 25: ateapi.ActorTemplate.metadata:type_name -> ateapi.ResourceMetadata
-	18,  // 26: ateapi.ActorTemplate.actor_template:type_name -> ateapi.ObjectRef
-	10,  // 27: ateapi.ActorTemplate.worker_selector:type_name -> ateapi.Selector
-	27,  // 28: ateapi.ActorTemplate.containers:type_name -> ateapi.Container
-	31,  // 29: ateapi.ActorTemplate.volumes:type_name -> ateapi.Volume
-	25,  // 30: ateapi.ActorTemplate.snapshots_config:type_name -> ateapi.SnapshotsConfig
-	24,  // 31: ateapi.ActorTemplate.sandbox_config:type_name -> ateapi.SandboxConfig
-	18,  // 32: ateapi.ActorTemplate.golden_snapshot:type_name -> ateapi.ObjectRef
-	23,  // 33: ateapi.ActorTemplate.phase:type_name -> ateapi.ActorTemplatePhase
-	21,  // 34: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
-	22,  // 35: ateapi.Resources.limits:type_name -> ateapi.Limits
-	7,   // 36: ateapi.ActorTemplatePhase.phase:type_name -> ateapi.ActorTemplatePhase.Phase
-	2,   // 37: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
-	35,  // 38: ateapi.SandboxConfig.sandbox_assets:type_name -> ateapi.SandboxAssets
-	0,   // 39: ateapi.SnapshotsConfig.on_pause:type_name -> ateapi.SnapshotContentScope
-	0,   // 40: ateapi.SnapshotsConfig.on_commit:type_name -> ateapi.SnapshotContentScope
-	26,  // 41: ateapi.SnapshotsConfig.on_resume:type_name -> ateapi.OnResumeConfig
-	3,   // 42: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
-	28,  // 43: ateapi.Container.env:type_name -> ateapi.EnvVar
-	29,  // 44: ateapi.Container.readyz:type_name -> ateapi.ContainerReadyz
-	34,  // 45: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
-	30,  // 46: ateapi.ContainerReadyz.http_get:type_name -> ateapi.HTTPGetAction
-	32,  // 47: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
-	33,  // 48: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
-	2,   // 49: ateapi.SandboxAssets.sandbox_class:type_name -> ateapi.SandboxClass
-	81,  // 50: ateapi.SandboxAssets.assets:type_name -> ateapi.SandboxAssets.AssetsEntry
-	82,  // 51: ateapi.ArchAssets.files:type_name -> ateapi.ArchAssets.FilesEntry
-	17,  // 52: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
-	18,  // 53: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	17,  // 54: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
-	18,  // 55: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	20,  // 56: ateapi.CreateActorTemplateRequest.actor_template:type_name -> ateapi.ActorTemplate
-	18,  // 57: ateapi.GetActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
-	20,  // 58: ateapi.ListActorTemplatesResponse.actor_templates:type_name -> ateapi.ActorTemplate
-	18,  // 59: ateapi.DeleteActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
-	18,  // 60: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
-	13,  // 61: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
-	13,  // 62: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
-	85,  // 63: ateapi.UpdateActorRequest.update_mask:type_name -> google.protobuf.FieldMask
-	18,  // 64: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
-	13,  // 65: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
-	18,  // 66: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
-	13,  // 67: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
-	18,  // 68: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
-	13,  // 69: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
-	18,  // 70: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
-	18,  // 71: ateapi.GetActorSnapshotRequest.snapshot:type_name -> ateapi.ObjectRef
-	18,  // 72: ateapi.GetActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
-	15,  // 73: ateapi.ListActorSnapshotsResponse.snapshots:type_name -> ateapi.ActorSnapshot
-	16,  // 74: ateapi.CreateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
-	16,  // 75: ateapi.UpdateActorSnapshotTagRequest.tag:type_name -> ateapi.ActorSnapshotTag
-	85,  // 76: ateapi.UpdateActorSnapshotTagRequest.update_mask:type_name -> google.protobuf.FieldMask
-	18,  // 77: ateapi.DeleteActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
-	69,  // 78: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
-	13,  // 79: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
-	71,  // 80: ateapi.Worker.assignment:type_name -> ateapi.Assignment
-	83,  // 81: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
-	8,   // 82: ateapi.Worker.state:type_name -> ateapi.Worker.State
-	70,  // 83: ateapi.Worker.capacity:type_name -> ateapi.WorkerCapacity
-	72,  // 84: ateapi.Assignment.actor_template:type_name -> ateapi.KubeNamespacedObjectRef
-	18,  // 85: ateapi.Assignment.actor:type_name -> ateapi.ObjectRef
-	4,   // 86: ateapi.MintCertRequest.purpose:type_name -> ateapi.ActorCertificatePurpose
-	36,  // 87: ateapi.SandboxAssets.AssetsEntry.value:type_name -> ateapi.ArchAssets
-	37,  // 88: ateapi.ArchAssets.FilesEntry.value:type_name -> ateapi.AssetFile
-	48,  // 89: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
-	49,  // 90: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
-	50,  // 91: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
-	51,  // 92: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
-	53,  // 93: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
-	55,  // 94: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
-	57,  // 95: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
-	58,  // 96: ateapi.Control.GetActorSnapshot:input_type -> ateapi.GetActorSnapshotRequest
-	59,  // 97: ateapi.Control.GetActorSnapshotTag:input_type -> ateapi.GetActorSnapshotTagRequest
-	60,  // 98: ateapi.Control.ListActorSnapshots:input_type -> ateapi.ListActorSnapshotsRequest
-	62,  // 99: ateapi.Control.CreateActorSnapshotTag:input_type -> ateapi.CreateActorSnapshotTagRequest
-	63,  // 100: ateapi.Control.UpdateActorSnapshotTag:input_type -> ateapi.UpdateActorSnapshotTagRequest
-	64,  // 101: ateapi.Control.DeleteActorSnapshotTag:input_type -> ateapi.DeleteActorSnapshotTagRequest
-	65,  // 102: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
-	67,  // 103: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
-	38,  // 104: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
-	39,  // 105: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
-	40,  // 106: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
-	42,  // 107: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	43,  // 108: ateapi.Control.CreateActorTemplate:input_type -> ateapi.CreateActorTemplateRequest
-	44,  // 109: ateapi.Control.GetActorTemplate:input_type -> ateapi.GetActorTemplateRequest
-	45,  // 110: ateapi.Control.ListActorTemplate:input_type -> ateapi.ListActorTemplatesRequest
-	47,  // 111: ateapi.Control.DeleteActorTemplate:input_type -> ateapi.DeleteActorTemplateRequest
-	73,  // 112: ateapi.Debug.DebugClear:input_type -> ateapi.DebugClearRequest
-	75,  // 113: ateapi.ActorIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
-	77,  // 114: ateapi.ActorIdentity.MintCert:input_type -> ateapi.MintCertRequest
-	13,  // 115: ateapi.Control.GetActor:output_type -> ateapi.Actor
-	13,  // 116: ateapi.Control.CreateActor:output_type -> ateapi.Actor
-	13,  // 117: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
-	52,  // 118: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
-	54,  // 119: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
-	56,  // 120: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
-	13,  // 121: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
-	15,  // 122: ateapi.Control.GetActorSnapshot:output_type -> ateapi.ActorSnapshot
-	16,  // 123: ateapi.Control.GetActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	61,  // 124: ateapi.Control.ListActorSnapshots:output_type -> ateapi.ListActorSnapshotsResponse
-	16,  // 125: ateapi.Control.CreateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	16,  // 126: ateapi.Control.UpdateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	16,  // 127: ateapi.Control.DeleteActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	66,  // 128: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
-	68,  // 129: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
-	17,  // 130: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
-	17,  // 131: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
-	41,  // 132: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
-	17,  // 133: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
-	20,  // 134: ateapi.Control.CreateActorTemplate:output_type -> ateapi.ActorTemplate
-	20,  // 135: ateapi.Control.GetActorTemplate:output_type -> ateapi.ActorTemplate
-	46,  // 136: ateapi.Control.ListActorTemplate:output_type -> ateapi.ListActorTemplatesResponse
-	20,  // 137: ateapi.Control.DeleteActorTemplate:output_type -> ateapi.ActorTemplate
-	74,  // 138: ateapi.Debug.DebugClear:output_type -> ateapi.DebugClearResponse
-	76,  // 139: ateapi.ActorIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
-	78,  // 140: ateapi.ActorIdentity.MintCert:output_type -> ateapi.MintCertResponse
-	115, // [115:141] is the sub-list for method output_type
-	89,  // [89:115] is the sub-list for method input_type
-	89,  // [89:89] is the sub-list for extension type_name
-	89,  // [89:89] is the sub-list for extension extendee
-	0,   // [0:89] is the sub-list for field type_name
+	10,  // 26: ateapi.ActorTemplate.worker_selector:type_name -> ateapi.Selector
+	27,  // 27: ateapi.ActorTemplate.containers:type_name -> ateapi.Container
+	31,  // 28: ateapi.ActorTemplate.volumes:type_name -> ateapi.Volume
+	25,  // 29: ateapi.ActorTemplate.snapshots_config:type_name -> ateapi.SnapshotsConfig
+	24,  // 30: ateapi.ActorTemplate.sandbox_config:type_name -> ateapi.SandboxConfig
+	18,  // 31: ateapi.ActorTemplate.golden_snapshot:type_name -> ateapi.ObjectRef
+	23,  // 32: ateapi.ActorTemplate.phase:type_name -> ateapi.ActorTemplatePhase
+	21,  // 33: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
+	22,  // 34: ateapi.Resources.limits:type_name -> ateapi.Limits
+	7,   // 35: ateapi.ActorTemplatePhase.phase:type_name -> ateapi.ActorTemplatePhase.Phase
+	2,   // 36: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
+	35,  // 37: ateapi.SandboxConfig.sandbox_assets:type_name -> ateapi.SandboxAssets
+	0,   // 38: ateapi.SnapshotsConfig.on_pause:type_name -> ateapi.SnapshotContentScope
+	0,   // 39: ateapi.SnapshotsConfig.on_commit:type_name -> ateapi.SnapshotContentScope
+	26,  // 40: ateapi.SnapshotsConfig.on_resume:type_name -> ateapi.OnResumeConfig
+	3,   // 41: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
+	28,  // 42: ateapi.Container.env:type_name -> ateapi.EnvVar
+	29,  // 43: ateapi.Container.readyz:type_name -> ateapi.ContainerReadyz
+	34,  // 44: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
+	30,  // 45: ateapi.ContainerReadyz.http_get:type_name -> ateapi.HTTPGetAction
+	32,  // 46: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
+	33,  // 47: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
+	2,   // 48: ateapi.SandboxAssets.sandbox_class:type_name -> ateapi.SandboxClass
+	81,  // 49: ateapi.SandboxAssets.assets:type_name -> ateapi.SandboxAssets.AssetsEntry
+	82,  // 50: ateapi.ArchAssets.files:type_name -> ateapi.ArchAssets.FilesEntry
+	17,  // 51: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
+	18,  // 52: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	17,  // 53: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
+	18,  // 54: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	20,  // 55: ateapi.CreateActorTemplateRequest.actor_template:type_name -> ateapi.ActorTemplate
+	18,  // 56: ateapi.GetActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
+	20,  // 57: ateapi.ListActorTemplatesResponse.actor_templates:type_name -> ateapi.ActorTemplate
+	18,  // 58: ateapi.DeleteActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
+	18,  // 59: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
+	13,  // 60: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
+	13,  // 61: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
+	85,  // 62: ateapi.UpdateActorRequest.update_mask:type_name -> google.protobuf.FieldMask
+	18,  // 63: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
+	13,  // 64: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
+	18,  // 65: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
+	13,  // 66: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
+	18,  // 67: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
+	13,  // 68: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
+	18,  // 69: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
+	18,  // 70: ateapi.GetActorSnapshotRequest.snapshot:type_name -> ateapi.ObjectRef
+	18,  // 71: ateapi.GetActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
+	15,  // 72: ateapi.ListActorSnapshotsResponse.snapshots:type_name -> ateapi.ActorSnapshot
+	16,  // 73: ateapi.CreateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
+	16,  // 74: ateapi.UpdateActorSnapshotTagRequest.tag:type_name -> ateapi.ActorSnapshotTag
+	85,  // 75: ateapi.UpdateActorSnapshotTagRequest.update_mask:type_name -> google.protobuf.FieldMask
+	18,  // 76: ateapi.DeleteActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
+	69,  // 77: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
+	13,  // 78: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
+	71,  // 79: ateapi.Worker.assignment:type_name -> ateapi.Assignment
+	83,  // 80: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
+	8,   // 81: ateapi.Worker.state:type_name -> ateapi.Worker.State
+	70,  // 82: ateapi.Worker.capacity:type_name -> ateapi.WorkerCapacity
+	72,  // 83: ateapi.Assignment.actor_template:type_name -> ateapi.KubeNamespacedObjectRef
+	18,  // 84: ateapi.Assignment.actor:type_name -> ateapi.ObjectRef
+	4,   // 85: ateapi.MintCertRequest.purpose:type_name -> ateapi.ActorCertificatePurpose
+	36,  // 86: ateapi.SandboxAssets.AssetsEntry.value:type_name -> ateapi.ArchAssets
+	37,  // 87: ateapi.ArchAssets.FilesEntry.value:type_name -> ateapi.AssetFile
+	48,  // 88: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
+	49,  // 89: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
+	50,  // 90: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
+	51,  // 91: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
+	53,  // 92: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
+	55,  // 93: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
+	57,  // 94: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
+	58,  // 95: ateapi.Control.GetActorSnapshot:input_type -> ateapi.GetActorSnapshotRequest
+	59,  // 96: ateapi.Control.GetActorSnapshotTag:input_type -> ateapi.GetActorSnapshotTagRequest
+	60,  // 97: ateapi.Control.ListActorSnapshots:input_type -> ateapi.ListActorSnapshotsRequest
+	62,  // 98: ateapi.Control.CreateActorSnapshotTag:input_type -> ateapi.CreateActorSnapshotTagRequest
+	63,  // 99: ateapi.Control.UpdateActorSnapshotTag:input_type -> ateapi.UpdateActorSnapshotTagRequest
+	64,  // 100: ateapi.Control.DeleteActorSnapshotTag:input_type -> ateapi.DeleteActorSnapshotTagRequest
+	65,  // 101: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
+	67,  // 102: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
+	38,  // 103: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
+	39,  // 104: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
+	40,  // 105: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
+	42,  // 106: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
+	43,  // 107: ateapi.Control.CreateActorTemplate:input_type -> ateapi.CreateActorTemplateRequest
+	44,  // 108: ateapi.Control.GetActorTemplate:input_type -> ateapi.GetActorTemplateRequest
+	45,  // 109: ateapi.Control.ListActorTemplates:input_type -> ateapi.ListActorTemplatesRequest
+	47,  // 110: ateapi.Control.DeleteActorTemplate:input_type -> ateapi.DeleteActorTemplateRequest
+	73,  // 111: ateapi.Debug.DebugClear:input_type -> ateapi.DebugClearRequest
+	75,  // 112: ateapi.ActorIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
+	77,  // 113: ateapi.ActorIdentity.MintCert:input_type -> ateapi.MintCertRequest
+	13,  // 114: ateapi.Control.GetActor:output_type -> ateapi.Actor
+	13,  // 115: ateapi.Control.CreateActor:output_type -> ateapi.Actor
+	13,  // 116: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
+	52,  // 117: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
+	54,  // 118: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
+	56,  // 119: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
+	13,  // 120: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
+	15,  // 121: ateapi.Control.GetActorSnapshot:output_type -> ateapi.ActorSnapshot
+	16,  // 122: ateapi.Control.GetActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
+	61,  // 123: ateapi.Control.ListActorSnapshots:output_type -> ateapi.ListActorSnapshotsResponse
+	16,  // 124: ateapi.Control.CreateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
+	16,  // 125: ateapi.Control.UpdateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
+	16,  // 126: ateapi.Control.DeleteActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
+	66,  // 127: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
+	68,  // 128: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
+	17,  // 129: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
+	17,  // 130: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
+	41,  // 131: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
+	17,  // 132: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
+	20,  // 133: ateapi.Control.CreateActorTemplate:output_type -> ateapi.ActorTemplate
+	20,  // 134: ateapi.Control.GetActorTemplate:output_type -> ateapi.ActorTemplate
+	46,  // 135: ateapi.Control.ListActorTemplates:output_type -> ateapi.ListActorTemplatesResponse
+	20,  // 136: ateapi.Control.DeleteActorTemplate:output_type -> ateapi.ActorTemplate
+	74,  // 137: ateapi.Debug.DebugClear:output_type -> ateapi.DebugClearResponse
+	76,  // 138: ateapi.ActorIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
+	78,  // 139: ateapi.ActorIdentity.MintCert:output_type -> ateapi.MintCertResponse
+	114, // [114:140] is the sub-list for method output_type
+	88,  // [88:114] is the sub-list for method input_type
+	88,  // [88:88] is the sub-list for extension type_name
+	88,  // [88:88] is the sub-list for extension extendee
+	0,   // [0:88] is the sub-list for field type_name
 }
 
 func init() { file_ateapi_proto_init() }

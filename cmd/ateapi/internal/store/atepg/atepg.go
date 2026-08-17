@@ -432,10 +432,6 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 	err := p.pool.QueryRow(ctx, `
 		DELETE FROM actor_templates AS t
 		WHERE t.atespace = $1 AND t.name = $2
-		  AND NOT EXISTS (
-		      SELECT 1 FROM actor_template_versions AS v
-		      WHERE v.actor_template_atespace = t.atespace
-		        AND v.actor_template_name = t.name)
 		RETURNING t.proto`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		exists, existsErr := p.ActorTemplateExists(ctx, templateRef)
@@ -1474,7 +1470,7 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 // --- Debug ---
 
 func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_template_versions, actor_snapshots, actor_snapshot_tags, workers, leases`); err != nil {
+	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases`); err != nil {
 		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil

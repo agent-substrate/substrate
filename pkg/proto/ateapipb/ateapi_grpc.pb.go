@@ -54,7 +54,7 @@ const (
 	Control_DeleteAtespace_FullMethodName         = "/ateapi.Control/DeleteAtespace"
 	Control_CreateActorTemplate_FullMethodName    = "/ateapi.Control/CreateActorTemplate"
 	Control_GetActorTemplate_FullMethodName       = "/ateapi.Control/GetActorTemplate"
-	Control_ListActorTemplate_FullMethodName      = "/ateapi.Control/ListActorTemplate"
+	Control_ListActorTemplates_FullMethodName     = "/ateapi.Control/ListActorTemplates"
 	Control_DeleteActorTemplate_FullMethodName    = "/ateapi.Control/DeleteActorTemplate"
 )
 
@@ -108,7 +108,7 @@ type ControlClient interface {
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	CreateActorTemplate(ctx context.Context, in *CreateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
-	ListActorTemplate(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
+	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
 	// snapshot in the ActorTemplate's namespace.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
@@ -332,10 +332,10 @@ func (c *controlClient) GetActorTemplate(ctx context.Context, in *GetActorTempla
 	return out, nil
 }
 
-func (c *controlClient) ListActorTemplate(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error) {
+func (c *controlClient) ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorTemplatesResponse)
-	err := c.cc.Invoke(ctx, Control_ListActorTemplate_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Control_ListActorTemplates_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +402,7 @@ type ControlServer interface {
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
 	CreateActorTemplate(context.Context, *CreateActorTemplateRequest) (*ActorTemplate, error)
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
-	ListActorTemplate(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
+	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
 	// snapshot in the ActorTemplate's namespace.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
@@ -479,8 +479,8 @@ func (UnimplementedControlServer) CreateActorTemplate(context.Context, *CreateAc
 func (UnimplementedControlServer) GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorTemplate not implemented")
 }
-func (UnimplementedControlServer) ListActorTemplate(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListActorTemplate not implemented")
+func (UnimplementedControlServer) ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListActorTemplates not implemented")
 }
 func (UnimplementedControlServer) DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActorTemplate not implemented")
@@ -884,20 +884,20 @@ func _Control_GetActorTemplate_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_ListActorTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Control_ListActorTemplates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorTemplatesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ControlServer).ListActorTemplate(ctx, in)
+		return srv.(ControlServer).ListActorTemplates(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Control_ListActorTemplate_FullMethodName,
+		FullMethod: Control_ListActorTemplates_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).ListActorTemplate(ctx, req.(*ListActorTemplatesRequest))
+		return srv.(ControlServer).ListActorTemplates(ctx, req.(*ListActorTemplatesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1012,8 +1012,8 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_GetActorTemplate_Handler,
 		},
 		{
-			MethodName: "ListActorTemplate",
-			Handler:    _Control_ListActorTemplate_Handler,
+			MethodName: "ListActorTemplates",
+			Handler:    _Control_ListActorTemplates_Handler,
 		},
 		{
 			MethodName: "DeleteActorTemplate",
