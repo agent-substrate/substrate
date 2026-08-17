@@ -28,6 +28,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/utils/ptr"
+
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 )
 
 // The device allowlist and CPU shares from defaultKataResources are the
@@ -237,6 +239,34 @@ func TestCheckResourceEnvelope_ErrorNamesActorLimitWhenDeclared(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err.Error(), want)
 		}
+	}
+}
+
+// A CPU-shortfall error must name spec.resources.limits.cpu, not
+// spec.resources.limits.memory, even when the actor also declares a memory
+// limit: raising memory cannot change the vCPU count.
+func TestCheckResourceEnvelope_CPUErrorNamesCPULimitEvenWithDeclaredMemory(t *testing.T) {
+	const mib = 1024 * 1024
+	period := uint64(kata.DefaultCPUPeriodUS)
+	quota := int64(2000 * kata.DefaultCPUPeriodUS / 1000) // 2000m
+	ctr := actorContainer{name: "hog", spec: &specs.Spec{Linux: &specs.Linux{
+		Resources: &specs.LinuxResources{CPU: &specs.LinuxCPU{Quota: &quota, Period: &period}},
+	}}}
+
+	err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{
+		memMiB: 2048, vcpus: 1, declaredBytes: 2048 * mib, reserveMiB: 256,
+	})
+	if err == nil {
+		t.Fatal("checkResourceEnvelope() = nil, want an error")
+	}
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+	if !strings.Contains(err.Error(), "spec.resources.limits.cpu") {
+		t.Errorf("error %q does not mention spec.resources.limits.cpu", err.Error())
+	}
+	if strings.Contains(err.Error(), "spec.resources.limits.memory") {
+		t.Errorf("error %q unexpectedly mentions spec.resources.limits.memory", err.Error())
 	}
 }
 

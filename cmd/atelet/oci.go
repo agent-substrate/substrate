@@ -266,8 +266,9 @@ const (
 	// container limited to N milli-cores may run for N/1000 of every period.
 	cpuQuotaPeriodUS = 100000
 	// cpuQuotaMinUS is the smallest quota the kernel accepts. tg_set_cfs_bandwidth
-	// rejects a quota below 1ms, so a limit under cpuQuotaPeriodUS/1000 milli-cores
-	// is raised to this floor rather than producing a spec the guest refuses.
+	// rejects a quota below 1ms, so a limit under
+	// cpuQuotaMinUS*1000/cpuQuotaPeriodUS milli-cores (10m) is raised to this
+	// floor rather than producing a spec the guest refuses.
 	cpuQuotaMinUS = 1000
 )
 

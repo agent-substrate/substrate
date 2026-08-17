@@ -170,13 +170,20 @@ type guestEnvelope struct {
 	reserveMiB    int
 }
 
-// remedy names the field that raises the ceiling.
+// remedy names the field that raises the memory ceiling.
 func (e guestEnvelope) remedy() string {
 	if e.declaredBytes > 0 {
 		return fmt.Sprintf("raise spec.resources.limits.memory (declared %dMiB, less the %dMiB VMM reserve) or lower the container limits",
 			e.declaredBytes/(1024*1024), e.reserveMiB)
 	}
 	return "lower the limits or use a SandboxConfig with a larger guest"
+}
+
+// cpuRemedy names the field that raises the vCPU ceiling. Unlike remedy, it
+// takes no reserve into account: the VMM reserve applies to guest memory, not
+// vCPU count (see guestEnvelope).
+func (e guestEnvelope) cpuRemedy() string {
+	return "raise spec.resources.limits.cpu or lower the container limits"
 }
 
 // checkResourceEnvelope rejects limits the guest can never satisfy. The guest is
@@ -218,7 +225,7 @@ func checkResourceEnvelope(ctrs []actorContainer, env guestEnvelope) error {
 		if millis > guestMillis {
 			return status.Errorf(codes.InvalidArgument,
 				"container %q asks for %dm CPU but the guest has %d vCPU; %s",
-				c.name, millis, env.vcpus, env.remedy())
+				c.name, millis, env.vcpus, env.cpuRemedy())
 		}
 		totalMillis += millis
 	}
@@ -231,7 +238,7 @@ func checkResourceEnvelope(ctrs []actorContainer, env guestEnvelope) error {
 	if totalMillis > guestMillis {
 		return status.Errorf(codes.InvalidArgument,
 			"the actor's containers ask for %dm CPU in total but the guest has %d vCPU; %s",
-			totalMillis, env.vcpus, env.remedy())
+			totalMillis, env.vcpus, env.cpuRemedy())
 	}
 	return nil
 }

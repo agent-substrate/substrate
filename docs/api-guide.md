@@ -178,8 +178,8 @@ Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is 
 
 Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate` spec. Declared limits do three things:
 
-1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateom) and applied to the container OCI spec:
-   - **gVisor (`ateom-gvisor`)** — `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
+1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateom):
+   - **gVisor (`ateom-gvisor`)** — applied to the container OCI spec: `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
    - **Micro-VM (`ateom-microvm`)** — `limits.cpu` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memory` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
 3. **Fall back to runtime defaults.** A zero or absent limit leaves that dimension at the runtime default — unlimited for gVisor, the kata config for the micro-VM.
@@ -308,6 +308,8 @@ containers:
 ```
 
 A container that exceeds its memory limit is OOM-killed on its own; the actor's other containers are unaffected.
+
+**Micro-VM rootfs is memory-backed.** A micro-VM container's writable rootfs upper layer is a guest tmpfs, and tmpfs pages are charged to the allocating cgroup. A container with `limits.memory: 256Mi` that writes a 300Mi file to its rootfs, `/tmp`, or `/run` is OOM-killed, unlike the same manifest on Kubernetes, where the rootfs is disk-backed reclaimable page cache.
 
 Only `cpu` and `memory` are accepted, each must be greater than zero, and a `cpu` limit below `10m` is raised to `10m` because the kernel rejects a CFS quota under 1ms.
 
