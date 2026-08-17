@@ -152,12 +152,34 @@ const maxActorContainers = 25
 // the _ovl containers, so log forwarding for those lineages keys on this.
 func overlayWorkloadID(name string) string { return name + "_ovl" }
 
-// overlayWorkloadIDs returns the overlay-workload container ids for the actor's
-// containers, in order. Recorded on runningActor so the SIGTERM handler knows
-// which guest workloads to signal and wait on.
-func overlayWorkloadIDs(ctrs []actorContainer) []string {
+// workloadIDs returns the guest container ids for the actor's containers, in
+// order. Recorded on runningActor so the SIGTERM handler knows which guest
+// workloads to signal and wait on, and it must name what the guest actually
+// runs: a container the agent does not know is rejected with InvalidContainerId,
+// and graceful shutdown then gives up without ever reaching the workload.
+//
+// A cold boot always runs containers under their bare name. Only a guest
+// restored from a legacy snapshot still holds <name>_ovl workloads, which is the
+// restore path's business (see RestoreWorkload).
+func workloadIDs(ctrs []actorContainer) []string {
 	ids := make([]string, 0, len(ctrs))
 	for _, c := range ctrs {
+		ids = append(ids, c.name)
+	}
+	return ids
+}
+
+// restoredWorkloadIDs is workloadIDs for a restored guest: hasUpper says the
+// snapshot carries a rootfs upper, i.e. it was taken by the host-overlay design
+// whose containers run under their bare name. A legacy snapshot predates that and
+// its guest still holds <name>_ovl workloads.
+func restoredWorkloadIDs(ctrs []actorContainer, hasUpper bool) []string {
+	ids := make([]string, 0, len(ctrs))
+	for _, c := range ctrs {
+		if hasUpper {
+			ids = append(ids, c.name)
+			continue
+		}
 		ids = append(ids, overlayWorkloadID(c.name))
 	}
 	return ids
@@ -576,7 +598,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: overlayWorkloadIDs(ctrs)}
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}

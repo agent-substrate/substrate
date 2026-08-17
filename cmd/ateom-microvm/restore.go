@@ -422,7 +422,11 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
-		workloadIDs:             overlayWorkloadIDs(ctrs),
+		// Same id split as the log forwarding and stats below: containers run under
+		// their bare name, except in a guest restored from a legacy snapshot, which
+		// still holds the retired <name>_ovl workloads. Signalling an id the agent
+		// does not know fails the whole graceful shutdown with InvalidContainerId.
+		workloadIDs: restoredWorkloadIDs(ctrs, hasUpper),
 	}
 
 	// Re-attach stdout/stderr forwarding for each container: the restored guest's
