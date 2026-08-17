@@ -54,6 +54,25 @@ func (c *testClientConn) ParseServiceConfig(serviceConfigJSON string) *serviceco
 	return nil
 }
 
+// waitForAddrs consumes updates until the set matches want: the resolver promises
+// eventual convergence, not that the first update after a change is final.
+func waitForAddrs(t *testing.T, cc *testClientConn, want []resolver.Address) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	var last []resolver.Address
+	for {
+		select {
+		case state := <-cc.stateChan:
+			last = state.Addresses
+			if reflect.DeepEqual(last, want) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("state.Addresses never converged: last = %v, want %v", last, want)
+		}
+	}
+}
+
 func TestParseTarget(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -168,15 +187,7 @@ func TestK8sResolverEndpointSliceUpdates(t *testing.T) {
 	}
 	defer res.Close()
 
-	select {
-	case state := <-cc.stateChan:
-		wantAddrs := []resolver.Address{{Addr: "10.0.0.1:443"}}
-		if !reflect.DeepEqual(state.Addresses, wantAddrs) {
-			t.Errorf("initial state.Addresses = %v, want %v", state.Addresses, wantAddrs)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for initial state update")
-	}
+	waitForAddrs(t, cc, []resolver.Address{{Addr: "10.0.0.1:443"}})
 
 	// Add a new EndpointSlice
 	slice2 := &discoveryv1.EndpointSlice{
@@ -205,18 +216,10 @@ func TestK8sResolverEndpointSliceUpdates(t *testing.T) {
 		t.Fatalf("failed to create slice2: %v", err)
 	}
 
-	select {
-	case state := <-cc.stateChan:
-		wantAddrs := []resolver.Address{
-			{Addr: "10.0.0.1:443"},
-			{Addr: "10.0.0.2:443"},
-		}
-		if !reflect.DeepEqual(state.Addresses, wantAddrs) {
-			t.Errorf("updated state.Addresses = %v, want %v", state.Addresses, wantAddrs)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for state update after slice addition")
-	}
+	waitForAddrs(t, cc, []resolver.Address{
+		{Addr: "10.0.0.1:443"},
+		{Addr: "10.0.0.2:443"},
+	})
 }
 
 func TestK8sResolverClose(t *testing.T) {
