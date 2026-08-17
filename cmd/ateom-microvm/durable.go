@@ -128,7 +128,6 @@ func (s *AteomService) stageDurableShare(ctx context.Context, rr resolvedRuntime
 		Binary:     rr.virtiofsd,
 		SocketPath: kata.DurableVirtiofsdSocketPath(actorUID),
 		SharedDir:  shared,
-		Cache:      "auto",
 		Log:        log,
 	})
 	if err != nil {

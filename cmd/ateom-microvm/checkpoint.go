@@ -144,10 +144,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//     the write-through share makes the tar coherent.
 	//   - Rootfs upper tar (Full only): host-backed like the durable volumes —
 	//     the memory snapshot does not carry rootfs writes. Under Data the
-	//     workload cold-starts on restore, discarding rootfs state. Gated on
-	//     the host dir a disk-upper boot creates (actorHasDiskUpper) so a
-	//     legacy actor restored from a tmpfs-upper snapshot checkpoints
-	//     correctly (its upper is inside the memory image).
+	//     workload cold-starts on restore, discarding rootfs state.
 	var dSnapshot, dDurable, dUpper time.Duration
 	g, gctx := errgroup.WithContext(ctx)
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
@@ -167,7 +164,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return nil
 		})
 	}
-	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL && actorHasDiskUpper(actorUID) {
+	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
 			t := time.Now()
 			if err := tarRootfsUpper(gctx, rootfsUpperDir(actorUID), checkpointDir); err != nil {
@@ -280,7 +277,6 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
-	// legacy tmpfs upper is already inside the memory snapshot above.
 	return dSnapshot, nil
 }
 
@@ -354,8 +350,7 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 
 	// Remove the rootfs upper dir: ateom owns it — atelet's actor-dir reset
 	// doesn't know it — and its absence is what marks a worker as holding no
-	// disk-backed upper (actorHasDiskUpper). Runs after the checkpoint tar,
-	// which is already on disk. A no-op for legacy tmpfs-upper actors.
+	// disk-backed upper. Runs after the checkpoint tar, which is already on disk.
 	if err := os.RemoveAll(rootfsUpperDir(id)); err != nil {
 		slog.WarnContext(ctx, "Failed to remove rootfs upper dir", slog.String("actorUID", id), slog.Any("err", err))
 	}

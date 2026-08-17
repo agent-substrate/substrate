@@ -203,22 +203,13 @@ func TestInitParams(t *testing.T) {
 // The SIGTERM path signals these ids over ttrpc, and the agent rejects an id it
 // does not know with InvalidContainerId — which aborts the whole graceful
 // shutdown, so a stale id here silently costs the guest its clean exit.
+// The SIGTERM path signals these ids over ttrpc, and the agent rejects an id it
+// does not know with InvalidContainerId — which aborts the whole graceful
+// shutdown, so a stale id here silently costs the guest its clean exit.
 func TestWorkloadIDs(t *testing.T) {
 	ctrs := []actorContainer{{name: "counter"}, {name: "sidecar"}}
-
-	// A cold-booted guest runs containers under their bare name.
 	got := workloadIDs(ctrs)
 	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
 		t.Errorf("workloadIDs() = %v, want %v", got, want)
-	}
-
-	// A restore from a snapshot carrying a rootfs upper is the same design.
-	if got := restoredWorkloadIDs(ctrs, true); !slices.Equal(got, []string{"counter", "sidecar"}) {
-		t.Errorf("restoredWorkloadIDs(hasUpper=true) = %v, want bare names", got)
-	}
-
-	// A legacy snapshot predates it: that guest still holds <name>_ovl workloads.
-	if got := restoredWorkloadIDs(ctrs, false); !slices.Equal(got, []string{"counter_ovl", "sidecar_ovl"}) {
-		t.Errorf("restoredWorkloadIDs(hasUpper=false) = %v, want _ovl ids", got)
 	}
 }
