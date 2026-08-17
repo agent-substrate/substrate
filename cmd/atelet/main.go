@@ -184,9 +184,7 @@ func main() {
 		}()
 	}
 
-	ateomDialer := &AteomDialer{
-		conns: lru.New(256),
-	}
+	ateomDialer := newAteomDialer(256)
 
 	var gcpRegistryAuthn authn.Authenticator
 	if *gcpAuthForImagePulls {
@@ -1790,6 +1788,20 @@ func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
 
 type AteomDialer struct {
 	conns *lru.Cache
+}
+
+// newAteomDialer builds a dialer whose cache closes the connections it
+// evicts. A conn pushed out of the LRU without Close is not reclaimed: grpc
+// keeps most of its goroutines and buffers alive for the life of the process
+// (the channel idle timeout parks only one of them). Closing on eviction can
+// fail an RPC still in flight on a conn that aged to the LRU tail, but that
+// failure is visible and retryable, unlike the leak.
+func newAteomDialer(size int) *AteomDialer {
+	return &AteomDialer{
+		conns: lru.NewWithEvictionFunc(size, func(_ lru.Key, value interface{}) {
+			value.(*grpc.ClientConn).Close()
+		}),
+	}
 }
 
 func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.ClientConn, error) {
