@@ -128,6 +128,14 @@ func pgErrCode(err error) string {
 	return ""
 }
 
+func pgErrConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
 // --- Atespaces ---
 
 func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
@@ -183,6 +191,10 @@ func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, er
 }
 
 func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Atespace]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindAtespace, "", 1)
 	if err != nil {
@@ -367,6 +379,10 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 }
 
 func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	keyParts := 2
 	if atespace != "" {
@@ -633,9 +649,12 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 }
 
 func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Actor]{}, err
+	}
 	var items []*ateapipb.Actor
 	var nextToken string
-	var err error
 	if atespace != "" {
 		items, nextToken, err = p.listActorsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
 	} else {
@@ -806,9 +825,12 @@ func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name st
 }
 
 func (p *Persistence) ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.ActorSnapshot]{}, err
+	}
 	var items []*ateapipb.ActorSnapshot
 	var nextToken string
-	var err error
 	if atespace != "" {
 		items, nextToken, err = p.listActorSnapshotsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
 	} else {
@@ -928,10 +950,6 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespa
 		return nil, fmt.Errorf("beginning actor snapshot tag create: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-	if _, err := getActorSnapshotRow(ctx, tx, snapshotAtespace, snapshotName); err != nil {
-		return nil, err
-	}
-
 	var inserted []byte
 	err = tx.QueryRow(ctx, `
 		INSERT INTO actor_snapshot_tags
@@ -947,7 +965,14 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespa
 		return dbTag, nil
 	}
 	if isForeignKeyViolation(err) {
-		return nil, store.ErrFailedPrecondition
+		switch pgErrConstraint(err) {
+		case "actor_snapshot_tags_snapshot_fk":
+			return nil, store.ErrNotFound
+		case "actor_snapshot_tags_atespace_fk":
+			return nil, store.ErrFailedPrecondition
+		default:
+			return nil, fmt.Errorf("inserting actor snapshot tag %s/%s violated unknown foreign key %q: %w", tagAtespace, tagName, pgErrConstraint(err), err)
+		}
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("inserting actor snapshot tag %s/%s: %w", tagAtespace, tagName, err)
@@ -1248,6 +1273,10 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 }
 
 func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Worker]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindWorker, "", 1)
 	if err != nil {
@@ -1351,6 +1380,9 @@ const defaultLockTTL = 30 * time.Second
 func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
 	ttl := p.lockTTL
 	token := uuid.NewString()
+	if err := p.cleanupExpiredLeases(ctx); err != nil {
+		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
+	}
 
 	acquired, err := p.acquireLease(ctx, key, token, ttl)
 	if err != nil {
@@ -1379,6 +1411,13 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 		}
 	}
 	return store.NewLock(leaseCtx, closeFn), nil
+}
+
+func (p *Persistence) cleanupExpiredLeases(ctx context.Context) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE expires_at <= clock_timestamp()`); err != nil {
+		return fmt.Errorf("deleting expired leases: %w", err)
+	}
+	return nil
 }
 
 func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {

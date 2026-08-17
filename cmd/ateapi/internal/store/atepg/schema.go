@@ -60,15 +60,17 @@ CREATE TABLE IF NOT EXISTS actor_snapshots (
 );
 
 CREATE TABLE IF NOT EXISTS actor_snapshot_tags (
-    atespace           text NOT NULL
-        REFERENCES atespaces(name) ON DELETE RESTRICT,
+    atespace           text NOT NULL,
     name               text NOT NULL,
     snapshot_atespace  text NOT NULL,
     snapshot_name      text NOT NULL,
     version            bigint NOT NULL,
     proto              bytea NOT NULL,
     PRIMARY KEY (atespace, name),
-    FOREIGN KEY (snapshot_atespace, snapshot_name)
+    CONSTRAINT actor_snapshot_tags_atespace_fk
+        FOREIGN KEY (atespace) REFERENCES atespaces(name) ON DELETE RESTRICT,
+    CONSTRAINT actor_snapshot_tags_snapshot_fk
+        FOREIGN KEY (snapshot_atespace, snapshot_name)
         REFERENCES actor_snapshots(atespace, name) ON DELETE RESTRICT
 );
 
@@ -86,6 +88,8 @@ CREATE TABLE IF NOT EXISTS leases (
     token       text NOT NULL,
     expires_at  timestamptz NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS leases_expires_at_idx ON leases (expires_at);
 `
 
 // applySchema idempotently creates atepg's tables.

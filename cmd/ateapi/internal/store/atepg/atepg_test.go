@@ -129,6 +129,61 @@ func newTestAtespace(name string) *ateapipb.Atespace {
 	return &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}}
 }
 
+func createTestAtespace(t *testing.T, s *Persistence, name string) {
+	t.Helper()
+	if _, err := s.CreateAtespace(context.Background(), newTestAtespace(name)); err != nil {
+		t.Fatalf("CreateAtespace(%q) failed: %v", name, err)
+	}
+}
+
+func TestCreateActorSnapshotTag_ForeignKeyErrors(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	tag := func() *ateapipb.ActorSnapshotTag {
+		return &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "latest"}}
+	}
+
+	if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "missing", tag()); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("missing snapshot error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "snapshot"}}); err != nil {
+		t.Fatalf("CreateActorSnapshot: %v", err)
+	}
+	tagWithoutAtespace := tag()
+	tagWithoutAtespace.Metadata.Atespace = "gone"
+	if _, err := s.CreateActorSnapshotTag(ctx, "gone", "snapshot", tagWithoutAtespace); !errors.Is(err, store.ErrFailedPrecondition) {
+		t.Errorf("missing tag atespace error = %v, want ErrFailedPrecondition", err)
+	}
+}
+
+func TestAcquireLock_CleansExpiredLeases(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO leases (key, token, expires_at) VALUES
+		('expired', 'old', clock_timestamp() - interval '1 minute'),
+		('active', 'live', clock_timestamp() + interval '1 hour')`); err != nil {
+		t.Fatalf("seeding leases: %v", err)
+	}
+	lock, err := s.AcquireLock(ctx, "new")
+	if err != nil {
+		t.Fatalf("AcquireLock: %v", err)
+	}
+	defer lock.Close()
+
+	var expired, active int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases WHERE key = 'expired'`).Scan(&expired); err != nil {
+		t.Fatalf("counting expired lease: %v", err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases WHERE key = 'active'`).Scan(&active); err != nil {
+		t.Fatalf("counting active lease: %v", err)
+	}
+	if expired != 0 || active != 1 {
+		t.Errorf("lease counts = expired:%d active:%d, want 0 and 1", expired, active)
+	}
+}
+
 // TestCreateActor_MissingAtespace_FailedPrecondition exercises the
 // foreign-key race the doc calls out: CreateActor rejects an actor whose
 // atespace doesn't exist (including a concurrently-deleted one), closing the
