@@ -1183,9 +1183,14 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, opts stor
 
 // listPage SCANs pattern across the redis masters from the page token, feeding key batches to collect and returns the next-page token.
 func (s *Persistence) listPage(ctx context.Context, pattern string, pageSize int32, pageTokenStr string, collect func(ctx context.Context, master *redis.Client, keys []string) (int, error)) (string, error) {
+	normalized, err := store.NormalizeListOptions(store.ListOptions{PageSize: pageSize})
+	if err != nil {
+		return "", err
+	}
+	pageSize = normalized.PageSize
 	token, err := decodePageToken(pageTokenStr)
 	if err != nil {
-		return "", fmt.Errorf("invalid page token: %w", err)
+		return "", fmt.Errorf("%w: %v", store.ErrInvalidPageToken, err)
 	}
 
 	masters, err := s.getSortedMasters(ctx)
