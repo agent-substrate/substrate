@@ -1,0 +1,113 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The egress probe used by internal/e2e/suites/sdsmint. ${NAMESPACE} is
+# substituted by the suite with the randomized namespace it created, so the
+# probe is torn down with that namespace and leaves nothing behind.
+#
+# A plain Pod, not an actor: the suite is testing the gateway's MITM leg, and
+# running the probe itself inside an actor would make a snapshot or restore
+# failure look like an sdsmint failure. The suite does create one actor, but
+# only for its identity -- the certificate mounted below is minted for it, and
+# the actor's own workload is never contacted.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: egressprobe
+  namespace: ${NAMESPACE}
+  labels:
+    app: egressprobe
+spec:
+  restartPolicy: Never
+  containers:
+  - name: egressprobe
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe
+    args:
+    - "--listen=:8080"
+    ports:
+    - name: http
+      containerPort: 8080
+    # The suite port-forwards to this pod, and port-forward targets the first
+    # READY pod behind the Service. Without a readiness gate the forward can
+    # attach before the listener exists and the first handshake fails as a
+    # connection refused that looks like a gateway problem.
+    readinessProbe:
+      httpGet:
+        path: /healthz
+        port: 8080
+      periodSeconds: 2
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+    # runAsUser must be spelled out: ko's distroless static base declares no
+    # USER, so runAsNonRoot on its own makes kubelet refuse to start the
+    # container ("image will run as root") rather than pick a uid. 65532 is
+    # distroless's nonroot uid, and the same one the egress gateway's pod uses.
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      capabilities:
+        drop: ["ALL"]
+    volumeMounts:
+    - name: "actor-identity"
+      mountPath: "/run/actor-identity"
+    - name: "actor-identity-unknown"
+      mountPath: "/run/actor-identity-unknown"
+    - name: "podidentity"
+      mountPath: "/run/podidentity.podcert.ate.dev"
+    - name: "servicedns-ca"
+      mountPath: "/run/servicedns.podcert.ate.dev"
+  volumes:
+  - name: "actor-identity"
+    secret:
+      secretName: egressprobe-actor-identity
+  - name: "actor-identity-unknown"
+    secret:
+      secretName: egressprobe-unknown-actor
+  - name: "podidentity"
+    projected:
+      sources:
+      - podCertificate:
+          signerName: podidentity.podcert.ate.dev/identity
+          keyType: ECDSAP256
+          credentialBundlePath: credential-bundle.pem
+  - name: "servicedns-ca"
+    projected:
+      sources:
+      - clusterTrustBundle:
+          signerName: servicedns.podcert.ate.dev/identity
+          labelSelector:
+            matchLabels:
+              podcert.ate.dev/canarying: live
+          path: trust-bundle.pem
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: egressprobe
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app: egressprobe
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080

@@ -86,6 +86,7 @@ function usage() {
   echo "  --create-jwt-authority-pool-secret     Create JWT authority pool secret"
   echo "  --create-actor-id-ca-pool-secret       Create actor ID CA pool secret"
   echo "  --create-actor-id-ca-certs-secret      Create actor ID CA certs secret"
+  echo "  --create-egress-mitm-ca-pool-secret    Create egress MITM CA pool secret"
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-valkey-ca-certs-secret        Create Valkey's combined client/server CA bundle"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
@@ -369,6 +370,27 @@ create_actor_id_ca_certs_secret() {
     | run_kubectl apply -f -
 }
 
+# The MITM CA the egress gateway's sdsmint sidecar signs per-SNI leaves with.
+# ecdsa-p256 rather than the ed25519 default: these leaves are validated by
+# arbitrary clients inside actor sandboxes, where Ed25519 support cannot be
+# assumed.
+create_egress_mitm_ca_pool_secret() {
+  log_step "create_egress_mitm_ca_pool_secret"
+  run_kubectl_ate admin make-ca-pool \
+    --ca-id="mitm" \
+    --name="egress-mitm-ca-pool" \
+    --secret-namespace=ate-system \
+    --key-type=ecdsa-p256 \
+    --common-name="substrate egress MITM CA"
+}
+
+# Only the sdsmint egress variant mounts this pool.
+ensure_egress_mitm_ca_pool_secret() {
+  [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]] || return 0
+  run_kubectl get secret -n ate-system egress-mitm-ca-pool >/dev/null 2>&1 \
+    || create_egress_mitm_ca_pool_secret
+}
+
 create_podcertificate_controller_cas() {
   log_step "create_podcertificate_controller_cas"
   run_kubectl create namespace podcertificate-controller-system || true
@@ -539,6 +561,7 @@ deploy_ate_system() {
   # Applied on its own rather than through the overlay above, so
   # --experimental-use-sdsmint composes with every overlay instead of needing a
   # variant of each.
+  ensure_egress_mitm_ca_pool_secret
   run_ko apply -f "$(atenet_egress_manifest)"
 
   log_step "Waiting for ATE system components to be ready..."
@@ -630,6 +653,7 @@ deploy_atenet() {
   router_manifest="$(render_atenet_router_manifest)"
   echo "${router_manifest}" | run_kubectl apply -f -
 
+  ensure_egress_mitm_ca_pool_secret
   run_ko apply -f "$(atenet_egress_manifest)"
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
@@ -952,6 +976,7 @@ while [[ "$#" -gt 0 ]]; do
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
     --create-actor-id-ca-pool-secret) create_actor_id_ca_pool_secret ;;
     --create-actor-id-ca-certs-secret) create_actor_id_ca_certs_secret ;;
+    --create-egress-mitm-ca-pool-secret) create_egress_mitm_ca_pool_secret ;;
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
     --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;

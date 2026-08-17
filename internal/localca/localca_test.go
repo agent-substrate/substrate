@@ -16,13 +16,17 @@ package localca
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"strings"
 	"testing"
@@ -294,6 +298,187 @@ func TestUnmarshalErrors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantInErr) {
 				t.Errorf("error = %q, want substring %q", err.Error(), tt.wantInErr)
+			}
+		})
+	}
+}
+
+// externalSigner stands in for a KMS or HSM signer: it can sign, but it holds
+// no exportable key material.
+type externalSigner struct{ inner ed25519.PrivateKey }
+
+func (e externalSigner) Public() crypto.PublicKey { return e.inner.Public() }
+func (e externalSigner) Sign(r io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	return e.inner.Sign(r, digest, opts)
+}
+
+// The point of typing SigningKey as crypto.Signer is that a key living outside
+// the process can be substituted. Verify that actually works end to end: such
+// a signer can issue certificates, and Marshal refuses it with an explanation
+// rather than x509's "unknown key type".
+func TestExternalSignerCanIssueButCannotBeMarshalled(t *testing.T) {
+	base, err := GenerateED25519CA("external")
+	if err != nil {
+		t.Fatalf("GenerateED25519CA: %v", err)
+	}
+	ca := &CA{
+		ID:              base.ID,
+		SigningKey:      externalSigner{inner: base.SigningKey.(ed25519.PrivateKey)},
+		RootCertificate: base.RootCertificate,
+	}
+
+	// Issuing works: x509.CreateCertificate only needs Public and Sign.
+	leafPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating leaf key: %v", err)
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "leaf"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+	}, ca.RootCertificate, leafPub, ca.SigningKey)
+	if err != nil {
+		t.Fatalf("signing with an external signer: %v", err)
+	}
+	if _, err := x509.ParseCertificate(leafDER); err != nil {
+		t.Fatalf("parsing the issued leaf: %v", err)
+	}
+
+	// Serializing does not, and must say why.
+	_, err = Marshal(&Pool{CAs: []*CA{ca}})
+	if err == nil {
+		t.Fatal("Marshal serialized a signer with no exportable key material")
+	}
+	if !strings.Contains(err.Error(), "KMS") {
+		t.Errorf("error does not explain the external-signer case: %v", err)
+	}
+}
+
+func TestGenerateCAKeyTypes(t *testing.T) {
+	for _, tc := range []struct {
+		keyType KeyType
+		check   func(*testing.T, crypto.Signer)
+	}{
+		{KeyTypeED25519, func(t *testing.T, k crypto.Signer) {
+			if _, ok := k.(ed25519.PrivateKey); !ok {
+				t.Errorf("key type = %T, want ed25519.PrivateKey", k)
+			}
+		}},
+		{KeyTypeECDSAP256, func(t *testing.T, k crypto.Signer) {
+			ec, ok := k.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("key type = %T, want *ecdsa.PrivateKey", k)
+			}
+			if ec.Curve != elliptic.P256() {
+				t.Errorf("curve = %v, want P-256", ec.Curve.Params().Name)
+			}
+		}},
+	} {
+		t.Run(string(tc.keyType), func(t *testing.T) {
+			ca, err := GenerateCA(GenerateOptions{ID: "k", KeyType: tc.keyType})
+			if err != nil {
+				t.Fatalf("GenerateCA: %v", err)
+			}
+			tc.check(t, ca.SigningKey)
+
+			// Whatever the algorithm, the result has to survive the pool.
+			data, err := Marshal(&Pool{CAs: []*CA{ca}})
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			restored, err := Unmarshal(data)
+			if err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			tc.check(t, restored.CAs[0].SigningKey)
+		})
+	}
+
+	if _, err := GenerateCA(GenerateOptions{ID: "k", KeyType: "rsa-8192"}); err == nil {
+		t.Error("GenerateCA accepted an unknown key type")
+	}
+}
+
+func TestGenerateCALifetimeAndCommonName(t *testing.T) {
+	ca, err := GenerateCA(GenerateOptions{ID: "x", CommonName: "my ca", Lifetime: 2 * time.Hour})
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+	if got := ca.RootCertificate.Subject.CommonName; got != "my ca" {
+		t.Errorf("CN = %q, want %q", got, "my ca")
+	}
+	if got := ca.RootCertificate.NotAfter.Sub(ca.RootCertificate.NotBefore); got != 2*time.Hour {
+		t.Errorf("lifetime = %v, want 2h", got)
+	}
+}
+
+func TestValidateAcceptsAGeneratedCA(t *testing.T) {
+	ca, err := GenerateED25519CA("generated")
+	if err != nil {
+		t.Fatalf("GenerateED25519CA: %v", err)
+	}
+	// GenerateCA is the one path that satisfies Validate by construction. If
+	// this ever fails the two have drifted apart.
+	if err := ca.Validate(); err != nil {
+		t.Errorf("Validate on a freshly generated CA: %v", err)
+	}
+	// Intermediates are a supported shape here, whatever individual consumers
+	// do about them.
+	ca.IntermediateCertificates = []*x509.Certificate{ca.RootCertificate}
+	if err := ca.Validate(); err != nil {
+		t.Errorf("Validate on a CA carrying intermediates: %v", err)
+	}
+}
+
+func TestValidateRejectsAMalformedCA(t *testing.T) {
+	good, err := GenerateED25519CA("good")
+	if err != nil {
+		t.Fatalf("GenerateED25519CA(good): %v", err)
+	}
+	other, err := GenerateED25519CA("other")
+	if err != nil {
+		t.Fatalf("GenerateED25519CA(other): %v", err)
+	}
+
+	// A cert that is not a CA. Signing leaves off it produces a chain that
+	// nothing will accept as an issuer.
+	leafKeyPub, leafKeyPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey(): %v", err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  false,
+		BasicConstraintsValid: true,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, good.RootCertificate, leafKeyPub, good.SigningKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate(): %v", err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatalf("ParseCertificate(): %v", err)
+	}
+
+	tests := []struct {
+		name string
+		ca   *CA
+	}{
+		{"nil", nil},
+		{"no root certificate", &CA{ID: "x", SigningKey: good.SigningKey}},
+		{"no signing key", &CA{ID: "x", RootCertificate: good.RootCertificate}},
+		{"root is not a CA", &CA{ID: "x", RootCertificate: leafCert, SigningKey: leafKeyPriv}},
+		// The case Unmarshal cannot catch: key and certificate are each well
+		// formed and are simply not a pair.
+		{"key does not match the certificate", &CA{ID: "x", RootCertificate: good.RootCertificate, SigningKey: other.SigningKey}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.ca.Validate(); err == nil {
+				t.Error("Validate() = nil, want error")
 			}
 		})
 	}
