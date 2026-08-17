@@ -230,6 +230,11 @@ func TestValidation_Atespace(t *testing.T) {
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
+	t.Run("ListAtespaces invalid token", func(t *testing.T) {
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageToken: "%%%"})
+		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
+	})
+
 	t.Run("CreateAtespace", func(t *testing.T) {
 		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
