@@ -105,10 +105,6 @@ func Validate_Actor(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "validateOutput", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
 			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "validateOutput", false, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
@@ -456,4 +452,58 @@ func Validate_ResourceMetadata(
 	}
 
 	return errs
+}
+
+// Validate_UpdateActorRequest validates an instance of UpdateActorRequest according
+// to declarative validation rules in the API schema.
+func Validate_UpdateActorRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.UpdateActorRequest) (errs field.ErrorList) {
+
+	{ // field ateapipb.UpdateActorRequest.Actor
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.Actor,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if protoDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			func() { // cohort = "metadata"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
+					func(o *ateapipb.Actor) *ateapipb.ResourceMetadata { return o.Metadata }, deepEqualImpl_, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.UpdateActorRequest) *ateapipb.Actor {
+				return oldObj.Actor
+			})
+		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// deepEqualImpl_ is a validate.MatchFunc which allows the implementation of deep-equality to be defined at codegen time.
+func deepEqualImpl_[T any](a, b T) bool {
+	return protoDeepEqual(a, b)
 }

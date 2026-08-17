@@ -39,7 +39,8 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	// First scrub any fields that users are not allowed to set.
 	inActor := req.Actor
 	if inActor != nil { // otherwise validation will flag it
-		scrubActor(inActor)
+		scrubResourceMetadataForCreate(inActor.Metadata)
+		inActor.Status = nil
 	}
 
 	// Validate the request, including the object within it.
@@ -58,6 +59,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	}()
 
 	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
+
 	// Handle the creation, including validation of the final stored object.
 	stored, err := s.impl.CreateActor(ctx, inActor)
 	setSpanActorAttributes(ctx, stored)
@@ -108,7 +110,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		LatestSnapshot: sourceSnapshotStatus.GetSnapshot(),
 		SourceSnapshot: sourceSnapshotStatus,
 	}
-	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor); len(errs) > 0 {
+	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
 	}
 
@@ -127,27 +129,25 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	return stored, nil
 }
 
-// scrubActor removes any fields from the request that clients are not allowed
-// to set.
-func scrubActor(actor *ateapipb.Actor) {
-	//FIXME: this is obviously wrong for update
-	scrubResourceMetadata(actor.Metadata)
-	actor.Status = nil
-}
-
 // FIXME: put this in a common place for all resources.
-func scrubResourceMetadata(in *ateapipb.ResourceMetadata) {
+func scrubResourceMetadataForCreate(in *ateapipb.ResourceMetadata) {
 	if in == nil {
 		return // validation will flag it
 	}
-	*in = ateapipb.ResourceMetadata{
-		Atespace:   in.Atespace,
-		Name:       in.Name,
-		Uid:        "",  // will be set later
-		Version:    0,   // will be set later
-		CreateTime: nil, // will be set later
-		UpdateTime: nil, // will be set later
+	in.Uid = ""         // will be set later
+	in.Version = 0      // will be set later
+	in.CreateTime = nil // will be set later
+	in.UpdateTime = nil // will be set later
+}
+
+// FIXME: put this in a common place for all resources.
+func scrubResourceMetadataForUpdate(in *ateapipb.ResourceMetadata) {
+	if in == nil {
+		return // validation will flag it
 	}
+	// in.Uid and in.Version are preconditions, so we don't scrub them.
+	in.CreateTime = nil // will be set later
+	in.UpdateTime = nil // will be set later
 }
 
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
@@ -296,24 +296,64 @@ func validateListActorsRequest(req *ateapipb.ListActorsRequest) field.ErrorList 
 }
 
 func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
-	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
+	// First scrub any fields that users are not allowed to set.
+	inActor := req.Actor
+	if inActor != nil { // otherwise validation will flag it
+		scrubResourceMetadataForUpdate(inActor.Metadata)
+		inActor.Status = nil
+	}
+
+	// Validate the request.
+	if errs := validateUpdateActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	in := req.GetActor()
-	actorRef := resources.ActorRefFromActor(in)
+
+	actorRef := resources.ActorRefFromActor(inActor)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapipb.Actor) error {
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
 		// Whole-object replace: clear first, so a field the client left unset is
 		// cleared rather than kept from the stored actor.
 		// Merge cannot smuggle in unknown fields because validation already rejected them.
 		proto.Reset(toUpdate)
-		proto.Merge(toUpdate, in)
+		proto.Merge(toUpdate, inActor)
 		// Restore status and metadata from the server.
 		toUpdate.Status = status
 		toUpdate.Metadata = metadata
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	setSpanActorAttributes(ctx, storedActor)
+
+	return storedActor, err
+}
+
+func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	storedActor, err := s.Interface.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
+		// Apply the mutation function to the stored value.
+		oldVal := proto.CloneOf(toUpdate)
+		if err := mutate(toUpdate); err != nil {
+			return err
+		}
+		newVal := toUpdate
+
+		// Validate the user's input before doing any further work.
+		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, false); len(errs) > 0 {
+			return toGRPCStatusError(errs)
+		}
+
+		// Do any further work on the resource.
+
+		// Validate the final value before storing it.
+		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
+			return toGRPCInternalError(errs)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -324,7 +364,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "actor %s/%s not found with uid %s", in.GetMetadata().GetAtespace(), in.GetMetadata().GetName(), in.GetMetadata().GetUid())
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "actor %s not found", actorRef)
@@ -334,24 +374,40 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 		}
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
-
-	setSpanActorAttributes(ctx, storedActor)
 	return storedActor, nil
 }
 
-func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorList {
+func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRequest) field.ErrorList {
 	var fldPath *field.Path
-	var errs field.ErrorList
+
+	// Call the generated validation.
+	// We model this as a create rather than an update because updates assume
+	// the existence of a "current" value, which we do not have yet.  This is
+	// validating the request itself. The result will be validated later, after
+	// we have a current value to compare against.
+	op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
+	errs := Validate_UpdateActorRequest(ctx, op, nil, req, nil)
+	if req.Actor != nil && req.Actor.Metadata != nil {
+		// TODO: Once we drop the fieldmask, we can do a full validation of the input actor and don't need this.
+		errs = append(errs, Validate_ResourceMetadata(ctx, op, field.NewPath("actor", "metadata"), req.Actor.Metadata, nil)...)
+		// This is an update, so the UID and version must be set.  When those
+		// become optional, we can drop this.
+		if req.Actor.Metadata.Uid == "" {
+			errs = append(errs, field.Required(field.NewPath("actor", "metadata", "uid"), ""))
+		}
+		if req.Actor.Metadata.Version == 0 {
+			errs = append(errs, field.Required(field.NewPath("actor", "metadata", "version"), ""))
+		}
+	}
 
 	actor := req.GetActor()
 	actorPath := fldPath.Child("actor")
 	if actor == nil {
-		return field.ErrorList{field.Required(actorPath, "")}
+		// handled by DV
+		return errs
 	}
 
 	errs = append(errs, validateNoUnknownFields(actor, actorPath)...)
-
-	errs = append(errs, resources.ValidateUpdateMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
 
 	if selector := actor.GetWorkerSelector(); selector != nil {
 		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)
@@ -505,9 +561,9 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorL
 	return errs
 }
 
-func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor) field.ErrorList {
+func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, validateOutput bool) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update, Options: map[string]bool{"validateOutput": true}}
+	op := operation.Operation{Type: operation.Update, Options: map[string]bool{"validateOutput": validateOutput}}
 	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
 
 	return errs

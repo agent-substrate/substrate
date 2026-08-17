@@ -106,8 +106,10 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		nil,
 	}, {
 		"specified actor.status",
-		validActor(func(a *ateapipb.Actor) { a.Status = &ateapipb.ActorStatus{} }),
-		field.ErrorList{field.Forbidden(field.NewPath("actor", "status"), "")},
+		validActor(func(a *ateapipb.Actor) {
+			a.Status = &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}
+		}),
+		nil, // ignored on input
 	}, {
 		"worker_selector with nil match_labels",
 		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
@@ -190,10 +192,26 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(func(a *ateapipb.Actor) { a.Metadata = nil }),
 		field.ErrorList{field.Required(field.NewPath("metadata"), "")},
 	}, {
+		"missing actor.metadata.atespace",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Metadata.Atespace = "" }),
+		field.ErrorList{
+			field.Required(field.NewPath("metadata", "atespace"), ""),
+			field.Invalid(field.NewPath("metadata", "atespace"), nil, "").WithOrigin("immutable"),
+		},
+	}, {
 		"invalid actor.metadata.atespace",
 		validInput(nil),
 		validOutput(func(a *ateapipb.Actor) { a.Metadata.Atespace = "NS1" }),
 		field.ErrorList{field.Invalid(field.NewPath("metadata", "atespace"), nil, "").WithOrigin("immutable")},
+	}, {
+		"missing actor.metadata.name",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Metadata.Name = "" }),
+		field.ErrorList{
+			field.Required(field.NewPath("metadata", "name"), ""),
+			field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("immutable"),
+		},
 	}, {
 		"invalid actor.metadata.name",
 		validInput(nil),
@@ -227,7 +245,7 @@ func TestValidateActorUpdate(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal), tt.want)
+			assertValidateErr(t, validateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal, true), tt.want)
 		})
 	}
 }
@@ -317,13 +335,9 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 		&ateapipb.UpdateActorRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor"), "")},
 	}, {
-		"missing actor.metadata.atespace",
-		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Atespace = "" })),
-		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "atespace"), "")},
-	}, {
 		"invalid actor.metadata.atespace",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Atespace = "NS1" })),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "atespace"), "NS1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.metadata.name",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "" })),
@@ -331,7 +345,7 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.metadata.name",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ID1" })),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), "ID1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), "ID1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.metadata.uid precondition",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Uid = "" })),
@@ -339,7 +353,7 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.metadata.uid precondition",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Uid = "not-a-uuid" })),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "uid"), "not-a-uuid", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "uid"), "not-a-uuid", "").WithOrigin("format=k8s-uuid")},
 	}, {
 		"missing actor.metadata.version precondition",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Version = 0 })),
@@ -347,7 +361,7 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}, {
 		"negative actor.metadata.version precondition",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Version = -1 })),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "version"), int64(-1), "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "version"), int64(-1), "").WithOrigin("minimum")},
 	}, {
 		"missing actor.metadata.version and actor.metadata.uid",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) {
@@ -381,7 +395,7 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateUpdateActorRequest(tt.req), tt.want)
+			assertValidateErr(t, validateUpdateActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -549,7 +563,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: racing}
+	svc := &RPCService{impl: newServiceImpl(racing, nil, nil)}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -611,7 +625,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: racing}
+	svc := &RPCService{impl: newServiceImpl(racing, nil, nil)}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
@@ -671,7 +685,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 	t.Cleanup(cleanup)
 
 	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
-	return &RPCService{impl: persistence}, created
+	return &RPCService{impl: newServiceImpl(persistence, nil, nil)}, created
 }
 
 func TestValidateDeleteActorRequest(t *testing.T) {
@@ -853,13 +867,6 @@ func TestUpdateActor_RejectsUnknownFields(t *testing.T) {
 				a.WorkerSelector.ProtoReflect().SetUnknown(unknownField(9999))
 			},
 			wantPath: field.NewPath("actor", "worker_selector"),
-		},
-		{
-			name: "nested in metadata.update_time",
-			placeUnknownField: func(a *ateapipb.Actor) {
-				a.Metadata.UpdateTime.ProtoReflect().SetUnknown(unknownField(9999))
-			},
-			wantPath: field.NewPath("actor", "metadata", "update_time"),
 		},
 	}
 	for _, tt := range tests {

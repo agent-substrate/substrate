@@ -872,7 +872,10 @@ type Actor struct {
 	// ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
 	// once at creation and immutable afterward.
 	SourceSnapshotTag *ObjectRef `protobuf:"bytes,6,opt,name=source_snapshot_tag,json=sourceSnapshotTag,proto3" json:"source_snapshot_tag,omitempty"`
-	// +k8s:ifDisabled(validateOutput)=+k8s:forbidden
+	// status is the system-managed state of the Actor. It is updated by the
+	// server and ignored on input. It is always present in output.
+	//
+	// +k8s:ifDisabled(validateOutput)=+k8s:optional
 	// +k8s:ifEnabled(validateOutput)=+k8s:required
 	Status        *ActorStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -3293,7 +3296,12 @@ type UpdateActorRequest struct {
 	// update.
 	// actor.metadata.version and actor.metadata.uid are required preconditions.
 	//
-	// +k8s:opaqueType
+	// +k8s:required
+	// TODO: Once we drop the fieldmask, we can drop these 2
+	// +k8s:opaqueType # updates are patch-like and can be sparse
+	// +k8s:subfield(metadata)=+k8s:required
+	// TODO: When nested subfields are enabled, use that for actor.metadata.uid
+	// TODO: When nested subfields are enabled, use that for actor.metadata.version
 	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

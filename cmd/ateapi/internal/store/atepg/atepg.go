@@ -201,9 +201,6 @@ func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
 	}
 }
 
-// TODO: This really does not belong in the storage layer, but there are a lot
-// of tests which assume that it does, so we can maybe fix this later.  For now
-// it is part of the storage contract.
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Uid = uuid.NewString()
 	metadata.Version = 1
@@ -211,6 +208,7 @@ func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.UpdateTime = metadata.CreateTime
 }
 
+// TODO: EOL this in favor of setUpdateMetadata
 func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
 	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
 	metadata.Version++
@@ -228,6 +226,13 @@ func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.Res
 		return fmt.Errorf("%s version projection %d does not match proto metadata version %d", resource, version, metadata.GetVersion())
 	}
 	return nil
+}
+
+func setUpdateMetadata(oldMeta, newMeta *ateapipb.ResourceMetadata) {
+	newMeta.Uid = oldMeta.Uid
+	newMeta.Version = oldMeta.Version + 1
+	newMeta.CreateTime = oldMeta.CreateTime
+	newMeta.UpdateTime = timestamppb.Now()
 }
 
 func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }
@@ -626,12 +631,6 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 // validateUpdateActorMutation reports whether an actor mutation changed fields
 // that are immutable for the lifetime of the stored actor.
 func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) error {
-	if stored, mutated := storedActor.GetMetadata().GetAtespace(), mutatedActor.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetMetadata().GetName(), mutatedActor.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
 	if stored, mutated := storedActor.GetActorTemplateNamespace(), mutatedActor.GetActorTemplateNamespace(); stored != mutated {
 		return fmt.Errorf("actor_template_namespace is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
@@ -674,6 +673,8 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
 		return nil, err
 	}
+	//FIXME: the mutate function has to do a clone to call validation,
+	//       so this is redundant. Can we get rid of one?
 	actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
 	if err := mutate(dbActor); err != nil {
 		return nil, err
@@ -683,7 +684,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	dbActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
+	setUpdateMetadata(actorBeforeMutation.Metadata, dbActor.Metadata)
 
 	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {

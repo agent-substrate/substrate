@@ -319,7 +319,7 @@ type hasResourceMetadata interface {
 
 // PreconditionFrom builds the guards from the object the caller observed: its
 // uid and version.
-func PreconditionFrom[T hasResourceMetadata](observed T) Precondition {
+func PreconditionFrom(observed hasResourceMetadata) Precondition {
 	md := observed.GetMetadata()
 	return Precondition{UID: md.GetUid(), Version: md.GetVersion()}
 }
