@@ -137,6 +137,12 @@ spec:
         - configMapRef:
             name: ate-api-server-envvars
             optional: true
+        # Sensitive env vars (e.g. a Postgres DSN carrying a password) live in
+        # a Secret rather than the ConfigMap above. Listed last so a key
+        # present in both takes its value from the Secret.
+        - secretRef:
+            name: ate-api-server-secret-envvars
+            optional: true
         volumeMounts:
         # servicedns: the apiserver's own gRPC serving cert (DNS SAN api.ate-system.svc).
         - name: "servicedns"
@@ -153,6 +159,15 @@ spec:
           readOnly: true
         - name: "authentication-config"
           mountPath: "/etc/ateapi/authentication"
+          readOnly: true
+        # postgres-server-ca: server CA for an external Postgres, referenced
+        # by the DSN via sslrootcert (sslmode=verify-ca). Empty unless the
+        # postgres-server-ca Secret exists. Cloud SQL does not need this: it
+        # uses the Auth Proxy sidecar (see
+        # manifests/ate-install/cloudsql-proxy-patch.yaml), which handles TLS
+        # itself.
+        - name: "postgres-server-ca"
+          mountPath: "/run/postgres-server-ca"
           readOnly: true
         ports:
         - containerPort: 443
@@ -220,6 +235,10 @@ spec:
       - name: "authentication-config"
         configMap:
           name: "ate-api-authentication"
+      - name: "postgres-server-ca"
+        secret:
+          secretName: "postgres-server-ca"
+          optional: true
 ---
 # Allow voluntary disruptions (node drains, cluster upgrades) to take
 # at most one API server pod at a time, at any replica count.

@@ -1,0 +1,194 @@
+# Cloud SQL for the PostgreSQL store backend
+
+The ateapi PostgreSQL store (`--store-backend=postgres`) can run against
+[Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres). The
+supported, most secure configuration uses the
+[Cloud SQL Auth Proxy](https://github.com/GoogleCloudPlatform/cloud-sql-proxy)
+as a sidecar on `ate-api-server` with **automatic IAM database
+authentication**:
+
+- **Transport security** — the proxy establishes a TLS 1.3 tunnel to the
+  instance using ephemeral certificates and verifies the instance's identity.
+  No server CA files to download, mount, or rotate. ateapi connects to the
+  proxy over pod-local loopback; that traffic never leaves the pod's network
+  namespace.
+- **Authentication** — establishing the tunnel requires the IAM permission
+  `cloudsql.instances.connect`, and the database session itself is
+  authenticated with a short-lived OAuth token for the pod's Workload
+  Identity (`--auto-iam-authn`). **No database password exists anywhere** —
+  nothing to store, leak, or rotate; access is revoked in IAM.
+- **Cloud-agnostic code** — ateapi itself knows nothing about Cloud SQL. The
+  sidecar is a deployment-time patch
+  (`manifests/ate-install/cloudsql-proxy-patch.yaml`) applied by
+  `hack/install-ate.sh` only when a Cloud SQL instance is configured.
+
+## 1. Provision
+
+The cluster must have Workload Identity enabled (clusters created by
+`setup-gcp create cluster` do), and the VPC needs [private services
+access](https://cloud.google.com/sql/docs/postgres/configure-private-services-access)
+(one-time per VPC; the tool prints the two `gcloud` commands if it is
+missing). Then:
+
+```sh
+export PROJECT_ID=<project>
+go run ./tools/setup-gcp create cloudsql   # flags: --instance, --tier, --edition, --storage-size, --gsa-name, --network
+```
+
+This idempotently creates:
+
+| Resource | Value |
+|---|---|
+| Cloud SQL instance | PostgreSQL 18, Enterprise edition, private IP only, `cloudsql.iam_authentication=on` |
+| Database | `atepg` |
+| Google service account | `ate-api-server@<project>.iam.gserviceaccount.com` |
+| Project IAM roles | `roles/cloudsql.client`, `roles/cloudsql.instanceUser` on the GSA |
+| Workload Identity binding | `roles/iam.workloadIdentityUser` for `<project>.svc.id.goog[ate-system/ate-api-server]` on the GSA |
+| IAM database user | the GSA, type `CLOUD_IAM_SERVICE_ACCOUNT` |
+
+> **Note:** The repo otherwise uses WIF-direct
+> `principal://` bindings, but Cloud SQL IAM database users must be service
+> accounts — federated Kubernetes principals cannot log into the database. The
+> KSA is therefore annotated with `iam.gke.io/gcp-service-account` so the
+> proxy's ambient credentials resolve to the GSA.
+
+## 2. One-time schema privileges
+
+IAM database users are created with no privileges, and PostgreSQL 15+ removed
+`PUBLIC`'s `CREATE` on the `public` schema. ateapi applies its schema
+idempotently at startup as the connecting user, so grant it once (connect as
+the built-in `postgres` user — note the database username is the GSA email
+**without** `.gserviceaccount.com`):
+
+```sql
+GRANT USAGE, CREATE ON SCHEMA public TO "ate-api-server@<project>.iam";
+```
+
+Getting that `postgres` session on a private-IP-only instance takes two
+steps: give `postgres` a temporary password (fresh instances have none), and
+run `psql` from inside the cluster, which is the only place with a network
+path to the instance:
+
+```sh
+gcloud sql users set-password postgres --instance=<instance> --password='<temp-pw>'
+IP=$(gcloud sql instances describe <instance> --format="value(ipAddresses[0].ipAddress)")
+kubectl run psql-grant --rm -i --restart=Never --image=postgres:18-alpine -- \
+  psql "postgresql://postgres:<temp-pw>@${IP}:5432/atepg?sslmode=require" \
+  -c 'GRANT USAGE, CREATE ON SCHEMA public TO "ate-api-server@<project>.iam";'
+```
+
+Nothing deployed ever uses this password — afterwards you can scramble it
+(`gcloud sql users set-password postgres --instance=<instance>
+--password="$(openssl rand -hex 16)"`) or keep it for admin access such as
+Cloud SQL Studio. Note that `postgres` is not a superuser on Cloud SQL: it
+can list the IAM user's tables but needs explicit `GRANT SELECT` from that
+user to read them.
+
+If the `atepg` tables already exist from a previous password-based user,
+transfer ownership instead (future in-place DDL requires it):
+
+```sql
+GRANT "ate-api-server@<project>.iam" TO "<olduser>";
+REASSIGN OWNED BY "<olduser>" TO "ate-api-server@<project>.iam";  -- run inside atepg
+```
+
+## 3. Deploy
+
+```sh
+export ATE_API_POSTGRES_CLOUDSQL_INSTANCE=<project>:<region>:<instance>
+export ATE_API_POSTGRES_CLOUDSQL_GSA=ate-api-server@<project>.iam.gserviceaccount.com
+./hack/install-ate.sh --deploy-ate-system --store-backend=postgres
+# Existing installation: --deploy-ate-apiserver instead of --deploy-ate-system
+```
+
+What this does differently from a plain install:
+
+- Skips the in-cluster PostgreSQL StatefulSet.
+- Writes the proxy's configuration (`CSQL_PROXY_*`) into the
+  `ate-api-server-envvars` ConfigMap and synthesizes a passwordless DSN
+  (`user=<gsa-user> host=127.0.0.1 ... sslmode=disable`) into the
+  `ate-api-server-secret-envvars` Secret.
+- Annotates the `ate-api-server` KSA with the GSA and patches the
+  `cloud-sql-proxy` native sidecar (initContainer with
+  `restartPolicy: Always`; requires Kubernetes 1.29+) into the deployment.
+  The sidecar's `/startup` probe gates ateapi, so ateapi never races the
+  tunnel. Unsetting `ATE_API_POSTGRES_CLOUDSQL_INSTANCE` and redeploying
+  removes the sidecar and annotation again.
+
+Optional environment variables:
+
+- `ATE_API_POSTGRES_CLOUDSQL_IP_TYPE` — `private` (default), `public`, `psc`.
+- `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH` — set `false` to fall back to password
+  authentication through the proxy (still encrypted and identity-verified);
+  you must then provide `ATE_API_POSTGRES_CONNECTION_STRING` with the
+  password yourself.
+- `ATE_API_POSTGRES_POOL_MAX_CONNS` — pgxpool connections per ateapi replica
+  (default: `max(4, NumCPU)`); folded into the synthesized DSN as
+  `pool_max_conns`.
+
+## 4. Verify
+
+```sh
+kubectl rollout status deployment/ate-api-server -n ate-system
+kubectl logs deployment/ate-api-server -n ate-system -c cloud-sql-proxy | head
+# expect: "The proxy has started successfully and is ready for new connections"
+kubectl logs deployment/ate-api-server -n ate-system | head -5
+# expect store-backend=postgres in the flag dump and no connection errors
+kubectl get secret ate-api-server-secret-envvars -n ate-system \
+  -o jsonpath='{.data.ATE_API_POSTGRES_CONNECTION_STRING}' | base64 -d
+# expect: no password in the DSN
+```
+
+Common failure modes:
+
+| Symptom | Cause |
+|---|---|
+| proxy: `PERMISSION_DENIED` on startup | GSA missing `roles/cloudsql.client`, or the Workload Identity annotation/binding is absent |
+| `FATAL: Cloud SQL IAM service account authentication failed` | GSA missing `roles/cloudsql.instanceUser`, or the IAM database user was not created |
+| ateapi: `permission denied for schema public` | the one-time schema `GRANT` (section 2) was not run |
+| proxy: instance connection errors mentioning IAM | `cloudsql.iam_authentication` flag is off on the instance |
+
+## 5. Scaling the database
+
+The defaults (`db-custom-2-8192`, 10 GB disk) suit development and modest
+fleets. At large actor counts the store becomes I/O-bound: once tables and
+indexes outgrow memory, uniform random reads fall out of cache and point
+lookups pay persistent-disk latency (several milliseconds) instead of
+microseconds. The knobs below address that, in order of leverage.
+
+**Instance shape** (`--tier`, `--edition` at create time; `gcloud sql
+instances patch` later — edition/tier changes restart the instance):
+
+- Memory is the primary lever: reads are served from cache until the working
+  set (tables + indexes) outgrows RAM, then p50 degrades to disk latency.
+- Once the dataset can't fit RAM on any tier, switch to
+  `--edition=enterprise-plus --tier=db-perf-optimized-N-<vCPU>`. The tool
+  enables its **local-SSD data cache**, which extends the effective cache
+  several times beyond RAM: reads that would miss to persistent disk are
+  served from local SSD at a fraction of the latency.
+
+**Storage** (`--storage-size` at create time; only grows afterwards):
+
+- Persistent-disk IOPS and throughput scale with provisioned size — the disk
+  is also the I/O knob. Pre-size to ~2× the expected dataset (records +
+  indexes + WAL + bloat) rather than relying on auto-resize, which grows in
+  small steps and stalls under bulk loads.
+
+**Connection pool** (`ATE_API_POSTGRES_POOL_MAX_CONNS` at deploy time):
+throughput is sensitive to pool sizing; sweep it per workload. A starting
+point is 1.5–2× the instance's vCPUs, split across ateapi replicas.
+
+Beyond configuration: at billions of rows per table, vacuum duration and
+index maintenance on monolithic tables become the operational limit —
+partitioning the large tables is schema work, not a configuration change.
+
+## Alternative: any external PostgreSQL (non-GCP)
+
+For a non-Cloud-SQL database, provide a DSN directly; password lives in a
+Secret and the server certificate is verified against a mounted CA:
+
+```sh
+export ATE_API_POSTGRES_CONNECTION_STRING='postgresql://<user>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
+export ATE_API_POSTGRES_SERVER_CA_FILE=/path/to/server-ca.pem
+./hack/install-ate.sh --deploy-ate-system --store-backend=postgres
+```

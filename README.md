@@ -151,6 +151,9 @@ go run ./tools/setup-gcp create cluster
 go run ./tools/setup-gcp create bucket
 ```
 
+To run the PostgreSQL store backend on Cloud SQL — with IAM database
+authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
+
 Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
 ```bash
 # Re-deploy only ate-apiserver of the ATE system

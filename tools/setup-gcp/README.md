@@ -14,6 +14,7 @@ It uses a hierarchical command structure:
         *   `bucket` - Create GCS bucket.
         *   `iam` - Create IAM policy bindings and grant permissions.
         *   `dashboards` - Create Cloud Monitoring dashboards.
+        *   `cloudsql` - Create a Cloud SQL PostgreSQL instance for the ateapi store, with IAM database authentication (see [cloud-sql.md](cloud-sql.md)).
     *   `bootstrap` - Run all setup steps in order.
 
 ## Prerequisites
