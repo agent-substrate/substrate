@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -196,5 +197,19 @@ func TestInitParams(t *testing.T) {
 	}
 	if strings.Contains(systemd, "init=") {
 		t.Errorf("initParams(false) = %q, must not override init", systemd)
+	}
+}
+
+// The SIGTERM path signals these ids over ttrpc, and the agent rejects an id it
+// does not know with InvalidContainerId — which aborts the whole graceful
+// shutdown, so a stale id here silently costs the guest its clean exit.
+// The SIGTERM path signals these ids over ttrpc, and the agent rejects an id it
+// does not know with InvalidContainerId — which aborts the whole graceful
+// shutdown, so a stale id here silently costs the guest its clean exit.
+func TestWorkloadIDs(t *testing.T) {
+	ctrs := []actorContainer{{name: "counter"}, {name: "sidecar"}}
+	got := workloadIDs(ctrs)
+	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
+		t.Errorf("workloadIDs() = %v, want %v", got, want)
 	}
 }

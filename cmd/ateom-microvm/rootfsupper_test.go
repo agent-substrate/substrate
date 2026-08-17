@@ -53,10 +53,6 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 	if err := tarRootfsUpper(t.Context(), src, checkpointDir); err != nil {
 		t.Fatalf("tarRootfsUpper: %v", err)
 	}
-	if !snapshotHasRootfsUpper(checkpointDir) {
-		t.Fatalf("snapshotHasRootfsUpper(%q) = false after tarRootfsUpper", checkpointDir)
-	}
-
 	// Restore: onto a directory holding a stale previous activation's contents,
 	// which must not leak into the restored overlay state.
 	dst := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
@@ -75,13 +71,5 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, "app_ovl/fs/stale.txt")); !os.IsNotExist(err) {
 		t.Errorf("stale pre-restore content survived untarRootfsUpper (stat err = %v), want it wiped", err)
-	}
-}
-
-// A snapshot without the tar is a legacy tmpfs-upper snapshot: restore must
-// not stage the ateUpper share (the guest has no fs device for it).
-func TestSnapshotHasRootfsUpperAbsent(t *testing.T) {
-	if snapshotHasRootfsUpper(t.TempDir()) {
-		t.Error("snapshotHasRootfsUpper() = true for a snapshot without the tar")
 	}
 }

@@ -132,7 +132,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 * **Autoscaling Control Loop & Anti-Windup**: `desired - ready > 0` sustained beyond a few minutes indicates undelivered capacity due to node pool exhaustion, quota limits, or stuck worker pods, serving as anti-windup input for demand-reactive capacity scaling.
 
 For `atenet.router.route.duration`:
-* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
+* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
 
 For `ate.scheduler.eligible_workers`:

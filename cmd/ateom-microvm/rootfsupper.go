@@ -39,12 +39,9 @@ package main
 // Snapshots: the upper does not ride in guest memory, so a FULL snapshot
 // ships it as a tar (rootfsUpperTarFile), taken while the guest is paused
 // (the share is write-through, so a paused guest's completed writes are
-// already in the upper). Restore is self-describing — the tar's presence is
-// what says the snapshot carries a host-merged rootfs — which is also what
-// keeps legacy tmpfs-upper snapshots restorable: no tar means the share
-// presents the bare image and the guest's own in-memory upper takes over. A
-// DATA snapshot deliberately excludes rootfs state: the workload cold-starts
-// on restore.
+// already in the upper). Every FULL snapshot carries one; restoring anything
+// older fails at the untar. A DATA snapshot deliberately excludes rootfs state:
+// the workload cold-starts on restore.
 
 import (
 	"context"
@@ -84,26 +81,6 @@ func resetRootfsUpperDir(actorUID string) error {
 		return fmt.Errorf("while creating rootfs upper dir %q: %w", dir, err)
 	}
 	return nil
-}
-
-// actorHasDiskUpper reports whether the running actor's rootfs is host-merged,
-// by the host directory only a merged-rootfs boot/restore creates (and
-// teardownActor removes; a legacy restore explicitly removes any crash-orphaned
-// leftover, so "directory absent" means the same thing on every entry path).
-// A LEGACY actor — restored from a snapshot taken by the retired tmpfs-upper
-// implementation — has no directory: its upper lives inside guest memory, and
-// its checkpoints must keep capturing it there.
-func actorHasDiskUpper(actorUID string) bool {
-	_, err := os.Stat(rootfsUpperDir(actorUID))
-	return err == nil
-}
-
-// snapshotHasRootfsUpper reports whether a snapshot carries host-merged rootfs
-// uppers — i.e. whether restore must re-materialize them and mount the merged
-// trees (vs a legacy snapshot, whose share presents the bare image).
-func snapshotHasRootfsUpper(snapshotDir string) bool {
-	_, err := os.Stat(filepath.Join(snapshotDir, rootfsUpperTarFile))
-	return err == nil
 }
 
 // tarRootfsUpper archives the actor's rootfs uppers (dir) into the checkpoint

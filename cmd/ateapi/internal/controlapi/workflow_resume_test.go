@@ -98,8 +98,8 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
 	}
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("assignWorkerAttempt() error = %v, want FailedPrecondition (no free workers)", err)
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no free workers)", err)
 	}
 
 	stored, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")

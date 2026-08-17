@@ -95,9 +95,8 @@ type runningActor struct {
 	// this activation.
 	guestAgent *kata.AgentClient
 
-	// workloadIDs are the kata overlay-workload container ids (overlayWorkloadID of
-	// each container name) running in the guest. The SIGTERM handler signals and
-	// waits on these to gracefully stop the actor before the VM is torn down.
+	// workloadIDs are the guest container ids of this actor's workloads, for the
+	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).
 	workloadIDs []string
 }
 
@@ -145,20 +144,17 @@ const minGuestMemMiB = 256
 // micro-VM + virtiofsd). 25 is far above any real pod.
 const maxActorContainers = 25
 
-// overlayWorkloadID is the kata containerID the RETIRED guest-overlay
-// arrangement gave a container's workload (the bare name went to a "carrier"
-// container; the workload overlaying it was <name>_ovl). Containers now run
-// under their bare name, but guests restored from legacy snapshots still hold
-// the _ovl containers, so log forwarding for those lineages keys on this.
-func overlayWorkloadID(name string) string { return name + "_ovl" }
-
-// overlayWorkloadIDs returns the overlay-workload container ids for the actor's
-// containers, in order. Recorded on runningActor so the SIGTERM handler knows
-// which guest workloads to signal and wait on.
-func overlayWorkloadIDs(ctrs []actorContainer) []string {
+// workloadIDs returns the guest container ids for the actor's containers, in
+// order. Recorded on runningActor so the SIGTERM handler knows which guest
+// workloads to signal and wait on, and it must name what the guest actually
+// runs: a container the agent does not know is rejected with InvalidContainerId,
+// and graceful shutdown then gives up without ever reaching the workload.
+//
+// Containers run under their bare name.
+func workloadIDs(ctrs []actorContainer) []string {
 	ids := make([]string, 0, len(ctrs))
 	for _, c := range ctrs {
-		ids = append(ids, overlayWorkloadID(c.name))
+		ids = append(ids, c.name)
 	}
 	return ids
 }
@@ -576,7 +572,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: overlayWorkloadIDs(ctrs)}
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}
@@ -664,11 +660,7 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 		Binary:     rr.virtiofsd,
 		SocketPath: kata.VirtiofsdSocketPath(id),
 		SharedDir:  kata.SharedDir(id),
-		// Writable share whose host contents also change on restore (the upper
-		// is re-materialized from the snapshot tar) — same reasoning as the
-		// durable-dir share.
-		Cache: "auto",
-		Log:   vfsdLog,
+		Log:        vfsdLog,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while starting virtiofsd: %w", err)

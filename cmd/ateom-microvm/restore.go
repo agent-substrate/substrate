@@ -212,19 +212,16 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// An error return between here and the join MUST drain the goroutine (the
 	// deferred receive below): returning with the untar still writing would let
 	// a retried restore's own untar race it inside the same directory.
-	hasUpper := snapshotHasRootfsUpper(restoreDir)
 	untarDone := make(chan error, 1)
 	untarJoined := false
-	if hasUpper {
-		go func() {
-			untarDone <- untarRootfsUpper(rootfsUpperDir(actorUID), restoreDir)
-		}()
-		defer func() {
-			if !untarJoined {
-				<-untarDone
-			}
-		}()
-	}
+	go func() {
+		untarDone <- untarRootfsUpper(rootfsUpperDir(actorUID), restoreDir)
+	}()
+	defer func() {
+		if !untarJoined {
+			<-untarDone
+		}
+	}()
 
 	// Reconstruct each container's rootfs at the frozen find-paths location
 	// SharedDir(id)/<cid>/rootfs from the LOCAL OCI bundle (atelet re-unpacked
@@ -252,42 +249,17 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if err != nil {
 		return err
 	}
-	var vfsdCmd *exec.Cmd
-	if hasUpper {
-		// The overlay mounts need the upper on disk: join the background untar
-		// (still overlapped with the bundle preparation above), then assemble
-		// the merged trees and serve them.
-		untarErr := <-untarDone
-		untarJoined = true
-		if untarErr != nil {
-			return untarErr
-		}
-		if vfsdCmd, err = s.stageMergedRootfs(ctx, rr, actorUID, ctrs); err != nil {
-			return err
-		}
-	} else {
-		// LEGACY snapshot: leave the upper directory ABSENT — a stale dir
-		// orphaned by a crash before teardown would otherwise make
-		// actorHasDiskUpper mislabel this lineage's next checkpoint — and
-		// present the bare image over the immutable (cache=always) bind,
-		// exactly what the restored guest's in-memory overlay expects.
-		if err := os.RemoveAll(rootfsUpperDir(actorUID)); err != nil {
-			return fmt.Errorf("while clearing stale rootfs upper dir: %w", err)
-		}
-		for _, c := range ctrs {
-			if err := kata.ReconstructSharedDirFromImage(ctx, c.bundleRootfs, actorUID, c.name); err != nil {
-				return fmt.Errorf("while staging legacy lower for %q: %w", c.name, err)
-			}
-		}
-		vfsdLog, _ := os.OpenFile(virtiofsdLogPath(actorUID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-		if vfsdCmd, err = kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
-			Binary:     rr.virtiofsd,
-			SocketPath: kata.VirtiofsdSocketPath(actorUID),
-			SharedDir:  kata.SharedDir(actorUID),
-			Log:        vfsdLog,
-		}); err != nil {
-			return fmt.Errorf("while starting virtiofsd: %w", err)
-		}
+	// The overlay mounts need the upper on disk: join the background untar (still
+	// overlapped with the bundle preparation above), then assemble the merged trees
+	// and serve them.
+	untarErr := <-untarDone
+	untarJoined = true
+	if untarErr != nil {
+		return untarErr
+	}
+	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, ctrs)
+	if err != nil {
+		return err
 	}
 	defer func() {
 		if retErr != nil && vfsdCmd.Process != nil {
@@ -422,7 +394,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
-		workloadIDs:             overlayWorkloadIDs(ctrs),
+		// Signaling an id the agent does not know fails the whole graceful
+		// shutdown with InvalidContainerId, so these must be what the guest runs.
+		workloadIDs: workloadIDs(ctrs),
 	}
 
 	// Re-attach stdout/stderr forwarding for each container: the restored guest's
@@ -437,12 +411,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	} else {
 		ra.guestAgent = guestAC
 		for _, c := range containers {
-			// Containers run under their bare name; guests restored from LEGACY
-			// snapshots still hold the retired <name>_ovl workload containers.
 			streamID := c.GetName()
-			if !hasUpper {
-				streamID = overlayWorkloadID(c.GetName())
-			}
 			s.startActorLogForwarding(guestAC, p.actorRef, actorUID, templateNS, templateName, streamID, c.GetName())
 		}
 	}
@@ -459,17 +428,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// its own — whatever kept the agent from answering a 15s retry loop would
 	// keep it from answering that one too.
 	if ra.guestAgent != nil {
-		// Same id split as the log forwarding above: bare names, except for
-		// guests restored from legacy snapshots, which hold <name>_ovl containers.
-		workloadIDs := make([]string, 0, len(containers))
-		for _, c := range containers {
-			id := c.GetName()
-			if !hasUpper {
-				id = overlayWorkloadID(c.GetName())
-			}
-			workloadIDs = append(workloadIDs, id)
-		}
-		s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: workloadIDs})
+		s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: ra.workloadIDs})
 	}
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",

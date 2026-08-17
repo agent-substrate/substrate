@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,10 @@ def parse_args() -> argparse.Namespace:
         "--runner-job-tmpl",
         default=RUNNER_JOB_TMPL,
         help="Path to the runner job YAML template file",
+    )
+    p.add_argument(
+        "--junit-output",
+        help="Path to write a JUnit XML report summarizing test results and durations",
     )
     return p.parse_args()
 
@@ -375,6 +380,47 @@ def run_test(
     return result
 
 
+def write_junit_xml(
+    path: str,
+    results: list[tuple[str, str, float, str | None]],
+    classname: str = "substrate.benchmarks",
+) -> None:
+    total_tests = len(results)
+    failures = sum(1 for _, status, _, _ in results if status != "complete")
+    total_time = sum(duration for _, _, duration, _ in results)
+
+    testsuite = ET.Element(
+        "testsuite",
+        name="substrate-benchmarks",
+        tests=str(total_tests),
+        failures=str(failures),
+        errors="0",
+        time=f"{total_time:.2f}",
+    )
+
+    for name, status, duration, failure_msg in results:
+        testcase = ET.SubElement(
+            testsuite,
+            "testcase",
+            name=name,
+            classname=classname,
+            time=f"{duration:.2f}",
+        )
+        if status != "complete":
+            failure = ET.SubElement(
+                testcase,
+                "failure",
+                message=failure_msg or f"Test failed with status: {status}",
+            )
+            failure.text = failure_msg or f"Test failed with status: {status}"
+
+    tree = ET.ElementTree(testsuite)
+    ET.indent(tree, space="  ", level=0)
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tree.write(str(out_path), encoding="utf-8", xml_declaration=True)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -432,7 +478,7 @@ def main() -> None:
                 f"Failed to apply target cluster {target_cluster!r}: {e}",
                 flush=True,
             )
-            results.append((test["name"], "config-error"))
+            results.append((test["name"], "config-error", 0.0, str(e)))
             continue
 
         try:
@@ -454,6 +500,8 @@ def main() -> None:
 
             sandbox_class = test.get("sandboxClass", "gvisor")
             status = "error"
+            failure_msg = None
+            start_time = time.time()
             try:
                 deploy_substrate()
                 # install-microvm-deps needs the CRDs from deploy_substrate;
@@ -469,10 +517,14 @@ def main() -> None:
                         commit,
                         args.runner_job_tmpl,
                     )
+                    if status != "complete":
+                        failure_msg = f"Test finished with status: {status}"
                 except Exception as e:
                     print(f"Test {test['name']} crashed: {e}", flush=True)
+                    failure_msg = str(e)
             except Exception as e:
                 print(f"Test {test['name']} setup failed: {e}", flush=True)
+                failure_msg = str(e)
             finally:
                 # Always tear down, even if deploy or run failed, so the
                 # next test (and the next CronJob fire) starts clean.
@@ -481,7 +533,8 @@ def main() -> None:
                 teardown_workloads()
                 teardown_microvm_deps()
                 teardown_substrate()
-            results.append((test["name"], status))
+            duration = time.time() - start_time
+            results.append((test["name"], status, duration, failure_msg))
         finally:
             # Drop .ate-dev-env.sh so the next test cannot accidentally
             # inherit this one's cluster/project if the next
@@ -490,10 +543,15 @@ def main() -> None:
 
     print("\n=== summary ===", flush=True)
     failed = 0
-    for name, status in results:
-        print(f"  {name}: {status}", flush=True)
+    for name, status, duration, _ in results:
+        print(f"  {name}: {status} ({duration:.2f}s)", flush=True)
         if status != "complete":
             failed += 1
+
+    if args.junit_output:
+        print(f"Writing JUnit XML report to {args.junit_output}", flush=True)
+        write_junit_xml(args.junit_output, results)
+
     sys.exit(1 if failed else 0)
 
 

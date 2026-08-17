@@ -24,10 +24,7 @@ package kata
 // itself. Rootfs writes therefore cost host disk, not guest RAM, and persist across
 // suspend/resume via the snapshot's rootfs-upper tar.
 //
-// (Snapshots from the retired guest-tmpfs-upper mode still restore: their upper rides
-// inside the restored guest memory, and the lower is re-presented with the legacy
-// read-only bind, see ReconstructSharedDirFromImage.) This file holds the
-// rootfs-staging helpers.
+// This file holds the rootfs-staging helpers.
 
 import (
 	"context"
@@ -100,28 +97,15 @@ type VirtiofsdOptions struct {
 	Binary     string // virtiofsd executable; defaults to "virtiofsd"
 	SocketPath string // vhost-user socket CH connects to (VirtiofsdSocketPath)
 	SharedDir  string // directory to serve (SharedDir(id))
-	// Cache is virtiofsd's --cache mode. Empty defaults to "always", which is
-	// only correct for a strictly read-only share (see virtiofsdArgs).
-	Cache string
-	Log   io.Writer
+	Log        io.Writer
 }
 
 // virtiofsdArgs builds the virtiofsd command line for o.
 func virtiofsdArgs(o VirtiofsdOptions) []string {
-	cache := o.Cache
-	if cache == "" {
-		// "always" is only correct for a strictly read-only share with immutable
-		// host contents — today that is solely the LEGACY restore path's bare-image
-		// share (see ReconstructSharedDirFromImage). WRITABLE shares (the merged
-		// rootfs, the durable-dir volumes) must pass Cache: "auto": the guest
-		// writes through them and the host contents change underneath the guest
-		// on restore, so cache=always would serve stale data.
-		cache = "always"
-	}
 	return []string{
 		"--socket-path=" + o.SocketPath,
 		"--shared-dir=" + o.SharedDir,
-		"--cache=" + cache,
+		"--cache=auto",
 		"--thread-pool-size=1",
 		"--announce-submounts",
 		"--migration-mode", "find-paths",
@@ -245,48 +229,6 @@ func UnmountMergedRootfs(restoreID, cid string) {
 	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
 		_ = reaper.Run(exec.Command("umount", "-l", dst))
 	}
-}
-
-// ReconstructSharedDirFromImage bind-mounts a container's OCI image rootfs at
-// <cid>/rootfs under SharedDir(restoreID) so virtiofsd serves it as the read-only
-// lower. LEGACY restores only: guests from retired guest-tmpfs-upper snapshots hold
-// this plain image tree open (their overlay upper lives inside the restored guest
-// memory), so the share must present the bare image, not a merged overlay. The bind
-// copies nothing on the host. cid is stable across the actor's lineage.
-func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID, cid string) error {
-	if cid == "" {
-		return fmt.Errorf("ReconstructSharedDirFromImage: empty container id")
-	}
-	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
-	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint. Not
-	// RemoveAll: that would chase a live bind into bundleRootfs.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return fmt.Errorf("creating shared dir %q: %w", dst, err)
-	}
-	cmd := exec.CommandContext(ctx, "mount", "--bind", bundleRootfs, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting image rootfs %q -> %q: %w (%s)", bundleRootfs, dst, err, strings.TrimSpace(stderr.String()))
-	}
-	// Ensure the standard OCI mountpoints exist even for minimal images: the container
-	// mounts /proc,/sys,/dev over them, and find-paths re-opens the lower by path on
-	// restore, so the layout must match on every node. (Bind still writable; ignore EEXIST.)
-	for _, d := range []string{"proc", "sys", "dev"} {
-		_ = os.MkdirAll(filepath.Join(dst, d), 0o755)
-	}
-	// Remount read-only: the lower is immutable, so all writes go to the overlay upper
-	// and it stays byte-identical across reconstructions (required by find-paths migration).
-	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
-	var roErr strings.Builder
-	ro.Stderr = &roErr
-	if err := reaper.Run(ro); err != nil {
-		return fmt.Errorf("remounting overlay lower read-only %q: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
-	}
-	return nil
 }
 
 // CreateSandboxForActor creates the guest sandbox with the kataShared virtio-fs mount
