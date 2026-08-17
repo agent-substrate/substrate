@@ -38,11 +38,19 @@ metadata:
   name: probe
   namespace: ate-e2e-probe
 spec:
-  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
     command: ["/ko-app/probe"]
+    # The probe binary binds :80 immediately, so this gates actor start on a
+    # readiness signal rather than a guess, and carries a non-default
+    # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom
+    # instead of only the ateom's built-in default.
+    readyz:
+      httpGet:
+        path: /healthz
+        port: 80
+      timeoutSeconds: 60
   workerSelector:
     matchLabels:
       workload: probe

@@ -30,7 +30,7 @@ fi
 TOOL_NAME="$1"
 shift
 
-ROOT="$(git rev-parse --show-toplevel)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${TOOL_NAME}" in
   "client-gen"|"informer-gen"|"lister-gen")
     TOOL_DIR="${ROOT}/hack/tools/code-generator"

@@ -100,6 +100,8 @@ def main():
     failed_files = []
 
     for filepath in files:
+        if os.path.isdir(filepath):
+            continue
         _, ext = os.path.splitext(filepath)
         filename = os.path.basename(filepath)
 

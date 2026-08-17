@@ -4,21 +4,17 @@ NOTE: Much of this architecture is aspirational, and is not yet implemented!
 
 ## Overview
 
-Agent Substrate is a system built on top of Kubernetes which manages agent-like
-workloads to achieve high workload density and scale.  It builds on top of
-Kubernetes, but takes the Kubernetes control-plane out of the critical path to
-achieve lower latency. Kubernetes provides the infrastructure provisioning and
-management, while Agent Substrate provides agent-specific scheduling and
-control.
+Agent Substrate delivers a performant, high density runtime environment for large scale agent deployments. The agent substrate control plane provides full lifecycle management for agent sandboxes, delivering sub-second agent resume/suspend operations, and allows heavy multiplexing of agents onto the same computer infrastructure. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
+
+At its core, Agent Substrate maps a larger set of “actors” (applications such
+as agents) onto a smaller set of ready “workers”, relying on
+the fact that agent-like applications tend to be idle most of the time to
+achieve heavy multiplexing.  It provides functionality to manage an actor’s
+lifecycle (e.g. create/destroy, suspend/resume), to assign actors to workers in real
+time, and to route incoming traffic to them.
+
 
 ## Problem Statement
-
-Kubernetes is the industry standard platform for running modern workloads.  It
-is built to support a wide array of workloads, and it can scale to very large
-clusters.  Kubernetes is designed to handle tens- or hundreds-of-thousands of
-relatively long-running workloads, but running agents at scale presents new
-challenges.
-
 Agents and "agent-like" workloads are generally very bursty, spending most of
 their time waiting for input or events, then handling those events, then going
 back to waiting.  The time they spend actually doing work is often very short,
@@ -26,50 +22,22 @@ and the time they spend waiting can be unbounded.  Because they often run
 untrusted logic, they are often run in sandboxes, which means they are usually
 single-tenant instances, and there are a great many of them.
 
-Running these on Kubernetes presents a number of challenges:
-  * Idle Pods still consume resources.  While Kubernetes is very scalable,
-    compute capacity is finite and has real costs.  Whether we're talking about
-    CPU time, memory space, or just the number of Pods per node, agent-like
-    workloads are terrible for efficiency.
-  * The Kubernetes API server is not designed to handle millions of resources.
-    It excels at reconciling resources asynchronously across many controllers,
-    but it is not so good at storing very large numbers of discrete resources,
-    or for handling a huge volume of write traffic.
-  * Scheduling a workload on Kubernetes requires several asynchronous processes
-    to converge, plus several network hops, plus image pulling and other steps,
-    which can add up.  Getting a Pod running in a couple of seconds is great
-    when that Pod will run for hours or days, but for a workload that will run
-    for milliseconds to low-digit seconds, that latency is unacceptable.
-  * State management is difficult.  Kubernetes provides an API for managing
-    state (PersistentVolumes), but it is not designed for millions of volumes,
-    with widely varying amounts of data, being attached and detached at high
-    speed.
-
 ## Core Concepts and Approaches
-
-Standard Kubernetes Pods are simply too heavy for many agentic workloads.
 
 ### Terminology: "Actor"
 
 Agent Substrate seeks to solve these problems for "agent-like" workloads.
-Often we simply say "agents", but it's important clarify that "agent-like"
+Often we simply say "agents", but it's important to clarify that "agent-like"
 workloads are not necessarily literally AI agents.  In most of the docs we
 instead use the term "actor" to refer to an instance of an agent-like workload.
 
-### Decoupling the Actor Lifecycle from Pods
-
-The obvious way to solve the problem of many idle Pods consuming resources is
-to not have idle Pods - we need to get rid of them when they are idle, and
-bring them back when they are needed.  Suspend and resume is not a concept in
-Kubernetes (yet!), but even if it was, the obvious way to implement it would
-still run through the Kubernetes API server and scheduling subsystem, which is
-(for now) too slow for our needs.
+### Decoupling the Actor Lifecycle from Workers (Kubernetes Pods)
 
 Since many agents run untrusted code, we need to run them in sandboxes of some
-sort.  There are a number of sandboxing technologies available, notably
+sort. Agent Substrate is designed to support multiple sandbox technologies with
 [gVisor](http://gvisor.dev) and micro-VMs such as
-[Kata Containers](https://katacontainers.io/) are both popular options.  Both
-of those happen to support some notion of suspend and resume.
+[Kata Containers](https://katacontainers.io/) being popular options. Both
+of those happen to support a notion of suspend and resume which is core for the Agent Substrate functionality.
 
 Agent Substrate starts with suspend and resume.  When an actor is idle, we
 suspend it, which frees up the resources it was consuming.  When an event comes
@@ -83,12 +51,8 @@ latency.
 
 ### A Focused Control Plane
 
-That doesn't solve the problem of the Kubernetes API server not being ready to
-handle millions of resources.  Unfortunately, there is no magic solution to
-that.  Instead of storing every actor, whether active or idle, as a Kubernetes
-object, Agent Substrate includes a small, focused control-plane component which
-is focused on high scale and QPS.  It does not need the generality of the
-Kubernetes API, which should allow it to be more effective for this use-case.
+Agent Substrate includes a small, focused control-plane component which
+focuses on high scale, QPS and low-latency suspend/resume operations for actors (Agent Sandboxes). It relies on the Kubernetes control plane for infrastructure and worker (Pods) provisioning which are low-frequency operations that align well with Kubernetes' strength in the infrastructure lifecycle management and workload resource isolation.
 
 ### Agent-Aware Routing
 
@@ -167,7 +131,7 @@ There are a few different personas that interact with the system:
   2) **Substrate admins**: These are the people who set up and own the Agent
      Substrate instance(s) in a Kubernetes cluster.  They are obviously aware
      that it is running in a Kubernetes cluster, and are responsible for
-     configuring the Kubernetes resources for it (such as WarmPools).
+     configuring the Kubernetes resources for it (such as WorkerPools).
 
   3) **Agent developers**: These are the people who deploy agents into a substrate
      for users or higher-level systems to consume. They might have to be aware
@@ -180,6 +144,32 @@ There are a few different personas that interact with the system:
      of Agent Substrate, or they might be higher-level systems that are using
      Agent Substrate as a building block. They should not need to be aware that
      they are using Kubernetes at all.
+
+## Relationship to Kubernetes
+
+Kubernetes is the industry standard platform for running modern workloads.  It
+is built to support a wide array of workloads, and it can scale to very large
+clusters. Agent Substrate leverages Kubernetes for infrastructure provisioning and worker lifecycle management (Kubernetes Pods). It builds on top of Kubernetes features like Pods and Pod autoscaling, while Agent Substrate provides agent-specific scheduling and control to achieve lower latency. Using Kubernetes as the underlying system enables consistent infrastructure management across all workloads types that are required for end to end agentic deployments and allows holistic infrastructure optimizations for RL scenarios that span agentic, inference and training cycles.
+
+### Why do we need a specialized control plane for Agent Substrate?
+ * Idle Pods still consume resources.  While Kubernetes is very scalable,
+   compute capacity is finite and has real costs.  Whether we're talking about
+   CPU time, memory space, or just the number of Pods per node, agent-like
+   workloads are terrible for efficiency.
+ * The Kubernetes API server is not designed to handle millions of resources.
+   It excels at reconciling resources asynchronously across many controllers,
+   but it is not so good at storing very large numbers of discrete resources,
+   or for handling a huge volume of write traffic.
+ * Scheduling a workload on Kubernetes requires several asynchronous processes
+   to converge, plus several network hops, plus image pulling and other steps,
+   which can add up.  Getting a Pod running in a couple of seconds is great
+   when that Pod will run for hours or days, but for a workload that will run
+   for milliseconds to low-digit seconds, that latency is unacceptable.
+ * State management is difficult.  Kubernetes provides an API for managing
+   state (PersistentVolumes), but it is not designed for millions of volumes,
+   with widely varying amounts of data, being attached and detached at high
+   Speed.
+Using a specialized Agent Substrate control plane for Actor allows us to achieve high scale and low latency control. We still rely on Kubernetes for infrastructure provisioning, such as worker pods, and workload isolation, which is what Kubernetes excels at.
 
 ## High-Level Design
 
@@ -334,19 +324,38 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 ### Sandbox Classes
 
-A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class has a matching `ateom` herder image. The sandbox binaries themselves are not baked into the worker image — they are fetched at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-sandbox-binaries) and pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class has a matching `ateom` herder image. The sandbox binaries themselves are not baked into the worker image — they, and the pause image holding the sandbox's namespaces, come at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-the-sandbox-itself) and are pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
 
   * **gVisor** (`ateom-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
 
-  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay.
+  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay. `DurableDir` volumes are host-backed instead, served over a second (writable) virtio-fs share and shipped in snapshots as a tar, so a `Data`-scope snapshot can capture them without any guest memory. Each volume is a subdirectory of that one share, so an actor can have several at no extra cost in devices — which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
 
-### Networking Stack (`atenet` + Envoy)
+### Networking Stack (`atenet` DNS + `atunnel`)
 
-Handles session-aware routing and automatic re-animation.
+Handles actor-aware routing and automatic re-animation.
 
   * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<actor-name>.<atespace>.actors.resources.substrate.ate.dev`).
 
-  * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor name from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the session is currently suspended.
+  * **Ingress Routing**: `atenet-router` runs Envoy with an `ext_proc` external
+    processor and accepts HTTP traffic for the Actor DNS suffix. The ext_proc
+    extracts the Actor name and Atespace from the `Host` header and calls the
+    Control Plane to resume the Actor and resolve its current worker assignment.
+
+  * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
+    authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
+    `atunnel`, hosted by `ateom`, forwards the request to the active Actor over
+    its private veth interface. Worker pod port 80 is not a direct Actor ingress
+    path.
+
+  * **Arbitrary-Port Ingress**: A client reaches a port on the Actor other than
+    its default (80) with an HTTP `CONNECT` request naming the port in the
+    authority (e.g. `CONNECT <actor-dns>:9090`), rather than a separate header
+    or field. `atenet-router` terminates the `CONNECT` on a dedicated listener
+    and re-enters the tunneled traffic through the same ingress path as
+    ordinary requests, so each request inside a long-lived tunnel still
+    resumes the Actor and re-routes it independently if it moves workers. Only
+    HTTP(S) traffic over the tunnel is supported today; raw TCP or other
+    non-HTTP protocols on a non-default port are not yet reachable this way.
 
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
@@ -360,26 +369,29 @@ suspended (UML sequence diagram):
 sequenceDiagram
     actor Client
     participant DNS as atenet DNS
-    participant Router as atenet router
+    participant Gateway as atenet-router
     participant API as ate-api-server
     participant Atelet as atelet
-    participant Ateom as ateom
+    participant Tunnel as ateom / atunnel
+    participant A as Actor
     participant Store as snapshot storage
 
     Client->>DNS: resolve actor DNS name
-    DNS-->>Client: router address
-    Client->>Router: HTTP request (Host = actor)
-    Router->>API: ResumeActor(actorName)
+    DNS-->>Client: ingress gateway address
+    Client->>Gateway: HTTP request (Host = actor)
+    Gateway->>API: ResumeActor(atespace, actor name)
     API->>Atelet: Restore
     Store-->>Atelet: download snapshot
-    Atelet->>Ateom: RestoreWorkload
-    Note over Ateom: runsc restore
-    Ateom-->>Atelet: ready
+    Atelet->>Tunnel: RestoreWorkload
+    Note over Tunnel: restore sandbox and activate Actor network
+    Tunnel-->>Atelet: ready
     Atelet-->>API: worker pod IP
-    API-->>Router: worker pod IP
-    Router->>Ateom: proxy request to worker pod
-    Ateom-->>Router: response
-    Router-->>Client: response
+    API-->>Gateway: worker assignment
+    Gateway->>Tunnel: mTLS tunnel to worker port 443
+    Tunnel->>A: forward request to Actor port
+    A-->>Tunnel: response
+    Tunnel-->>Gateway: response
+    Gateway-->>Client: response
     Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
 ```
 
@@ -392,6 +404,10 @@ stateDiagram-v2
     RESUMING --> RUNNING : restore / boot complete
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
+    RUNNING --> PAUSING : PauseActor
+    PAUSING --> PAUSED : node-local checkpoint complete
+    PAUSED --> RESUMING : ResumeActor (pinned to the snapshot's node)
+    PAUSED --> SUSPENDING : SuspendActor (uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```
 
@@ -418,13 +434,14 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   2. **Assignment**: The Control Plane claims a warm worker from the
      `WorkerPool`.
 
-  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the `GoldenSnapshot` (for first-run) or the `LatestSnapshotInfo` (for recurring runs) into the sandbox.
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden `ActorSnapshot` (for first-run) or the Actor's latest `ActorSnapshot` (for recurring runs) into the sandbox.
 
   4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
      active Worker IP.
 
-  5. **Response**: The Control Plane returns the worker IP to the Gateway,
-     which forwards the original request.
+  5. **Response**: The Control Plane returns the worker assignment to the
+     Gateway. The Gateway opens an authenticated tunnel to `atunnel` on that
+     worker, which forwards the original request to the active Actor.
 
 ### Phase 3: Hibernation (`SuspendActor`)
 
@@ -437,7 +454,13 @@ Triggered by an explicit `SuspendActor` call.
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
   4. **Status**: Status transitions back to `STATUS_SUSPENDED`, now pointing to
-     the `LatestSnapshotInfo` for future resumptions.
+     an immutable `ActorSnapshot` resource and references it for future resumptions.
+
+Snapshots may be given tags owned and addressed by an Atespace. The same tag
+name may exist in different Atespaces. A tag is an immutable alias and retention
+pin: publishing it permits reuse from other Atespaces without changing its
+`atespace/name` address. Deleting the owning Atespace deletes all of its tags,
+including published tags, but leaves snapshot cleanup to garbage collection.
 
 ### Phase 4: Deletion
 

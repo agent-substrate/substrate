@@ -15,42 +15,109 @@
 package controlapi
 
 import (
+	"context"
+	"sync"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/internal/volume/csi"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"k8s.io/client-go/kubernetes"
+	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
 // Service implements ateapipb.Control
 type Service struct {
 	ateapipb.UnimplementedControlServer
-	persistence         store.Interface
-	dialer              *AteletDialer
-	actorTemplateLister listersv1alpha1.ActorTemplateLister
-	workerPoolLister    listersv1alpha1.WorkerPoolLister
-	actorWorkflow       *ActorWorkflow
+	persistence           serviceStore
+	workerCache           *workercache.Cache
+	dialer                *AteletDialer
+	actorTemplateLister   listersv1alpha1.ActorTemplateLister
+	workerPoolLister      listersv1alpha1.WorkerPoolLister
+	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+	storageClassLister    storagev1listers.StorageClassLister
+	actorWorkflow         *ActorWorkflow
+	instruments           *Instruments
+	mu                    sync.RWMutex
+	volumePlugins         map[string]volume.VolumePluginControlPlane
 }
 
 var _ ateapipb.ControlServer = (*Service)(nil)
 
-// NewService creates a service.
+// VolumePluginRegistry defines the interface for dynamic CSI plugin resolution.
+type VolumePluginRegistry interface {
+	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
+}
+
+// NewService creates a service. instruments may be nil; the record helpers no-op.
 func NewService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
 	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
+	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
+	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
-	kubeClient kubernetes.Interface,
+	instruments *Instruments,
+	egressGatewayAddress string,
+	volumePlugins map[string]volume.VolumePluginControlPlane,
 ) *Service {
 	s := &Service{
-		persistence:         persistence,
-		actorTemplateLister: actorTemplateLister,
-		workerPoolLister:    workerPoolLister,
-		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient),
+		persistence:           persistence,
+		workerCache:           workerCache,
+		actorTemplateLister:   actorTemplateLister,
+		workerPoolLister:      workerPoolLister,
+		csiDriverConfigLister: csiDriverConfigLister,
+		storageClassLister:    storageClassLister,
+		dialer:                dialer,
+		instruments:           instruments,
+		volumePlugins:         volumePlugins,
+	}
+	s.actorWorkflow = NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	return s
+}
+
+// serviceStore enumerates the exact storage methods needed by
+// the control API and nothing more.
+type serviceStore interface {
+	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)
+	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
+	ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error)
+	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
+	DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+	AtespaceExists(ctx context.Context, name string) (bool, error)
+	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
+	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
+	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error)
+	DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
+	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
+	AcquireLock(ctx context.Context, key string) (*store.Lock, error)
+}
+
+// GetPlugin retrieves a CSI volume plugin by driver name, dynamically discovering it if not present.
+func (s *Service) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
+	s.mu.RLock()
+	plugin, ok := s.volumePlugins[driverName]
+	s.mu.RUnlock()
+	if ok {
+		return plugin, nil
 	}
 
-	return s
+	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, driverName, true /*isController*/)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.volumePlugins[driverName] = csiPlugin
+	s.mu.Unlock()
+	return csiPlugin, nil
 }

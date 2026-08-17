@@ -212,6 +212,8 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
         cfg_json = build_config_json(args.locust_extra)
         if cfg_json:
             boomer_cmd += ["--config-json", cfg_json]
+        if os.environ.get("ATE_ATEAPI_CLIENT_AUTH") == "token":
+            boomer_cmd += ["--use-token-auth"]
         tee(logs, f"Running: {' '.join(boomer_cmd)}")
         boomer_proc = subprocess.Popen(
             boomer_cmd,

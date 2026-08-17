@@ -20,19 +20,28 @@ on:
   schedule:
     # Weekly run on the default branch keeps the micro-VM asset cache warm (GitHub
     # evicts caches idle for 7 days). The push-to-main run populates the cache that
-    # PRs inherit; this refreshes it so PRs keep hitting it (no virtiofsd rebuild).
+    # PRs inherit; this refreshes it so PRs keep hitting it (no asset re-download).
     - cron: '37 4 * * 1'
+# Nothing here writes to the repository: the jobs check the tree out, build it,
+# and run it in a throwaway cluster.
+permissions:
+  contents: read
 jobs:
   run-tests:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v5
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Setup Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
-    - run: go test -v ./...
+    - run: go test -race -v ./...
+    # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
+    # skip for the unprivileged runner user above; rerun the packages that
+    # contain them (any test importing internal/roottest) under sudo.
+    - name: root-gated tests
+      run: hack/run-root-tests.sh -race -v
     - name: verify
       run: hack/verify-all.sh
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
@@ -43,40 +52,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        auth-mode: [mtls, jwt]
-    name: e2e-test (${{ matrix.auth-mode }})
+        ateapi-client-auth: [cert, token]
+    name: e2e-test (${{ matrix.ateapi-client-auth }})
     steps:
     - name: Checkout
-      uses: actions/checkout@v5
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
     - name: Setup Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
-    - name: Free disk space
-      # The micro-VM guest image/kernel + cloud-hypervisor + kind node image +
-      # control-plane images + snapshots are tight on the ~14GB runner disk.
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        df -h /
     - name: Cache micro-VM assets
       id: microvm-assets
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-        # Assembling the assets (download kata-static + cloud-hypervisor, build
-        # virtiofsd from source for the overlay rootfs) is the slow part and is fully
-        # pinned by assemble.sh, so key the cache on its hash. The push-to-main run
-        # populates the default-branch cache PRs inherit; the weekly schedule refreshes
-        # it. run-microvm-demo-kind.sh skips assembling when these are present.
+        # Assembling the assets (download kata-static + cloud-hypervisor + the
+        # prebuilt virtiofsd — all downloads on amd64) is fully pinned by assemble.sh,
+        # so key the cache on its hash. The push-to-main run populates the
+        # default-branch cache PRs inherit; the weekly schedule refreshes it.
+        # run-microvm-demo-kind.sh skips assembling when these are present.
         path: bin/microvm-assets/amd64
         key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
-    - name: Install micro-VM asset build deps
-      # Only needed when (re)assembling (cache miss): building virtiofsd from source.
-      if: steps.microvm-assets.outputs.cache-hit != 'true'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends libcap-ng-dev libseccomp-dev pkg-config
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
     - name: Enable KVM
       # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
       # the node and labels it for the micro-VM sandbox class.
@@ -88,13 +83,17 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system --auth-mode=${{ matrix.auth-mode }}
+      run: hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth=${{ matrix.ateapi-client-auth }} --store-backend=postgres
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh --auth-mode=${{ matrix.auth-mode }}
+      run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=${{ matrix.ateapi-client-auth }}
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
+    - name: Deploy egress demo
+      # TestActorEgress in the networking suite builds its Actor from the
+      # ate-demo-egress/egress ActorTemplate, so the fixture has to exist before.
+      run: hack/install-ate-kind.sh --deploy-demo-egress
     - name: Wait for micro-VM golden snapshot
       run: |
         kubectl --context kind-kind wait --for=condition=Ready \
@@ -113,12 +112,20 @@ jobs:
       if: failure()
       run: |
         kubectl --context kind-kind get actortemplate,workerpool,pods -A -o wide || true
-        for ns in ate-demo-counter-microvm ate-demo-counter ate-system; do
-          for p in $(kubectl --context kind-kind get pods -n "$ns" -o name 2>/dev/null); do
-            echo "=== logs: $ns/$p ==="
-            kubectl --context kind-kind logs -n "$ns" "$p" --all-containers --tail=200 2>/dev/null || true
-          done
+        dump() {
+          echo "=== logs: $1/$2 ==="
+          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
+        }
+        for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
+          dump ate-system "$p"
         done
+        # Every worker pod in any namespace: the demo pools plus the e2e suites'
+        # randomly-named per-test namespaces, which the suites keep on failure.
+        # The failing actor runs in one of these, so this is where its ateom logs
+        # (and, for a micro-VM worker, the guest console tail) live.
+        kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
+          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
+          | while read -r ns name; do dump "$ns" "$name"; done
   e2e-test:
     runs-on: ubuntu-latest
     needs: e2e-test-matrix

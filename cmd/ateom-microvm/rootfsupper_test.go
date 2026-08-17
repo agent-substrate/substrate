@@ -1,0 +1,87 @@
+//go:build linux
+
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// upperDirWith returns a rootfs upper directory laid out the way the host
+// overlay staging builds one: <containerID>/{fs,work} per container, with the
+// given files created under it (paths relative to the directory).
+func upperDirWith(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for rel, content := range files {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("creating %q: %v", filepath.Dir(p), err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %q: %v", rel, err)
+		}
+	}
+	return dir
+}
+
+func TestRootfsUpperRoundTrip(t *testing.T) {
+	// Checkpoint: every container's upper/work, archived while the guest is
+	// paused. The layout under the dir is exactly what find-paths re-opens.
+	files := map[string]string{
+		"app_ovl/fs/home/agent/notes.txt": "rootfs write",
+		"app_ovl/work/index":              "",
+		"sidecar_ovl/fs/var/log/s.log":    "sidecar write",
+	}
+	src := upperDirWith(t, files)
+	checkpointDir := t.TempDir()
+	if err := tarRootfsUpper(t.Context(), src, checkpointDir); err != nil {
+		t.Fatalf("tarRootfsUpper: %v", err)
+	}
+	if !snapshotHasRootfsUpper(checkpointDir) {
+		t.Fatalf("snapshotHasRootfsUpper(%q) = false after tarRootfsUpper", checkpointDir)
+	}
+
+	// Restore: onto a directory holding a stale previous activation's contents,
+	// which must not leak into the restored overlay state.
+	dst := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
+	if err := untarRootfsUpper(dst, checkpointDir); err != nil {
+		t.Fatalf("untarRootfsUpper: %v", err)
+	}
+	for rel, want := range files {
+		got, err := os.ReadFile(filepath.Join(dst, rel))
+		if err != nil {
+			t.Errorf("reading restored %q: %v", rel, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("restored %q = %q, want %q", rel, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "app_ovl/fs/stale.txt")); !os.IsNotExist(err) {
+		t.Errorf("stale pre-restore content survived untarRootfsUpper (stat err = %v), want it wiped", err)
+	}
+}
+
+// A snapshot without the tar is a legacy tmpfs-upper snapshot: restore must
+// not stage the ateUpper share (the guest has no fs device for it).
+func TestSnapshotHasRootfsUpperAbsent(t *testing.T) {
+	if snapshotHasRootfsUpper(t.TempDir()) {
+		t.Error("snapshotHasRootfsUpper() = true for a snapshot without the tar")
+	}
+}

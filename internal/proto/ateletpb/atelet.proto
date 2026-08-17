@@ -18,6 +18,26 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
+// CredentialBroker gives an authenticated worker its current actor credential.
+service CredentialBroker {
+  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
+}
+
+message MintActorCertificateRequest {
+  // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
+  // corresponding private key.
+  bytes certificate_signing_request = 1;
+
+  // Actor incarnation this activation expects. Ateapi resolves the actor from
+  // the authenticated worker and rejects the request if its UID differs.
+  string expected_actor_uid = 2;
+}
+
+message MintActorCertificateResponse {
+  // DER-encoded leaf followed by any intermediate certificates.
+  repeated bytes actor_certificates = 1;
+}
+
 service AteomHerder {
   // Run tells atelet to create a new containerized workload from scratch on an
   // ateom.
@@ -30,6 +50,12 @@ service AteomHerder {
 
   // Restore restores a workload from checkpoint onto an ateom.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
+
+  // UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
+  // disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
+  // paused, its sandbox is gone; the checkpoint files plus their manifest
+  // already sit under the actor's local-checkpoints directory.
+  rpc UploadPausedCheckpoint(UploadPausedCheckpointRequest) returns (UploadPausedCheckpointResponse) {}
 }
 
 message RunRequest {
@@ -48,10 +74,26 @@ message RunRequest {
   // fetches the relevant assets and records them with the actor's on-node state
   // so a later Checkpoint can pin the same version into the snapshot manifest.
   SandboxAssets sandbox_assets = 8;
+
+  // When absent, actor traffic uses direct egress instead of atunnel.
+  optional EgressGateway egress_gateway = 9;
+
+  // The actor's declared size, from the ActorTemplate's resource limits. atelet
+  // passes these through to the sandbox so it is sized to the actor (not the
+  // whole host or worker pod). Zero means "unset": keep the runtime default.
+  int64 cpu_milli = 10;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 11; // Memory limit in bytes.
+}
+
+// EgressGateway configures tunneled egress for one actor activation.
+message EgressGateway {
+  // address is required and identifies the remote gateway as an IP address or
+  // DNS name followed by its port.
+  string address = 1;
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
-// (e.g. the gVisor runsc binary).
+// (e.g. the gVisor release tarball).
 message AssetFile {
   // gs:// URL to download the asset from.
   string url = 1;
@@ -66,27 +108,43 @@ message ArchAssets {
 }
 
 // SandboxAssets is the generic, backend-agnostic description of the sandbox
-// binaries for an actor: a sandbox class plus assets keyed first by
-// architecture (GOARCH) and then by asset name. atelet's backend code
-// interprets the asset names (gVisor expects "runsc").
+// an actor runs in: a sandbox class, the pause image holding its namespaces,
+// and binaries keyed first by architecture (GOARCH) and then by asset name.
+// atelet's backend code interprets the asset names (gVisor expects "gvisor",
+// the release tarball; legacy "runsc", a bare binary, is still accepted).
 message SandboxAssets {
   string sandbox_class = 1;           // e.g. "gvisor"
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}
+
+  // pause_image is the image for the sandbox's root container. Like the
+  // binaries above it is sandbox configuration, not workload configuration,
+  // and atelet pins it into the snapshot manifest so a restore rebuilds the
+  // sandbox from the same image.
+  string pause_image = 3;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
-  string pause_image = 2;
   repeated Volume volumes = 3;
+
+  reserved 2;
+  reserved "pause_image"; // moved to SandboxAssets
 }
 
 enum VolumeType {
   VOLUME_TYPE_UNSPECIFIED = 0;
   VOLUME_TYPE_DURABLE_DIR = 1;
+  VOLUME_TYPE_EXTERNAL = 2;
 }
 
 message DurableDirVolume {
+}
+
+message ExternalVolumeSource {
+  string storage_volume_id = 1;
+  string volume_type = 2;
+  map<string, string> volume_context = 3;
 }
 
 message Volume {
@@ -96,6 +154,7 @@ message Volume {
 
   oneof source {
     DurableDirVolume durable_dir = 3;
+    ExternalVolumeSource external = 4;
   }
 }
 
@@ -123,6 +182,9 @@ message EnvEntry {
 // Only HTTP is supported today.
 message Readyz {
   HTTPGetAction http_get = 1;
+  // How long to keep polling before giving up and failing the actor start.
+  // Zero means the ateom's default.
+  int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
@@ -137,23 +199,17 @@ message RunResponse {
 }
 
 message LocalCheckpointConfiguration {
-  // A sub-directory on the local filesystem below which the checkpoint data will be
-  // stored.  The structure of the checkpoint should generally be treated as opaque.
-  string snapshot_prefix = 1;
+  // Names a sub-directory on the local filesystem below which the checkpoint
+  // data will be stored. atelet decides where that directory lives, from the
+  // actor's UID, so this is a bare name and must not contain a path separator.
+  // The structure of the checkpoint should generally be treated as opaque.
+  string snapshot_name = 1;
 }
 
 message ExternalCheckpointConfiguration {
-  // An object storage URI prefix below which the checkpoint data will be
-  // stored.
-  //
-  // The structure of the checkpoint should generally be treated as opaque. For
-  // gVisor, the checkpoint consists of a checkpoint.img file that contains the
-  // memory, sentry state, and filesystem deltas.  ateom will write additional
-  // files to store the WorkloadSpec, which must be reassembled before gVisor
-  // can restore a checkpoint.
-  //
-  // For example: "gs://bucket/actors/1234/snapshots/5678/"
-  string snapshot_uri_prefix = 1;
+  // The object storage URI of the snapshot to write. Object names are appended
+  // to it, so it addresses the snapshot as a whole rather than any one object.
+  string snapshot_uri = 1;
 }
 
 enum CheckpointType {
@@ -175,6 +231,13 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
+  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
+  // (memory + full filesystem delta) combined with the snapshot's durable
+  // data. Never valid for Checkpoint — snapshots only ever capture FULL or
+  // DATA; whether a snapshot restores from its own content or on the golden
+  // is decided by the control plane from the template's onResume
+  // configuration.
+  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 message CheckpointRequest {
@@ -207,6 +270,33 @@ message CheckpointRequest {
 message CheckpointResponse {
 }
 
+message UploadPausedCheckpointRequest {
+  string atespace = 1;
+  string actor_name = 2;
+  string actor_uid = 3;
+
+  // For metrics attribution, like on CheckpointRequest.
+  string actor_template_namespace = 4;
+  string actor_template_name = 5;
+
+  // The local checkpoint to upload: LocalSnapshotInfo.snapshot_name recorded
+  // at pause time.
+  string local_snapshot_name = 6;
+
+  // Destination object-storage URI (the actor's in-progress snapshot URI).
+  string destination_snapshot_uri = 7;
+
+  // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
+  // The scope the pause checkpoint captured is not sent: atelet reads it from
+  // the local snapshot's own manifest, which is authoritative. When they
+  // differ, atelet converts where possible (micro-VM FULL capture to a DATA
+  // upload by selecting the durable-dir tar) and rejects otherwise.
+  SnapshotScope desired_scope = 8;
+}
+
+message UploadPausedCheckpointResponse {
+}
+
 message RestoreRequest {
   string target_ateom_uid = 1;
 
@@ -232,6 +322,24 @@ message RestoreRequest {
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
+
+  // The object storage URI of the ActorTemplate's golden snapshot.
+  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
+  // the golden snapshot (memory + full fs delta) with the durable data in
+  // the snapshot referenced by `config`. A top-level field rather than part
+  // of the `config` oneof: the actor's snapshot may be local (a pause
+  // checkpoint) while the golden snapshot is always external.
+  string golden_snapshot_uri = 12;
+
+  // When absent, actor traffic uses direct egress instead of atunnel.
+  optional EgressGateway egress_gateway = 13;
+
+  // The actor's declared size, from the ActorTemplate's resource limits. For
+  // gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
+  // for a FULL micro-VM restore the size baked into the snapshot wins. Zero
+  // means "unset": keep the runtime default.
+  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 15; // Memory limit in bytes.
 }
 
 message RestoreResponse {

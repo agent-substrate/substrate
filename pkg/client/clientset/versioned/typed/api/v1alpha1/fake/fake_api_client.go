@@ -30,6 +30,10 @@ func (c *FakeApiV1alpha1) ActorTemplates(namespace string) v1alpha1.ActorTemplat
 	return newFakeActorTemplates(c, namespace)
 }
 
+func (c *FakeApiV1alpha1) CSIDriverConfigs() v1alpha1.CSIDriverConfigInterface {
+	return newFakeCSIDriverConfigs(c)
+}
+
 func (c *FakeApiV1alpha1) SandboxConfigs() v1alpha1.SandboxConfigInterface {
 	return newFakeSandboxConfigs(c)
 }

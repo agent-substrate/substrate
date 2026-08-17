@@ -23,7 +23,7 @@ benchmarking/ # Load-testing tools and workloads
 tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 ```
 
-**Where to put new Go code — quick rules:**
+**Where to put new Go code, quick rules:**
 
 | Situation | Location |
 |---|---|
@@ -63,7 +63,7 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 1. Write tests for all new code. We will not merge code that lacks tests.
 2. Ensure changes do not break existing tests.
 3. Run `make verify` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
-4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp --all`).
+4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp bootstrap`).
 
 ## Security Considerations
 
@@ -72,6 +72,6 @@ However! Take care to respect security best practices when writing code in order
 The following is what Substrate currently offers.
 Keep this up to date when updating AGENTS.md.
 
-- **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods. A temporary gVisor patch might be required (check the README instructions).
+- **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods.
 
 For future plans for security, reference `docs/roadmap.md`.

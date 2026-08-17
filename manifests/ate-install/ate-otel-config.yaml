@@ -1,0 +1,35 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Single source of truth for the OTLP exporter settings shared by every control
+# plane component (ate-api-server, ate-controller, atelet, atenet-router), which
+# consume it via `envFrom`. ate-controller additionally propagates these values
+# to the ateom worker pods it creates, which have no other way to receive them,
+# and atenet-router's --otlp-collector-address defaults to the endpoint below,
+# so Envoy's own spans follow it too.
+#
+# This file holds the GKE values. The kind overlay supplies a ConfigMap of the
+# same name with the in-cluster collector address; see
+# manifests/ate-install/kind/ate-otel-config.yaml.
+#
+# NOTE: editing this ConfigMap does not restart the pods that consume it — the
+# pod template is unchanged, so no new rollout is triggered. Follow a change
+# with `kubectl rollout restart` on the affected workloads.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-otel-config
+  namespace: ate-system
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317

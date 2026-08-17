@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -46,12 +47,15 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 		strconv.FormatInt(elapsed.Microseconds(), 10),
 	))
 
+	pInfo, _ := principal.FromContext(ctx)
+
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
 		slog.Any("req", sanitizeForLog(req)),
 		slog.Any("resp", sanitizeForLog(resp)),
 		slog.Any("err", err),
 		slog.String("elapsed-time", elapsed.String()),
+		slog.Any("principal", pInfo),
 	)
 
 	if err != nil {
@@ -60,8 +64,7 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 		}
 
 		if errors.As(err, &statusErr) {
-			st := statusErr.GRPCStatus()
-			return nil, status.Error(st.Code(), st.Message())
+			return nil, statusErr.GRPCStatus().Err()
 		}
 
 		// No status error found in chain.
@@ -69,6 +72,15 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 	}
 
 	return resp, err
+}
+
+// MaxDeadlineUnaryInterceptor returns an interceptor that caps the request context at maxDeadline.
+func MaxDeadlineUnaryInterceptor(maxDeadline time.Duration) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		ctx, cancel := context.WithTimeout(ctx, maxDeadline)
+		defer cancel()
+		return handler(ctx, req)
+	}
 }
 
 // InternalServerUnaryInterceptor is for internal services to return full gRPC errors with specific error codes and debugging details.

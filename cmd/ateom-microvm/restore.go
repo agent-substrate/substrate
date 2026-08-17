@@ -22,54 +22,174 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet"
+
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/sizing"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// RestoreWorkload restores the actor on a (possibly different) pod by relaunching
-// cloud-hypervisor directly from the downloaded snapshot and resuming.
+// restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
+// just told us about itself over vmm.ping.
 //
-// Contract with atelet: the snapshot dir (config.json + state.json + memory-ranges +
-// base-id) has been downloaded to RestoreStateDir.
+// OnDemand is what we want: it faults pages in as the guest touches them, so an idle
+// restored actor holds its working set rather than its whole snapshot — on the counter
+// demo, 16MiB against 158MiB. Eager gives that up, reading every populated extent up
+// front.
 //
-// Each container's rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper). Steps:
-// reconstruct each RO lower from the local OCI bundle (atelet re-unpacked the golden
-// image) at the frozen find-paths path and start the virtiofsd serving them; rewrite
-// the snapshot config's per-VMDir paths (vsock + serial + fs socket) to this actor's;
-// rebuild the tap (the snapshot's virtio-net is fd-backed → fresh net_fds); relaunch
-// CH with --restore (OnDemand), and resume. Guest RAM — incl. the actor's in-memory
-// state, the tmpfs rootfs upper (so rootfs writes PERSIST), and the frozen network
-// config — comes back from the memory snapshot.
+// It is still the right choice on a VMM that prefaults, where OnDemand is not merely
+// wasteful but unusable: the prefault storm starves the guest and its readiness probe
+// never passes.
+func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
+	if !info.PrefaultsUnconditionally() {
+		return ch.MemRestoreOnDemand
+	}
+	if info.Version == "" && info.BuildVersion == "" {
+		// Unknown version: eager works everywhere, so prefer a bigger idle footprint
+		// over an actor that cannot start. Say so, because that cost is invisible.
+		slog.WarnContext(ctx, "cloud-hypervisor did not report a version; restoring eagerly",
+			slog.String("mode", ch.MemRestoreEager))
+	}
+	return ch.MemRestoreEager
+}
+
+// RestoreWorkload brings the actor back from a snapshot, on a possibly different
+// pod. What that means depends on the scope the snapshot was taken with:
+//
+//   - FULL: relaunch cloud-hypervisor from the snapshot and resume the guest
+//     (restoreFullScope).
+//   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
+//     cold-boot the actor, which starts its containers afresh from the OCI image.
+//   - DATA_ON_GOLDEN: atelet staged a combined set into RestoreStateDir — the
+//     guest files (memory + VM state) from the template's golden snapshot plus
+//     the durable-dir tar from the actor's own snapshot — so this restores
+//     exactly like FULL: the golden guest resumes over the actor's data.
+//
+// Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
+// and the durable-dir volume directories re-created (empty).
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	atespace := req.GetAtespace()
-	name := req.GetActorName()
-	actorUID := req.GetActorUid()
-	templateNS := req.GetActorTemplateNamespace()
-	templateName := req.GetActorTemplateName()
-	restoreDir := ateompath.RestoreStateDir(actorUID)
+	if err := s.rejectIfDraining(); err != nil {
+		return nil, err
+	}
+
+	// Same as RunWorkload: a restore is a boot, and graceful shutdown cancels it
+	// rather than queueing behind it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.setActiveRPC(rpcRestoreWorkload, cancel)
+	defer s.clearActiveRPC()
+
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
+
+	p := actorBootParams{
+		actorRef:      resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:      req.GetActorUid(),
+		templateNS:    req.GetActorTemplateNamespace(),
+		templateName:  req.GetActorTemplateName(),
+		containers:    req.GetSpec().GetContainers(),
+		assetPaths:    req.GetRuntimeAssetPaths(),
+		egressGateway: req.GetEgressGateway(),
+		size:          sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+	}
+	restoreDir := ateompath.RestoreStateDir(p.actorUID)
+	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
 	tStart := time.Now()
 
-	s.actorLogger.EmitLifecycleLog("Actor restoring", atespace, name, actorUID, templateNS, templateName)
+	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 
-	rr := s.resolveRuntime(req.GetRuntimeAssetPaths())
+	// Same as RunWorkload: retain before the restore, drop again if it fails. A
+	// Full-scope resume reaches "executing" in a different way than a cold boot
+	// does, but the window between accepting the actor and serving it is the same
+	// window, and a poll landing in it should name the actor either way.
+	attribution := p.actorAttribution()
+	s.activeActor.Store(&attribution)
+	defer func() {
+		if retErr != nil {
+			s.activeActor.Store(nil)
+		}
+	}()
+
+	// Restore the durable-dir volumes before anything can observe them: for Full
+	// that means before the share's virtiofsd starts, for Data before the workload
+	// cold-starts. The snapshot must carry them — the actor declares the volume, and
+	// every scope captures it.
+	if hasDurableVolumes(p.containers) {
+		if err := untarDurableVolumes(durableDir, restoreDir); err != nil {
+			return nil, err
+		}
+	}
+
+	switch scope := req.GetScope(); scope {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		// DATA_ON_GOLDEN: the restore dir holds the golden snapshot's guest
+		// files, and the untar above re-materialized the ACTOR's durable-dir
+		// data, so resuming the golden guest picks up the actor's data through
+		// the durable virtio-fs share.
+		if err := s.restoreFullScope(ctx, p, restoreDir, tStart); err != nil {
+			return nil, err
+		}
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		// A Data snapshot holds no guest state, so this is a cold boot that
+		// happens to start with the volumes already populated. readyz gating comes
+		// with the cold-boot path, so the actor is serving when we return.
+		if err := s.coldBootActorRetrying(ctx, p); err != nil {
+			return nil, err
+		}
+		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",
+			slog.String("id", p.actorUID), slog.Duration("total", time.Since(tStart)))
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
+	}
+
+	s.actorLogger.EmitLifecycleLog("Actor restored", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+	return &ateompb.RestoreWorkloadResponse{}, nil
+}
+
+// restoreFullScope restores a whole-guest snapshot: relaunch cloud-hypervisor
+// directly from it and resume.
+//
+// Each container's rootfs is a host-merged overlay (image lower + host upper). Steps:
+// rewrite the snapshot config's per-VMDir paths (vsock + serial + fs sockets) to this
+// actor's; re-materialize the uppers from rootfs-upper.tar (in the background,
+// overlapped with bundle preparation) and re-mount the merged trees at the frozen
+// find-paths paths; start the virtiofsd serving them; rebuild the tap (the snapshot's
+// virtio-net is fd-backed → fresh net_fds); relaunch CH with --restore (OnDemand),
+// and resume. Guest RAM — the actor's in-memory state and the frozen network config —
+// comes back from the memory snapshot; the durable-dir volumes were restored by the
+// caller from their tar.
+func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, restoreDir string, tStart time.Time) (retErr error) {
+	actorUID := p.actorUID
+	templateNS, templateName := p.templateNS, p.templateName
+
+	rr := s.resolveRuntime(p.assetPaths)
+	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
+	if err != nil {
+		return err
+	}
 	kata.CleanupSandboxState(ctx, actorUID)
 
 	// Repoint the snapshot's vsock socket to this actor's VMDir (the disk + kernel
 	// paths are content-addressed/per-actor and already line up on the same node).
 	if err := rewriteSnapshotSocketPaths(restoreDir, actorUID); err != nil {
-		return nil, fmt.Errorf("while rewriting snapshot socket paths: %w", err)
+		return fmt.Errorf("while rewriting snapshot socket paths: %w", err)
 	}
 	srcID := actorUID
 	if b, rerr := os.ReadFile(filepath.Join(restoreDir, baseIDFile)); rerr == nil {
@@ -78,31 +198,96 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}
 	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
-		return nil, fmt.Errorf("while creating VM dir: %w", err)
+		return fmt.Errorf("while creating VM dir: %w", err)
 	}
 
-	// Reconstruct each container's overlay RO lower from the LOCAL OCI bundle (atelet
-	// re-unpacked the golden image; the lower is the immutable golden image) at the
-	// frozen find-paths location SharedDir(id)/<cid>/rootfs, and start the one virtiofsd
-	// serving them. The writable upper is a guest tmpfs restored from the memory
-	// snapshot (rootfs writes persist), so there is no disk to rebuild or repoint; the
-	// fs socket in the snapshot config is repointed to this VMDir by
-	// rewriteSnapshotSocketPaths above. cross-node consistency relies on a deterministic
-	// unpack of the same image at the same <cid>/rootfs path.
-	containers := req.GetSpec().GetContainers()
+	// Merged-rootfs snapshots carry the upper as rootfs-upper.tar (the tar's
+	// presence is what says which model the guest expects). Start
+	// re-materializing the upper contents NOW, in the background: the untar
+	// scales with the actor's data and is joined right before the host overlay
+	// mounts need it, so it hides behind the bundle preparation below. Legacy
+	// guest-tmpfs-upper snapshots have no tar: their upper rides inside the
+	// restored guest memory and the share presents the bare image instead.
+	//
+	// An error return between here and the join MUST drain the goroutine (the
+	// deferred receive below): returning with the untar still writing would let
+	// a retried restore's own untar race it inside the same directory.
+	hasUpper := snapshotHasRootfsUpper(restoreDir)
+	untarDone := make(chan error, 1)
+	untarJoined := false
+	if hasUpper {
+		go func() {
+			untarDone <- untarRootfsUpper(rootfsUpperDir(actorUID), restoreDir)
+		}()
+		defer func() {
+			if !untarJoined {
+				<-untarDone
+			}
+		}()
+	}
+
+	// Reconstruct each container's rootfs at the frozen find-paths location
+	// SharedDir(id)/<cid>/rootfs from the LOCAL OCI bundle (atelet re-unpacked
+	// the golden image) and start the one virtiofsd serving the tree. The fs
+	// sockets in the snapshot config are repointed to this VMDir by
+	// rewriteSnapshotSocketPaths above. Cross-node consistency relies on a
+	// deterministic unpack of the same image at the same <cid>/rootfs path
+	// (plus, for merged rootfs, the upper re-materialized from the tar).
+	containers := p.containers
 	if len(containers) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "actor spec has no containers")
+		return status.Error(codes.InvalidArgument, "actor spec has no containers")
 	}
 	if len(containers) > maxActorContainers {
-		return nil, status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(actorUID, containers)
+	// The VM's RAM comes from the snapshot, so a limit the current VMM reserve can
+	// no longer satisfy (e.g. --vmm-mem-reserve-mib was raised after the snapshot
+	// was taken) has to fail here rather than silently pair the guest with a cgroup
+	// limit larger than its RAM.
+	guestSize, err := s.guestSize(p.size)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	vfsdCmd, err := s.stageOverlayLowers(ctx, rr, actorUID, ctrs)
+	ctrs, err := s.buildActorContainers(actorUID, containers, guestSize)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	var vfsdCmd *exec.Cmd
+	if hasUpper {
+		// The overlay mounts need the upper on disk: join the background untar
+		// (still overlapped with the bundle preparation above), then assemble
+		// the merged trees and serve them.
+		untarErr := <-untarDone
+		untarJoined = true
+		if untarErr != nil {
+			return untarErr
+		}
+		if vfsdCmd, err = s.stageMergedRootfs(ctx, rr, actorUID, ctrs); err != nil {
+			return err
+		}
+	} else {
+		// LEGACY snapshot: leave the upper directory ABSENT — a stale dir
+		// orphaned by a crash before teardown would otherwise make
+		// actorHasDiskUpper mislabel this lineage's next checkpoint — and
+		// present the bare image over the immutable (cache=always) bind,
+		// exactly what the restored guest's in-memory overlay expects.
+		if err := os.RemoveAll(rootfsUpperDir(actorUID)); err != nil {
+			return fmt.Errorf("while clearing stale rootfs upper dir: %w", err)
+		}
+		for _, c := range ctrs {
+			if err := kata.ReconstructSharedDirFromImage(ctx, c.bundleRootfs, actorUID, c.name); err != nil {
+				return fmt.Errorf("while staging legacy lower for %q: %w", c.name, err)
+			}
+		}
+		vfsdLog, _ := os.OpenFile(virtiofsdLogPath(actorUID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if vfsdCmd, err = kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
+			Binary:     rr.virtiofsd,
+			SocketPath: kata.VirtiofsdSocketPath(actorUID),
+			SharedDir:  kata.SharedDir(actorUID),
+			Log:        vfsdLog,
+		}); err != nil {
+			return fmt.Errorf("while starting virtiofsd: %w", err)
+		}
 	}
 	defer func() {
 		if retErr != nil && vfsdCmd.Process != nil {
@@ -111,21 +296,53 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}()
 
+	// Restart the durable-dir share's virtiofsd over the contents the caller
+	// restored. The guest reattaches to it by the socket path rewritten into the
+	// snapshot config below; find-paths re-opens whatever files it still holds open
+	// against the same paths, which the restored tar reproduces exactly.
+	var durableVfsdCmd *exec.Cmd
+	if hasDurableVolumes(containers) {
+		if durableVfsdCmd, err = s.stageDurableShare(ctx, rr, actorUID); err != nil {
+			return err
+		}
+		defer func() {
+			if retErr != nil && durableVfsdCmd.Process != nil {
+				_ = durableVfsdCmd.Process.Kill()
+				_, _ = durableVfsdCmd.Process.Wait()
+			}
+		}()
+	}
+
 	// Networking: rebuild the per-activation veth + tap; the snapshot's virtio-net
 	// is fd-backed, so CH needs fresh tap FDs (net_fds) on restore.
-	if err := s.setupActorNetwork(ctx); err != nil {
-		return nil, fmt.Errorf("while setting up actor network: %w", err)
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		HostVethHWAddr:     hostVethHWAddr,
+		SweepInteriorLinks: true,
+		EgressRedirectPort: s.egressRedirectPort(p.egressGateway != nil),
+	}); err != nil {
+		return fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if cleanupErr := s.deactivateActorNetworking(cleanupCtx); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
+			}
+			if cleanupErr := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
+			}
+			// Detach any bundle rootfs overlays mounted by buildActorContainers
+			// before the failure, mirroring teardownActor's cleanup.
+			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure", slog.Any("err", err))
 			}
 		}
 	}()
 	netDevs, err := ch.SnapshotNetDevices(restoreDir)
 	if err != nil {
-		return nil, fmt.Errorf("while reading snapshot net devices: %w", err)
+		return fmt.Errorf("while reading snapshot net devices: %w", err)
 	}
 	var restoredNets []ch.RestoredNet
 	var tapFiles []*os.File
@@ -137,7 +354,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	for i, nd := range netDevs {
 		files, terr := s.setupRestoreTap(ctx, fmt.Sprintf("tap%d_kata", i), nd.QueuePairs)
 		if terr != nil {
-			return nil, fmt.Errorf("while building restore tap for %s: %w", nd.ID, terr)
+			return fmt.Errorf("while building restore tap for %s: %w", nd.ID, terr)
 		}
 		tapFiles = append(tapFiles, files...)
 		rn := ch.RestoredNet{ID: nd.ID}
@@ -154,64 +371,118 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		Binary: rr.chBinary, APISocket: apiSocket, Stdout: slogWriter{ctx}, Stderr: slogWriter{ctx},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("while launching VMM for restore: %w", err)
+		return fmt.Errorf("while launching VMM for restore: %w", err)
 	}
 	defer func() {
 		if retErr != nil && chCmd.Process != nil {
 			_ = chCmd.Process.Kill()
 		}
 	}()
-	// OnDemand (userfaultfd) memory restore: ~75ms vs ~1.8s eager, and it keeps the
-	// memfd SPARSE so the next suspend isn't the eager-copy-densified full-RAM scan.
-	// CH's OnDemand snapshot alone would be INCOMPLETE (it writes only faulted pages,
-	// dropping the un-faulted ones it demand-pages from this source) — so
-	// CheckpointWorkload overlays CH's delta onto this source (restoreSourceDir) to
-	// rebuild a complete snapshot. CH demand-pages from restoreDir for the VM's whole
-	// lifetime, so it must persist until teardown (atelet keeps it until reset).
-	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, "OnDemand"); err != nil {
-		return nil, fmt.Errorf("while restoring VM with net FDs: %w", err)
+	// How guest RAM comes back depends on the VMM (see restoreMemMode), and the rest
+	// of the actor's lifecycle follows from that choice:
+	//
+	//   - OnDemand: cloud-hypervisor demand-pages from restoreDir for the VM's whole
+	//     lifetime, so it must stay put, and the snapshot it writes later holds only
+	//     the pages faulted in meanwhile — CheckpointWorkload overlays that delta onto
+	//     this source to rebuild a complete one.
+	//   - Eager: every populated extent is read here and now. Nothing pages from the
+	//     source afterwards and nothing merges against it, so it is dropped below and
+	//     the next snapshot stands on its own.
+	memMode := restoreMemMode(ctx, client.Info())
+	slog.InfoContext(ctx, "restoring guest memory",
+		slog.String("mode", memMode), slog.String("vmm_version", client.Info().Version))
+	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, memMode); err != nil {
+		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	if err := client.Resume(ctx); err != nil {
-		return nil, fmt.Errorf("while resuming restored guest: %w", err)
+		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
 
 	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, containers, actorVethIP); err != nil {
-		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
+	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
+		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir}
-
-	// Re-attach stdout/stderr forwarding for each container: the restored guest's
-	// containers + kata-agent are alive, so a fresh dial over this actor's vsock
-	// resumes ReadStdout/ReadStderr. The overlay workload's container/exec id is
-	// <name>_ovl (same as the cold run). Best-effort — a failed dial must not fail the
-	// restore (the actor is already running); forwarding is just skipped.
-	vsockPath := kata.VsockSocketPath(actorUID)
-	logAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
-	if dialErr != nil {
-		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding disabled for this restore",
-			slog.String("id", actorUID), slog.Any("err", dialErr))
-	} else {
-		ra.logAgent = logAC
-		for _, c := range containers {
-			s.startActorLogForwarding(logAC, atespace, name, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
+	// An eager restore has read the whole snapshot into guest memory, and nothing
+	// merges against it afterwards, so the staged copy is dead weight from here on —
+	// a second ~160MiB per running actor on top of the checkpoint it will write.
+	// Drop the memory image but keep the directory: atelet re-stages it wholesale
+	// before any later restore, and the small files beside it stay cheap to keep.
+	if memMode == ch.MemRestoreEager {
+		staged := filepath.Join(restoreDir, "memory-ranges")
+		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+			// Not fatal: it only costs disk until the actor is torn down.
+			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
+		} else {
+			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
 		}
 	}
 
+	ra := &runningActor{
+		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
+		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
+		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
+		workloadIDs:             overlayWorkloadIDs(ctrs),
+	}
+
+	// Re-attach stdout/stderr forwarding for each container: the restored guest's
+	// containers + kata-agent are alive, so a fresh dial over this actor's vsock
+	// resumes ReadStdout/ReadStderr. Best-effort — a failed dial must not fail the
+	// restore (the actor is already running); forwarding is just skipped.
+	vsockPath := kata.VsockSocketPath(actorUID)
+	guestAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
+	if dialErr != nil {
+		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding and guest stats disabled for this restore",
+			slog.String("id", actorUID), slog.Any("err", dialErr))
+	} else {
+		ra.guestAgent = guestAC
+		for _, c := range containers {
+			// Containers run under their bare name; guests restored from LEGACY
+			// snapshots still hold the retired <name>_ovl workload containers.
+			streamID := c.GetName()
+			if !hasUpper {
+				streamID = overlayWorkloadID(c.GetName())
+			}
+			s.startActorLogForwarding(guestAC, p.actorRef, actorUID, templateNS, templateName, streamID, c.GetName())
+		}
+	}
+
+	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
+		return err
+	}
 	s.running[actorUID] = ra
-	s.actorLogger.EmitLifecycleLog("Actor restored", atespace, name, actorUID, templateNS, templateName)
+
+	// Publish the guest to GetWorkloadStats, past the last error return above
+	// for the same reason as in coldBootActor. Skipped when the dial failed:
+	// telemetry rides on the forwarding connection, so that activation answers
+	// FAILED_PRECONDITION until its next checkpoint. Not worth a second dial of
+	// its own — whatever kept the agent from answering a 15s retry loop would
+	// keep it from answering that one too.
+	if ra.guestAgent != nil {
+		// Same id split as the log forwarding above: bare names, except for
+		// guests restored from legacy snapshots, which hold <name>_ovl containers.
+		workloadIDs := make([]string, 0, len(containers))
+		for _, c := range containers {
+			id := c.GetName()
+			if !hasUpper {
+				id = overlayWorkloadID(c.GetName())
+			}
+			workloadIDs = append(workloadIDs, id)
+		}
+		s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: workloadIDs})
+	}
+
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))
-	return &ateompb.RestoreWorkloadResponse{}, nil
+	return nil
 }
 
 // rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
 // the source actor's VMDir to the restoring actor's: the hybrid-vsock socket, the
-// File serial console, and each virtio-fs (overlay RO lower) socket, so the sockets/
-// files we create are the ones CH reopens. The kernel and /dev/vda kata image are
-// content-addressed static files with identical paths on every node, so they need no
-// rewrite, and the overlay has no per-actor disk to repoint.
+// File serial console, and each virtio-fs socket, so the sockets/files we create are
+// the ones CH reopens. The kernel and /dev/vda kata image are content-addressed static
+// files with identical paths on every node, so they need no rewrite, and the overlay
+// has no per-actor disk to repoint.
 func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 	cfgPath := filepath.Join(snapshotDir, "config.json")
 	b, err := os.ReadFile(cfgPath)
@@ -234,12 +505,24 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			serial["file"] = filepath.Join(kata.VMDir(id), "serial.log")
 		}
 	}
-	// The overlay RO lower is served by a per-VMDir virtiofsd socket; the snapshot
-	// recorded the golden actor's, so repoint each fs device at this actor's VMDir.
+	// Each virtio-fs share is served by its own per-VMDir virtiofsd socket; the
+	// snapshot recorded the golden actor's, so repoint them at this actor's VMDir.
+	// Match on the device tag: the shares have separate sockets (the rootfs
+	// share's and, when the actor has durable-dir volumes, the durable share's),
+	// and crossing them would hand the guest the wrong filesystem.
 	if fss, ok := cfg["fs"].([]any); ok {
 		for _, f := range fss {
-			if fm, ok := f.(map[string]any); ok {
+			fm, ok := f.(map[string]any)
+			if !ok {
+				return fmt.Errorf("snapshot config %q has a malformed fs device", cfgPath)
+			}
+			switch tag, _ := fm["tag"].(string); tag {
+			case kata.FsTag:
 				fm["socket"] = kata.VirtiofsdSocketPath(id)
+			case kata.DurableFsTag:
+				fm["socket"] = kata.DurableVirtiofsdSocketPath(id)
+			default:
+				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
 			}
 		}
 	}

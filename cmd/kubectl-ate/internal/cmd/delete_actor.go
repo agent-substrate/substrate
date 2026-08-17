@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
@@ -30,21 +31,21 @@ var deleteActorCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return err
 		}
 		defer c.Close()
 
-		name := args[0]
+		actorRef := resources.ActorRef{Atespace: deleteAtespaceFlag, Name: args[0]}
 		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: deleteAtespaceFlag, Name: name},
+			Actor: actorRef.ToObjectRef(),
 		})
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("actor %q deleted\n", name)
+		fmt.Printf("actor %q deleted\n", actorRef.Name)
 		return nil
 	},
 }

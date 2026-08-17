@@ -137,7 +137,7 @@ func (a *AgentClient) Close() error {
 // CreateContainer asks the agent to create a container: mount its storages (in
 // order) and build the rootfs, then fork the parked init process. This is the
 // hook point — the agent mounts storages[] (here: a bind of the virtio-fs lower
-// followed by the tmpfs-upper overlay) before init_rootfs consumes the rootfs.
+// followed by the disk-backed-upper overlay) before init_rootfs consumes the rootfs.
 // Mirrors grpc.AgentService/CreateContainer (returns google.protobuf.Empty).
 func (a *AgentClient) CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest) error {
 	if err := a.client.Call(ctx, "grpc.AgentService", "CreateContainer", req, &emptypb.Empty{}); err != nil {
@@ -203,6 +203,32 @@ func (a *AgentClient) AddARPNeighbors(ctx context.Context, neighbors []*agentpb.
 	return nil
 }
 
+// SignalProcess sends signal to a process in the guest. Targeting the container's
+// init process (ExecId == ContainerId) delivers the signal to the workload; an
+// empty execID delivers it to ALL processes in the container. Used during
+// graceful shutdown to propagate SIGTERM into the actor. Mirrors
+// grpc.AgentService/SignalProcess (returns google.protobuf.Empty).
+func (a *AgentClient) SignalProcess(ctx context.Context, containerID, execID string, signal uint32) error {
+	req := &agentpb.SignalProcessRequest{ContainerId: containerID, ExecId: execID, Signal: signal}
+	if err := a.client.Call(ctx, "grpc.AgentService", "SignalProcess", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent SignalProcess: %w", err)
+	}
+	return nil
+}
+
+// WaitProcess blocks until the identified guest process exits and returns its
+// exit status (mimics waitpid(2)). Used during graceful shutdown to confirm the
+// actor has stopped before ateom tears the VM down. Mirrors
+// grpc.AgentService/WaitProcess.
+func (a *AgentClient) WaitProcess(ctx context.Context, containerID, execID string) (int32, error) {
+	resp := &agentpb.WaitProcessResponse{}
+	req := &agentpb.WaitProcessRequest{ContainerId: containerID, ExecId: execID}
+	if err := a.client.Call(ctx, "grpc.AgentService", "WaitProcess", req, resp); err != nil {
+		return 0, fmt.Errorf("agent WaitProcess: %w", err)
+	}
+	return resp.GetStatus(), nil
+}
+
 // ReadStdout reads up to max bytes from the container process's stdout. It is a
 // unary RPC (NOT a server stream): each call returns whatever bytes the agent has
 // buffered (up to max), so callers loop until it returns an error — the agent
@@ -228,6 +254,30 @@ func (a *AgentClient) ReadStderr(ctx context.Context, containerID, execID string
 		return nil, err
 	}
 	return resp.GetData(), nil
+}
+
+// StatsContainer returns the guest cgroup accounting for one container, as the
+// kata-agent reads it from inside the guest. Mirrors
+// grpc.AgentService/StatsContainer.
+//
+// It returns only the cgroup half of the response; the network counters
+// alongside it are per-guest-interface rather than per-container and are not
+// what ateom reports. A nil return with a nil error means the agent answered
+// without cgroup stats for this container — it has no accounting for it, which
+// is a normal state for one that has exited. What that means for the actor is
+// the caller's call: the summing in GetWorkloadStats folds it in as a zero
+// contribution, because a gone container consumes nothing from here on.
+//
+// Safe to call while the stdout/stderr forwarding goroutines are reading over
+// the same client: ttrpc multiplexes concurrent calls over the one connection,
+// which is already what those goroutines rely on.
+func (a *AgentClient) StatsContainer(ctx context.Context, containerID string) (*agentpb.CgroupStats, error) {
+	resp := &agentpb.StatsContainerResponse{}
+	req := &agentpb.StatsContainerRequest{ContainerId: containerID}
+	if err := a.client.Call(ctx, "grpc.AgentService", "StatsContainer", req, resp); err != nil {
+		return nil, fmt.Errorf("agent StatsContainer %q: %w", containerID, err)
+	}
+	return resp.GetCgroupStats(), nil
 }
 
 // StreamReader adapts the agent's repeated ReadStdout/ReadStderr unary calls into

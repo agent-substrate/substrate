@@ -38,7 +38,7 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 
 | Path | Purpose |
 |---|---|
-| `demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl` | Namespace, Secret, WorkerPool, and ActorTemplates in a single envsubst template |
+| `demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl` | Namespace, WorkerPool, and ActorTemplates in a single envsubst template |
 | `hack/install-demo-claude-code-multiplex.sh` | Sourced by `install-ate.sh`; registers `--deploy-demo-claude-code-multiplex` and `--delete-demo-claude-code-multiplex` |
 | `demos/claude-code-multiplex/workload/` | The agent container image source (Dockerfile + entrypoint that wires Claude Code; built and pushed by the deploy step) |
 | `demos/claude-code-multiplex/ui/` | Static dashboard (`index.html` + `server.go`) that talks to the cluster |
@@ -55,7 +55,7 @@ BUCKET_NAME=your-substrate-bucket \
   ./hack/install-ate.sh --deploy-demo-claude-code-multiplex
 ```
 
-This creates the `claude-multiplex-demo` namespace, an `anthropic-api-key` Secret, a 2-pod `WorkerPool`, and three `ActorTemplate` objects named `agent-luna`, `agent-mars`, `agent-orion`. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the manifest template at apply time. The ActorTemplates consume the key through `valueFrom.secretKeyRef`.
+This creates the `claude-multiplex-demo` namespace, a 2-pod `WorkerPool`, and three `ActorTemplate` objects named `agent-luna`, `agent-mars`, `agent-orion`. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the manifest template at apply time.
 
 ### 2. Start the dashboard
 

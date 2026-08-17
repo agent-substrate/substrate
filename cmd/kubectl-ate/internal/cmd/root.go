@@ -27,6 +27,7 @@ var (
 	kubeconfig   string
 	k8sContext   string
 	endpoint     string
+	tokenFile    string
 	outputFmt    string
 	traceEnabled bool
 )
@@ -56,6 +57,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&kubeconfig, "kubeconfig", "", "Path to the kubeconfig file")
 	rootCmd.PersistentFlags().StringVar(&k8sContext, "context", "", "The name of the kubeconfig context to use")
 	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "", "Manual override for the gRPC target (e.g., localhost:8080). If omitted, automatically port-forwards.")
+	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "Path to a bearer token for ate-api authentication, or - to read it from stdin. Defaults to a Kubernetes ServiceAccount token.")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format. One of: table|json|yaml")
 	rootCmd.PersistentFlags().BoolVar(&traceEnabled, "trace", false, "Enable tracing for the request")
 }

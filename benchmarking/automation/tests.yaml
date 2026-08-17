@@ -24,6 +24,9 @@
 # the deploy that runs before this test. The orchestrator redeploys
 # workloads between tests, so each test can pick its own scale.
 #
+# Optional `sandboxClass` (default "gvisor") picks the sandbox runtime for
+# the benchmark WorkerPool. Allowed values: "gvisor" | "microvm".
+#
 # Required `targetCluster` names a config file under
 # /etc/orchestrator/target-clusters/ (e.g. `targetCluster: dev` ->
 # /etc/orchestrator/target-clusters/dev.sh). The orchestrator copies that

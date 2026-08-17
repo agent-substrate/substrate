@@ -14,20 +14,27 @@
 package main
 
 import (
+	"context"
+	"log/slog"
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
+	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -37,12 +44,30 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 
-	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "dns:///api.ate-system.svc:443", "")
+	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "k8s:///api.ate-system.svc:443", "")
 
-	ateapiAuthMode   = pflag.String("ateapi-auth", "mtls", "Client auth to ateapi: mtls|jwt. 'mtls' (default) dials with insecure TLS and relies on pod-projected mTLS credentials for identity. 'jwt' verifies the server cert and sends a Bearer SA token.")
-	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert. Required for jwt.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+
+	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		"OTLP endpoint set on ateom worker pods so they push telemetry. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
+
+	otelMetricExportInterval = pflag.String("otel-metric-export-interval", os.Getenv("OTEL_METRIC_EXPORT_INTERVAL"),
+		"Metric export interval in milliseconds set on ateom worker pods. Empty keeps the OTel SDK's 60s default. Defaults to the controller's own OTEL_METRIC_EXPORT_INTERVAL.")
+
+	otelMetricExportTimeout = pflag.String("otel-metric-export-timeout", os.Getenv("OTEL_METRIC_EXPORT_TIMEOUT"),
+		"Per-export timeout in milliseconds set on ateom worker pods. Empty keeps the OTel SDK's 30s default. Defaults to the controller's own OTEL_METRIC_EXPORT_TIMEOUT.")
+
+	otelTracesSampler = pflag.String("otel-traces-sampler", os.Getenv("OTEL_TRACES_SAMPLER"),
+		"Trace sampler set on ateom worker pods. Empty keeps the ateom binary's default. Defaults to the controller's own OTEL_TRACES_SAMPLER.")
+
+	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
+		"Trace sampler argument set on ateom worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
+
+	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert.")
 	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
-	ateapiTokenFile  = pflag.String("ateapi-token-file", ateapiauth.DefaultServiceAccountTokenFile, "Projected SA token file used as Bearer credential. Required for jwt.")
+	ateapiTokenAuth  = pflag.Bool("ateapi-use-token-auth", false, "Authenticate to ateapi with the Bearer token from --ateapi-token-file instead of the client certificate from --ateapi-client-cert.")
+	ateapiTokenFile  = pflag.String("ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required with --ateapi-use-token-auth, ignored otherwise.")
+	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required unless --ateapi-use-token-auth is set, ignored otherwise.")
 )
 
 func init() {
@@ -50,26 +75,65 @@ func init() {
 	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
 }
 
+const serviceName = "atecontroller"
+
+// logr verbosity V(n) maps to slog level -n, so V(1) stays below Info until
+// --log-level=debug. logr carries no context, so these records have no trace IDs.
+func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
+	return logr.FromSlogHandler(h)
+}
+
 func main() {
 	pflag.Parse()
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+	ctx := context.Background()
+	serverboot.InitLogger()
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
-	mode, err := ateapiauth.ParseMode(*ateapiAuthMode)
+	// Both providers must be registered before the ateapi client below:
+	// otelgrpc.NewClientHandler captures the global tracer and meter providers at
+	// construction, so a later init leaves it bound to the no-op ones.
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: serviceName,
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+	})
 	if err != nil {
-		setupLog.Error(err, "invalid --ateapi-auth")
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
+	}
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+
+	// controller-runtime records reconcile, workqueue, and runtime metrics into its
+	// own Prometheus registry, which the manager serves on a port nothing scrapes.
+	// Bridging it as a Producer puts them on the OTLP path instead.
+	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
+		prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+
+	k8sConfig := ctrl.GetConfigOrDie()
+	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		setupLog.Error(err, "creating kubernetes client for ateapi dialer")
 		os.Exit(1)
 	}
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		Mode:       mode,
-		CAFile:     *ateapiCAFile,
-		ServerName: *ateapiServerName,
-		TokenFile:  *ateapiTokenFile,
+		K8sClient:        k8sClient,
+		UseTokenAuth:     *ateapiTokenAuth,
+		CAFile:           *ateapiCAFile,
+		ServerName:       *ateapiServerName,
+		TokenFile:        *ateapiTokenFile,
+		ClientCredBundle: *ateapiClientCert,
 	})
 	if err != nil {
 		setupLog.Error(err, "building ateapi dial options")
 		os.Exit(1)
 	}
+	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 
 	ateapiConn, err := grpc.NewClient(*ateAPIConnSpec, dialOpts...)
 	if err != nil {
@@ -79,7 +143,7 @@ func main() {
 
 	ateapiClient := ateapipb.NewControlClient(ateapiConn)
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		Scheme: scheme,
 	})
 	if err != nil {
@@ -88,10 +152,23 @@ func main() {
 	}
 
 	if err = (&controllers.WorkerPoolReconciler{
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		OTelEndpoint:             *otelEndpoint,
+		OTelMetricExportInterval: *otelMetricExportInterval,
+		OTelMetricExportTimeout:  *otelMetricExportTimeout,
+		OTelTracesSampler:        *otelTracesSampler,
+		OTelTracesSamplerArg:     *otelTracesSamplerArg,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkerPool")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.NetworkPolicyReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WorkerPool")
+		setupLog.Error(err, "unable to create controller", "controller", "NetPolicy")
 		os.Exit(1)
 	}
 

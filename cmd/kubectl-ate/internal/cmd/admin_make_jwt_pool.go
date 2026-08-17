@@ -29,7 +29,7 @@ var keyID string
 
 var makeJwtPoolCmd = &cobra.Command{
 	Use:   "make-jwt-pool",
-	Short: "Make a new secret that contains a JWT authority pool to be used by the session ID broker",
+	Short: "Make a new secret that contains a JWT authority pool to be used by the actor ID broker",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 

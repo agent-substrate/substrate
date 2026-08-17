@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         python3-venv \
         docker.io \
+        unzip \
+        zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Go must be new enough to honor the `tool` directive in
