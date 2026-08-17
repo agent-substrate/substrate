@@ -29,7 +29,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +36,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/third_party/atomicwriter"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -1482,27 +1482,24 @@ func (s *AteomHerder) prepareOCIBundles(
 // writeSystemInfoVolume populates the root directory of a system-info volume
 // with one file per projected item. It runs on every Run/Restore, before the
 // sandbox starts, so the files carry the values of the actor actually being
-// started, no matter what checkpointed state it boots from.
-//
-// Every file must be a plain file at a stable real path across regenerations:
-// the micro-VM virtiofsds run in find-paths migration mode, which re-binds
-// the guest's FUSE state to files by the paths recorded at suspend, and
-// gVisor's gofer likewise re-opens files by path on restore. Symlink-swap
-// schemes (kubelet's atomic writer) move the payload files to a new
-// timestamped directory on every write and delete the old one, so guest
-// state from the snapshot could not re-bind. Per-file write-to-temp-and-
-// rename is atomic enough: this only runs while the sandbox is down, so no
-// reader can observe a partial write.
+// started, no matter what checkpointed state it boots from. Files are written
+// with the atomic writer so a concurrent reader can never observe a partial
+// write.
 //
 // TODO(#802): rotating data sources (identity JWTs, certificates) will need
-// these files refreshed while the actor runs, not just at Run/Restore — and
-// must keep the per-file rename discipline so visible paths never move.
+// these files refreshed while the actor runs, not just at Run/Restore.
 // actorMetadata never changes after start, so writing here is enough for it.
 func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) error {
 	if err := os.MkdirAll(rootPath, 0o755); err != nil {
 		return fmt.Errorf("while creating %q: %w", rootPath, err)
 	}
 
+	aw, err := atomicwriter.NewAtomicWriter(rootPath)
+	if err != nil {
+		return fmt.Errorf("while creating atomicwriter: %w", err)
+	}
+
+	contents := map[string]atomicwriter.FileProjection{}
 	for _, dataSourceAny := range si.GetDataSources() {
 		switch dataSource := dataSourceAny.GetDataSource().(type) {
 		case *ateletpb.SystemInfoDataSource_ActorMetadata:
@@ -1520,35 +1517,16 @@ func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resour
 					// item rather than write an empty file under its path.
 					continue
 				}
-				if err := writeSystemInfoFile(rootPath, item.GetPath(), []byte(value)); err != nil {
-					return err
+				contents[item.GetPath()] = atomicwriter.FileProjection{
+					Data: []byte(value),
+					Mode: 0o644,
 				}
 			}
 		}
 	}
-	return nil
-}
 
-// writeSystemInfoFile writes one projected file at relPath under rootPath via
-// write-to-temp-and-rename, creating parent directories as needed. relPath is
-// validated defensively even though ActorTemplate validation already rejects
-// non-clean paths: atelet is the last line before the value hits the host
-// filesystem.
-func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
-	if relPath == "" || strings.HasPrefix(relPath, "/") {
-		return fmt.Errorf("invalid system-info path %q: must be a non-empty relative path", relPath)
-	}
-	for _, seg := range strings.Split(relPath, "/") {
-		if seg == ".." || seg == "." || seg == "" {
-			return fmt.Errorf("invalid system-info path %q: must not contain empty, '.', or '..' segments", relPath)
-		}
-	}
-	dst := filepath.Join(rootPath, filepath.FromSlash(relPath))
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("while creating parent of %q: %w", dst, err)
-	}
-	if err := writeFileAtomic(dst, data, 0o644); err != nil {
-		return fmt.Errorf("while writing system-info file %q: %w", dst, err)
+	if err := aw.Write(ctx, contents, nil); err != nil {
+		return fmt.Errorf("while writing contents of SystemInfoVolume: %w", err)
 	}
 	return nil
 }
