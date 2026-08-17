@@ -30,6 +30,32 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+type createActorErrorStore struct {
+	serviceStore
+	err error
+}
+
+func (s *createActorErrorStore) CreateActor(context.Context, *ateapipb.Actor) (*ateapipb.Actor, error) {
+	return nil, s.err
+}
+
+func TestCreateActor_AtespaceDeletedAfterPrecheck(t *testing.T) {
+	ns := namespaceForTest("ns-create-atespace-race")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+	tc.service.persistence = &createActorErrorStore{serviceStore: tc.service.persistence, err: store.ErrFailedPrecondition}
+
+	_, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "racing-create"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CreateActor status = %v, want FailedPrecondition (error: %v)", status.Code(err), err)
+	}
+}
+
 func TestValidateCreateActorRequest(t *testing.T) {
 	validActor := func(mutate func(*ateapipb.Actor)) *ateapipb.CreateActorRequest {
 		a := &ateapipb.Actor{
