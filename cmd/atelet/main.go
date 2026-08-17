@@ -461,7 +461,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
+	if err := s.mountExternalVolumes(ctx, req.GetTargetAteomUid(), actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, err
 	}
 
@@ -667,7 +667,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 	dPersist = time.Since(tPersist)
 
-	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
+	if err := s.unmountExternalVolumes(ctx, req.GetTargetAteomUid(), actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), fmt.Errorf("while unmounting external volumes: %w", err))
 	}
 
@@ -951,7 +951,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	tMount := time.Now()
-	mountErr := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
+	mountErr := s.mountExternalVolumes(ctx, req.GetTargetAteomUid(), actorUID, req.GetSpec().GetVolumes())
 	dMount = time.Since(tMount)
 	if mountErr != nil {
 		op.failedPhase = ateattr.SnapshotPhaseVolumeMount
@@ -1242,7 +1242,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 
 	// Unmount external volumes
-	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
+	if err := s.unmountExternalVolumes(ctx, req.GetTargetAteomUid(), actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, fmt.Errorf("failed to unmount external volumes during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
@@ -1532,6 +1532,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.imageCache,
+			targetAteomUid,
 			actorUID,
 			"pause",
 			pauseImage,
@@ -1560,6 +1561,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			if err := prepareOCIDirectory(
 				gCtx,
 				s.imageCache,
+				targetAteomUid,
 				actorUID,
 				ctr.GetName(),
 				ctr.GetImage(),
@@ -2095,23 +2097,6 @@ func resetActorDirs(actorUID string) error {
 	}
 	if err := os.MkdirAll(systemInfoVolumeRootsDir, 0o755); err != nil {
 		return wrapFileSystemErr("while creating system-info volume roots dir: %w", err)
-	}
-
-	// Do not call RemoveAll on volume directories in case the unmount failed.
-	// We do not want to delete mount content.
-	volumesDir := ateompath.VolumesDir(actorUID)
-	entries, err := os.ReadDir(volumesDir)
-	if err != nil && !os.IsNotExist(err) {
-		return wrapFileSystemErr("while reading volumes dir: %w", err)
-	}
-	for _, entry := range entries {
-		volPath := filepath.Join(volumesDir, entry.Name())
-		if err := os.Remove(volPath); err != nil {
-			return wrapFileSystemErr("while removing volume dir: %w", err)
-		}
-	}
-	if err := os.MkdirAll(volumesDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating volumes dir: %w", err)
 	}
 
 	return nil

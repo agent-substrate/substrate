@@ -70,6 +70,8 @@ func TestUnmountExternalVolumes(t *testing.T) {
 		},
 	}
 
+	workerPodUID := "test-worker-pod-123"
+
 	t.Run("success", func(t *testing.T) {
 		fake := &fakeWorkerPlugin{}
 		s := &AteomHerder{
@@ -78,7 +80,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 			},
 		}
 
-		err := s.unmountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{extVol1, durableVol, extVol2})
+		err := s.unmountExternalVolumes(ctx, workerPodUID, actorUID, []*ateletpb.Volume{extVol1, durableVol, extVol2})
 		if err != nil {
 			t.Fatalf("unmountExternalVolumes failed unexpectedly: %v", err)
 		}
@@ -97,7 +99,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 			},
 		}
 
-		err := s.unmountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{extVol1})
+		err := s.unmountExternalVolumes(ctx, workerPodUID, actorUID, []*ateletpb.Volume{extVol1})
 		if err == nil {
 			t.Fatal("unmountExternalVolumes returned nil, want blocking error")
 		}
@@ -116,7 +118,7 @@ func TestUnmountExternalVolumes(t *testing.T) {
 			},
 		}
 
-		err := s.unmountExternalVolumes(ctx, actorUID, []*ateletpb.Volume{extVol1, extVol2})
+		err := s.unmountExternalVolumes(ctx, workerPodUID, actorUID, []*ateletpb.Volume{extVol1, extVol2})
 		if err == nil {
 			t.Fatal("unmountExternalVolumes returned nil, want blocking error")
 		}

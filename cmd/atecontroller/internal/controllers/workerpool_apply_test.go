@@ -736,6 +736,11 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithPath(ateompath.BasePath).
 					WithType(corev1.HostPathDirectoryOrCreate)),
 			corev1ac.Volume().
+				WithName("kubelet-pods").
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.KubeletPodsDir).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
 				WithName(atunnelIdentityVolume).
 				WithProjected(corev1ac.ProjectedVolumeSource().
 					WithSources(
@@ -805,6 +810,10 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				corev1ac.VolumeMount().
 					WithName("run-ateom").
 					WithMountPath(ateompath.BasePath).
+					WithMountPropagation(corev1.MountPropagationHostToContainer),
+				corev1ac.VolumeMount().
+					WithName("kubelet-pods").
+					WithMountPath(ateompath.KubeletPodsDir).
 					WithMountPropagation(corev1.MountPropagationHostToContainer),
 				corev1ac.VolumeMount().
 					WithName(atunnelIdentityVolume).
