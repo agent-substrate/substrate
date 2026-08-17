@@ -1414,23 +1414,23 @@ type ActorTemplate struct {
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// worker_selector restricts which worker pools actors from this template
 	// may use.
-	WorkerSelector  *Selector        `protobuf:"bytes,3,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
-	Containers      []*Container     `protobuf:"bytes,4,rep,name=containers,proto3" json:"containers,omitempty"`
-	Volumes         []*Volume        `protobuf:"bytes,5,rep,name=volumes,proto3" json:"volumes,omitempty"`
-	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,6,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
+	WorkerSelector  *Selector        `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
+	Containers      []*Container     `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
+	Volumes         []*Volume        `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
 	// sandbox_config selects the sandbox runtime this version's actors run on.
 	// Required. Resolved and frozen into resolved_sandbox at creation time.
-	SandboxConfig *SandboxConfig `protobuf:"bytes,7,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
+	SandboxConfig *SandboxConfig `protobuf:"bytes,6,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
 	// golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
 	// system atespace, built for this version by ate-api. Set once state is
 	// READY.
-	GoldenSnapshot *ObjectRef `protobuf:"bytes,8,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
+	GoldenSnapshot *ObjectRef `protobuf:"bytes,7,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
 	// State machine, mirroring the ActorTemplate CRD PhaseType:
 	// INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
 	// READY and FAILED are terminal; the version is only usable once READY.
-	Phase *ActorTemplatePhase `protobuf:"bytes,9,opt,name=phase,proto3" json:"phase,omitempty"`
+	Phase *ActorTemplatePhase `protobuf:"bytes,8,opt,name=phase,proto3" json:"phase,omitempty"`
 	// Resource usage configuration.
-	Resources     *Resources `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources     *Resources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4840,17 +4840,16 @@ const file_ateapi_proto_rawDesc = "" +
 	"\fsnapshot_uid\x18\x03 \x01(\tR\vsnapshotUid\"\xfe\x03\n" +
 	"\rActorTemplate\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x129\n" +
-	"\x0fworker_selector\x18\x03 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x121\n" +
+	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x121\n" +
 	"\n" +
-	"containers\x18\x04 \x03(\v2\x11.ateapi.ContainerR\n" +
+	"containers\x18\x03 \x03(\v2\x11.ateapi.ContainerR\n" +
 	"containers\x12(\n" +
-	"\avolumes\x18\x05 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12B\n" +
-	"\x10snapshots_config\x18\x06 \x01(\v2\x17.ateapi.SnapshotsConfigR\x0fsnapshotsConfig\x12<\n" +
-	"\x0esandbox_config\x18\a \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12:\n" +
-	"\x0fgolden_snapshot\x18\b \x01(\v2\x11.ateapi.ObjectRefR\x0egoldenSnapshot\x120\n" +
-	"\x05phase\x18\t \x01(\v2\x1a.ateapi.ActorTemplatePhaseR\x05phase\x12/\n" +
-	"\tresources\x18\n" +
-	" \x01(\v2\x11.ateapi.ResourcesR\tresources\"3\n" +
+	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12B\n" +
+	"\x10snapshots_config\x18\x05 \x01(\v2\x17.ateapi.SnapshotsConfigR\x0fsnapshotsConfig\x12<\n" +
+	"\x0esandbox_config\x18\x06 \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12:\n" +
+	"\x0fgolden_snapshot\x18\a \x01(\v2\x11.ateapi.ObjectRefR\x0egoldenSnapshot\x120\n" +
+	"\x05phase\x18\b \x01(\v2\x1a.ateapi.ActorTemplatePhaseR\x05phase\x12/\n" +
+	"\tresources\x18\t \x01(\v2\x11.ateapi.ResourcesR\tresources\"3\n" +
 	"\tResources\x12&\n" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
