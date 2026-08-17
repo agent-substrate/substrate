@@ -174,6 +174,72 @@ func TestWriteSystemInfoVolume(t *testing.T) {
 	}
 }
 
+// TestWriteSystemInfoVolume_StableRealPaths pins the path-stability contract
+// the restore paths depend on: the micro-VM virtiofsds run in find-paths
+// migration mode, which re-binds the guest's FUSE state to files by the paths
+// recorded at suspend, and gVisor's gofer likewise re-opens files by path on
+// restore. Projected files must therefore be plain files at stable real
+// paths — no symlink indirection — and regenerating the volume must not move
+// or delete a path that guest state may reference.
+func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "system-info", "vol1")
+	si := &ateletpb.SystemInfoVolume{
+		DataSources: []*ateletpb.SystemInfoDataSource{
+			{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+				ActorMetadata: &ateletpb.ActorMetadataDataSource{
+					Items: []*ateletpb.ActorMetadataItem{
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+					},
+				},
+			}},
+		},
+	}
+
+	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
+	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", si); err != nil {
+		t.Fatalf("writeSystemInfoVolume: %v", err)
+	}
+
+	realBefore := map[string]string{}
+	for _, p := range []string{"actor-name", "identity/actor-uid"} {
+		visible := filepath.Join(root, p)
+		fi, err := os.Lstat(visible)
+		if err != nil {
+			t.Fatalf("lstat %q: %v", visible, err)
+		}
+		if !fi.Mode().IsRegular() {
+			t.Errorf("%q is %v, want a regular file: symlink indirection moves the real path on regeneration, which find-paths cannot re-bind", visible, fi.Mode().Type())
+		}
+		real, err := filepath.EvalSymlinks(visible)
+		if err != nil {
+			t.Fatalf("eval symlinks %q: %v", visible, err)
+		}
+		realBefore[p] = real
+	}
+
+	// Regenerate for a different actor, as a restore from a shared golden
+	// snapshot does.
+	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
+	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", si); err != nil {
+		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
+	}
+
+	for _, p := range []string{"actor-name", "identity/actor-uid"} {
+		real, err := filepath.EvalSymlinks(filepath.Join(root, p))
+		if err != nil {
+			t.Fatalf("eval symlinks after rewrite %q: %v", p, err)
+		}
+		if real != realBefore[p] {
+			t.Errorf("%q real path moved on regeneration: %q -> %q; guest state recorded at suspend cannot re-bind", p, realBefore[p], real)
+		}
+		if _, err := os.Stat(realBefore[p]); err != nil {
+			t.Errorf("pre-rewrite real path %q gone after regeneration: %v; find-paths re-open of a suspend-time path would fail", realBefore[p], err)
+		}
+	}
+}
+
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "actor-id")
