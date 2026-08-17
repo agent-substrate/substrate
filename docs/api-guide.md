@@ -315,7 +315,11 @@ Only `cpu` and `memory` are accepted, each must be greater than zero, and a `cpu
 
 **Limits only.** There is no `requests`. Scheduling happens at the pool level, so per-container limits subdivide a budget that is already held, and there is no scheduler inside the actor to hint at. For memory it is also a correctness question: a restore needs at least the footprint that was captured.
 
-**Bounded by the guest.** A micro-VM actor runs inside a guest VM whose size comes from the pool's [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself), not from the actor. A limit above the guest, or limits summing above it across the actor's containers, can never bind, so the actor fails to start with an error naming both the limit and the guest size.
+**Two layers.** `spec.resources` sizes the sandbox itself: for a micro-VM the guest's RAM and vCPU count, for gVisor the sentry. Per-container limits subdivide that sandbox. A container gets a cgroup limit only when it declares one; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total.
+
+**Bounded by the guest.** A micro-VM guest is sized from `spec.resources.limits.memory` minus a small reserve held back for the VMM, or from the pool's [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) when the template declares no actor-level limit. A container limit above that ceiling, or limits summing above it across the actor's containers, can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
+
+**Over-subscription is caught at actor start, not at apply.** Admission validates each limit on its own; the sum is checked when the actor first runs, against the real guest size. A template whose container limits do not fit is accepted by the API server and fails on its first actor.
 
 ### Container Readiness Probe (`readyz`)
 
