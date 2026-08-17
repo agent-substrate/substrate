@@ -110,7 +110,7 @@ func (s *Service) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespaces
 
 	page, err := s.persistence.ListAtespaces(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
-		return nil, fmt.Errorf("while listing atespaces in db: %w", err)
+		return nil, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))
 	}
 	return &ateapipb.ListAtespacesResponse{
 		Atespaces:     page.Items,

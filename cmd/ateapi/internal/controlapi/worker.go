@@ -32,7 +32,7 @@ func (s *Service) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequ
 
 	page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
-		return nil, fmt.Errorf("while listing workers in db: %w", err)
+		return nil, mapListError(fmt.Errorf("while listing workers in db: %w", err))
 	}
 	return &ateapipb.ListWorkersResponse{
 		Workers:       page.Items,

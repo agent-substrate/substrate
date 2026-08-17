@@ -107,7 +107,7 @@ func (s *Service) ListActorSnapshots(ctx context.Context, req *ateapipb.ListActo
 	}
 	page, err := s.persistence.ListActorSnapshots(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
-		return nil, fmt.Errorf("while listing actor snapshots: %w", err)
+		return nil, mapListError(fmt.Errorf("while listing actor snapshots: %w", err))
 	}
 	return &ateapipb.ListActorSnapshotsResponse{Snapshots: page.Items, NextPageToken: page.NextPageToken}, nil
 }
