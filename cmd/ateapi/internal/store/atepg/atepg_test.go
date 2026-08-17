@@ -136,6 +136,180 @@ func createTestAtespace(t *testing.T, s *Persistence, name string) {
 	}
 }
 
+func createTestActorTemplate(t *testing.T, s *Persistence, atespace, name string) {
+	t.Helper()
+	if _, err := s.CreateActorTemplate(context.Background(), &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate(%q/%q) failed: %v", atespace, name, err)
+	}
+}
+
+func TestUpdateActor_RetriesConcurrentWrite(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	created, err := s.CreateActor(ctx, &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
+		ActorTemplateNamespace: "default",
+		ActorTemplateName:      "template-a",
+		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	actorRef := resources.ActorRefFromActor(created)
+
+	attempts := 0
+	updated, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+		attempts++
+		if attempts == 1 {
+			if _, err := s.UpdateActor(ctx, actorRef, func(concurrent *ateapipb.Actor) error {
+				concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+				return nil
+			}); err != nil {
+				return fmt.Errorf("concurrent actor update: %w", err)
+			}
+		}
+		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("mutate ran %d times, want 2", attempts)
+	}
+	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("status = %v, want RUNNING", updated.GetStatus())
+	}
+	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("worker selector tier = %q, want paid: concurrent update was lost", got)
+	}
+	if got, want := updated.GetMetadata().GetVersion(), created.GetMetadata().GetVersion()+2; got != want {
+		t.Errorf("version = %d, want %d", got, want)
+	}
+}
+
+func TestUpdateActor_ExhaustsOptimisticRetries(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	created, err := s.CreateActor(ctx, &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
+		ActorTemplateNamespace: "default",
+		ActorTemplateName:      "template-a",
+		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	actorRef := resources.ActorRefFromActor(created)
+
+	attempts := 0
+	_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+		attempts++
+		_, err := s.UpdateActor(ctx, actorRef, func(concurrent *ateapipb.Actor) error {
+			concurrent.Status = ateapipb.Actor_STATUS_RUNNING
+			return nil
+		})
+		return err
+	})
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("UpdateActor error = %v, want ErrVersionConflict", err)
+	}
+	if attempts != updateMaxAttempts {
+		t.Errorf("mutate ran %d times, want %d", attempts, updateMaxAttempts)
+	}
+}
+
+func TestUpdateActorTemplate_RetriesConcurrentWrite(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	createTestActorTemplate(t, s, "team-a", "template-a")
+	templateRef := resources.ActorTemplateRef{Atespace: "team-a", Name: "template-a"}
+
+	attempts := 0
+	updated, err := s.UpdateActorTemplate(ctx, templateRef, func(toUpdate *ateapipb.ActorTemplate) error {
+		attempts++
+		if attempts == 1 {
+			if _, err := s.UpdateActorTemplate(ctx, templateRef, func(concurrent *ateapipb.ActorTemplate) error {
+				concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+				return nil
+			}); err != nil {
+				return fmt.Errorf("concurrent actor template update: %w", err)
+			}
+		}
+		toUpdate.Phase = &ateapipb.ActorTemplatePhase{Message: "ready"}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate failed: %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("mutate ran %d times, want 2", attempts)
+	}
+	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("worker selector tier = %q, want paid: concurrent update was lost", got)
+	}
+	if got := updated.GetPhase().GetMessage(); got != "ready" {
+		t.Errorf("phase message = %q, want ready", got)
+	}
+}
+
+func TestUpdateActorSnapshotTag_UIDPreventsDeleteRecreateABA(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+	for _, name := range []string{"snapshot-a", "snapshot-b"} {
+		if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
+			SnapshotUri: "gs://bucket/" + name,
+		}); err != nil {
+			t.Fatalf("CreateActorSnapshot(%q) failed: %v", name, err)
+		}
+	}
+	original, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-a", &ateapipb.ActorSnapshotTag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tag-a"},
+		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+	})
+	if err != nil {
+		t.Fatalf("CreateActorSnapshotTag failed: %v", err)
+	}
+
+	mutations := 0
+	var recreated *ateapipb.ActorSnapshotTag
+	_, err = s.UpdateActorSnapshotTag(ctx, "team-a", "tag-a", store.WithPrecondition(original, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+		mutations++
+		if _, err := s.DeleteActorSnapshotTag(ctx, "team-a", "tag-a"); err != nil {
+			return fmt.Errorf("deleting original tag: %w", err)
+		}
+		recreated, err = s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-b", &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tag-a"},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		})
+		if err != nil {
+			return fmt.Errorf("recreating tag: %w", err)
+		}
+		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+		return nil
+	}))
+	if !errors.Is(err, store.ErrUIDConflict) {
+		t.Fatalf("UpdateActorSnapshotTag error = %v, want ErrUIDConflict", err)
+	}
+	if mutations != 1 {
+		t.Errorf("guarded mutation ran %d times, want 1", mutations)
+	}
+	stored, err := s.GetActorSnapshotTag(ctx, "team-a", "tag-a")
+	if err != nil {
+		t.Fatalf("GetActorSnapshotTag failed: %v", err)
+	}
+	if diff := cmp.Diff(recreated, stored, protocmp.Transform()); diff != "" {
+		t.Errorf("recreated tag was overwritten (-want +got):\n%s", diff)
+	}
+}
+
 func TestCreateActorSnapshotTag_ForeignKeyErrors(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
@@ -274,6 +448,30 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event from a committed write")
+	}
+}
+
+func TestWatchWorkers_MalformedNotificationClosesWatch(t *testing.T) {
+	s := setupPostgresStore(t).(*Persistence)
+	ctx := context.Background()
+
+	watch, err := s.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+	defer watch.Close()
+
+	if _, err := s.pool.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, "not-json"); err != nil {
+		t.Fatalf("pg_notify failed: %v", err)
+	}
+
+	select {
+	case event, ok := <-watch.Events:
+		if ok {
+			t.Fatalf("received event %+v from malformed notification; want closed watch", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for malformed notification to close watch")
 	}
 }
 

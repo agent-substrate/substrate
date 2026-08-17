@@ -34,7 +34,6 @@ const (
 	kindAtespace             resourceKind = "atespace"
 	kindActor                resourceKind = "actor"
 	kindActorTemplate        resourceKind = "actor-template"
-	kindActorTemplateVersion resourceKind = "actor-template-version"
 	kindSnapshot             resourceKind = "snapshot"
 	kindWorker               resourceKind = "worker"
 )

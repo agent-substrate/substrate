@@ -439,10 +439,8 @@ func (s *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	return store.ListResponse[*ateapipb.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
-// DeleteActorTemplate deletes an ActorTemplate with no remaining versions.
-// Returns store.ErrNotFound if the template does not exist, or
-// store.ErrFailedPrecondition while any ActorTemplateVersion still names it
-// as parent.
+// DeleteActorTemplate deletes an ActorTemplate.
+// Returns store.ErrNotFound if the template does not exist.
 func (s *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
 	dbKey := actorTemplateDBKey(templateRef)
 

@@ -184,8 +184,7 @@ type Interface interface {
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
-	// ErrNotFound if missing, or ErrFailedPrecondition while any
-	// ActorTemplateVersion still names it as parent.
+	// ErrNotFound if missing.
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 
 	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
