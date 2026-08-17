@@ -168,30 +168,6 @@ func waitForTunneledRouteReady(t *testing.T, ctx context.Context, router *e2e.Ro
 	}
 }
 
-// sendTunneledRequest issues a plain GET / over conn (an established CONNECT
-// tunnel) and returns the parsed response with its body already read and the
-// connection's read side left consumed accordingly.
-func sendTunneledRequest(t *testing.T, conn interface {
-	io.ReadWriter
-	SetDeadline(time.Time) error
-}, host string) (*http.Response, string) {
-	t.Helper()
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")); err != nil {
-		t.Fatalf("writing tunneled request: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		t.Fatalf("reading tunneled response: %v", err)
-	}
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		t.Fatalf("reading tunneled response body (HTTP %d): %v", resp.StatusCode, err)
-	}
-	return resp, string(body)
-}
-
 func requestTunneled(conn interface {
 	io.ReadWriter
 	SetDeadline(time.Time) error
