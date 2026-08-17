@@ -195,7 +195,7 @@ func TestCheckResourceEnvelope(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkResourceEnvelope(tc.ctrs, 2048, 1)
+			err := checkResourceEnvelope(tc.ctrs, guestEnvelope{memMiB: 2048, vcpus: 1})
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("checkResourceEnvelope() = %v, want nil", err)
@@ -212,6 +212,75 @@ func TestCheckResourceEnvelope(t *testing.T) {
 				t.Errorf("status code = %v, want InvalidArgument so a permanent misconfiguration does not read as a server fault", got)
 			}
 		})
+	}
+}
+
+// When the actor declared its own size, the guest ceiling comes from that limit
+// minus the VMM reserve, so the error must point at the actor's limit rather
+// than at the SandboxConfig the user cannot usefully change.
+func TestCheckResourceEnvelope_ErrorNamesActorLimitWhenDeclared(t *testing.T) {
+	const mib = 1024 * 1024
+	ctr := actorContainer{name: "hog", spec: &specs.Spec{Linux: &specs.Linux{
+		Resources: &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: ptr.To(int64(2048 * mib))}},
+	}}}
+
+	err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{
+		memMiB: 768, vcpus: 1, declaredBytes: 1024 * mib, reserveMiB: 256,
+	})
+	if err == nil {
+		t.Fatal("checkResourceEnvelope() = nil, want an error")
+	}
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+	for _, want := range []string{"hog", "1024", "256", "spec.resources.limits.memory"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err.Error(), want)
+		}
+	}
+}
+
+// The ceiling containers are measured against is the post-reserve guest, not the
+// declared limit and not the SandboxConfig default. RunWorkload gets there by
+// calling resolveGuestMemMiB before checkResourceEnvelope; this pins the
+// arithmetic those two steps compose into, which nothing else asserts.
+func TestCheckResourceEnvelope_MeasuresAgainstPostReserveGuest(t *testing.T) {
+	const mib = 1024 * 1024
+	const declaredMiB, reserveMiB = 1024, 256
+
+	guestMiB, err := resolveGuestMemMiB(int64(declaredMiB)*mib, reserveMiB, 2048)
+	if err != nil {
+		t.Fatalf("resolveGuestMemMiB() = %v", err)
+	}
+	if guestMiB != declaredMiB-reserveMiB {
+		t.Fatalf("guest = %dMiB, want %dMiB (declared minus reserve)", guestMiB, declaredMiB-reserveMiB)
+	}
+
+	// A container asking for the full declared limit does not fit the guest,
+	// because the reserve is not the container's to spend.
+	ctr := actorContainer{name: "hog", spec: &specs.Spec{Linux: &specs.Linux{
+		Resources: &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: ptr.To(int64(declaredMiB) * mib)}},
+	}}}
+	env := guestEnvelope{memMiB: guestMiB, vcpus: 1, declaredBytes: int64(declaredMiB) * mib, reserveMiB: reserveMiB}
+	if err := checkResourceEnvelope([]actorContainer{ctr}, env); err == nil {
+		t.Error("checkResourceEnvelope() = nil, want an error: the declared limit does not fit once the reserve is held back")
+	}
+}
+
+// With no actor-level limit the guest is the SandboxConfig default, so that
+// remains the right thing to point at.
+func TestCheckResourceEnvelope_ErrorNamesSandboxConfigWhenUndeclared(t *testing.T) {
+	const mib = 1024 * 1024
+	ctr := actorContainer{name: "hog", spec: &specs.Spec{Linux: &specs.Linux{
+		Resources: &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: ptr.To(int64(4096 * mib))}},
+	}}}
+
+	err := checkResourceEnvelope([]actorContainer{ctr}, guestEnvelope{memMiB: 2048, vcpus: 1})
+	if err == nil {
+		t.Fatal("checkResourceEnvelope() = nil, want an error")
+	}
+	if !strings.Contains(err.Error(), "SandboxConfig") {
+		t.Errorf("error %q does not mention SandboxConfig", err.Error())
 	}
 }
 

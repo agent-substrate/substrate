@@ -154,6 +154,31 @@ func defaultKataResources() *specs.LinuxResources {
 	}
 }
 
+// guestEnvelope is the ceiling an actor's container limits must fit inside.
+// declaredBytes is the actor-level memory limit (0 when the template declares
+// none), and reserveMiB the guest RAM held back for the VMM; together they
+// explain where memMiB came from, so the error can name the field the user can
+// actually raise.
+//
+// memMiB is already net of reserveMiB: guest memory is reduced by the VMM
+// reserve, while vcpus is not, since applying a reserve to CPU the same way is
+// follow-up work.
+type guestEnvelope struct {
+	memMiB        int
+	vcpus         int
+	declaredBytes int64
+	reserveMiB    int
+}
+
+// remedy names the field that raises the ceiling.
+func (e guestEnvelope) remedy() string {
+	if e.declaredBytes > 0 {
+		return fmt.Sprintf("raise spec.resources.limits.memory (declared %dMiB, less the %dMiB VMM reserve) or lower the container limits",
+			e.declaredBytes/(1024*1024), e.reserveMiB)
+	}
+	return "lower the limits or use a SandboxConfig with a larger guest"
+}
+
 // checkResourceEnvelope rejects limits the guest can never satisfy. The guest is
 // sized by the pool's SandboxConfig, not by the actor, so a limit above the
 // guest can never bind: the container would hit the guest's own ceiling
@@ -163,9 +188,9 @@ func defaultKataResources() *specs.LinuxResources {
 // time, because they share one guest. Errors carry codes.InvalidArgument: the
 // template spec is immutable, so this can never succeed on a retry and must not
 // read as a server fault.
-func checkResourceEnvelope(ctrs []actorContainer, memMiB, vcpus int) error {
-	guestBytes := int64(memMiB) * 1024 * 1024
-	guestMillis := int64(vcpus) * 1000
+func checkResourceEnvelope(ctrs []actorContainer, env guestEnvelope) error {
+	guestBytes := int64(env.memMiB) * 1024 * 1024
+	guestMillis := int64(env.vcpus) * 1000
 
 	var totalBytes, totalMillis int64
 	for _, c := range ctrs {
@@ -181,8 +206,8 @@ func checkResourceEnvelope(ctrs []actorContainer, memMiB, vcpus int) error {
 			limit := *r.Memory.Limit
 			if limit > guestBytes {
 				return status.Errorf(codes.InvalidArgument,
-					"container %q asks for %d bytes of memory but the guest has %d MiB; lower the limit or use a SandboxConfig with a larger guest",
-					c.name, limit, memMiB)
+					"container %q asks for %d bytes of memory but the guest has %d MiB; %s",
+					c.name, limit, env.memMiB, env.remedy())
 			}
 			totalBytes += limit
 		}
@@ -192,21 +217,21 @@ func checkResourceEnvelope(ctrs []actorContainer, memMiB, vcpus int) error {
 		}
 		if millis > guestMillis {
 			return status.Errorf(codes.InvalidArgument,
-				"container %q asks for %dm CPU but the guest has %d vCPU; lower the limit or use a SandboxConfig with a larger guest",
-				c.name, millis, vcpus)
+				"container %q asks for %dm CPU but the guest has %d vCPU; %s",
+				c.name, millis, env.vcpus, env.remedy())
 		}
 		totalMillis += millis
 	}
 
 	if totalBytes > guestBytes {
 		return status.Errorf(codes.InvalidArgument,
-			"the actor's containers ask for %d bytes of memory in total but the guest has %d MiB; lower the limits or use a SandboxConfig with a larger guest",
-			totalBytes, memMiB)
+			"the actor's containers ask for %d bytes of memory in total but the guest has %d MiB; %s",
+			totalBytes, env.memMiB, env.remedy())
 	}
 	if totalMillis > guestMillis {
 		return status.Errorf(codes.InvalidArgument,
-			"the actor's containers ask for %dm CPU in total but the guest has %d vCPU; lower the limits or use a SandboxConfig with a larger guest",
-			totalMillis, vcpus)
+			"the actor's containers ask for %dm CPU in total but the guest has %d vCPU; %s",
+			totalMillis, env.vcpus, env.remedy())
 	}
 	return nil
 }

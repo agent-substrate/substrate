@@ -458,7 +458,12 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// agent. Restore does not repeat this: it resumes a snapshotted VM, and the
 	// template spec is immutable, so an actor's limits were validated when its
 	// golden was built.
-	if err := checkResourceEnvelope(ctrs, memMiB, vcpus); err != nil {
+	if err := checkResourceEnvelope(ctrs, guestEnvelope{
+		memMiB:        memMiB,
+		vcpus:         vcpus,
+		declaredBytes: sz.MemoryBytes,
+		reserveMiB:    s.memReserveMiB,
+	}); err != nil {
 		return err
 	}
 
