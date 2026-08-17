@@ -189,7 +189,7 @@ func actorVolumeID(actorUID string, volumeName string) string {
 
 // detachActorVolumes detaches all mounted external volumes for an actor from its worker node.
 func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registry VolumePluginRegistry, actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate, action string) error {
-	assignment := actor.GetWorkerAssignment()
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned worker pod during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
 		return nil
@@ -211,7 +211,7 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 	}
 
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetActorVolumes(), template) {
+	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), template) {
 		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {

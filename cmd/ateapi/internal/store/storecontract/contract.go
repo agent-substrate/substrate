@@ -140,7 +140,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "test-template",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		created, err := s.CreateActor(ctx, actor)
@@ -186,7 +186,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "test-template",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		if _, err := s.CreateActor(ctx, actor); err != nil {
@@ -206,7 +206,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "test-template",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		created, err := s.CreateActor(ctx, actor)
@@ -216,7 +216,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 
 		actorRef := resources.ActorRefFromActor(created)
 		updated, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-			dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			// Server-owned metadata must be derived from the stored resource, not
 			// accepted from the mutation.
 			dbActor.Metadata.Uid = "client-supplied-uid"
@@ -228,8 +228,8 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			t.Fatalf("UpdateActor failed: %v", err)
 		}
 
-		if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-			t.Errorf("UpdateActor returned status %v, want RUNNING", updated.GetStatus())
+		if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			t.Errorf("UpdateActor returned state %v, want RUNNING", updated.GetStatus().GetState())
 		}
 		if updated.GetMetadata().GetVersion() != 2 {
 			t.Errorf("UpdateActor returned version %d, want 2", updated.GetMetadata().GetVersion())
@@ -263,7 +263,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "test-template",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		if _, err := s.CreateActor(ctx, actor); err != nil {
@@ -281,14 +281,14 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 
 		actorRef := resources.ActorRefFromActor(actor1)
 		if _, err := s.UpdateActor(ctx, actorRef, store.WithPrecondition(actor1, func(dbActor *ateapipb.Actor) error {
-			dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			return nil
 		})); err != nil {
 			t.Fatalf("UpdateActor failed: %v", err)
 		}
 
 		_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(actor2, func(dbActor *ateapipb.Actor) error {
-			dbActor.Status = ateapipb.Actor_STATUS_SUSPENDED
+			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 			return nil
 		}))
 		if !errors.Is(err, store.ErrVersionConflict) {
@@ -305,7 +305,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "test-template",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 		created, err := s.CreateActor(ctx, actor)
 		if err != nil {
@@ -331,7 +331,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "test-template",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		})
 		if err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
@@ -339,7 +339,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 
 		mutateErr := errors.New("mutation rejected")
 		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), func(dbActor *ateapipb.Actor) error {
-			dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			return fmt.Errorf("checking mutation: %w", mutateErr)
 		}); !errors.Is(err, mutateErr) {
 			t.Fatalf("UpdateActor error = %v, want one wrapping %v", err, mutateErr)
@@ -357,14 +357,14 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 	t.Run("DeleteActor", func(t *testing.T) {
 		tests := []struct {
 			name    string
-			status  ateapipb.Actor_Status
+			status  ateapipb.ActorState
 			wantErr error
 		}{
-			{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED, wantErr: store.ErrFailedPrecondition},
-			{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED, wantErr: store.ErrFailedPrecondition},
-			{name: "deleting", status: ateapipb.Actor_STATUS_DELETING},
-			{name: "running", status: ateapipb.Actor_STATUS_RUNNING, wantErr: store.ErrFailedPrecondition},
-			{name: "paused", status: ateapipb.Actor_STATUS_PAUSED, wantErr: store.ErrFailedPrecondition},
+			{name: "suspended", status: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
+			{name: "crashed", status: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
+			{name: "deleting", status: ateapipb.ActorState_ACTOR_STATE_DELETING},
+			{name: "running", status: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
+			{name: "paused", status: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
 		}
 
 		for _, tt := range tests {
@@ -377,7 +377,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 					ActorTemplateNamespace: "default",
 					ActorTemplateName:      "test-template",
-					Status:                 tt.status,
+					Status:                 &ateapipb.ActorStatus{State: tt.status},
 				}
 				if _, err := s.CreateActor(ctx, actor); err != nil {
 					t.Fatalf("CreateActor failed: %v", err)
@@ -392,8 +392,8 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					if getErr != nil {
 						t.Fatalf("GetActor after rejected delete failed: %v", getErr)
 					}
-					if got.GetStatus() != tt.status {
-						t.Errorf("actor status after rejected delete = %v, want %v", got.GetStatus(), tt.status)
+					if got.GetStatus().GetState() != tt.status {
+						t.Errorf("actor state after rejected delete = %v, want %v", got.GetStatus().GetState(), tt.status)
 					}
 					return
 				}
@@ -441,15 +441,19 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-			LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
+			Status: &ateapipb.ActorStatus{
+				State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+				LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
+			},
 		}
 		actor2 := &ateapipb.Actor{
 			Metadata:               &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-			LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
+			Status: &ateapipb.ActorStatus{
+				State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+				LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
+			},
 		}
 		if _, err := s.CreateActor(ctx, actor1); err != nil {
 			t.Fatalf("failed to create actor1: %v", err)
@@ -481,7 +485,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				Metadata:               &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
 				ActorTemplateNamespace: "ns1",
 				ActorTemplateName:      "tmpl1",
-				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			}
 			if _, err := s.CreateActor(ctx, actor); err != nil {
 				t.Fatalf("failed to create actor %d: %v", i, err)
@@ -525,7 +529,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
 				ActorTemplateNamespace: "ns1",
 				ActorTemplateName:      "tmpl1",
-				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			}
 		}
 		for _, a := range []*ateapipb.Actor{mkActor("team-a", "a1"), mkActor("team-a", "a2"), mkActor("team-b", "b1")} {
@@ -1251,7 +1255,7 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 			t.Fatalf("CreateAtespace failed: %v", err)
 		}
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_DELETING}); err != nil {
+		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING}}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
@@ -1269,7 +1273,7 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 			t.Fatalf("CreateAtespace failed: %v", err)
 		}
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_DELETING}); err != nil {
+		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING}}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
@@ -1293,7 +1297,7 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-b")); err != nil {
 			t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 		}
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-b"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
+		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-b"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 
@@ -1403,7 +1407,7 @@ func runDebugContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 		if _, err := s.CreateActor(ctx, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"},
-			Status:   ateapipb.Actor_STATUS_SUSPENDED,
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}

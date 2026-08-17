@@ -70,14 +70,14 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 		return printProto(out, &ateapipb.ListActorsResponse{Actors: actors}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATUS\tATEOM POD\tATEOM IP\tVERSION\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATE\tATEOM POD\tATEOM IP\tVERSION\tAGE")
 		for _, actor := range actors {
 			atespace := actor.GetMetadata().GetAtespace()
 			name := actor.GetMetadata().GetName()
 			template := actor.GetActorTemplateNamespace() + "/" + actor.GetActorTemplateName()
-			status := actor.GetStatus().String()
+			state := actor.GetStatus().GetState().String()
 
-			assignment := actor.GetWorkerAssignment()
+			assignment := actor.GetStatus().GetWorkerAssignment()
 			worker := "<none>"
 			if assignment != nil {
 				worker = assignment.GetWorkerNamespace() + "/" + assignment.GetWorkerPod()
@@ -85,7 +85,7 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 
 			version := actor.GetMetadata().GetVersion()
 			age := formatAge(actor.GetMetadata().GetCreateTime())
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, status, worker, assignment.GetWorkerPodIp(), version, age)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, state, worker, assignment.GetWorkerPodIp(), version, age)
 		}
 		return w.Flush()
 	default:

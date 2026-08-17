@@ -318,7 +318,7 @@ func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 	// Delete the assigned worker pod directly.
 	// The WorkerPoolSyncer will detect the pod is gone, crash the actor via syncer.go,
 	// and emit the ate_actor_crashes counter.
-	if ass := actor.GetWorkerAssignment(); ass != nil && ass.GetWorkerPod() != "" {
+	if ass := actor.GetStatus().GetWorkerAssignment(); ass != nil && ass.GetWorkerPod() != "" {
 		podName := ass.GetWorkerPod()
 		podNS := ass.GetWorkerNamespace()
 		if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
@@ -328,7 +328,7 @@ func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 		t.Fatalf("Actor %s has no assigned worker pod to delete", actorID)
 	}
 
-	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_CRASHED)
+	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_CRASHED)
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
@@ -338,7 +338,7 @@ func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID str
 	}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
-	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 }
 
 // validateSnapshotPhaseLabels guards atelet's cold-start histograms against a
@@ -378,17 +378,17 @@ func suspend(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID st
 	}); err != nil {
 		t.Fatalf("SuspendActor: %v", err)
 	}
-	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 }
 
-func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.Actor_Status) {
+func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 		})
-		if err == nil && resp.GetStatus() == want {
+		if err == nil && resp.GetStatus().GetState() == want {
 			return
 		}
 		time.Sleep(2 * time.Second)

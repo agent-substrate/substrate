@@ -28,34 +28,34 @@ import (
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 	tests := []struct {
 		name       string
-		seedStatus ateapipb.Actor_Status
+		seedStatus ateapipb.ActorState
 		wantErr    bool
 		wantCode   codes.Code
 	}{
 		{
 			name:       "delete suspended actor succeeds",
-			seedStatus: ateapipb.Actor_STATUS_SUSPENDED,
+			seedStatus: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			wantErr:    false,
 		},
 		{
 			name:       "delete crashed actor succeeds",
-			seedStatus: ateapipb.Actor_STATUS_CRASHED,
+			seedStatus: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 			wantErr:    false,
 		},
 		{
 			name:       "delete deleting actor succeeds",
-			seedStatus: ateapipb.Actor_STATUS_DELETING,
+			seedStatus: ateapipb.ActorState_ACTOR_STATE_DELETING,
 			wantErr:    false,
 		},
 		{
 			name:       "delete running actor rejected",
-			seedStatus: ateapipb.Actor_STATUS_RUNNING,
+			seedStatus: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			wantErr:    true,
 			wantCode:   codes.FailedPrecondition,
 		},
 		{
 			name:       "delete paused actor rejected",
-			seedStatus: ateapipb.Actor_STATUS_PAUSED,
+			seedStatus: ateapipb.ActorState_ACTOR_STATE_PAUSED,
 			wantErr:    true,
 			wantCode:   codes.FailedPrecondition,
 		},
@@ -92,10 +92,10 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 }
 
 func TestEnsureMarkedDeleting_StatusMatrix(t *testing.T) {
-	allowed := map[ateapipb.Actor_Status]bool{
-		ateapipb.Actor_STATUS_SUSPENDED: true,
-		ateapipb.Actor_STATUS_CRASHED:   true,
-		ateapipb.Actor_STATUS_DELETING:  true, // skipped, not re-marked
+	allowed := map[ateapipb.ActorState]bool{
+		ateapipb.ActorState_ACTOR_STATE_SUSPENDED: true,
+		ateapipb.ActorState_ACTOR_STATE_CRASHED:   true,
+		ateapipb.ActorState_ACTOR_STATE_DELETING:  true, // skipped, not re-marked
 	}
 
 	for _, seedStatus := range allActorStatuses {
@@ -112,8 +112,8 @@ func TestEnsureMarkedDeleting_StatusMatrix(t *testing.T) {
 
 		updated, err := w.ensureMarkedDeleting(ctx, actorRef, actor)
 		assertPrerequisiteResult(t, seedStatus, err, allowed[seedStatus])
-		if err == nil && updated.GetStatus() != ateapipb.Actor_STATUS_DELETING {
-			t.Errorf("status %v: ensureMarkedDeleting returned actor in %v, want DELETING", seedStatus, updated.GetStatus())
+		if err == nil && updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
+			t.Errorf("state %v: ensureMarkedDeleting returned actor in %v, want DELETING", seedStatus, updated.GetStatus().GetState())
 		}
 		cleanup()
 	}

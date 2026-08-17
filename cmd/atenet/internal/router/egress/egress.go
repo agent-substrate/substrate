@@ -182,9 +182,9 @@ func (h *Handler) validateActor(ctx context.Context, identity *substratex509.Act
 	}
 
 	// The actor performing egress must actually be running.
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
-			"egress denied: actor %q/%q is %s, not running", atespace, actorName, actor.GetStatus())
+			"egress denied: actor %q/%q is %s, not running", atespace, actorName, actor.GetStatus().GetState())
 	}
 	return nil
 }

@@ -214,7 +214,7 @@ func runningActor() *ateapipb.Actor {
 			Name:     testEgressActor,
 			Uid:      testEgressActorUID,
 		},
-		Status: ateapipb.Actor_STATUS_RUNNING,
+		Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	}
 }
 
@@ -481,7 +481,7 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 					Name:     testEgressActor,
 					Uid:      "d41d8cd9-8f00-4204-a980-0998ecf8427e",
 				},
-				Status: ateapipb.Actor_STATUS_RUNNING,
+				Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
@@ -489,7 +489,7 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 			name: "actor has no UID",
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: testEgressAtespace, Name: testEgressActor},
-				Status:   ateapipb.Actor_STATUS_RUNNING,
+				Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},
@@ -501,7 +501,7 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 					Name:     testEgressActor,
 					Uid:      testEgressActorUID,
 				},
-				Status: ateapipb.Actor_STATUS_SUSPENDED,
+				Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},

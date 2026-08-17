@@ -48,11 +48,11 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplNamespace, tmplN
 // seedWorkflowActor stores an actor with the given status, bound to the given
 // template (pass the same tmplNamespace/tmplName as newTestActorWorkflow).
 // opts mutate the actor before it is stored.
-func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplNamespace, tmplName string, actorStatus ateapipb.Actor_Status, opts ...func(*ateapipb.Actor)) {
+func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplNamespace, tmplName string, actorStatus ateapipb.ActorState, opts ...func(*ateapipb.Actor)) {
 	t.Helper()
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:                 actorStatus,
+		Status:                 &ateapipb.ActorStatus{State: actorStatus},
 		ActorTemplateNamespace: tmplNamespace,
 		ActorTemplateName:      tmplName,
 	}
@@ -64,25 +64,25 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 	}
 }
 
-// allActorStatuses enumerates every Actor_Status value, for exhaustive
+// allActorStatuses enumerates every ActorStatus_State value, for exhaustive
 // CheckPrerequisite table tests. It is derived from the generated enum map so
 // statuses added to the proto are covered automatically.
-var allActorStatuses = func() []ateapipb.Actor_Status {
-	nums := make([]int32, 0, len(ateapipb.Actor_Status_name))
-	for n := range ateapipb.Actor_Status_name {
+var allActorStatuses = func() []ateapipb.ActorState {
+	nums := make([]int32, 0, len(ateapipb.ActorState_name))
+	for n := range ateapipb.ActorState_name {
 		nums = append(nums, n)
 	}
 	slices.Sort(nums)
-	statuses := make([]ateapipb.Actor_Status, 0, len(nums))
+	statuses := make([]ateapipb.ActorState, 0, len(nums))
 	for _, n := range nums {
-		statuses = append(statuses, ateapipb.Actor_Status(n))
+		statuses = append(statuses, ateapipb.ActorState(n))
 	}
 	return statuses
 }()
 
 // assertPrerequisiteResult verifies a CheckPrerequisite outcome for one
 // status: nil when allowed, FailedPrecondition otherwise.
-func assertPrerequisiteResult(t *testing.T, st ateapipb.Actor_Status, err error, wantAllowed bool) {
+func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, wantAllowed bool) {
 	t.Helper()
 	if wantAllowed {
 		if err != nil {

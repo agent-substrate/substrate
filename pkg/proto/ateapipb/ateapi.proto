@@ -189,52 +189,74 @@ message Actor {
   string actor_template_name = 3;
 
   // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
-  ObjectRef actor_template = 13;
-
-  enum Status {
-    STATUS_UNSPECIFIED = 0;
-    STATUS_RESUMING = 1;
-    STATUS_RUNNING = 2;
-    STATUS_SUSPENDING = 3;
-    STATUS_SUSPENDED = 4;
-    STATUS_PAUSING = 5;
-    STATUS_PAUSED = 6;
-    STATUS_CRASHED = 7;
-    STATUS_DELETING = 8;
-  }
-  Status status = 4;
-
-  // worker_assignment points at the worker currently hosting this Actor.
-  // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
-  WorkerAssignment worker_assignment = 5;
-
-  string in_progress_snapshot_name = 6;
+  ObjectRef actor_template = 4;
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
-  // find eligible pools. Set at CreateActor; may be updated at any time via
-  // UpdateActor. Changes take effect on the next ResumeActor call.
-  Selector worker_selector = 7;
+  // find eligible pools.
+  // Changes take effect on the next ResumeActor call.
+  Selector worker_selector = 5;
+
+  // The tag specified by the caller at CreateActor to seed this Actor from an
+  // ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
+  // once at creation and immutable afterward.
+  ObjectRef source_snapshot_tag = 6;
+
+  ActorStatus status = 7;
+}
+
+enum ActorState {
+  ACTOR_STATE_UNSPECIFIED = 0;
+  ACTOR_STATE_RESUMING = 1;
+  ACTOR_STATE_RUNNING = 2;
+  ACTOR_STATE_SUSPENDING = 3;
+  ACTOR_STATE_SUSPENDED = 4;
+  ACTOR_STATE_PAUSING = 5;
+  ACTOR_STATE_PAUSED = 6;
+  ACTOR_STATE_CRASHED = 7;
+  ACTOR_STATE_DELETING = 8;
+}
+
+message ActorStatus {
+  ActorState state = 1;
+
+  // worker_assignment points at the worker currently hosting this Actor.
+  // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+  WorkerAssignment worker_assignment = 2;
+
+  string in_progress_snapshot_name = 3;
 
   // The latest durable snapshot created for this Actor.
-  ObjectRef latest_snapshot = 8;
+  ObjectRef latest_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
-  LocalSnapshotInfo local_snapshot_info = 9;
+  LocalSnapshotInfo local_snapshot_info = 5;
 
   // Actor version captured when the current durable snapshot began.
-  int64 in_progress_snapshot_source_actor_version = 10;
+  int64 in_progress_snapshot_source_actor_version = 6;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
-  repeated ExternalVolume actor_volumes = 11;
+  repeated ExternalVolume actor_volumes = 7;
 
-  string in_progress_local_snapshot_name = 12;
+  string in_progress_local_snapshot_name = 8;
 
   // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
-  // the Actor was not created from a snapshot. Set once at creation and
-  // immutable afterward.
-  ActorSnapshotSource source_snapshot = 14;
+  // the Actor was not created from a snapshot.
+  ActorSourceSnapshotStatus source_snapshot = 9;
+}
+
+// ActorSourceSnapshotStatus records what an Actor's source_snapshot_tag
+// resolved to at CreateActor time. Set once, immutable afterward.
+message ActorSourceSnapshotStatus {
+  // Canonical (atespace, name) of the snapshot the tag resolved to at
+  // creation time.
+  ObjectRef snapshot = 1;
+
+  // UID of the snapshot resolved at creation time. Stays a permanent trail
+  // even if that snapshot is later deleted and its name reused by an
+  // unrelated snapshot.
+  string snapshot_uid = 2;
 }
 
 // WorkerAssignment identifies the Worker currently hosting an Actor.
@@ -293,22 +315,6 @@ message ObjectRef {
   // The name of the resource. Required. Unique within an atespace, or globally
   // unique if the resource is global-scoped.
   string name = 2;
-}
-
-// ActorSnapshotSource records how an Actor was seeded from an ActorSnapshot.
-// Set once at CreateActor; every field is immutable afterward.
-message ActorSnapshotSource {
-  // The tag specified by the caller at CreateActor.
-  ObjectRef tag = 1;
-
-  // Output only. Canonical (atespace, name) of the snapshot the tag
-  // resolved to at creation time.
-  ObjectRef snapshot = 2;
-
-  // Output only. UID of the snapshot resolved at creation time. Stays a
-  // permanent trail even if that snapshot is later deleted and its name
-  // reused by an unrelated snapshot.
-  string snapshot_uid = 3;
 }
 
 // SandboxClass selects the sandbox runtime family. Snapshots are not portable

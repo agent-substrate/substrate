@@ -143,12 +143,12 @@ func createLiveActor() (*probeActor, error) {
 	}
 
 	deadline := time.Now().Add(4 * time.Minute)
-	var lastStatus ateapipb.Actor_Status
+	var lastStatus ateapipb.ActorState
 	for time.Now().Before(deadline) {
 		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
 		if err == nil {
-			lastStatus = actor.GetStatus()
-			if lastStatus == ateapipb.Actor_STATUS_RUNNING {
+			lastStatus = actor.GetStatus().GetState()
+			if lastStatus == ateapipb.ActorState_ACTOR_STATE_RUNNING {
 				uid := actor.GetMetadata().GetUid()
 				if uid == "" {
 					return nil, fmt.Errorf("actor %s/%s is running but has no UID", probeAtespace, name)

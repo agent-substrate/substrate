@@ -78,7 +78,7 @@ func TestRequestParking(t *testing.T) {
 	t.Run("ParkThenServed", func(t *testing.T) {
 		// Occupy the only worker with actor A.
 		resumeActor(ctx, t, clients, actorA)
-		waitForActorStatus(ctx, t, clients, actorA, ateapipb.Actor_STATUS_RUNNING)
+		waitForActorStatus(ctx, t, clients, actorA, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 		// Request actor B: the pool is full, so the request parks.
 		type result struct {
@@ -284,14 +284,14 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, name 
 	}
 }
 
-func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, name string, want ateapipb.Actor_Status) {
+func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, name string, want ateapipb.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
 		})
-		if err == nil && resp.GetStatus() == want {
+		if err == nil && resp.GetStatus().GetState() == want {
 			return
 		}
 		time.Sleep(1 * time.Second)

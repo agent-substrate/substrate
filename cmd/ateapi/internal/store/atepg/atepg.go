@@ -607,7 +607,7 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	if err := proto.Unmarshal(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for deletion: %w", err)
 	}
-	if out.GetStatus() != ateapipb.Actor_STATUS_DELETING {
+	if out.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
 		return nil, store.ErrFailedPrecondition
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM actors WHERE atespace = $1 AND name = $2`, atespace, name); err != nil {

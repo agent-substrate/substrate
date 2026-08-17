@@ -376,7 +376,7 @@ func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 		})
-		if err == nil && resp.GetStatus() == ateapipb.Actor_STATUS_RUNNING {
+		if err == nil && resp.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
 			t.Logf("Actor %q reached RUNNING status", actorName)
 			return
 		}

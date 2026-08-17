@@ -219,7 +219,7 @@ func mintCertRequest(t *testing.T, actorUID string) *ateapipb.MintCertRequest {
 
 // actorFixture describes the actor/worker pair seeded into the store.
 type actorFixture struct {
-	status     ateapipb.Actor_Status
+	status     ateapipb.ActorState
 	workerNode string
 	// actorWorkerPod overrides the Pod named by the actor while leaving the
 	// requesting worker unchanged, simulating a stale reciprocal assignment.
@@ -245,7 +245,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		Status:                 f.status,
+		Status:                 &ateapipb.ActorStatus{State: f.status},
 		ActorTemplateNamespace: "ate-demo",
 		ActorTemplateName:      "counter",
 	}
@@ -254,7 +254,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 		if f.actorWorkerPod != "" {
 			workerPod = f.actorWorkerPod
 		}
-		actor.WorkerAssignment = &ateapipb.WorkerAssignment{
+		actor.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
 			WorkerNamespace: testPodNS,
 			WorkerPool:      testPool,
 			WorkerPod:       workerPod,
@@ -299,7 +299,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 
 // runningOnNode is the fixture for a healthy actor hosted on nodeName.
 func runningOnNode(nodeName string) actorFixture {
-	return actorFixture{status: ateapipb.Actor_STATUS_RUNNING, workerNode: nodeName}
+	return actorFixture{status: ateapipb.ActorState_ACTOR_STATE_RUNNING, workerNode: nodeName}
 }
 
 // TestMintCertAuthorization covers the gate deciding whether a caller may mint
@@ -369,7 +369,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor does not exist": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				status:     ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: testAtespace, Name: "no-such-actor"},
 			},
@@ -377,7 +377,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor exists under a different atespace": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				status:     ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: "some-other-atespace", Name: testActorName},
 			},
@@ -394,7 +394,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"worker is assigned to a different actor": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				status:     ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: testAtespace, Name: "someone-else"},
 			},
@@ -402,7 +402,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"worker is assigned to an actor with same name and atespace but different UID": {
 			fixture: actorFixture{
-				status:        ateapipb.Actor_STATUS_RUNNING,
+				status:        ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode:    testNode,
 				mismatchedUID: true,
 			},
@@ -410,7 +410,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor points to a different worker": {
 			fixture: actorFixture{
-				status:         ateapipb.Actor_STATUS_RUNNING,
+				status:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode:     testNode,
 				actorWorkerPod: "replacement-worker",
 			},
@@ -418,7 +418,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"hosting worker record is missing": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				status:     ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				noWorker:   true,
 			},
@@ -426,7 +426,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor has no placement": {
 			fixture: actorFixture{
-				status:      ateapipb.Actor_STATUS_RUNNING,
+				status:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode:  testNode,
 				noPlacement: true,
 			},
@@ -434,7 +434,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"worker has been released": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				status:     ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				unassigned: true,
 			},
@@ -635,7 +635,7 @@ func TestMintCertActorUID(t *testing.T) {
 // minting: an actor still assigned to a worker on the caller's node gets a
 // credential whatever status it carries, except while it is being deleted.
 //
-// STATUS_RESUMING is the case that matters in practice. atelet mints while
+// STATE_RESUMING is the case that matters in practice. atelet mints while
 // serving the Run/Restore RPC that ateapi issues before marking the actor
 // RUNNING, so gating on RUNNING would make every resume unsatisfiable.
 //
@@ -646,10 +646,10 @@ func TestMintCertActorUID(t *testing.T) {
 // listing statuses means a status added later is covered without editing this
 // test.
 func TestMintCertActorStatus(t *testing.T) {
-	for value, name := range ateapipb.Actor_Status_name {
-		actorStatus := ateapipb.Actor_Status(value)
+	for value, name := range ateapipb.ActorState_name {
+		actorStatus := ateapipb.ActorState(value)
 		wantCode := codes.OK
-		if actorStatus == ateapipb.Actor_STATUS_DELETING {
+		if actorStatus == ateapipb.ActorState_ACTOR_STATE_DELETING {
 			wantCode = codes.FailedPrecondition
 		}
 		t.Run(name, func(t *testing.T) {
@@ -676,9 +676,9 @@ func TestMintCertActorStatus(t *testing.T) {
 // checks — not the status — are what stops a departed actor. A RUNNING actor
 // whose worker has been released is refused just as a SUSPENDED one is.
 func TestMintCertDeniesUnassignedActorWhateverItsStatus(t *testing.T) {
-	for name, actorStatus := range map[string]ateapipb.Actor_Status{
-		"Running":   ateapipb.Actor_STATUS_RUNNING,
-		"Suspended": ateapipb.Actor_STATUS_SUSPENDED,
+	for name, actorStatus := range map[string]ateapipb.ActorState{
+		"Running":   ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		"Suspended": ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()

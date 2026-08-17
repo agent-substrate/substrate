@@ -162,7 +162,7 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, fmt.Errorf("while suspending golden actor: %w", err)
 		}
 
-		snapshot := resp.GetActor().GetLatestSnapshot()
+		snapshot := resp.GetActor().GetStatus().GetLatestSnapshot()
 		if snapshot == nil {
 			return ctrl.Result{}, fmt.Errorf("suspending golden actor returned no ActorSnapshot")
 		}

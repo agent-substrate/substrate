@@ -417,7 +417,7 @@ A user or framework calls `CreateActor` with a unique ID and a reference to an
 `ActorTemplate`.
 
   * **Status**: The actor is registered in the database with status
-    `STATUS_SUSPENDED`.
+    `STATE_SUSPENDED`.
 
   * **State**: The record is initialized in the database with the metadata and
     **Golden Snapshot** (Version 0) reference derived from the associated
@@ -436,7 +436,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
 
   3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden `ActorSnapshot` (for first-run) or the Actor's latest `ActorSnapshot` (for recurring runs) into the sandbox.
 
-  4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
+  4. **Status**: Status transitions to `STATE_RUNNING`. The actor now has an
      active Worker IP.
 
   5. **Response**: The Control Plane returns the worker assignment to the
@@ -453,7 +453,7 @@ Triggered by an explicit `SuspendActor` call.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
-  4. **Status**: Status transitions back to `STATUS_SUSPENDED`, now pointing to
+  4. **Status**: Status transitions back to `STATE_SUSPENDED`, now pointing to
      an immutable `ActorSnapshot` resource and references it for future resumptions.
 
 Snapshots may be given tags owned and addressed by an Atespace. The same tag
@@ -464,7 +464,7 @@ including published tags, but leaves snapshot cleanup to garbage collection.
 
 ### Phase 4: Deletion
 
-Actors in `STATUS_SUSPENDED` status can be deleted from the Control Plane.
+Actors in `STATE_SUSPENDED` status can be deleted from the Control Plane.
 After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage
 collected. The garbage collection process is not implemented yet.
 

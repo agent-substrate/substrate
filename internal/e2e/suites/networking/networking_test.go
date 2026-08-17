@@ -303,7 +303,7 @@ func waitForRouteReady(t *testing.T, what string, request func() (*http.Response
 
 func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapipb.Actor) {
 	t.Helper()
-	if actor.GetWorkerAssignment().GetWorkerNamespace() == "" || actor.GetWorkerAssignment().GetWorkerPod() == "" {
+	if actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace() == "" || actor.GetStatus().GetWorkerAssignment().GetWorkerPod() == "" {
 		t.Fatalf("resumed Actor has no worker pod assignment: %+v", actor)
 	}
 
@@ -312,16 +312,16 @@ func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Cli
 	// verifies that the old direct path remains unavailable without relying on
 	// the test runner having a route to the pod CIDR.
 	result := clients.K8s.CoreV1().RESTClient().Get().
-		Namespace(actor.GetWorkerAssignment().GetWorkerNamespace()).
+		Namespace(actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()).
 		Resource("pods").
-		Name(actor.GetWorkerAssignment().GetWorkerPod() + ":80").
+		Name(actor.GetStatus().GetWorkerAssignment().GetWorkerPod() + ":80").
 		SubResource("proxy").
 		Suffix("readyz").
 		Do(ctx)
 	body, err := result.Raw()
 
 	if err == nil {
-		t.Fatalf("direct Actor access through %s/%s:80 unexpectedly succeeded; body: %s", actor.GetWorkerAssignment().GetWorkerNamespace(), actor.GetWorkerAssignment().GetWorkerPod(), body)
+		t.Fatalf("direct Actor access through %s/%s:80 unexpectedly succeeded; body: %s", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), body)
 	}
-	t.Logf("direct Actor access through %s/%s:80 was blocked as expected: %v", actor.GetWorkerAssignment().GetWorkerNamespace(), actor.GetWorkerAssignment().GetWorkerPod(), err)
+	t.Logf("direct Actor access through %s/%s:80 was blocked as expected: %v", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), err)
 }

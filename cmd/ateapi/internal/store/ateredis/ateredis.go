@@ -972,7 +972,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 			return fmt.Errorf("in protojson.Unmarshal: %w", err)
 		}
 
-		if currentActor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
+		if currentActor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
 			return store.ErrFailedPrecondition
 		}
 
