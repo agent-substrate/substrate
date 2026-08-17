@@ -1,0 +1,78 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Micro-VM variant of the probe fixture, in its own namespace so the gVisor
+# probe manifest and this one can be applied and torn down independently.
+# Applied only by the microvm-gated identity tests: it requires a cluster with
+# the micro-VM deps installed (hack/install-microvm-deps.sh; cluster-wide
+# SandboxConfig "microvm").
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-e2e-probe-mvm
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: probe-mvm
+  namespace: ate-e2e-probe-mvm
+  labels:
+    workload: probe-mvm
+spec:
+  replicas: 2
+  sandboxClass: microvm
+  sandboxConfigName: microvm
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: probe
+  namespace: ate-e2e-probe-mvm
+spec:
+  sandboxClass: microvm
+  volumes:
+  - name: system-info
+    systemInfo:
+      dataSources:
+      - actorMetadata:
+          items:
+          - field: name
+            path: actor-id
+          - field: atespace
+            path: atespace
+          - field: uid
+            path: actor-uid
+  containers:
+  - name: probe
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+    command: ["/ko-app/probe"]
+    volumeMounts:
+    - name: system-info
+      mountPath: /run/ate   # the probe reads /run/ate/actor-id
+    readyz:
+      httpGet:
+        path: /healthz
+        port: 80
+      timeoutSeconds: 60
+  workerSelector:
+    matchLabels:
+      workload: probe-mvm
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/ate-e2e-probe-mvm/
