@@ -1110,7 +1110,7 @@ get_actor_state() {
 }
 
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
-# accepts the actor: ACTOR_STATE_SUSPENDED or ACTOR_STATE_CRASHED.
+# accepts the actor: ACTOR_STATE_SUSPENDED, ACTOR_STATE_CRASHED, or ACTOR_STATE_DELETING.
 prepare_actor_for_delete() {
   local actor_name="$1"
   local atespace="$2"
@@ -1124,7 +1124,7 @@ prepare_actor_for_delete() {
     fi
 
     case "${state}" in
-      ACTOR_STATE_SUSPENDED | ACTOR_STATE_CRASHED)
+      ACTOR_STATE_SUSPENDED | ACTOR_STATE_CRASHED | ACTOR_STATE_DELETING)
         return 0
         ;;
       ACTOR_STATE_PAUSED)
