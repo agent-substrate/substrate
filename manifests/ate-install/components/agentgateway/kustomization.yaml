@@ -34,15 +34,15 @@ patches:
       namespace: ate-system
     patch: |-
       - op: test
-        path: /spec/template/spec/containers/0/args/5
+        path: /spec/template/spec/containers/0/args/4
         value: --port-xds=18000
       - op: remove
-        path: /spec/template/spec/containers/0/args/5
+        path: /spec/template/spec/containers/0/args/4
       - op: test
-        path: /spec/template/spec/containers/0/args/9
+        path: /spec/template/spec/containers/0/args/8
         value: --envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem
       - op: remove
-        path: /spec/template/spec/containers/0/args/9
+        path: /spec/template/spec/containers/0/args/8
       - op: test
         path: /spec/template/spec/containers/0/ports/0/name
         value: xds
@@ -67,6 +67,10 @@ patches:
             containerPort: 8080
           - name: https
             containerPort: 8443
+          - name: connect
+            containerPort: 8081
+          - name: connect-tls
+            containerPort: 8444
           - name: readiness
             containerPort: 15021
           - name: stats

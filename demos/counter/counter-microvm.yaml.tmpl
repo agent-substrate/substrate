@@ -38,6 +38,25 @@ spec:
   sandboxClass: microvm
   sandboxConfigName: microvm
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  template:
+    # Per-worker resources: these size the worker POD and advertise its
+    # scheduling capacity (the per-actor ceiling). The micro-VM sandbox itself is
+    # sized by the ActorTemplate's spec.resources below, not by these; keep the
+    # actor memory below this limit so the VMM reserve fits (see internal/sizing).
+    #
+    # Capacity comes from the limits (workerCapacity reads limits only), while the
+    # kube-scheduler packs nodes by the requests — so the CPU request is set well
+    # below the limit to keep the pool placeable on a small node (a single kind
+    # node in CI, shared with the gVisor demo pool) without changing what an actor
+    # is allowed to use. Memory is not compressible, so its request matches the
+    # limit: the guest RAM plus the VMM reserve has to be really there.
+    resources:
+      limits:
+        cpu: "2"
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 2Gi
 
 ---
 
@@ -64,6 +83,14 @@ spec:
     volumeMounts:
     - name: data
       mountPath: /home/counter
+  # Sandbox size: an actor occupies its whole worker. Size vCPUs + guest RAM at
+  # (or below) the pool's per-worker capacity above, leaving headroom under the
+  # worker memory limit for the VMM reserve. ateom applies these to the guest
+  # (see internal/sizing).
+  resources:
+    limits:
+      cpu: "2"
+      memory: 1536Mi
   workerSelector:
     matchLabels:
       workload: counter-microvm

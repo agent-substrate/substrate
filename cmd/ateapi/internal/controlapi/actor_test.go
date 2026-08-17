@@ -66,10 +66,10 @@ func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
 	// uid is server-assigned on create, so assert it is present and non-empty
 	// rather than a fixed value.
 	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
-		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.Emit())
+		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.String())
 	}
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 1 {
-		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.Emit())
+		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.String())
 	}
 }
 
@@ -550,10 +550,10 @@ func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
 	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
 	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, ns)
 	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
-		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.Emit())
+		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.String())
 	}
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 2 {
-		t.Errorf("%s = %v, want int64 2 (updated version)", ateattr.ActorVersionKey, v.Emit())
+		t.Errorf("%s = %v, want int64 2 (updated version)", ateattr.ActorVersionKey, v.String())
 	}
 }
 

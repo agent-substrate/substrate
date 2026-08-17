@@ -70,6 +70,10 @@ function usage() {
   echo "  --atenet-router=envoy|agentgateway     Select the atenet router dataplane (default: envoy)"
   echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
   echo ""
+  echo "Experiments:"
+  echo ""
+  echo "  --experimental-use-sdsmint             Deploy the egress gateway with per-SNI certificate minting (experimental)"
+  echo ""
   echo "Infrastructure components:"
   echo ""
   echo "  --deploy-atelet                        Deploy atelet only"
@@ -246,6 +250,20 @@ render_atenet_router_manifest() {
       --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   else
     run_ko resolve -f manifests/ate-install/atenet-router.yaml
+  fi
+}
+
+# atenet_egress_manifest echoes the path of the egress manifest to deploy:
+# the sdsmint variant under --experimental-use-sdsmint, the shipped one
+# otherwise. The two are whole files rather than a Kustomize overlay because
+# what differs between them is envoy.yaml, which lives as one inline string in
+# the atenet-egress ConfigMap; Kustomize can replace that string but cannot
+# patch into it, so an overlay would carry a full copy of it anyway.
+atenet_egress_manifest() {
+  if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]]; then
+    echo "manifests/ate-install/atenet-egress-with-sdsmint.yaml"
+  else
+    echo "manifests/ate-install/atenet-egress.yaml"
   fi
 }
 
@@ -601,6 +619,11 @@ deploy_ate_system() {
 
   reconcile_cloudsql_proxy_sidecar
 
+  # Applied on its own rather than through the overlay above, so
+  # --experimental-use-sdsmint composes with every overlay instead of needing a
+  # variant of each.
+  run_ko apply -f "$(atenet_egress_manifest)"
+
   log_step "Waiting for ATE system components to be ready..."
   case "$(store_backend)" in
     redis)
@@ -678,6 +701,7 @@ reconcile_cloudsql_proxy_sidecar() {
       -o jsonpath='{.spec.template.spec.initContainers[*].name}' 2>/dev/null \
       | grep -qw cloud-sql-proxy; then
     log_step "reconcile_cloudsql_proxy_sidecar (remove)"
+    # shellcheck disable=SC2016
     run_kubectl patch deployment ate-api-server -n ate-system --type=strategic \
       -p '{"spec":{"template":{"spec":{"initContainers":[{"name":"cloud-sql-proxy","$patch":"delete"}]}}}}'
     run_kubectl annotate serviceaccount ate-api-server -n ate-system \
@@ -721,7 +745,7 @@ deploy_atenet() {
   router_manifest="$(render_atenet_router_manifest)"
   echo "${router_manifest}" | run_kubectl apply -f -
 
-  run_ko apply -f manifests/ate-install/atenet-egress.yaml
+  run_ko apply -f "$(atenet_egress_manifest)"
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
@@ -845,7 +869,12 @@ delete_atenet() {
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/components/agentgateway/configmap.yaml
+  # Both egress variants, not the selected one: teardown has to clean up an
+  # install made with --experimental-use-sdsmint whether or not this invocation
+  # passes it, and either file may declare resources the other does not.
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-egress.yaml
+  run_kubectl delete --ignore-not-found \
+    -f manifests/ate-install/atenet-egress-with-sdsmint.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-dns.yaml
 }
 
@@ -923,6 +952,7 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_ATENET_ROUTER="${prescan_args[$((i + 1))]}"
       ;;
+    --experimental-use-sdsmint) ATE_EXPERIMENTAL_USE_SDSMINT=true ;;
     --store-backend=*) ATE_INSTALL_STORE_BACKEND="${prescan_args[i]#*=}" ;;
     --store-backend)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -994,6 +1024,9 @@ while [[ "$#" -gt 0 ]]; do
       fi
       ATE_ATENET_ROUTER="$1"
       ;;
+    # Captured in the pre-scan above; matched here only so the `*)` branch does
+    # not reject it as an unknown option.
+    --experimental-use-sdsmint) ;;
     --store-backend=*) ATE_INSTALL_STORE_BACKEND="${1#*=}" ;;
     --store-backend)
       shift

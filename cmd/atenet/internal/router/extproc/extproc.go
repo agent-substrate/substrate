@@ -128,7 +128,7 @@ func (s *Server) processRequestHeaders(
 	reqHeaders *extprocv3.HttpHeaders,
 ) *extprocv3.ProcessingResponse {
 	start := time.Now()
-	md := NewRequestMetadata(reqHeaders.GetHeaders().GetHeaders())
+	md := NewRequestMetadata(reqHeaders.GetHeaders().GetHeaders(), req.GetAttributes())
 
 	// One atenet binary serves both directions, as two ext_proc handlers
 	// selected here. They are deployed separately today — atenet-router fronts
@@ -172,6 +172,7 @@ func (s *Server) processRequestHeaders(
 
 	s.recorder.AddRouterRequest(start, elapsed, "Route ok", res.Target, md)
 	return &extprocv3.ProcessingResponse{
-		Response: &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: res.Response},
+		Response:        &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: res.Response},
+		DynamicMetadata: res.DynamicMetadata,
 	}
 }

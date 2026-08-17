@@ -119,6 +119,13 @@ message RunWorkloadRequest {
 
   // When absent, actor traffic uses direct egress instead of atunnel.
   optional EgressGateway egress_gateway = 10;
+
+  // The actor's declared size, from the ActorTemplate's resource limits. ateom
+  // sizes the sandbox to these (cgroup caps via the OCI spec, and for the
+  // micro-VM the VM's vCPU count and memory). Zero means "unset": keep the
+  // runtime default (unlimited for gVisor, the kata config for the micro-VM).
+  int64 cpu_milli = 11;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 12; // Memory limit in bytes.
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -262,6 +269,13 @@ message RestoreWorkloadRequest {
   // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
   // snapshot_uri contract (field 8).
   string golden_snapshot_uri = 13;
+
+  // The actor's declared size, from the ActorTemplate's resource limits. Used to
+  // (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
+  // FULL micro-VM restore the size baked into the snapshot is authoritative and
+  // these are ignored. Zero means "unset": keep the runtime default.
+  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 15; // Memory limit in bytes.
 }
 
 message RestoreWorkloadResponse {

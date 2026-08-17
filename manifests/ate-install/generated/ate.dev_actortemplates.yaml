@@ -227,6 +227,74 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              resources:
+                description: |-
+                  Resources declares the compute resources for each actor of this template.
+                  Unlike a pod, an actor is sized by its Limits: the sandbox is built to the
+                  CPU/memory limits (cgroup caps, and for the micro-VM the VM's vCPU count and
+                  memory), the scheduler only places the actor on a worker whose capacity is
+                  >= these limits, and the limits are supplied to the sandbox over the actor
+                  RPCs. Because the size is baked into snapshots, it is part of the immutable
+                  spec. Requests and claims are not supported (actors are sized by limits only).
+                  A zero or absent limit leaves the sandbox at the runtime default (unlimited
+                  for gVisor, the kata config for the micro-VM).
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
               sandboxClass:
                 default: gvisor
                 description: |-
@@ -424,6 +492,17 @@ spec:
               rule: '(has(self.sandboxClass) && self.sandboxClass == ''microvm'')
                 || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData)
                 ? self.snapshotsConfig.onResume.fromData : ''ColdBoot'') != ''Golden'''
+            - message: spec.resources.requests is not supported; actors are sized
+                by spec.resources.limits only
+              rule: '!has(self.resources) || !has(self.resources.requests)'
+            - message: spec.resources.claims is not supported
+              rule: '!has(self.resources) || !has(self.resources.claims)'
+            - message: For sandboxClass 'microvm', spec.resources.limits.memory must
+                be at least 512Mi (256Mi VMM reserve + 256Mi guest minimum); below
+                this the VM cannot boot
+              rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
+                !has(self.resources) || !has(self.resources.limits) || !(''memory''
+                in self.resources.limits) || !quantity(self.resources.limits[''memory'']).isLessThan(quantity(''512Mi''))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

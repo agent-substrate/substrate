@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/sizing"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -87,14 +88,14 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	p := actorBootParams{
-		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:     req.GetActorUid(),
-		templateNS:   req.GetActorTemplateNamespace(),
-		templateName: req.GetActorTemplateName(),
-		containers:   req.GetSpec().GetContainers(),
-		assetPaths:   req.GetRuntimeAssetPaths(),
-
+		actorRef:      resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:      req.GetActorUid(),
+		templateNS:    req.GetActorTemplateNamespace(),
+		templateName:  req.GetActorTemplateName(),
+		containers:    req.GetSpec().GetContainers(),
+		assetPaths:    req.GetRuntimeAssetPaths(),
 		egressGateway: req.GetEgressGateway(),
+		size:          sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 	restoreDir := ateompath.RestoreStateDir(p.actorUID)
 	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
@@ -204,7 +205,15 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if len(containers) > maxActorContainers {
 		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(actorUID, containers)
+	// The VM's RAM comes from the snapshot, so a limit the current VMM reserve can
+	// no longer satisfy (e.g. --vmm-mem-reserve-mib was raised after the snapshot
+	// was taken) has to fail here rather than silently pair the guest with a cgroup
+	// limit larger than its RAM.
+	guestSize, err := s.guestSize(p.size)
+	if err != nil {
+		return err
+	}
+	ctrs, err := s.buildActorContainers(actorUID, containers, guestSize)
 	if err != nil {
 		return err
 	}

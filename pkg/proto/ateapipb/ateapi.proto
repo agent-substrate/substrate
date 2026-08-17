@@ -338,15 +338,6 @@ enum SandboxClass {
   SANDBOX_CLASS_MICROVM = 2;
 }
 
-// ActorTemplateRef addresses a template by its canonical identity or by an
-// Atespace-owned ActorTemplateVersion.
-message ActorTemplateRef {
-  oneof reference {
-    ObjectRef actor_template_version = 1;
-    ObjectRef actor_template = 2;
-  }
-}
-
 // ActorTemplate an mutable, Atespace-owned resource that points to a default
 // ActorTemplateVersion to be used when creating Actors.
 message ActorTemplate {
@@ -889,6 +880,20 @@ message Worker {
     STATE_DRAINING = 2;
   }
   State state = 11;
+
+  // The compute capacity this worker can give an actor sandbox.
+  WorkerCapacity capacity = 12;
+}
+
+// WorkerCapacity is the worker pod's compute capacity available to host an
+// actor sandbox, taken from the ateom container's resource limits. The
+// scheduler only places an actor on a worker whose capacity is >= the actor's
+// declared resource limits. An unset message, or a zero field within it, means
+// "unknown/unset" for that dimension: treated as unconstrained so placement is
+// not blocked (matching the pre-capacity behavior).
+message WorkerCapacity {
+  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
+  int64 memory_bytes = 2; // Memory capacity in bytes.
 }
 
 message Assignment {

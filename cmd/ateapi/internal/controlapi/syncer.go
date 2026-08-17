@@ -54,14 +54,26 @@ type workerKey struct {
 // key against the current informer cache state, requeuing with rate-limited
 // backoff on transient failures such as store.ErrVersionConflict.
 type WorkerPoolSyncer struct {
-	persistence      store.Interface
+	persistence      workerPoolSyncerStore
 	workerInformer   cache.SharedIndexInformer
 	workerPoolLister listersv1alpha1.WorkerPoolLister
 	queue            workqueue.TypedRateLimitingInterface[workerKey]
 }
 
+// workerPoolSyncerStore enumerates the exact storage methods needed by
+// WorkerPoolSyncer and nothing more.
+type workerPoolSyncerStore interface {
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
+	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
+	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
+}
+
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(persistence store.Interface, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(persistence workerPoolSyncerStore, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		persistence:      persistence,
 		workerInformer:   workerInformer,
@@ -216,6 +228,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
 			State:           ateapipb.Worker_STATE_ACTIVE,
+			Capacity:        workerCapacity(pod),
 		}
 		// TODO(thockin): for now this is the only place Workers are
 		// created.  If/when this becomes a regular API, validation should
@@ -271,6 +284,38 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 
 func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
+}
+
+// ateomContainerName is the name of the container in a worker pod that hosts the
+// actor's sandbox; its resource limits bound what an actor placed here can use.
+const ateomContainerName = "ateom"
+
+// workerCapacity returns the worker pod's capacity for hosting an actor — CPU
+// in millicores and memory in bytes — taken from the ateom container's resource
+// limits. A dimension the pod does not limit reports 0, which the scheduler
+// treats as "unknown" (unconstrained); a pod that limits neither reports nil
+// rather than an all-zero message that says the same thing. The actor sandbox
+// runs nested in the ateom container's cgroup, so that container's limits — not
+// the pod total — are the relevant envelope.
+func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
+	var capacity ateapipb.WorkerCapacity
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		if c.Name != ateomContainerName {
+			continue
+		}
+		if v := c.Resources.Limits.Cpu(); v != nil {
+			capacity.CpuMilli = v.MilliValue()
+		}
+		if v := c.Resources.Limits.Memory(); v != nil {
+			capacity.MemoryBytes = v.Value()
+		}
+		break
+	}
+	if capacity.CpuMilli == 0 && capacity.MemoryBytes == 0 {
+		return nil
+	}
+	return &capacity
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler

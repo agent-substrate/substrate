@@ -84,6 +84,17 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 	if err := o.Close(); err != nil {
 		return err
 	}
+	// Put the merged image at outFile's name. Unlink the old one FIRST, then rename
+	// onto the now-free name, for the same reason as MergeDeltaIntoBase's final
+	// rename below: renaming OVER an existing file makes ext4 (data=ordered)
+	// synchronously write back the renamed file's dirty pages, and `tmp` carries the
+	// whole merged image. Renaming to a non-existent name skips that flush (the
+	// dirty pages stay in page cache for atelet to ship), taking the merge
+	// ~1140ms→~115ms. Unlike there, outFile need not exist: this is also called to
+	// write a merged image to a fresh path.
+	if err := os.Remove(outFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove old out: %w", err)
+	}
 	return os.Rename(tmp, outFile)
 }
 

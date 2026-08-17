@@ -77,6 +77,12 @@ message RunRequest {
 
   // When absent, actor traffic uses direct egress instead of atunnel.
   optional EgressGateway egress_gateway = 9;
+
+  // The actor's declared size, from the ActorTemplate's resource limits. atelet
+  // passes these through to the sandbox so it is sized to the actor (not the
+  // whole host or worker pod). Zero means "unset": keep the runtime default.
+  int64 cpu_milli = 10;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 11; // Memory limit in bytes.
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -327,6 +333,13 @@ message RestoreRequest {
 
   // When absent, actor traffic uses direct egress instead of atunnel.
   optional EgressGateway egress_gateway = 13;
+
+  // The actor's declared size, from the ActorTemplate's resource limits. For
+  // gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
+  // for a FULL micro-VM restore the size baked into the snapshot wins. Zero
+  // means "unset": keep the runtime default.
+  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 15; // Memory limit in bytes.
 }
 
 message RestoreResponse {

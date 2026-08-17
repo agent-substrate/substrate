@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -161,8 +160,7 @@ func validateDestination(destination string) error {
 	if net.ParseIP(host) == nil {
 		return fmt.Errorf("atunnel: invalid egress destination %q: host must be an IP address", destination)
 	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
+	if _, ok := ParsePort(port); !ok {
 		return fmt.Errorf("atunnel: invalid egress destination %q: port must be between 1 and 65535", destination)
 	}
 	return nil

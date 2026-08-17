@@ -24,6 +24,8 @@ import (
 	"strings"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+
+	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // ensureKataCompatibleSpec augments the bundle's config.json with the fields
@@ -31,7 +33,7 @@ import (
 // Without linux.resources, kata's ContainerConfig nil-derefs and the shim
 // crashes. This shaper is a bridge; a future atelet change should emit
 // runtime-appropriate specs so it can retire.
-func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error) {
+func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxSize) (*specs.Spec, error) {
 	specPath := filepath.Join(bundle, "config.json")
 	b, err := os.ReadFile(specPath)
 	if err != nil {
@@ -51,6 +53,11 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error)
 	if spec.Linux.CgroupsPath == "" {
 		spec.Linux.CgroupsPath = "/ateomchv/" + id
 	}
+	// Right-size the guest container cgroup to the actor's declared limits; the
+	// kata-agent applies spec.Linux.Resources inside the VM. Shared with the gVisor
+	// runtime via internal/sizing; overlays the device allowlist + CPU shares set
+	// by defaultKataResources.
+	size.ApplyToOCISpec(&spec)
 
 	// atelet's spec carries gVisor pause-model CRI annotations
 	// (container-type=container, sandbox-id=pause). kata reads those and waits
