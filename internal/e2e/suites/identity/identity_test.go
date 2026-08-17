@@ -42,6 +42,11 @@ type whoamiResponse struct {
 	Atespace string `json:"atespace"`
 	UID      string `json:"uid"`
 	Hostname string `json:"hostname"`
+	// Held is the actor id read through a file descriptor the probe opened at
+	// startup and holds across checkpoints — the snapshot therefore carries an
+	// open guest handle on a system-info file, and restore must re-bind it to
+	// the regenerated file (virtiofsd find-paths / gofer re-open by path).
+	Held string `json:"held"`
 	// Error is the probe's file read error(s), if any, so a failed assertion
 	// explains why a value was missing.
 	Error string `json:"error"`
@@ -91,6 +96,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q and %q both report identity %q — actors are not distinct", id, other, got.File)
 		}
 		seen[got.File] = id
+
+		// The fd held open since before the golden snapshot must survive the
+		// restore and read the restored actor's OWN id: system-info files are
+		// regenerated at stable paths precisely so suspend-time guest handles
+		// re-bind (a moved or deleted path would fail the restore or the read).
+		if got.Held != id {
+			t.Errorf("actor %q: id via startup-held fd = %q, want %q (probe read error: %q)", id, got.Held, id, got.Error)
+		}
 
 		if got.Atespace != probeNamespace {
 			t.Errorf("actor %q: /run/ate/atespace = %q, want %q (probe read error: %q)", id, got.Atespace, probeNamespace, got.Error)

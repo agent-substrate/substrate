@@ -23,6 +23,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -38,6 +39,15 @@ const (
 	atespaceFile = "/run/ate/atespace"
 	uidFile      = "/run/ate/actor-uid"
 )
+
+// heldIdentity is identityFile opened at startup and held open for the
+// probe's whole life, deliberately violating the read-at-time-of-use
+// guidance. It exists so a snapshot taken after startup carries live guest
+// file state for a system-info file, and a restore must re-bind it (virtiofsd
+// find-paths / gofer re-open by path). whoami reads through it on every
+// request; after a restore from a shared golden snapshot the read must
+// succeed and yield the restored actor's own id, not the golden's.
+var heldIdentity *os.File
 
 // whoami reports the actor's identity as observed at request time from the
 // bind-mounted identity file. A read failure is reported in the response
@@ -60,7 +70,27 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
+	resp["held"] = ""
+	if heldIdentity == nil {
+		resp["error"] += "identity file was not open at startup; "
+	} else if b, err := readAllAt(heldIdentity); err == nil {
+		resp["held"] = string(b)
+	} else {
+		resp["error"] += "reading held identity fd: " + err.Error() + "; "
+	}
+
 	writeJSON(w, resp)
+}
+
+// readAllAt reads f's full contents from offset 0 without moving its offset,
+// so concurrent requests do not interleave seeks on the shared fd.
+func readAllAt(f *os.File) ([]byte, error) {
+	buf := make([]byte, 4096)
+	n, err := f.ReadAt(buf, 0)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return buf[:n], nil
 }
 
 // resources reports the compute envelope the actor observes from inside the
@@ -131,6 +161,15 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func main() {
+	// Hold the identity file open before serving: every snapshot of this actor
+	// then contains an open guest handle on a system-info file (see
+	// heldIdentity).
+	if f, err := os.Open(identityFile); err == nil {
+		heldIdentity = f
+	} else {
+		log.Printf("probe: opening %s at startup: %v", identityFile, err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
 	mux.HandleFunc("/resources", resources)
