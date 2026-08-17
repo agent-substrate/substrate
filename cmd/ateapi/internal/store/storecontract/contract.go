@@ -48,15 +48,23 @@ func newTestAtespace(name string) *ateapipb.Atespace {
 	return &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}}
 }
 
+// The fixture populates the volume/env union fields so the round-trip covers
+// the plain-field union shape (issue #962), including presence of the
+// optional value and type fields (empty string != unset).
 func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
-	return &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name}}
-}
-
-func newTestActorTemplateVersion(atespace, name, template string) *ateapipb.ActorTemplateVersion {
-	return &ateapipb.ActorTemplateVersion{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: template},
-		Phase:         &ateapipb.ActorTemplateVersionPhase{Phase: ateapipb.ActorTemplateVersionPhase_PHASE_INITIAL},
+	return &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+		Containers: []*ateapipb.Container{{
+			Name:         "main",
+			Image:        "example.com/app@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			Env:          []*ateapipb.EnvVar{{Name: "MODE", Value: "VAL"}},
+			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
+		}},
+		Volumes: []*ateapipb.Volume{{
+			Name:       "data",
+			DurableDir: &ateapipb.DurableDirVolumeSource{},
+			Type:       "DurableDir",
+		}},
 	}
 }
 
@@ -593,93 +601,8 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 			t.Errorf("stored template mismatch (-created +got):\n%s", diff)
 		}
 
-		updated, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
-			template.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("UpdateActorTemplate failed: %v", err)
-		}
-		if updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
-			t.Errorf("updated template metadata = %v, want version 2 and original uid", updated.GetMetadata())
-		}
-
-		versionInput := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-		version, err := s.CreateActorTemplateVersion(ctx, versionInput)
-		if err != nil {
-			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-		}
-		if versionInput.GetMetadata().GetUid() != "" || versionInput.GetMetadata().GetVersion() != 0 {
-			t.Errorf("CreateActorTemplateVersion mutated its input: %v", versionInput.GetMetadata())
-		}
-		versionRef := resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		gotVersion, err := s.GetActorTemplateVersion(ctx, versionRef)
-		if err != nil {
-			t.Fatalf("GetActorTemplateVersion failed: %v", err)
-		}
-		if diff := cmp.Diff(version, gotVersion, protocmp.Transform()); diff != "" {
-			t.Errorf("stored version mismatch (-created +got):\n%s", diff)
-		}
-
-		if _, err := s.DeleteActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteActorTemplate with a child = %v, want ErrFailedPrecondition", err)
-		}
-		if _, err := s.DeleteActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteActorTemplateVersion while default = %v, want ErrFailedPrecondition", err)
-		}
-		if _, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
-			template.DefaultVersionOnCreate = nil
-			return nil
-		}); err != nil {
-			t.Fatalf("clearing default version failed: %v", err)
-		}
-		if deleted, err := s.DeleteActorTemplateVersion(ctx, versionRef); err != nil {
-			t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
-		} else if diff := cmp.Diff(version, deleted, protocmp.Transform()); diff != "" {
-			t.Errorf("deleted version mismatch (-created +deleted):\n%s", diff)
-		}
-		if _, err := s.GetActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("GetActorTemplateVersion after delete = %v, want ErrNotFound", err)
-		}
 		if _, err := s.DeleteActorTemplate(ctx, templateRef); err != nil {
 			t.Fatalf("DeleteActorTemplate failed: %v", err)
-		}
-	})
-
-	t.Run("ListActorTemplateVersions_FilteredPagination", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		for _, atespace := range []string{"team-a", "team-b"} {
-			mustCreateAtespace(t, s, atespace)
-		}
-		for _, item := range []struct{ atespace, name, parent string }{
-			{"team-a", "a-1", "tmpl-a"},
-			{"team-a", "a-2", "tmpl-a"},
-			{"team-a", "b-1", "tmpl-b"},
-			{"team-b", "a-1", "tmpl-a"},
-		} {
-			if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion(item.atespace, item.name, item.parent)); err != nil {
-				t.Fatalf("CreateActorTemplateVersion(%s/%s) failed: %v", item.atespace, item.name, err)
-			}
-		}
-
-		parent := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
-		var got []string
-		for token := ""; ; {
-			page, err := s.ListActorTemplateVersions(ctx, "", parent, store.ListOptions{PageSize: 1, PageToken: token})
-			if err != nil {
-				t.Fatalf("ListActorTemplateVersions failed: %v", err)
-			}
-			for _, version := range page.Items {
-				got = append(got, version.GetMetadata().GetAtespace()+"/"+version.GetMetadata().GetName())
-			}
-			if page.NextPageToken == "" {
-				break
-			}
-			token = page.NextPageToken
-		}
-		if diff := cmp.Diff([]string{"team-a/a-1", "team-a/a-2"}, got); diff != "" {
-			t.Errorf("filtered pagination mismatch (-want +got):\n%s", diff)
 		}
 	})
 
@@ -692,38 +615,6 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteAtespace with template = %v, want ErrFailedPrecondition", err)
-		}
-		if _, err := s.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); err != nil {
-			t.Fatalf("DeleteActorTemplate failed: %v", err)
-		}
-		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "orphan-v1", "gone")); err != nil {
-			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteAtespace with version = %v, want ErrFailedPrecondition", err)
-		}
-	})
-
-	t.Run("DeleteActorTemplateVersion_DeletesGoldenSnapshot", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, "team-a")
-		if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-			Metadata:    &ateapipb.ResourceMetadata{Atespace: "ate-golden", Name: "golden-1"},
-			SnapshotUri: "gs://bucket/golden-1",
-		}); err != nil {
-			t.Fatalf("CreateActorSnapshot failed: %v", err)
-		}
-		version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-		version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}
-		if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
-			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-		}
-		if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-			t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
-		}
-		if _, err := s.GetActorSnapshot(ctx, "ate-golden", "golden-1"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("golden snapshot after version delete = %v, want ErrNotFound", err)
 		}
 	})
 }
