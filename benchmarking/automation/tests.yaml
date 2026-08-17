@@ -12,34 +12,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Each test runs `runner.py -f <file> -t <duration> -u <users> --name <name>`
-# with --tag set to the build commit hash and --dest set from the orchestrator's
-# --dest flag. The orchestrator deploys + tears down substrate + workloads
-# around each test so runs don't pollute each other.
+# The orchestrator deploys + tears down substrate + workloads around each
+# test so runs don't pollute each other.
 #
+# Fields shared by every entry:
+#
+#   type           Required. Selects the runner: "locust" | "nighthawk-ingress".
+#                  Each type's own fields are described in its section.
+#   targetCluster  Required. Names a config file under
+#                  /etc/orchestrator/target-clusters/ (e.g. `targetCluster:
+#                  dev` -> /etc/orchestrator/target-clusters/dev.sh). The
+#                  orchestrator copies that file into the cloned repo as
+#                  .ate-dev-env.sh before the test runs and deletes it
+#                  after, so different tests can target different clusters
+#                  / projects from one CronJob run.
+#   sandboxClass   Optional (default "gvisor"). Sandbox runtime for the
+#                  benchmark WorkerPool: "gvisor" | "microvm".
+#   workerCount    Optional (default 1). WorkerPool replica count for the
+#                  deploy that runs before this test. The orchestrator
+#                  redeploys workloads between tests, so each test can
+#                  pick its own scale.
+#   actorMemory    Optional (default "256Mi", the smallest size microvm
+#                  admits). Memory limit on the benchmark ActorTemplates;
+#                  raise it for suites that exercise glutton's WriteRAM path.
+#
+# ---- type: locust -----------------------------------------------------------
+#
+# Runs `runner.py -f <file> -t <duration> -u <users> --name <name>` in a
+# Job, with --tag set to the build commit hash and --dest from the
+# orchestrator's --dest flag. `file`, `duration` and `users` are required.
 # Optional `flags` is a list of arbitrary strings appended to runner.py's
 # argv; runner.py forwards them to locust verbatim.
 #
-# Optional `workerCount` (default 1) sets the WorkerPool replica count for
-# the deploy that runs before this test. The orchestrator redeploys
-# workloads between tests, so each test can pick its own scale.
+# ---- type: nighthawk-ingress --------------------------------------------------------
 #
-# Optional `sandboxClass` (default "gvisor") picks the sandbox runtime for
-# the benchmark WorkerPool. Allowed values: "gvisor" | "microvm".
-#
-# Optional `actorMemory` (default "256Mi", the smallest size microvm admits)
-# sets the memory limit on the benchmark ActorTemplates. Raise it for suites
-# that exercise glutton's WriteRAM path.
-#
-# Required `targetCluster` names a config file under
-# /etc/orchestrator/target-clusters/ (e.g. `targetCluster: dev` ->
-# /etc/orchestrator/target-clusters/dev.sh). The orchestrator copies that
-# file into the cloned repo as .ate-dev-env.sh before the test runs and
-# deletes it after, so different tests can target different clusters /
-# projects from one CronJob run.
+# Runs the Nighthawk adaptive router-capacity benchmark. `duration` is the
+# job-wait budget only; the test knobs live in a `nighthawk-ingress:` block — see
+# the "Configuration knobs" table in benchmarking/nighthawk-ingress/README.md.
+# `workerCount` is required: the benchmark warms one actor per worker, so
+# it is also the actor fleet size.
 
 tests:
   - name: glutton_baseline_1_user
+    type: locust
     description: "Glutton baseline: 1 concurrent user for 1 minute"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -52,6 +67,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: glutton_baseline_5_users
+    type: locust
     description: "Glutton baseline: 5 concurrent users for 1 minute"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -64,6 +80,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: glutton_baseline_10_users
+    type: locust
     description: "Glutton baseline: 10 concurrent users for 1 minute (doubles the number of workers/node)"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -76,6 +93,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: glutton_oversubscribe_15_users
+    type: locust
     description: "Glutton baseline: 15 concurrent users for 2 minutes (50% oversubscribed)"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -88,6 +106,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: durdir_data_baseline
+    type: locust
     description: "DurDir data baseline: 1 concurrent user, 8 MiB file, explicit resume"
     targetCluster: dev
     file: /app/tests/durdir.py
@@ -106,6 +125,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: durdir_full_baseline
+    type: locust
     description: "DurDir full baseline: 1 concurrent user, 8 MiB file, full memory restore comparison"
     targetCluster: dev
     file: /app/tests/durdir.py
@@ -124,6 +144,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: durdir_implicit_resume
+    type: locust
     description: "DurDir implicit resume: 1 concurrent user, 8 MiB file, traffic-triggered resume"
     targetCluster: dev
     file: /app/tests/durdir.py
@@ -142,6 +163,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: durdir_size_5mb
+    type: locust
     description: "DurDir file size sweep (5 MiB): 1 concurrent user, digest read mode"
     targetCluster: dev
     file: /app/tests/durdir.py
@@ -162,6 +184,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: durdir_size_10mb
+    type: locust
     description: "DurDir file size sweep (10 MiB): 1 concurrent user, digest read mode"
     targetCluster: dev
     file: /app/tests/durdir.py
@@ -182,6 +205,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: durdir_size_64mb
+    type: locust
     description: "DurDir file size sweep (64 MiB): 1 concurrent user, digest read mode"
     targetCluster: dev
     file: /app/tests/durdir.py
@@ -201,3 +225,39 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  - name: ingress_routercap_envoy_2cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 2 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 2
+      tailLatencySloMs: 25
+  - name: ingress_routercap_envoy_4cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 4 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 4
+      tailLatencySloMs: 25
+  - name: ingress_routercap_envoy_8cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 8 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 8
+      tailLatencySloMs: 25
+  - name: ingress_routercap_envoy_16cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 16 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 16
+      tailLatencySloMs: 25
