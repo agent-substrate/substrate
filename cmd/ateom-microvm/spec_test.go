@@ -28,8 +28,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/utils/ptr"
-
-	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // The device allowlist and CPU shares from defaultKataResources are the
@@ -217,9 +215,9 @@ func TestCheckResourceEnvelope(t *testing.T) {
 	}
 }
 
-// A container's own declared limit is what must bind inside the guest. The
-// actor-level size sizes the VM; stamping it over each container would replace
-// the declared value with the actor total and silently unbound the container.
+// A container's own declared limit is what must bind inside the guest: it is
+// the only input to the spec, so nothing can stamp over it and silently
+// unbound the container.
 func TestEnsureKataCompatibleSpec_KeepsDeclaredContainerLimits(t *testing.T) {
 	const declared = 64 * 1024 * 1024
 	bundle := t.TempDir()
@@ -234,9 +232,7 @@ func TestEnsureKataCompatibleSpec_KeepsDeclaredContainerLimits(t *testing.T) {
 		t.Fatalf("writing config.json: %v", err)
 	}
 
-	// An actor-level size far larger than the container's own limit.
-	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net",
-		sizing.SandboxSize{MemoryBytes: 2048 * 1024 * 1024, MilliCPU: 4000})
+	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net")
 	if err != nil {
 		t.Fatalf("ensureKataCompatibleSpec() = %v", err)
 	}
@@ -262,8 +258,7 @@ func TestEnsureKataCompatibleSpec_LeavesUndeclaredContainerUnlimited(t *testing.
 		t.Fatalf("writing config.json: %v", err)
 	}
 
-	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net",
-		sizing.SandboxSize{MemoryBytes: 2048 * 1024 * 1024, MilliCPU: 4000})
+	got, err := ensureKataCompatibleSpec(bundle, "actor-uid", "/proc/1/ns/net")
 	if err != nil {
 		t.Fatalf("ensureKataCompatibleSpec() = %v", err)
 	}

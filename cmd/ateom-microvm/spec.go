@@ -29,7 +29,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // ensureKataCompatibleSpec augments the bundle's config.json with the fields
@@ -37,7 +36,7 @@ import (
 // Without linux.resources, kata's ContainerConfig nil-derefs and the shim
 // crashes. This shaper is a bridge; a future atelet change should emit
 // runtime-appropriate specs so it can retire.
-func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxSize) (*specs.Spec, error) {
+func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error) {
 	specPath := filepath.Join(bundle, "config.json")
 	b, err := os.ReadFile(specPath)
 	if err != nil {
