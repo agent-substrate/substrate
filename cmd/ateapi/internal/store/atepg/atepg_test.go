@@ -129,13 +129,6 @@ func newTestAtespace(name string) *ateapipb.Atespace {
 	return &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}}
 }
 
-func createTestAtespace(t *testing.T, s *Persistence, name string) {
-	t.Helper()
-	if _, err := s.CreateAtespace(context.Background(), newTestAtespace(name)); err != nil {
-		t.Fatalf("CreateAtespace(%q) failed: %v", name, err)
-	}
-}
-
 // TestCreateActor_MissingAtespace_FailedPrecondition exercises the
 // foreign-key race the doc calls out: CreateActor rejects an actor whose
 // atespace doesn't exist (including a concurrently-deleted one), closing the
