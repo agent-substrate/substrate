@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -154,7 +155,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 	})
 
-	t.Run("SingleflightDeduplication_Disambiguation", func(t *testing.T) {
+	t.Run("SharedFlightDeduplication_Disambiguation", func(t *testing.T) {
 		var resumeCalled int
 		var mu sync.Mutex
 
@@ -219,7 +220,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		if resumeCalled != 1 {
-			t.Errorf("expected ResumeActor called exactly once by singleflight, got %d", resumeCalled)
+			t.Errorf("expected ResumeActor called exactly once by the shared flight, got %d", resumeCalled)
 		}
 	})
 }
@@ -436,9 +437,119 @@ func TestActorResumer_Parking(t *testing.T) {
 // contract from both sides: a caller that disconnects while parked gets
 // context.Canceled (classified as the `canceled` outcome) WITHOUT aborting the
 // shared in-flight resume, which keeps running and serves a later caller from
-// the same single RPC.
+// the same RPC.
 func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	synctest.Test(t, testCallerCancelDoesNotAbortFlight)
+}
+
+type asyncResumeResult struct {
+	actor   *ateapipb.Actor
+	outcome ResumeOutcome
+	err     error
+}
+
+func resumeAsync(r *ActorResumer, actorRef resources.ActorRef) <-chan asyncResumeResult {
+	result := make(chan asyncResumeResult, 1)
+	go func() {
+		actor, outcome, err := r.ResumeActor(context.Background(), actorRef)
+		result <- asyncResumeResult{actor: actor, outcome: outcome, err: err}
+	}()
+	return result
+}
+
+func TestActorResumer_LateJoinerOutlivesLeaderOnSameFlight(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-late-shared"}
+		start := time.Now()
+		mock := &resumerMockClient{
+			resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				if time.Since(start) >= 1700*time.Millisecond {
+					return &ateapipb.ResumeActorResponse{
+						Actor:   &ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING},
+						Resumed: true,
+					}, nil
+				}
+				return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+			},
+		}
+		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{
+			Max:           2,
+			Budget:        time.Second,
+			RetryInterval: 100 * time.Millisecond,
+			RetryFactor:   1,
+		}))
+
+		firstResult := resumeAsync(resumer, actorRef)
+		time.Sleep(750 * time.Millisecond)
+		secondResult := resumeAsync(resumer, actorRef)
+
+		first := <-firstResult
+		var exhausted *budgetExhaustedError
+		if !errors.As(first.err, &exhausted) {
+			t.Fatalf("first caller error = %v, want budgetExhaustedError", first.err)
+		}
+
+		second := <-secondResult
+		if second.err != nil {
+			t.Fatalf("late caller failed: %v", second.err)
+		}
+		if second.actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+			t.Errorf("late caller actor status = %v, want RUNNING", second.actor.GetStatus())
+		}
+		if second.outcome != ResumeOutcomeJoined {
+			t.Errorf("late caller outcome = %q, want %q", second.outcome, ResumeOutcomeJoined)
+		}
+
+		synctest.Wait()
+		resumer.mu.Lock()
+		defer resumer.mu.Unlock()
+		if _, exists := resumer.flights[actorRef.String()]; exists {
+			t.Fatal("successful flight remained registered")
+		}
+	})
+}
+
+func TestActorResumer_LateJoinerShortensAccumulatedBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-late-backoff"}
+		start := time.Now()
+		var calls atomic.Int32
+		mock := &resumerMockClient{
+			resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				calls.Add(1)
+				if time.Since(start) >= 800*time.Millisecond {
+					return &ateapipb.ResumeActorResponse{
+						Actor:   &ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING},
+						Resumed: true,
+					}, nil
+				}
+				return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+			},
+		}
+		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{
+			Max:           2,
+			Budget:        time.Second,
+			RetryInterval: 100 * time.Millisecond,
+			RetryFactor:   100,
+		}))
+
+		firstResult := resumeAsync(resumer, actorRef)
+		// The second attempt at 100ms leaves the shared loop in a 10s backoff.
+		// A caller arriving at 750ms brings the next attempt forward to 850ms.
+		time.Sleep(750 * time.Millisecond)
+		secondResult := resumeAsync(resumer, actorRef)
+
+		first, second := <-firstResult, <-secondResult
+		if first.err != nil || second.err != nil {
+			t.Fatalf("resume results: first=%v, second=%v", first.err, second.err)
+		}
+		if first.outcome != ResumeOutcomeTriggered || second.outcome != ResumeOutcomeJoined {
+			t.Errorf("outcomes = (%q, %q), want (%q, %q)", first.outcome, second.outcome, ResumeOutcomeTriggered, ResumeOutcomeJoined)
+		}
+		if calls.Load() != 3 {
+			t.Errorf("ResumeActor calls = %d, want 2 before the join and 1 after it", calls.Load())
+		}
+	})
 }
 
 func testCallerCancelDoesNotAbortFlight(t *testing.T) {

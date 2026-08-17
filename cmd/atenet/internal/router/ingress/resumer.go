@@ -17,6 +17,7 @@ package ingress
 import (
 	"context"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,7 +27,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -44,9 +44,8 @@ const failFastResumeBudget = 15 * time.Second
 // the delay reaches Cap, which would end retries long before the parking budget
 // (a Cap of 2s stops the loop in ~7 steps regardless of the budget). A gentle
 // Factor keeps the gap small on its own — from 100ms at the default 1.1 the gap
-// only grows to ~0.5s over a 5s budget — while Steps is set high so the budget
-// context passed to ExponentialBackoffWithContext, not the step count, bounds
-// the wait.
+// only grows to ~0.5s over a 5s budget — while Steps is set high so flight and
+// caller deadlines, not the step count, bound retries.
 func resumeBackoff(interval time.Duration, factor, jitter float64) wait.Backoff {
 	return wait.Backoff{
 		Steps:    math.MaxInt32,
@@ -56,17 +55,16 @@ func resumeBackoff(interval time.Duration, factor, jitter float64) wait.Backoff 
 	}
 }
 
-// budgetExhaustedError marks a resume that was still blocked on a retryable
-// condition (e.g. "no free workers available") when the parking budget elapsed.
-// It wraps the last retryable error, so the HTTP boundary still maps the
-// underlying gRPC status faithfully (503 with the capacity message), while the
-// parking metrics can report budget exhaustion as its own outcome.
+// budgetExhaustedError marks a caller whose parking budget elapsed. It wraps
+// the last retryable error when one is available, so the HTTP boundary can
+// preserve that status (for example, a capacity 503). If the first RPC consumes
+// the whole budget, it wraps context.DeadlineExceeded instead and maps to 504.
 type budgetExhaustedError struct{ lastErr error }
 
 func (e *budgetExhaustedError) Error() string { return e.lastErr.Error() }
 func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 
-// ResumeOutcome indicates the singleflight execution state of an actor resumption request.
+// ResumeOutcome indicates the shared-flight execution state of an actor resumption request.
 type ResumeOutcome string
 
 const (
@@ -81,29 +79,138 @@ type resumeCallResult struct {
 	// false if the actor was already running
 	resumed bool
 	// leaderID is the unique request ID (reqID) of the leader that initiated
-	// the singleflight execution. It helps disambiguates the leader caller
+	// the shared execution. It helps disambiguate the leader caller
 	// (ResumeOutcomeTriggered) from joiner callers (ResumeOutcomeJoined).
 	leaderID uint64
 	err      error
 }
 
+// resumeFlight owns one control-plane retry loop shared by requests for an
+// Actor. Its deadline tracks the latest joining caller, while each caller has
+// an independent timer and can stop waiting earlier.
+type resumeFlight struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	joined chan struct{}
+
+	mu           sync.Mutex
+	deadline     time.Time
+	timer        *time.Timer
+	expired      bool
+	finished     bool
+	lastRetryErr error
+	result       *resumeCallResult
+}
+
+func newResumeFlight(deadline time.Time) *resumeFlight {
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &resumeFlight{
+		ctx:      ctx,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		joined:   make(chan struct{}, 1),
+		deadline: deadline,
+	}
+	f.timer = time.AfterFunc(time.Until(deadline), f.expire)
+	return f
+}
+
+// join extends the shared loop through the caller's deadline and notifies the
+// retry scheduler that fresh demand arrived. The notification is coalesced:
+// ten simultaneous joiners need one backoff adjustment, not ten RPCs.
+func (f *resumeFlight) join(deadline time.Time) bool {
+	f.mu.Lock()
+	if f.finished || f.expired {
+		f.mu.Unlock()
+		return false
+	}
+	if !time.Now().Before(f.deadline) {
+		f.expired = true
+		f.mu.Unlock()
+		f.cancel()
+		return false
+	}
+	if deadline.After(f.deadline) {
+		f.deadline = deadline
+		f.timer.Reset(time.Until(deadline))
+	}
+	f.mu.Unlock()
+
+	select {
+	case f.joined <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+func (f *resumeFlight) expire() {
+	f.mu.Lock()
+	if f.finished || f.expired {
+		f.mu.Unlock()
+		return
+	}
+	if remaining := time.Until(f.deadline); remaining > 0 {
+		// A previous timer callback can race with join extending the deadline.
+		// Re-check the guarded value instead of canceling the extended flight.
+		f.timer.Reset(remaining)
+		f.mu.Unlock()
+		return
+	}
+	f.expired = true
+	f.mu.Unlock()
+	f.cancel()
+}
+
+func (f *resumeFlight) setLastRetryErr(err error) {
+	f.mu.Lock()
+	f.lastRetryErr = err
+	f.mu.Unlock()
+}
+
+func (f *resumeFlight) budgetError() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastRetryErr == nil {
+		// The caller's park budget still expired even though an in-flight first RPC
+		// occupied the whole window before producing a retryable error.
+		return &budgetExhaustedError{lastErr: context.DeadlineExceeded}
+	}
+	return &budgetExhaustedError{lastErr: f.lastRetryErr}
+}
+
+// finish publishes the retry loop's one terminal result. Deadline expiry only
+// cancels ctx; the loop must observe that cancellation and return before done
+// is closed, after which joiners can safely read result.
+func (f *resumeFlight) finish(result *resumeCallResult) {
+	f.mu.Lock()
+	f.finished = true
+	f.result = result
+	f.timer.Stop()
+	close(f.done)
+	f.mu.Unlock()
+	f.cancel()
+}
+
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
 	apiClient ateapipb.ControlClient
-	flight    singleflight.Group
+
+	mu      sync.Mutex
+	flights map[string]*resumeFlight
 
 	// parkEnabled makes transient worker-pool saturation (FailedPrecondition)
 	// retryable, so a request is parked and retried until budget rather than
 	// failing immediately.
 	parkEnabled bool
-	// budget bounds the total time a single resume operation retries before the
-	// underlying error is returned.
+	// budget is each caller's maximum parking time. The shared flight tracks the
+	// latest caller deadline, but callers stop waiting on their own timers.
 	budget time.Duration
-	// backoff paces the retries within the budget.
+	// backoff paces the shared retry loop.
 	backoff wait.Backoff
 	// nextID is a counter assigned to each incoming ResumeActor call.
 	// Used as a unique ID to identify requests (reqID) and disambiguate the
-	// leader vs joiners for singleflight outcome classification.
+	// leader vs joiners for shared-flight outcome classification.
 	nextID uint64
 }
 
@@ -112,8 +219,9 @@ type resumerOption func(*ActorResumer)
 
 // withParking configures parking behavior from cfg. When parking is enabled,
 // FailedPrecondition ("no free workers available") becomes retryable and the
-// resume is retried, at cfg's retry cadence, for up to cfg's budget. When
-// disabled, the resumer applies fail-fast-on-capacity behavior.
+// shared resume is retried at cfg's cadence, while each caller waits for at
+// most cfg's budget. When disabled, the resumer applies fail-fast-on-capacity
+// behavior.
 func withParking(cfg ParkedRequestConfig) resumerOption {
 	cfg = cfg.Normalized()
 	return func(r *ActorResumer) {
@@ -128,6 +236,7 @@ func withParking(cfg ParkedRequestConfig) resumerOption {
 func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *ActorResumer {
 	r := &ActorResumer{
 		apiClient: apiClient,
+		flights:   make(map[string]*resumeFlight),
 		budget:    failFastResumeBudget,
 		backoff: resumeBackoff(DefaultParkedRequestRetryInterval,
 			DefaultParkedRequestRetryFactor, DefaultParkedRequestRetryJitter),
@@ -136,6 +245,93 @@ func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *A
 		opt(r)
 	}
 	return r
+}
+
+func (r *ActorResumer) joinOrStartFlight(actorRef resources.ActorRef, reqID uint64, deadline time.Time) *resumeFlight {
+	key := actorRef.String()
+	r.mu.Lock()
+	if flight := r.flights[key]; flight != nil && flight.join(deadline) {
+		r.mu.Unlock()
+		return flight
+	}
+
+	flight := newResumeFlight(deadline)
+	r.flights[key] = flight
+	r.mu.Unlock()
+
+	go func() {
+		flight.finish(r.runResumeFlight(flight, actorRef, reqID))
+
+		r.mu.Lock()
+		if r.flights[key] == flight {
+			delete(r.flights, key)
+		}
+		r.mu.Unlock()
+	}()
+	return flight
+}
+
+func (r *ActorResumer) runResumeFlight(flight *resumeFlight, actorRef resources.ActorRef, leaderID uint64) *resumeCallResult {
+	backoff := r.backoff
+
+retry:
+	for {
+		resumeResp, err := r.apiClient.ResumeActor(flight.ctx, &ateapipb.ResumeActorRequest{
+			Actor: actorRef.ToObjectRef(),
+		})
+		if err == nil {
+			return &resumeCallResult{
+				actor:    resumeResp.GetActor(),
+				resumed:  resumeResp.GetResumed(),
+				leaderID: leaderID,
+			}
+		}
+
+		if flight.ctx.Err() != nil {
+			return &resumeCallResult{leaderID: leaderID, err: flight.budgetError()}
+		}
+		if !r.retryable(err) {
+			return &resumeCallResult{leaderID: leaderID, err: err}
+		}
+		flight.setLastRetryErr(err)
+
+		delay := backoff.Step()
+		retryAt := time.Now().Add(delay)
+		timer := time.NewTimer(delay)
+		for {
+			select {
+			case <-flight.ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return &resumeCallResult{leaderID: leaderID, err: flight.budgetError()}
+			case <-flight.joined:
+				// If accumulated backoff puts the next attempt more than one initial
+				// interval away, bring it forward and restart backoff growth. Leave an
+				// already-sooner attempt and its future growth unchanged. The channel's
+				// single slot coalesces simultaneous joins.
+				freshBackoff := r.backoff
+				freshDelay := freshBackoff.Step()
+				freshRetryAt := time.Now().Add(freshDelay)
+				if freshRetryAt.Before(retryAt) {
+					backoff = freshBackoff
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(freshDelay)
+					retryAt = freshRetryAt
+				}
+			case <-timer.C:
+				continue retry
+			}
+		}
+	}
 }
 
 // retryable reports whether err warrants another resume attempt while the
@@ -167,80 +363,21 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	defer span.End()
 
 	reqID := atomic.AddUint64(&r.nextID, 1)
-
-	ch := r.flight.DoChan(actorRef.String(), func() (interface{}, error) {
-		// We detach the context from the first caller using a fixed background budget.
-		// This guarantees that if Caller 1 disconnects or times out, the underlying
-		// resume operation continues running for Caller 2 and Caller 3 without failing.
-		//
-		// The budget is therefore per-FLIGHT, not per-caller: its clock starts with
-		// the first caller, and later callers de-duplicated onto this flight share
-		// its remaining budget and outcome. A late joiner can see budget_exhausted
-		// after waiting far less than a full budget itself — the accepted cost of
-		// one control-plane RPC per hot actor (see docs/request-parking.md).
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
-		defer bgCancel()
-
-		backoff := r.backoff
-
-		var resumeResp *ateapipb.ResumeActorResponse
-		var lastRetryErr error
-
-		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(ctx context.Context) (bool, error) {
-			var err error
-			resumeResp, err = r.apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-				Actor: actorRef.ToObjectRef(),
-			})
-			if err == nil {
-				return true, nil
-			}
-
-			if r.retryable(err) {
-				lastRetryErr = err // remember it in case the budget elapses
-				return false, nil  // park: retry until the budget elapses
-			}
-			return false, err
-		})
-
-		if err != nil {
-			// If the budget elapsed while we were still retrying a transient error,
-			// surface that underlying error rather than the generic wait/deadline
-			// error so the HTTP boundary maps it faithfully (e.g. 503 "no free
-			// workers available") instead of a misleading timeout. The wrapper marks
-			// the exhaustion explicitly for the parking wait-duration metric.
-			//
-			// Gate on bgCtx itself, not on errors.Is(err, context.DeadlineExceeded):
-			// when the deadline lands during an in-flight ResumeActor RPC, gRPC
-			// surfaces a *status* error with code DeadlineExceeded that does not
-			// match the context sentinel, which would misreport budget exhaustion
-			// as a 504. bgCtx is this loop's only deadline source, so checking it
-			// covers both landing spots (mid-RPC and between retries).
-			if lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)) {
-				return &resumeCallResult{leaderID: reqID, err: &budgetExhaustedError{lastErr: lastRetryErr}}, nil
-			}
-			return &resumeCallResult{leaderID: reqID, err: err}, nil
-		}
-
-		return &resumeCallResult{
-			actor:    resumeResp.GetActor(),
-			resumed:  resumeResp.GetResumed(),
-			leaderID: reqID,
-		}, nil
-	})
+	callerDeadline := time.Now().Add(r.budget)
+	budgetTimer := time.NewTimer(time.Until(callerDeadline))
+	defer budgetTimer.Stop()
+	flight := r.joinOrStartFlight(actorRef, reqID, callerDeadline)
 
 	select {
 	case <-ctx.Done():
-		// The caller's request context was canceled before the singleflight resume completed.
-		// Return early with ResumeOutcomeNone ("none")
+		// The caller's request context was canceled before the shared resume completed.
+		// Return early with ResumeOutcomeNone ("none"). The detached flight keeps
+		// running so another caller can still share it.
 		return nil, ResumeOutcomeNone, ctx.Err()
-	case res := <-ch:
-		callRes, _ := res.Val.(*resumeCallResult)
-		if callRes == nil {
-			if res.Err != nil {
-				return nil, ResumeOutcomeNone, res.Err
-			}
-			return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
-		}
+	case <-budgetTimer.C:
+		return nil, ResumeOutcomeNone, flight.budgetError()
+	case <-flight.done:
+		callRes := flight.result
 
 		// On error, return ResumeOutcomeNone ("none") so the failure is tagged
 		// under the 'outcome' label rather than misreported as an activation.
@@ -248,7 +385,7 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			return nil, ResumeOutcomeNone, callRes.err
 		}
 
-		// Disambiguate singleflight resume outcome:
+		// Disambiguate shared resume outcome:
 		// - ResumeOutcomeNone ("none"): resumed == false, actor was already active/running.
 		// - ResumeOutcomeTriggered ("triggered"): Cold activation leader (resumed == true, caller's reqID == leaderID).
 		// - ResumeOutcomeJoined ("joined"): Cold activation joiner (resumed == true, caller's reqID != leaderID).

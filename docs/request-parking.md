@@ -39,9 +39,10 @@ exponential backoff until either
 
 - the resume succeeds (the actor is `RUNNING` and has a worker IP) — the request
   is then routed normally; or
-- the **park budget** (`--parked-request-budget`, default `5s`) elapses — the
-  underlying capacity error is returned, surfacing as `503 "actor <id>
-  unavailable: no free workers available"`.
+- the **park budget** (`--parked-request-budget`, default `5s`) elapses. If a
+  retryable error was observed, that underlying error is preserved (for
+  example, capacity remains a `503`); if the first RPC occupied the whole
+  budget, the request ends with `504`.
 
 To bound resource use and provide backpressure, the router admits requests to a
 **parking lot** of fixed capacity (`--parked-request-max`, default `1024`). Each
@@ -62,18 +63,25 @@ would silently truncate it — Envoy would reject the overflow itself, with 503s
 that never reach the lot and never count in `parking.rejected`.
 
 Concurrent requests for the *same* actor are de-duplicated by the resumer's
-`singleflight` group: they share a single in-flight `ResumeActor` call and all
-park on its result, so a hot actor consumes N parking slots but only one
-control-plane RPC.
+shared flight, so a hot actor consumes N parking slots without starting an
+independent sequence of `ResumeActor` RPCs for every request. When an expired
+flight is replaced, cancellation of its last RPC may briefly overlap the new
+flight; ateapi's per-Actor lock makes this handoff safe and retryable.
 
-**The park budget is per-flight, not per-request.** The budget clock starts
-when a flight's first caller begins the resume; every later request for the
-same actor joins that flight and shares its remaining budget and outcome. A
-request that joins late may therefore see `budget_exhausted` after waiting far
-less than a full budget itself — the accepted cost of collapsing a hot actor's
-requests into one control-plane call. (`parking.wait.duration` records each
-request's *own* parked time, so sub-budget `budget_exhausted` samples are
-expected under sustained saturation.)
+**The park budget is per-request.** Each caller receives the full configured
+budget from the time it joins. A late caller extends the shared flight's
+execution deadline, while every caller still stops waiting on its own timer.
+The join also resets accumulated exponential growth and ensures the next retry
+is no farther away than one initial retry interval; simultaneous joins coalesce
+into one adjustment rather than issuing one RPC each. Thus de-duplication does
+not make a newly arrived request inherit either an almost-expired wait budget
+or a long backoff accumulated before it arrived.
+
+A shared flight can remain alive while requests for that Actor keep arriving:
+each arrival moves its execution deadline to cover that caller. Once arrivals
+stop, it expires no later than one configured budget after the last join. A
+caller cancellation does not immediately abort the detached flight, so another
+request arriving within that bounded window can still share its work.
 
 ### What is *not* parked
 
@@ -111,15 +119,16 @@ so a parked request always gets its full budget and a normal verdict (routed
 
 | Flag                             | Default | Meaning                                                            |
 | -------------------------------- | ------- | ------------------------------------------------------------------ |
-| `--parked-request-budget`         | `5s`    | Park budget per resume *flight*; requests de-duplicated onto an in-flight resume share its remaining budget (see Behavior). |
+| `--parked-request-budget`         | `5s`    | Park budget for each request; requests for one actor share the control-plane retry loop, not the remaining wait budget. |
 | `--parked-request-max`            | `1024`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
 | `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
 | `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |
 | `--parked-request-retry-jitter`   | `0.1`   | Random fraction in `[0, 1)` added per retry to de-synchronize parked requests. |
 | `--extproc-max-requests`          | `0` (auto) | Envoy circuit-breaker `max_requests` for the ext_proc cluster. `0` derives twice `--parked-request-max` (min `1024`); explicit values must be `>= --parked-request-max` (enforced at startup). The excess is fast-path headroom (see Behavior). |
 
-The retry backoff deliberately has no cap and no attempt limit: the budget alone
-bounds the wait.
+The retry backoff deliberately has no cap and no attempt limit. Each caller's
+budget bounds its own wait; later arrivals may extend the lifetime of the shared
+flight.
 
 ## Observability
 
@@ -135,7 +144,7 @@ bounds the wait.
   | `outcome`          | When it is set                                                              |
   | ------------------ | --------------------------------------------------------------------------- |
   | `served`           | The resume succeeded and the request was routed to its worker.              |
-  | `budget_exhausted` | The park budget elapsed while the resume was still blocked on a retryable condition (pool saturated, a concurrent operation holding the actor, or the control plane unavailable) — the signal that capacity, not a fault, is the bottleneck. |
+  | `budget_exhausted` | The caller's park budget elapsed. A saved retryable cause is preserved (for example, pool saturation remains a 503); if the first RPC consumed the whole budget, it maps to 504 instead. |
   | `canceled`         | The client disconnected while parked (request context canceled).            |
   | `timeout`          | The request's own deadline expired while parked (distinct from the park budget). |
   | `error`            | The resume failed with a non-retryable error (`NotFound`, `PermissionDenied`, ...). |
