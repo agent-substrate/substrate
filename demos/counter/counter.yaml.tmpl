@@ -69,6 +69,7 @@ spec:
     # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
     # from the primary port 80 every other assertion in this demo uses.
     - --extra-port=9090
+    - --tcp-port=9091
 ${VALIDATE_EXISTING_FILE_PATH_ARG}
     readyz:
       httpGet:

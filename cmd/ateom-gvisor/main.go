@@ -65,12 +65,13 @@ var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
 	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
-	atunnelListenAddress       = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
-	workerCredentialBundle     = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
-	podIdentityTrustBundle     = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
-	atunnelClientIdentity      = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
-	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
-	egressGatewayTrustBundle   = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+	atunnelListenAddress        = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", "0.0.0.0:444", "Address for actor ingress mTLS CONNECT")
+	workerCredentialBundle      = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
+	podIdentityTrustBundle      = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
+	atunnelClientIdentity       = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelEgressListenAddress  = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	egressGatewayTrustBundle    = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -261,6 +262,16 @@ func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunn
 		}
 	}()
 	slog.InfoContext(ctx, "atunnel serving", slog.String("address", *atunnelListenAddress))
+	atunnelConnectListener, err := net.Listen("tcp", *atunnelConnectListenAddress)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while opening atunnel CONNECT listener: %w", err)
+	}
+	go func() {
+		if err := atunnelIngress.ServeConnect(ctx, atunnelConnectListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor CONNECT ingress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel CONNECT serving", slog.String("address", *atunnelConnectListenAddress))
 
 	atunnelEgress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
 	if err != nil {

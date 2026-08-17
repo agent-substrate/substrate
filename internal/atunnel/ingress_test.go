@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -152,6 +153,40 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	}
 }
 
+func TestServeConnectHTTPValidatesMethodAndAuthority(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, upstreamURL)
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		host   string
+		want   int
+	}{
+		{name: "rejects non CONNECT", method: http.MethodGet, host: "actor-1.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMethodNotAllowed},
+		{name: "requires authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev", want: http.StatusBadRequest},
+		{name: "rejects invalid authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev:70000", want: http.StatusMisdirectedRequest},
+		{name: "rejects inactive actor", method: http.MethodConnect, host: "actor-2.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMisdirectedRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "https://worker/", nil)
+			req.Host = tt.host
+			rec := httptest.NewRecorder()
+			s.ServeConnectHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -251,6 +286,9 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := s.tlsConfig.NextProtos, []string{"h2", "http/1.1"}; !slices.Equal(got, want) {
+		t.Fatalf("ALPN protocols = %v, want %v", got, want)
 	}
 
 	untrustedCA := newTestCA(t)

@@ -735,6 +735,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithArgs(
 				"--pod-uid=$(POD_UID)",
 				"--atunnel-listen-address=0.0.0.0:443",
+				"--atunnel-connect-listen-address=0.0.0.0:444",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 				"--atunnel-egress-listen-address=0.0.0.0:15001",
@@ -743,7 +744,11 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithPorts(corev1ac.ContainerPort().
 				WithName("https").
 				WithContainerPort(443).
-				WithProtocol(corev1.ProtocolTCP)).
+				WithProtocol(corev1.ProtocolTCP),
+				corev1ac.ContainerPort().
+					WithName("connect").
+					WithContainerPort(444).
+					WithProtocol(corev1.ProtocolTCP)).
 			WithSecurityContext(corev1ac.SecurityContext().
 				WithRunAsUser(0).
 				WithRunAsGroup(0).
