@@ -18,8 +18,8 @@ package ateom;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateompb";
 
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
-// guest inside a worker pod.
+// Ateom is the interface to control a single gVisor or microVM guest inside a
+// worker pod.
 //
 // Each ateom server may be available, have a prepared root sandbox, or be
 // executing a workload.
@@ -480,8 +480,9 @@ message PrepareSandboxRequest {
   // Runtime assets needed before a microVM can boot. Empty for gVisor.
   map<string, string> runtime_asset_paths = 6;
 
-  // The runtime-specific sandbox preparation may depend on workload shape,
-  // while application image contents are consumed only by RunWorkload.
+  // Runtime-specific preparation needs the workload shape: gVisor declares
+  // durable mount hints while microVM decides its early sandbox shape.
+  // Application image contents are consumed only by RunWorkload.
   WorkloadSpec spec = 7;
 }
 

@@ -47,8 +47,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
-// guest inside a worker pod.
+// Ateom is the interface to control a single gVisor or microVM guest inside a
+// worker pod.
 //
 // Each ateom server may be available, have a prepared root sandbox, or be
 // executing a workload.
@@ -227,8 +227,8 @@ func (c *ateomClient) TerminateWorkload(ctx context.Context, in *TerminateWorklo
 // All implementations must embed UnimplementedAteomServer
 // for forward compatibility.
 //
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
-// guest inside a worker pod.
+// Ateom is the interface to control a single gVisor or microVM guest inside a
+// worker pod.
 //
 // Each ateom server may be available, have a prepared root sandbox, or be
 // executing a workload.
