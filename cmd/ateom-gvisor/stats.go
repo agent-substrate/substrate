@@ -27,8 +27,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 // defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a
@@ -201,7 +201,7 @@ func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResp
 // code for the keyed read, a normal EXECUTING answer for the discovery read.
 // Callers re-check s.activeActor against the pointer they loaded after this
 // returns; the read holds no lock.
-func (s *AteomService) sampleSandbox(active *ateomstats.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
+func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
 	read := s.readSandboxCgroup
 	if read == nil {
 		read = cgroupstats.Read

@@ -27,8 +27,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/agentstats"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 // statsCallTimeout bounds one container's guest-agent call. The RPC is polled
@@ -201,7 +201,7 @@ var errStaleGuestTarget = errors.New("guest agent connection belongs to a differ
 // read, a NoSampleReason for the discovery read. Callers re-check
 // s.activeActor against the pointer they loaded after this returns; the read
 // holds no lock.
-func (s *AteomService) sampleGuest(ctx context.Context, active *ateomstats.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
+func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
 	// The actor is the one here, but there is no guest to ask yet. Usually that
 	// is a poll landing in the boot or the restore: the ateom retains the
 	// attribution from the moment it accepts the actor, and the target is only

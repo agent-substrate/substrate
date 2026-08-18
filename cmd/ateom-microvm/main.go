@@ -44,10 +44,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
@@ -435,7 +435,7 @@ type AteomService struct {
 	// poller through all of them. The writers keep holding lock; the point is the
 	// reader. As there, the type makes a lock-free read possible without making
 	// one happen — GetWorkloadStats must not take lock at all.
-	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+	activeActor atomic.Pointer[resources.ActorAttribution]
 
 	// guestStats is what GetWorkloadStats measures with: the kata-agent client
 	// and the guest containers to sum. Nil whenever there is no guest to ask —

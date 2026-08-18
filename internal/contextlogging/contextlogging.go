@@ -16,9 +16,12 @@ package contextlogging
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 type ContextHandler struct {
@@ -35,11 +38,17 @@ func (h *ContextHandler) Enabled(ctx context.Context, lvl slog.Level) bool {
 	return h.internal.Enabled(ctx, lvl)
 }
 
+// Handle records the active span on the log record under the field names the OTel
+// spec fixes for non-OTLP log formats, so a collector can lift them onto the log
+// record's own trace fields. Gated on the whole span context being valid: a trace
+// ID without a span ID names a request but not the operation within it.
 func (h *ContextHandler) Handle(ctx context.Context, rec slog.Record) error {
-	spanContext := trace.SpanContextFromContext(ctx)
-	if spanContext.HasTraceID() {
-		traceID := spanContext.TraceID()
-		rec.AddAttrs(slog.String("ate.dev/trace-id", traceID.String()))
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		rec.AddAttrs(
+			slog.String(ateattr.LogTraceIDField, sc.TraceID().String()),
+			slog.String(ateattr.LogSpanIDField, sc.SpanID().String()),
+			slog.String(ateattr.LogTraceFlagsField, fmt.Sprintf("%02x", byte(sc.TraceFlags()))),
+		)
 	}
 
 	return h.internal.Handle(ctx, rec)

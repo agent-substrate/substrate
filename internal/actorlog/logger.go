@@ -14,20 +14,31 @@
 
 // Package actorlog provides structured JSON logging for actor sandboxes shared
 // by the gVisor and micro-VM ateom runtimes. It forwards an actor container's
-// stdout/stderr to the worker pod's stdout, annotated with ate.dev/* labels, and
-// emits synthetic actor lifecycle events.
+// stdout/stderr to the worker pod's stdout, annotated with the ate.* identity
+// labels from internal/ateattr, and emits synthetic actor lifecycle events.
+//
+// Only the lifecycle events carry trace context: one forwarder goroutine covers a
+// whole container stream, so it cannot tell which request produced a given line.
+// An actor emitting its own trace_id/span_id keeps them, verbatim like the rest of
+// its fields.
 package actorlog
 
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -67,45 +78,38 @@ func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
 	}
 }
 
-// EmitLifecycleLog logs a synthetic actor lifecycle event.
-func (al *ActorLogger) EmitLifecycleLog(msg string, actorRef resources.ActorRef, actorUID, actorTemplateNamespace, actorTemplateName string) {
+// EmitLifecycleLog logs a synthetic actor lifecycle event. The record joins the
+// trace of the RPC that drove the transition whenever ctx carries one.
+func (al *ActorLogger) EmitLifecycleLog(ctx context.Context, msg string, a resources.ActorAttribution) {
 	envelope := map[string]any{
-		"time":    time.Now().Format(time.RFC3339Nano),
-		"message": msg,
-		al.labelsKey: map[string]string{
-			"ate.dev/actor_atespace":           actorRef.Atespace,
-			"ate.dev/actor_name":               actorRef.Name,
-			"ate.dev/actor_uid":                actorUID,
-			"ate.dev/actor_template_namespace": actorTemplateNamespace,
-			"ate.dev/actor_template_name":      actorTemplateName,
-		},
+		"time":       time.Now().Format(time.RFC3339Nano),
+		"message":    msg,
+		al.labelsKey: ateattr.ActorLogLabels(a, ""),
 	}
-	if envBytes, err := json.Marshal(envelope); err == nil {
-		envBytes = append(envBytes, '\n')
-		_, _ = al.writer.Write(envBytes)
-	}
+	addTraceContext(ctx, envelope)
+	al.write(envelope)
 }
 
 // StartJSONLogPipe intercepts container raw stdout/stderr streams and pipes them
 // through the logger. containerName tags every line with the originating container;
 // callers that multiplex multiple containers should give each its own pipe so the
 // tag is meaningful.
-func (al *ActorLogger) StartJSONLogPipe(actorRef resources.ActorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName string) (io.WriteCloser, error) {
+func (al *ActorLogger) StartJSONLogPipe(a resources.ActorAttribution, containerName string) (io.WriteCloser, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	go func() {
-		al.WrapContainerLogs(pr, actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
+		al.WrapContainerLogs(pr, a, containerName)
 		pr.Close()
 	}()
 	return pw, nil
 }
 
 // WrapContainerLogs reads log lines from r, parses them, and logs them in a unified
-// structured format. containerName is added as the ate.dev/container_name label so
-// multi-container actors can be demultiplexed.
-func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorRef resources.ActorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName string) {
+// structured format. containerName is added as the ate.actor.container.name label
+// so multi-container actors can be demultiplexed.
+func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttribution, containerName string) {
 	rdr := bufio.NewReader(r)
 	for {
 		lineBytes, err := rdr.ReadBytes('\n')
@@ -134,45 +138,82 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorRef resources.ActorRe
 			}
 
 			if unmarshalErr != nil {
-				labels := map[string]string{
-					"ate.dev/actor_atespace":           actorRef.Atespace,
-					"ate.dev/actor_name":               actorRef.Name,
-					"ate.dev/actor_uid":                actorUID,
-					"ate.dev/actor_template_namespace": actorTemplateNamespace,
-					"ate.dev/actor_template_name":      actorTemplateName,
-					"ate.dev/container_name":           containerName,
-				}
 				envelope = map[string]any{
 					"time":       time.Now().Format(time.RFC3339Nano),
 					"message":    string(lineBytes),
-					al.labelsKey: labels,
+					al.labelsKey: ateattr.ActorLogLabels(a, containerName),
 				}
 			} else {
 				if _, ok := m["time"]; !ok {
 					m["time"] = time.Now().Format(time.RFC3339Nano)
 				}
-				labels, ok := m[al.labelsKey].(map[string]any)
-				if !ok {
-					labels = make(map[string]any)
-					m[al.labelsKey] = labels
+				for k := range m {
+					if strings.HasPrefix(k, ateattr.ReservedNamespace) {
+						delete(m, k)
+					}
 				}
-				labels["ate.dev/actor_atespace"] = actorRef.Atespace
-				labels["ate.dev/actor_name"] = actorRef.Name
-				labels["ate.dev/actor_uid"] = actorUID
-				labels["ate.dev/actor_template_namespace"] = actorTemplateNamespace
-				labels["ate.dev/actor_template_name"] = actorTemplateName
-				labels["ate.dev/container_name"] = containerName
+				labels := sanitizeLabels(m[al.labelsKey])
+				for k, v := range ateattr.ActorLogLabels(a, containerName) {
+					labels[k] = v
+				}
+				m[al.labelsKey] = labels
 				envelope = m
 			}
 
-			if envBytes, err := json.Marshal(envelope); err == nil {
-				envBytes = append(envBytes, '\n')
-				_, _ = al.writer.Write(envBytes)
-			}
+			al.write(envelope)
 		}
 
 		if err != nil {
 			break
 		}
+	}
+}
+
+func (al *ActorLogger) write(envelope map[string]any) {
+	if envBytes, err := json.Marshal(envelope); err == nil {
+		envBytes = append(envBytes, '\n')
+		_, _ = al.writer.Write(envBytes)
+	}
+}
+
+func addTraceContext(ctx context.Context, envelope map[string]any) {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return
+	}
+	envelope[ateattr.LogTraceIDField] = sc.TraceID().String()
+	envelope[ateattr.LogSpanIDField] = sc.SpanID().String()
+	envelope[ateattr.LogTraceFlagsField] = fmt.Sprintf("%02x", byte(sc.TraceFlags()))
+}
+
+// sanitizeLabels drops reserved keys from the actor's label group and stringifies
+// the rest: GKE promotes the group into LogEntry.labels, where one non-string value
+// costs the whole record its labels.
+func sanitizeLabels(v any) map[string]any {
+	labels, ok := v.(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(labels))
+	for k, val := range labels {
+		if strings.HasPrefix(k, ateattr.ReservedNamespace) {
+			continue
+		}
+		out[k] = labelValueString(val)
+	}
+	return out
+}
+
+func labelValueString(v any) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case nil:
+		return ""
+	default:
+		if b, err := json.Marshal(val); err == nil {
+			return string(b)
+		}
+		return fmt.Sprint(val)
 	}
 }

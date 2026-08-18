@@ -41,7 +41,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 	tests := []struct {
 		name string
 		p    actorBootParams
-		want ateomstats.ActorAttribution
+		want resources.ActorAttribution
 	}{
 		{
 			name: "fully populated",
@@ -51,7 +51,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 				templateNS:   "template-ns-d",
 				templateName: "template-name-e",
 			},
-			want: ateomstats.ActorAttribution{
+			want: resources.ActorAttribution{
 				Ref:               resources.ActorRef{Atespace: "atespace-a", Name: "actor-b"},
 				UID:               "uid-c",
 				TemplateNamespace: "template-ns-d",
@@ -61,7 +61,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 		{
 			name: "zero params",
 			p:    actorBootParams{},
-			want: ateomstats.ActorAttribution{},
+			want: resources.ActorAttribution{},
 		},
 	}
 
@@ -110,7 +110,7 @@ func TestActorBootParamsAttributionMatchesRequest(t *testing.T) {
 // here is everything GetWorkloadStats does with the result, which is where the
 // polling loop will actually live.
 
-var testActor = ateomstats.ActorAttribution{
+var testActor = resources.ActorAttribution{
 	Ref:               resources.ActorRef{Atespace: "space-a", Name: "actor-a"},
 	UID:               "uid-a",
 	TemplateNamespace: "ns-a",
@@ -497,7 +497,7 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 
 	tests := []struct {
 		name string
-		to   *ateomstats.ActorAttribution
+		to   *resources.ActorAttribution
 		want ateompb.NoSampleReason
 	}{
 		// A new actor took the slot: there is a workload, its numbers are just

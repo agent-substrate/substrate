@@ -377,7 +377,7 @@ type AteomService struct {
 	// The type makes a lock-free read possible; it does not make one happen.
 	// GetWorkloadStats must not take lock at all, including around the cgroup
 	// read it does with the value. TestGetWorkloadStatsDoesNotTakeLock pins that.
-	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+	activeActor atomic.Pointer[resources.ActorAttribution]
 
 	// shuttingDown is set once SIGTERM has been received. While true, new
 	// workload RPCs are rejected with codes.Unavailable.
@@ -594,13 +594,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
-	s.actorLogger.EmitLifecycleLog("Actor starting", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
 	// Retain the attribution before the boot rather than after it, so a sample
 	// taken against a workload that dies mid-boot is still attributable. The
 	// cleanup below drops it again if the boot fails outright.
-	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.activeActor.Store(&attribution)
 
 	// Contract with atelet:
@@ -667,9 +666,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	// Create and start each application container, each with its own log pipe so
-	// every line is tagged with the originating container (ate.dev/container_name).
+	// every line is tagged with the originating container (ate.actor.container.name).
 	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName(), ac.GetName())
+		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
@@ -697,7 +696,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor started", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 
 	return &ateompb.RunWorkloadResponse{}, nil
@@ -718,8 +717,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	}
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
-	s.actorLogger.EmitLifecycleLog("Actor checkpointing", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
 	// Contract with atelet:
 	//
@@ -781,7 +780,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// directories after uploading the snapshot.
 	if err := rcmd.cleanupContainersAfterCheckpoint(ctx, req.GetSpec().GetContainers()); err != nil {
 		slog.WarnContext(ctx, "Failed to clean up runsc containers after checkpoint",
-			"actor", actorRef,
+			"actor", attribution.Ref,
 			"actorUID", req.GetActorUid(),
 			"err", err)
 	}
@@ -807,7 +806,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointed", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 	s.activeSession = nil
 
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
@@ -872,11 +871,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
-	s.actorLogger.EmitLifecycleLog("Actor restoring", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
 	// Same as RunWorkload: retain before the boot, drop again if it fails.
-	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.activeActor.Store(&attribution)
 
 	// Contract with atelet:
@@ -956,9 +954,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	// Create and restore each application container, each with its own log pipe so
-	// every line is tagged with the originating container (ate.dev/container_name).
+	// every line is tagged with the originating container (ate.actor.container.name).
 	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName(), ac.GetName())
+		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
@@ -999,7 +997,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor restored", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 
 	return &ateompb.RestoreWorkloadResponse{}, nil

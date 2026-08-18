@@ -31,6 +31,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 func resourceAttrs(res *resource.Resource) map[string]string {
@@ -109,15 +111,15 @@ func TestRelayAttrs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("newResource: %v", err)
 			}
-			got, ok := resourceAttrs(res)[relayAttrKey]
+			got, ok := resourceAttrs(res)[string(ateattr.OTLPRelayKey)]
 			if tc.want == "" {
 				if ok {
-					t.Errorf("%s = %q, want absent", relayAttrKey, got)
+					t.Errorf("%s = %q, want absent", string(ateattr.OTLPRelayKey), got)
 				}
 				return
 			}
 			if got != tc.want {
-				t.Errorf("%s = %q, want %q", relayAttrKey, got, tc.want)
+				t.Errorf("%s = %q, want %q", string(ateattr.OTLPRelayKey), got, tc.want)
 			}
 		})
 	}
@@ -156,16 +158,16 @@ func collectedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) m
 // (passing the wrong flag, dropping the attrs) fails here and not in
 // TestRelayAttrs.
 func TestMeterProviderRelayAttribute(t *testing.T) {
-	if got, ok := collectedResource(t, true, lazyConn(t))[relayAttrKey]; !ok || got != "relay" {
-		t.Errorf("%s = %q (present %t), want relay", relayAttrKey, got, ok)
+	if got, ok := collectedResource(t, true, lazyConn(t))[string(ateattr.OTLPRelayKey)]; !ok || got != "relay" {
+		t.Errorf("%s = %q (present %t), want relay", string(ateattr.OTLPRelayKey), got, ok)
 	}
-	if got, ok := collectedResource(t, true, nil)[relayAttrKey]; !ok || got != "direct" {
-		t.Errorf("%s = %q (present %t), want direct", relayAttrKey, got, ok)
+	if got, ok := collectedResource(t, true, nil)[string(ateattr.OTLPRelayKey)]; !ok || got != "direct" {
+		t.Errorf("%s = %q (present %t), want direct", string(ateattr.OTLPRelayKey), got, ok)
 	}
 	// atecontroller and ateapi: no relay was ever offered, so no claim is made
 	// about which path they took.
-	if got, ok := collectedResource(t, false, nil)[relayAttrKey]; ok {
-		t.Errorf("%s = %q, want absent for a component with no relay", relayAttrKey, got)
+	if got, ok := collectedResource(t, false, nil)[string(ateattr.OTLPRelayKey)]; ok {
+		t.Errorf("%s = %q, want absent for a component with no relay", string(ateattr.OTLPRelayKey), got)
 	}
 }
 

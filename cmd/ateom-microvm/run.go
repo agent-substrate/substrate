@@ -34,7 +34,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
@@ -280,7 +279,8 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		size:          sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+	attribution := p.actorAttribution()
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
 	// Retain the attribution before the boot rather than after it, so a sample
 	// taken against a workload that dies mid-boot is still attributable. A cold
@@ -288,7 +288,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// readyz is one whose usage is worth reporting rather than the one case that
 	// reports nothing. The defer drops it again if the boot fails outright.
 	// Matches ateom-gvisor's RunWorkload.
-	attribution := p.actorAttribution()
 	s.activeActor.Store(&attribution)
 	defer func() {
 		if retErr != nil {
@@ -299,7 +298,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := s.coldBootActorRetrying(ctx, p); err != nil {
 		return nil, err
 	}
-	s.actorLogger.EmitLifecycleLog("Actor started", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", p.actorUID))
 	return &ateompb.RunWorkloadResponse{}, nil
 }
@@ -324,8 +323,8 @@ type actorBootParams struct {
 
 // actorAttribution regroups the actor fields that arrived on the Run/Restore
 // request, for retention in AteomService.activeActor.
-func (p actorBootParams) actorAttribution() ateomstats.ActorAttribution {
-	return ateomstats.ActorAttribution{
+func (p actorBootParams) actorAttribution() resources.ActorAttribution {
+	return resources.ActorAttribution{
 		Ref:               p.actorRef,
 		UID:               p.actorUID,
 		TemplateNamespace: p.templateNS,
@@ -366,7 +365,6 @@ func (s *AteomService) coldBootActorRetrying(ctx context.Context, p actorBootPar
 // owns the lifecycle logging.
 func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (retErr error) {
 	actorUID := p.actorUID
-	templateNS, templateName := p.templateNS, p.templateName
 
 	// All of the actor's containers share the one micro-VM (which is the pod
 	// sandbox): each gets its own overlay rootfs and its own kata-agent
@@ -595,8 +593,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// over ac for the actor's lifetime and exit (io.EOF) when teardownActor
 	// closes ac.
 	workloadIDs := make([]string, 0, len(ctrs))
+	attribution := p.actorAttribution()
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, p.actorRef, actorUID, templateNS, templateName, c.name, c.name)
+		s.startActorLogForwarding(ac, attribution, c.name, c.name)
 		workloadIDs = append(workloadIDs, c.name)
 	}
 
@@ -954,16 +953,16 @@ func startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath s
 //
 // The streams are keyed by streamID == the kata containerID==execID (the overlay
 // workload id); lines are tagged with actorName + containerName
-// (ate.dev/container_name) so a multi-container actor demultiplexes.
+// (ate.actor.container.name) so a multi-container actor demultiplexes.
 // The reader contexts are context.Background() — the goroutines are NOT bound to the
 // RPC that started them; they terminate when ac is closed (by teardownActor), which
 // makes the in-flight ReadStdout/ReadStderr fail and the StreamReader return io.EOF,
 // ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
 // concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
 // the connection.
-func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, actorRef resources.ActorRef, actorUID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
+func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, a resources.ActorAttribution, streamID, containerName string) {
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), a, containerName)
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), a, containerName)
 }
 
 // errGuestStopped reports that the micro-VM stopped before the kata-agent

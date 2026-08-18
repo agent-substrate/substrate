@@ -32,7 +32,7 @@ import (
 )
 
 // Dotted ate.* matches the metric-instrument naming (atenet.*, atelet.*), not the
-// ate.dev/ slash form used for k8s labels and stdout log fields.
+// ate.dev/ slash form, which is k8s labels only.
 // name vs uid mirror the k8s object model that ResourceMetadata follows:
 // ate.actor.name is the atespace-scoped addressable name, ate.actor.uid is the
 // server-assigned globally-unique key. There is deliberately no ate.actor.id
@@ -40,15 +40,41 @@ import (
 // atespace and template are their own top-level namespaces (ate.atespace,
 // ate.template.*) rather than nested under actor: both are first-class resources
 // that also appear in non-actor telemetry, so the keys must mean the same thing
-// regardless of what a span is about.
+// regardless of what a span is about. ActorContainerNameKey nests under actor for
+// the mirror-image reason: it names a container the ActorTemplate declared, which
+// exists only within an actor. It is deliberately not the registry's
+// k8s.container.name or container.name, both of which the collector already
+// assigns to the worker pod's own containers.
 const (
-	AtespaceKey          = attribute.Key("ate.atespace")
-	ActorNameKey         = attribute.Key("ate.actor.name")
-	ActorUIDKey          = attribute.Key("ate.actor.uid")
-	TemplateNameKey      = attribute.Key("ate.template.name")
-	TemplateNamespaceKey = attribute.Key("ate.template.namespace")
-	ActorVersionKey      = attribute.Key("ate.actor.version")
+	AtespaceKey           = attribute.Key("ate.atespace")
+	ActorNameKey          = attribute.Key("ate.actor.name")
+	ActorUIDKey           = attribute.Key("ate.actor.uid")
+	ActorContainerNameKey = attribute.Key("ate.actor.container.name")
+	TemplateNameKey       = attribute.Key("ate.template.name")
+	TemplateNamespaceKey  = attribute.Key("ate.template.namespace")
+	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
+
+// ReservedNamespace is substrate's. A producer that merges untrusted fields into a
+// record drops everything under it, so nothing a workload sets can read as
+// platform-issued attribution downstream.
+const ReservedNamespace = "ate."
+
+// Trace-context fields for structured logs, per the OTel spec for non-OTLP log
+// formats: these exact names, top-level in the record, lowercase hex. Not ate.*
+// and not attributes - a collector maps them onto the log record's own
+// TraceId/SpanId/flags fields.
+// https://opentelemetry.io/docs/specs/otel/compatibility/logging_trace_context/
+const (
+	LogTraceIDField    = "trace_id"
+	LogSpanIDField     = "span_id"
+	LogTraceFlagsField = "trace_flags"
+)
+
+// OTLPRelayKey is a resource attribute rather than a subject one: it describes
+// how the emitting component reached the collector, not what the signal is about.
+// Only the components that have a relay to take or miss carry it.
+const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,
 // each with a small bounded value set. High-cardinality identity (actor
@@ -289,6 +315,24 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
+}
+
+// ActorLogLabels returns the actor identity stamped on every actor log record. A
+// string map because GKE promotes the record's label group into LogEntry.labels,
+// which is string-valued. An empty containerName omits the key rather than
+// emitting it empty, so a consumer filtering on it gets container output only.
+func ActorLogLabels(a resources.ActorAttribution, containerName string) map[string]string {
+	labels := map[string]string{
+		string(AtespaceKey):          a.Ref.Atespace,
+		string(ActorNameKey):         a.Ref.Name,
+		string(ActorUIDKey):          a.UID,
+		string(TemplateNamespaceKey): a.TemplateNamespace,
+		string(TemplateNameKey):      a.TemplateName,
+	}
+	if containerName != "" {
+		labels[string(ActorContainerNameKey)] = containerName
+	}
+	return labels
 }
 
 // ActorMetricAttributes returns the metric labels for an Actor.
