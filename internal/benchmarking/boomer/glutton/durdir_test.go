@@ -26,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 )
 
@@ -40,19 +41,19 @@ func TestDurDirLoopSequence(t *testing.T) {
 			name:         "explicit resume mode",
 			resumeMode:   dynconfig.ResumeModeExplicit,
 			wantGRPCCall: []string{"SuspendActor", "ResumeActor"},
-			wantHTTPCall: []string{readDiskRoute, readDiskRoute, writeDiskRoute},
+			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
 		},
 		{
 			name:         "implicit resume mode",
 			resumeMode:   dynconfig.ResumeModeImplicit,
 			wantGRPCCall: []string{"SuspendActor"}, // No ResumeActor RPC!
-			wantHTTPCall: []string{readDiskRoute, readDiskRoute, writeDiskRoute},
+			wantHTTPCall: []string{fake.ReadDiskRoute, fake.ReadDiskRoute, fake.WriteDiskRoute},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := &diskServer{data: []byte("seq content")}
+			srv := &fake.Server{Data: []byte("seq content")}
 			fakeCtrl := &fakeControlClient{}
 			cfg := &userclass.Config{
 				APIStub: fakeCtrl,
@@ -61,7 +62,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 				}),
 			}
 			du := newTestDurDirUser(t, srv, cfg)
-			du.expectedDigest = srv.hexDigest()
+			du.expectedDigest = srv.HexDigest()
 
 			dynCfg := cfg.Dyn.Load()
 			du.step(context.Background(), dynCfg)
@@ -69,7 +70,7 @@ func TestDurDirLoopSequence(t *testing.T) {
 			if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, tc.wantGRPCCall) {
 				t.Errorf("gRPC calls: got %v, want %v", got, tc.wantGRPCCall)
 			}
-			if got := srv.recordedPaths(); !reflect.DeepEqual(got, tc.wantHTTPCall) {
+			if got := srv.RecordedPaths(); !reflect.DeepEqual(got, tc.wantHTTPCall) {
 				t.Errorf("HTTP calls: got %v, want %v", got, tc.wantHTTPCall)
 			}
 		})
@@ -78,14 +79,14 @@ func TestDurDirLoopSequence(t *testing.T) {
 
 func TestDurDirUsesConfiguredFileSize(t *testing.T) {
 	configuredSize := int64(1048576) // 1 MiB
-	srv := &diskServer{data: make([]byte, configuredSize)}
+	srv := &fake.Server{Data: make([]byte, configuredSize)}
 	du := newTestDurDirUser(t, srv, nil)
 
 	if err := du.writeDisk(context.Background(), "TestConfiguredSize", configuredSize, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE); err != nil {
 		t.Fatalf("writeDisk failed: %v", err)
 	}
 
-	recorded := srv.recordedWriteSizes()
+	recorded := srv.RecordedWriteSizes()
 	if len(recorded) != 1 {
 		t.Fatalf("recorded write sizes: got %d calls, want 1", len(recorded))
 	}
@@ -101,12 +102,12 @@ func TestDurDirTestFileIsAValidGluttonKey(t *testing.T) {
 }
 
 func TestDurDirDigestOnlyAcceptsEmptyPayload(t *testing.T) {
-	srv := &diskServer{
-		data:         make([]byte, 1024),
-		emptyPayload: true,
+	srv := &fake.Server{
+		Data:         make([]byte, 1024),
+		EmptyPayload: true,
 	}
 	du := newTestDurDirUser(t, srv, nil)
-	du.expectedDigest = srv.hexDigest()
+	du.expectedDigest = srv.HexDigest()
 
 	if err := du.readDisk(context.Background(), t.Name(), gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY); err != nil {
 		t.Fatalf("expected readDisk to succeed in digest-only mode with empty payload, got: %v", err)
@@ -114,12 +115,12 @@ func TestDurDirDigestOnlyAcceptsEmptyPayload(t *testing.T) {
 }
 
 func TestDurDirDataModeRejectsEmptyPayload(t *testing.T) {
-	srv := &diskServer{
-		data:         make([]byte, 1024),
-		emptyPayload: true,
+	srv := &fake.Server{
+		Data:         make([]byte, 1024),
+		EmptyPayload: true,
 	}
 	du := newTestDurDirUser(t, srv, nil)
-	du.expectedDigest = srv.hexDigest()
+	du.expectedDigest = srv.HexDigest()
 
 	if err := du.readDisk(context.Background(), t.Name(), gluttonpb.ReadMode_READ_MODE_DATA); err == nil {
 		t.Fatalf("expected readDisk to fail in data mode with empty payload, got nil")
@@ -128,13 +129,13 @@ func TestDurDirDataModeRejectsEmptyPayload(t *testing.T) {
 
 func TestDurDirDigestOnlyStillRejectsWrongDigest(t *testing.T) {
 	wrongHash := sha256.Sum256([]byte("wrong data"))
-	srv := &diskServer{
-		data:         make([]byte, 1024),
-		digest:       wrongHash[:],
-		emptyPayload: true,
+	srv := &fake.Server{
+		Data:         make([]byte, 1024),
+		Digest:       wrongHash[:],
+		EmptyPayload: true,
 	}
 	du := newTestDurDirUser(t, srv, nil)
-	h := sha256.Sum256(srv.data)
+	h := sha256.Sum256(srv.Data)
 	du.expectedDigest = hex.EncodeToString(h[:])
 
 	if err := du.readDisk(context.Background(), t.Name(), gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY); err == nil {
@@ -143,15 +144,15 @@ func TestDurDirDigestOnlyStillRejectsWrongDigest(t *testing.T) {
 }
 
 func TestDurDirReadModeSentOnWire(t *testing.T) {
-	srv := &diskServer{}
+	srv := &fake.Server{}
 	du := newTestDurDirUser(t, srv, nil)
-	du.expectedDigest = srv.hexDigest()
+	du.expectedDigest = srv.HexDigest()
 
 	if err := du.readDisk(context.Background(), t.Name(), gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY); err != nil {
 		t.Fatalf("readDisk failed: %v", err)
 	}
 
-	recorded := srv.recordedReadModes()
+	recorded := srv.RecordedReadModes()
 	if len(recorded) != 1 {
 		t.Fatalf("recorded read modes: got %d calls, want 1", len(recorded))
 	}
@@ -161,12 +162,12 @@ func TestDurDirReadModeSentOnWire(t *testing.T) {
 }
 
 func TestDurDirBootstrapDoesNotBoot(t *testing.T) {
-	srv := &diskServer{data: []byte("data")}
+	srv := &fake.Server{Data: []byte("data")}
 	fakeCtrl := &fakeControlClient{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub: fakeCtrl,
 		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			DurDirFileSize: int64(len(srv.data)),
+			DurDirFileSize: int64(len(srv.Data)),
 		}),
 	})
 
@@ -205,12 +206,12 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := &diskServer{data: []byte("data")}
+			srv := &fake.Server{Data: []byte("data")}
 			fakeCtrl := &fakeControlClient{}
 			cfg := newTestConfig(t, srv, &userclass.Config{
 				APIStub: fakeCtrl,
 				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					DurDirFileSize: int64(len(srv.data)),
+					DurDirFileSize: int64(len(srv.Data)),
 					ResumeMode:     tc.resumeMode,
 				}),
 			})
@@ -231,7 +232,7 @@ func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 }
 
 func TestDurDirBootstrapFailureSuspendsBeforeDelete(t *testing.T) {
-	srv := &diskServer{status: http.StatusInternalServerError}
+	srv := &fake.Server{Status: http.StatusInternalServerError}
 	fakeCtrl := &fakeControlClient{}
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub: fakeCtrl,
@@ -258,7 +259,7 @@ func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
 	cfg := &userclass.Config{
 		APIStub: fakeCtrl,
 	}
-	du := newTestDurDirUser(t, &diskServer{}, cfg)
+	du := newTestDurDirUser(t, &fake.Server{}, cfg)
 
 	rt := &durDirRuntime{cfg: du.cfg}
 	rt.users.Store(goroutineID(), du)
