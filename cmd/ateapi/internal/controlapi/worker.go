@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -27,13 +28,13 @@ func (s *Service) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequ
 		return nil, toGRPCStatusError(errs)
 	}
 
-	workers, nextToken, err := s.persistence.ListWorkers(ctx, effectivePageSize(req.GetPageSize()), req.GetPageToken())
+	page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers in db: %w", err)
 	}
 	return &ateapipb.ListWorkersResponse{
-		Workers:       workers,
-		NextPageToken: nextToken,
+		Workers:       page.Items,
+		NextPageToken: page.NextPageToken,
 	}, nil
 }
 

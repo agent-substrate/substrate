@@ -44,7 +44,24 @@ const (
 	// atunnel only accepts mTLS-authenticated router clients, and the router's
 	// ext_proc server overwrites this header before every request.
 	OriginalHostHeader = "X-Ate-Original-Host"
+
+	// TargetPortHeader carries the port to reach on the actor: the CONNECT
+	// :authority's port for arbitrary-port ingress, or the default 80
+	// otherwise (see atenet-router's HandleRequestHeaders). cfg.Upstream is
+	// fixed for the Server's lifetime, so this lets the port vary per
+	// request; stripped before the request reaches the actor.
+	TargetPortHeader = "X-Ate-Target-Port"
 )
+
+// ParsePort parses s as a TCP port number, returning ok=false for anything
+// outside the valid 1-65535 range (including non-numeric input).
+func ParsePort(s string) (port int, ok bool) {
+	p, err := strconv.Atoi(s)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, false
+	}
+	return p, true
+}
 
 // Config configures an ingress Server.
 type Config struct {
@@ -103,12 +120,27 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(cfg.Upstream)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	proxy.Transport = transport
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(cfg.Upstream)
+			// Retain the actor's stable mesh hostname rather than the
+			// upstream's, matching NewSingleHostReverseProxy's default
+			// behavior.
+			pr.Out.Host = pr.In.Host
+
+			port := pr.In.Header.Get(TargetPortHeader)
+			pr.Out.Header.Del(TargetPortHeader)
+			if p, ok := ParsePort(port); ok {
+				pr.Out.URL.Host = net.JoinHostPort(cfg.Upstream.Hostname(), strconv.Itoa(p))
+			}
+			pr.SetXForwarded()
+		},
+		Transport: transport,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		},
 	}
 
 	s := &Server{
@@ -295,8 +327,7 @@ func requestHostname(hostport string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid host %q: %w", hostport, err)
 		}
-		portNumber, err := strconv.Atoi(port)
-		if err != nil || portNumber < 1 || portNumber > 65535 {
+		if _, ok := ParsePort(port); !ok {
 			return "", fmt.Errorf("invalid port in host %q", hostport)
 		}
 	}

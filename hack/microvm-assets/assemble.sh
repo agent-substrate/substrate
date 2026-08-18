@@ -34,7 +34,7 @@
 # publishes a prebuilt static binary for x86_64 only; arm64 builds from the release
 # tag, which needs rust (rustup) + libcap-ng-dev libseccomp-dev pkg-config.
 #
-# Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.0.0), CH_VER (v52.0),
+# Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.0.0), CH_VER (v53.0),
 #      OUT (default ./bin/microvm-assets/$ARCH, under the gitignored bin/).
 
 set -o errexit -o nounset -o pipefail
@@ -43,7 +43,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 
 ARCH="${ARCH:-arm64}"
 KATA_VER="${KATA_VER:-4.0.0}"
-CH_VER="${CH_VER:-v52.0}"
+CH_VER="${CH_VER:-v53.0}"
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

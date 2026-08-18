@@ -155,10 +155,10 @@ func TestDeleteActorTemplateVersion_TaggedGoldenSnapshotRollsBack(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot failed: %v", err)
 	}
-	if _, err := s.TagActorSnapshot(ctx, "ate-golden", "golden-1", &ateapipb.ActorSnapshotTag{
+	if _, err := s.CreateActorSnapshotTag(ctx, "ate-golden", "golden-1", &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "keep-golden"},
 	}); err != nil {
-		t.Fatalf("TagActorSnapshot failed: %v", err)
+		t.Fatalf("CreateActorSnapshotTag failed: %v", err)
 	}
 	version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
 	version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}
@@ -188,15 +188,15 @@ func TestListActorTemplateVersions_PageTokenRejectsDifferentFilter(t *testing.T)
 		}
 	}
 	parent := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
-	_, token, err := s.ListActorTemplateVersions(ctx, "team-a", parent, 1, "")
+	page, err := s.ListActorTemplateVersions(ctx, "team-a", parent, store.ListOptions{PageSize: 1})
 	if err != nil {
 		t.Fatalf("ListActorTemplateVersions failed: %v", err)
 	}
-	if token == "" {
+	if page.NextPageToken == "" {
 		t.Fatal("expected a second page")
 	}
 	otherParent := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-b"}
-	if _, _, err := s.ListActorTemplateVersions(ctx, "team-a", otherParent, 1, token); err == nil {
+	if _, err := s.ListActorTemplateVersions(ctx, "team-a", otherParent, store.ListOptions{PageSize: 1, PageToken: page.NextPageToken}); err == nil {
 		t.Error("page token was accepted with a different parent filter")
 	}
 }
@@ -288,7 +288,7 @@ func TestListActors_InvalidPageToken(t *testing.T) {
 	s := setupPostgresStore(t).(*Persistence)
 	ctx := context.Background()
 
-	if _, _, err := s.ListActors(ctx, "", 10, "not-valid-base64!!"); err == nil {
+	if _, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 10, PageToken: "not-valid-base64!!"}); err == nil {
 		t.Errorf("ListActors with malformed page token = nil error, want an error")
 	}
 }
@@ -316,30 +316,30 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		}
 	}
 
-	_, nextToken, err := s.ListActors(ctx, "team-a", 1, "")
+	page, err := s.ListActors(ctx, "team-a", store.ListOptions{PageSize: 1})
 	if err != nil {
 		t.Fatalf("ListActors(team-a) failed: %v", err)
 	}
-	if nextToken == "" {
+	if page.NextPageToken == "" {
 		t.Fatalf("expected a next page token")
 	}
 
 	// A token minted for team-a must be rejected when replayed against team-b
 	// or against the unscoped (global) listing.
-	if _, _, err := s.ListActors(ctx, "team-b", 1, nextToken); err == nil {
+	if _, err := s.ListActors(ctx, "team-b", store.ListOptions{PageSize: 1, PageToken: page.NextPageToken}); err == nil {
 		t.Errorf("ListActors(team-b) with team-a's token = nil error, want an error")
 	}
-	if _, _, err := s.ListActors(ctx, "", 1, nextToken); err == nil {
+	if _, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1, PageToken: page.NextPageToken}); err == nil {
 		t.Errorf("ListActors(all) with team-a's token = nil error, want an error")
 	}
 
 	// A worker-list token must be rejected by ListAtespaces (different kind).
-	_, workerToken, err := s.ListWorkers(ctx, 1, "")
+	workerPage, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
-	if workerToken != "" {
-		if _, _, err := s.ListAtespaces(ctx, 1, workerToken); err == nil {
+	if workerPage.NextPageToken != "" {
+		if _, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1, PageToken: workerPage.NextPageToken}); err == nil {
 			t.Errorf("ListAtespaces with a worker page token = nil error, want an error")
 		}
 	}

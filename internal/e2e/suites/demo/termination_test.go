@@ -37,10 +37,6 @@ import (
 // (CRASHED). We assert the control-plane state
 // machine rather than any in-actor state saving, which is the application's responsibility.
 func TestGracefulWorkerTermination(t *testing.T) {
-	if isMicroVMEnvironment() {
-		t.Skip("Skipping TestGracefulWorkerTermination for microVM environment")
-	}
-
 	nsObj := e2e.CreateNamespace(t)
 
 	ctx := context.Background()
@@ -149,13 +145,9 @@ func waitForWorkerRemoved(ctx context.Context, t *testing.T, clients *e2e.Client
 
 // TestGracefulWorkerTerminationTimeout exercises the case where the workload
 // container hangs (exceeds the 1-minute workloadGracePeriod) during SIGTERM.
-// ateom-gvisor is expected to SIGKILL the container, letting the control plane
-// mark the worker removed and the actor CRASHED.
+// The ateom is expected to SIGKILL the container, letting the control plane
+// mark the worker removed and the actor CRASHED. Runs against both runtimes.
 func TestGracefulWorkerTerminationTimeout(t *testing.T) {
-	if isMicroVMEnvironment() {
-		t.Skip("Skipping TestGracefulWorkerTerminationTimeout for microVM environment")
-	}
-
 	nsObj := e2e.CreateNamespace(t)
 
 	ctx := context.Background()
@@ -243,10 +235,6 @@ func TestGracefulWorkerTerminationTimeout(t *testing.T) {
 // deleted (evicted), and while the container is in its SIGTERM shutdown phase,
 // we initiate a suspend. Suspend should succeed.
 func TestGracefulWorkerTerminationSuspend(t *testing.T) {
-	if isMicroVMEnvironment() {
-		t.Skip("Skipping TestGracefulWorkerTerminationSuspend for microVM environment")
-	}
-
 	nsObj := e2e.CreateNamespace(t)
 
 	ctx := context.Background()

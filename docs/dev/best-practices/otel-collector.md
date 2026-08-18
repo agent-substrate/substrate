@@ -508,16 +508,118 @@ Regardless of topology, these are the ones that tell you it is struggling:
 | `otelcol_exporter_queue_size` vs `_capacity` | Queue filling — shedding is imminent |
 | `otelcol_processor_incoming_items` vs `_outgoing_items` | Gap means a processor is dropping data |
 
-Substrate's telemetry has two independent rate drivers, and they scale on
-different axes:
+### The volume model
 
-- **Metrics** scale with **fleet size** — roughly
-  `(2 + nodes + actors) × instruments × cardinality` per minute, pushed on a
-  60s unjittered interval.
-- **Traces** scale with **request rate**. `ateapi` roots a trace for every
-  unparented API call; downstream components are `ParentBased(NeverSample)`,
-  so one sampled request fans out into spans across the whole call chain.
+The telemetry of substrate has two independent rate drivers, and each one
+increases on a different axis.
 
-A cluster with many idle actors is metrics-bound; a cluster under load is
-trace-bound. Size for whichever dominates your workload, and use the
-trace sampling probability as the first knob when the collector saturates.
+The model below gives the shape of each driver. It gives no values: those
+change with the instruments of each release and with the cluster. Measure them
+with the telemetry meter, which counts by service. See
+[benchmarking/observability.md](../../../benchmarking/observability.md) for the
+scenario ladder.
+
+**The metrics increase with the number of components that run**, not with the
+quantity of work that they do:
+
+```
+datapoints/min ≈  nodes                  × atelet_dp
+                + ateapi_replicas        × ateapi_dp
+                + router_replicas        × router_dp
+                + worker_pods            × ateom_dp
+                + instrumented_actors    × actor_dp
+```
+
+Each substrate binary pushes on a `PeriodicReader` at the SDK default of 60s,
+with no jitter (`newMeterProvider` in
+[`serverboot.go`](../../../internal/serverboot/serverboot.go)). Thus processes
+that start together also push together. The request rate changes this term
+only a small quantity. A large increase in the actor lifecycle rate moves the
+datapoint volume very little.
+
+Do not assume a value for any term. Each release can add or remove instruments,
+thus a component that sends little today can send much later, and a component
+that looks silent may not be. Measure the terms for your own cluster with the
+telemetry meter, which counts by service; see
+[benchmarking/telemetry/README.md](../../../benchmarking/telemetry/README.md).
+
+One term is a matter of configuration and not of volume: an actor container
+sends telemetry only if its image has instrumentation **and** its ActorTemplate
+sets an OTLP endpoint. Substrate puts no OTLP configuration in an actor
+container.
+
+**The traces increase with the rate of the operations:**
+
+```
+spans/sec ≈ (actor_lifecycle_ops/sec + actor_requests/sec)
+            × P(root sampled)
+            × spans_per_op
+```
+
+Measure `spans_per_op` for your own cluster at a low sample rate, where no
+component drops data, then hold it as a constant for the higher rates. The
+share of each component moves with the code path that the load uses, thus read
+it from the meter for the scenario you run.
+
+> [!IMPORTANT]
+> **With `ParentBased`, the caller makes the root decision.** Since
+> [#711](https://github.com/agent-substrate/substrate/pull/711) the defaults are
+> `ParentBased(TraceIDRatioBased)` at 0.1 for `ateapi`, `atelet`, and `ateom-*`,
+> and 0.01 for `atenet-router` and Envoy. These rates apply only to an operation
+> that arrives with no `traceparent`. A client that sends a `traceparent` makes
+> the decision for the full chain, and the defaults of substrate do not apply.
+> To change the rate for one process, set `OTEL_TRACES_SAMPLER` and
+> `OTEL_TRACES_SAMPLER_ARG`.
+
+The metrics are the limit in a cluster with many components. The traces are the
+limit in a cluster with much load. Calculate the size for the larger of the
+two. If the collector becomes full, decrease the trace sample rate first.
+
+### Deployment or DaemonSet
+
+Users frequently ask at which throughput the collector must change from a
+Deployment to a DaemonSet. The measurements show that **throughput is the wrong
+axis**. At the maximum actor throughput of substrate, the collector used a
+small part of its memory limit and of its CPU limit. But it stayed at
+`maxReplicas` at the same time. A rule that uses throughput shows a large
+margin during all of this condition.
+
+The variable that sets the limit is the **number of pods in the cluster**,
+because of the size of the `k8sattributes` cache:
+
+| Mode | Cache in each instance | When the cluster becomes larger |
+|---|---|---|
+| Deployment | O(pods in the cluster) | Increases with no limit. The HPA cannot decrease it. |
+| DaemonSet, filter scoped to the node | O(pods on the node) | Stays in a limit, because a node holds a limited number of pods |
+
+The DaemonSet is better only **with** `k8sattributes` scoped to the node
+(`filter: node_from_env_var`). Without this scope, a DaemonSet is worse: the
+cache is not sharded per node, thus each node keeps one full copy of the
+cluster cache.
+
+Make the decision in this sequence:
+
+1. **Do you need trace-complete processing?** Tail sampling needs all the spans
+   of a trace in one instance, thus a DaemonSet breaks it. To keep a DaemonSet,
+   add a gateway tier behind `loadbalancingexporter`, which sends all the spans
+   of one trace to the same instance. `spanmetrics` does not need this: it reads
+   each span on its own. This condition frequently makes the decision.
+2. **The number of pods in the cluster.** In a small cluster, a Deployment is
+   more simple and less expensive. As the cluster becomes larger, the cache
+   term increases until the Deployment has no margin for the HPA. Measure the
+   memory of each replica against the number of pods to find this point for
+   your own cluster.
+3. **The concentration on each node**, if some nodes hold workloads that send
+   much telemetry.
+
+Calculate the cost in the other direction also. A DaemonSet puts one collector
+on each node, and each collector has an idle memory floor. Thus a DaemonSet
+uses *more* memory in total than a small number of Deployment replicas, until
+the cache term becomes larger than that floor. The crossover point is the value
+to measure.
+
+> [!WARNING]
+> **No measurement covers the DaemonSet mode.** The statements above for the
+> DaemonSet are an extrapolation from the values of the Deployment mode. To
+> confirm them, measure the two modes against an increasing number of pods, and
+> compare the memory of each instance and the memory of the full cluster.

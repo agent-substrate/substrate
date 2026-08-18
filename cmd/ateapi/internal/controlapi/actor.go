@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
@@ -47,32 +48,6 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 			ateattr.TemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
 		)
 	}()
-	var sourceSnapshot *ateapipb.ActorSnapshot
-	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
-	if src := in.GetSourceSnapshot(); src != nil {
-		lock, snapshot, canonical, tag, err := s.lockActorSnapshot(ctx, nil, src.GetTag())
-		if err != nil {
-			return nil, err
-		}
-		defer lock.Close()
-		ctx = lock.Context()
-		sourceSnapshot = snapshot
-		sourceSnapshotInfo = &ateapipb.ActorSnapshotSource{
-			Tag:         src.GetTag(),
-			Snapshot:    canonical,
-			SnapshotUid: snapshot.GetMetadata().GetUid(),
-		}
-		target := in.GetMetadata()
-		switch tag.GetScope() {
-		case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE:
-			if tag.GetMetadata().GetAtespace() != target.GetAtespace() {
-				return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot tag is not published outside its Atespace")
-			}
-		case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED:
-		default:
-			return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
-		}
-	}
 	templateNamespace := in.GetActorTemplateNamespace()
 	templateName := in.GetActorTemplateName()
 
@@ -85,16 +60,12 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		}
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
-	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
-	if sourceSnapshot != nil && sourceSnapshot.GetActorTemplateUid() != string(template.GetUID()) {
-		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
-	}
-	if sourceSnapshot != nil {
-		for _, volume := range template.Spec.Volumes {
-			if volume.ExternalVolumeTemplate != nil {
-				// TODO: Permit cloning after CSI volume snapshots are supported.
-				return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot cloning does not support external volumes")
-			}
+
+	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
+	if src := in.GetSourceSnapshot(); src != nil {
+		sourceSnapshotInfo, err = s.resolveSnapshotSource(ctx, in.GetMetadata().GetAtespace(), src, template)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -139,6 +110,55 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 
 	setSpanActorAttributes(ctx, stored)
 	return stored, nil
+}
+
+// resolveSnapshotSource resolves a CreateActor request's source snapshot tag
+// and checks that its scope and ActorSnapshot are compatible with creating
+// an Actor in actorAtespace from template.
+func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace string, src *ateapipb.ActorSnapshotSource, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSnapshotSource, error) {
+	tagRef := src.GetTag()
+	tag, err := s.persistence.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+	}
+	snapshotRef := tag.GetSnapshot()
+	snapshot, err := s.persistence.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting actor snapshot: %w", err)
+	}
+	switch tag.GetScope() {
+	case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE:
+		if tag.GetMetadata().GetAtespace() != actorAtespace {
+			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot tag is not published outside its Atespace")
+		}
+	case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED:
+	default:
+		return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
+	}
+	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
+	if snapshot.GetActorTemplateUid() != string(template.GetUID()) {
+		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
+	}
+	for _, volume := range template.Spec.Volumes {
+		if volume.ExternalVolumeTemplate != nil {
+			// TODO: Permit cloning after CSI volume snapshots are supported.
+			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot cloning does not support external volumes")
+		}
+	}
+	return &ateapipb.ActorSnapshotSource{
+		Tag: tagRef,
+		Snapshot: &ateapipb.ObjectRef{
+			Atespace: snapshot.GetMetadata().GetAtespace(),
+			Name:     snapshot.GetMetadata().GetName(),
+		},
+		SnapshotUid: snapshot.GetMetadata().GetUid(),
+	}, nil
 }
 
 func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorList {
@@ -221,13 +241,13 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 		return nil, toGRPCStatusError(errs)
 	}
 
-	actors, nextToken, err := s.persistence.ListActors(ctx, req.GetAtespace(), effectivePageSize(req.GetPageSize()), req.GetPageToken())
+	page, err := s.persistence.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing actors in db: %w", err)
 	}
 	return &ateapipb.ListActorsResponse{
-		Actors:        actors,
-		NextPageToken: nextToken,
+		Actors:        page.Items,
+		NextPageToken: page.NextPageToken,
 	}, nil
 }
 

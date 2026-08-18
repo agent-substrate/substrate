@@ -234,6 +234,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					reasonVal := extractLabelValue(line, "ate_failure_reason")
 					tmplNSVal := extractLabelValue(line, "ate_template_namespace")
 					tmplNameVal := extractLabelValue(line, "ate_template_name")
+					workerPoolNSVal := extractLabelValue(line, "ate_workerpool_namespace")
 					workerPoolVal := extractLabelValue(line, "ate_workerpool_name")
 					sandboxVal := extractLabelValue(line, "ate_sandbox_class")
 
@@ -256,6 +257,12 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					if tmplNameVal == "" {
 						crashErrs = append(crashErrs, "ate_template_name label is missing or empty")
 					}
+					// The pool keys identify one WorkerPool together: the name on
+					// its own merges same-named pools from different namespaces.
+					// The suite crashes an assigned actor, so both are expected.
+					if workerPoolNSVal == "" {
+						crashErrs = append(crashErrs, "ate_workerpool_namespace label is missing or empty")
+					}
 					if workerPoolVal == "" {
 						crashErrs = append(crashErrs, "ate_workerpool_name label is missing or empty")
 					}
@@ -264,8 +271,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					}
 
 					if len(crashErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q)",
-							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolVal, sandboxVal))
+						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q)",
+							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal))
 					}
 				}
 			}

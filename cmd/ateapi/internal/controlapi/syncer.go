@@ -54,14 +54,26 @@ type workerKey struct {
 // key against the current informer cache state, requeuing with rate-limited
 // backoff on transient failures such as store.ErrVersionConflict.
 type WorkerPoolSyncer struct {
-	persistence      store.Interface
+	persistence      workerPoolSyncerStore
 	workerInformer   cache.SharedIndexInformer
 	workerPoolLister listersv1alpha1.WorkerPoolLister
 	queue            workqueue.TypedRateLimitingInterface[workerKey]
 }
 
+// workerPoolSyncerStore enumerates the exact storage methods needed by
+// WorkerPoolSyncer and nothing more.
+type workerPoolSyncerStore interface {
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
+	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
+	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
+}
+
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(persistence store.Interface, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(persistence workerPoolSyncerStore, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		persistence:      persistence,
 		workerInformer:   workerInformer,
@@ -216,6 +228,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
 			State:           ateapipb.Worker_STATE_ACTIVE,
+			Capacity:        workerCapacity(pod),
 		}
 		// TODO(thockin): for now this is the only place Workers are
 		// created.  If/when this becomes a regular API, validation should
@@ -273,6 +286,38 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
 }
 
+// ateomContainerName is the name of the container in a worker pod that hosts the
+// actor's sandbox; its resource limits bound what an actor placed here can use.
+const ateomContainerName = "ateom"
+
+// workerCapacity returns the worker pod's capacity for hosting an actor — CPU
+// in millicores and memory in bytes — taken from the ateom container's resource
+// limits. A dimension the pod does not limit reports 0, which the scheduler
+// treats as "unknown" (unconstrained); a pod that limits neither reports nil
+// rather than an all-zero message that says the same thing. The actor sandbox
+// runs nested in the ateom container's cgroup, so that container's limits — not
+// the pod total — are the relevant envelope.
+func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
+	var capacity ateapipb.WorkerCapacity
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		if c.Name != ateomContainerName {
+			continue
+		}
+		if v := c.Resources.Limits.Cpu(); v != nil {
+			capacity.CpuMilli = v.MilliValue()
+		}
+		if v := c.Resources.Limits.Memory(); v != nil {
+			capacity.MemoryBytes = v.Value()
+		}
+		break
+	}
+	if capacity.CpuMilli == 0 && capacity.MemoryBytes == 0 {
+		return nil
+	}
+	return &capacity
+}
+
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler
 // stops routing new actors to it while its pod is Terminating. If the worker is
 // already gone or already draining there is nothing more to do — the Pod
@@ -307,24 +352,74 @@ func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, namespace, p
 	return s.persistence.DeleteWorker(ctx, namespace, pool, podName)
 }
 
+// storedWorkerListBackoff and storedWorkerListCap are the exponential backoff
+// schedule for retrying a failed page of the startup stored-worker scan. They
+// are vars so tests can shrink them.
+var (
+	storedWorkerListBackoff = 500 * time.Millisecond
+	storedWorkerListCap     = 30 * time.Second
+)
+
 // enqueueStoredWorkers enqueues a key for every worker record in the store.
 // Records whose pods are live and unchanged reconcile to a no-op; orphaned
 // records (pod gone, or its name reused by a new pod UID) get cleaned up.
+//
+// Each page's ListWorkers call is retried with capped backoff until it succeeds
+// or ctx is cancelled, so a transient store error does not abandon the scan and
+// leave ghost workers behind until the next restart (the per-key workqueue
+// retries reconciles, but nothing retries this initial enqueue scan). Pages are
+// enqueued as they are read, so the whole worker set is never held in memory at
+// once and a late failure does not re-scan the pages already enqueued.
 func (s *WorkerPoolSyncer) enqueueStoredWorkers(ctx context.Context) {
 	var pageToken string
 	for {
-		workers, nextToken, err := s.persistence.ListWorkers(ctx, 1000, pageToken)
+		page, err := s.listWorkersPageWithRetry(ctx, pageToken)
 		if err != nil {
-			slog.ErrorContext(ctx, "Syncer: failed to list workers for orphan reconcile", slog.Any("err", err))
+			// Only ctx cancellation (ate-api-server shutdown) ends the retry
+			// loop. Pages read so far are already enqueued (partial progress);
+			// the rest are recovered by the next startup scan.
+			slog.ErrorContext(ctx, "Syncer: stopped enqueue of stored workers before completing the scan; remaining workers will be retried at the next startup", slog.Any("err", err))
 			return
 		}
-		for _, w := range workers {
+		for _, w := range page.Items {
 			s.queue.Add(workerKey{namespace: w.GetWorkerNamespace(), pool: w.GetWorkerPool(), name: w.GetWorkerPod()})
 		}
-		if nextToken == "" {
+		if !page.HasNextPage() {
 			return
 		}
-		pageToken = nextToken
+		pageToken = page.NextPageToken
+	}
+}
+
+// listWorkersPageWithRetry reads one page of workers, retrying the store call
+// with capped exponential backoff until it succeeds or ctx is cancelled. The
+// page token is a stateless cursor, so retrying the failed call with the same
+// token resumes from the same position. A fresh backoff per page means only
+// consecutive failures of the same call accumulate delay; a page that succeeds
+// resets it.
+func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageToken string) (store.ListResponse[*ateapipb.Worker], error) {
+	backoff := wait.Backoff{
+		Duration: storedWorkerListBackoff,
+		Factor:   2.0,
+		Jitter:   0.1,
+		// Steps must be large enough for the ramp (Duration*Factor^n) to reach
+		// Cap, or Cap never triggers and the plateau sits at the last ramp step.
+		// With Duration=500ms, Factor=2, the ramp hits Cap=30s at step 6
+		// (0.5,1,2,4,8,16,30,30...).
+		Steps: 6,
+		Cap:   storedWorkerListCap,
+	}
+	for {
+		page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: 1000, PageToken: pageToken})
+		if err == nil {
+			return page, nil
+		}
+		slog.WarnContext(ctx, "Syncer: failed to list a page of stored workers for orphan cleanup, retrying", slog.Any("err", err))
+		select {
+		case <-ctx.Done():
+			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing stored workers aborted: %w", ctx.Err())
+		case <-time.After(backoff.Step()):
+		}
 	}
 }
 

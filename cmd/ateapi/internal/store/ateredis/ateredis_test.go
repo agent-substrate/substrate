@@ -742,10 +742,11 @@ func TestListWorkers(t *testing.T) {
 		t.Fatalf("failed to create worker2: %v", err)
 	}
 
-	workers, _, err := s.ListWorkers(ctx, 1000, "")
+	workersResp, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
+	workers := workersResp.Items
 
 	if len(workers) != 2 {
 		t.Errorf("expected 2 workers, got %d", len(workers))
@@ -792,10 +793,11 @@ func TestListActors(t *testing.T) {
 		t.Fatalf("failed to create actor2: %v", err)
 	}
 
-	actors, _, err := s.ListActors(ctx, "", 1000, "")
+	actorsResp, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
+	actors := actorsResp.Items
 
 	if len(actors) != 2 {
 		t.Errorf("expected 2 actors, got %d", len(actors))
@@ -843,13 +845,17 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "before-upgrade"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	}
-	tagged, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", tag)
+	tagged, err := s.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", tag)
 	if err != nil || tagged.GetSnapshot().GetName() != "snapshot-1" {
-		t.Fatalf("TagActorSnapshot = (%v, %v), want stable tag", tagged, err)
+		t.Fatalf("CreateActorSnapshotTag = (%v, %v), want stable tag", tagged, err)
 	}
-	byTag, resolvedTag, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade")
-	if err != nil || !proto.Equal(created, byTag) || !proto.Equal(tagged, resolvedTag) {
-		t.Fatalf("GetActorSnapshotByTag = (%v, %v, %v), want tagged snapshot", byTag, resolvedTag, err)
+	resolvedTag, err := s.GetActorSnapshotTag(ctx, testAtespace, "before-upgrade")
+	if err != nil || !proto.Equal(tagged, resolvedTag) {
+		t.Fatalf("GetActorSnapshotTag = (%v, %v), want tagged tag", resolvedTag, err)
+	}
+	byTag, err := s.GetActorSnapshot(ctx, resolvedTag.GetSnapshot().GetAtespace(), resolvedTag.GetSnapshot().GetName())
+	if err != nil || !proto.Equal(created, byTag) {
+		t.Fatalf("GetActorSnapshot(resolved tag target) = (%v, %v), want tagged snapshot", byTag, err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
@@ -858,15 +864,15 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("CreateActorSnapshot second snapshot: %v", err)
 	}
 	otherTag := &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "before-upgrade"}, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE}
-	if _, err := s.TagActorSnapshot(ctx, "other", "snapshot-2", otherTag); err != nil {
+	if _, err := s.CreateActorSnapshotTag(ctx, "other", "snapshot-2", otherTag); err != nil {
 		t.Fatalf("same tag name in another Atespace: %v", err)
 	}
-	if _, err := s.TagActorSnapshot(ctx, "other", "snapshot-2", tag); !errors.Is(err, store.ErrAlreadyExists) {
+	if _, err := s.CreateActorSnapshotTag(ctx, "other", "snapshot-2", tag); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("duplicate Atespace tag error = %v, want ErrAlreadyExists", err)
 	}
 	differentScope := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
 	differentScope.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
-	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
+	if _, err := s.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("re-tag with different scope error = %v, want ErrAlreadyExists", err)
 	}
 	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", func(toUpdate *ateapipb.ActorSnapshotTag) error {
@@ -876,19 +882,22 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil || tagged.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("UpdateActorSnapshotTag = (%v, %v), want published", tagged, err)
 	}
-	if byTag, resolvedTag, err = s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); err != nil || byTag.GetMetadata().GetUid() != created.GetMetadata().GetUid() || resolvedTag.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
-		t.Fatalf("tag after publication = (%v, %v, %v), want same address and snapshot", byTag, resolvedTag, err)
+	if resolvedTag, err = s.GetActorSnapshotTag(ctx, testAtespace, "before-upgrade"); err != nil || resolvedTag.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("tag after publication = (%v, %v), want published scope", resolvedTag, err)
 	}
-	listed, _, err := s.ListActorSnapshots(ctx, testAtespace, 10, "")
-	if err != nil || len(listed) != 1 {
-		t.Fatalf("ListActorSnapshots = (%v, %v), want one", listed, err)
+	if byTag, err = s.GetActorSnapshot(ctx, resolvedTag.GetSnapshot().GetAtespace(), resolvedTag.GetSnapshot().GetName()); err != nil || byTag.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
+		t.Fatalf("snapshot after publication = (%v, %v), want same address", byTag, err)
+	}
+	listed, err := s.ListActorSnapshots(ctx, testAtespace, store.ListOptions{PageSize: 10})
+	if err != nil || len(listed.Items) != 1 {
+		t.Fatalf("ListActorSnapshots = (%v, %v), want one", listed.Items, err)
 	}
 
 	deleted, err := s.DeleteActorSnapshotTag(ctx, testAtespace, "before-upgrade")
 	if err != nil || deleted.GetMetadata().GetName() != "before-upgrade" {
 		t.Fatalf("DeleteActorSnapshotTag = (%v, %v)", deleted, err)
 	}
-	if _, _, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.GetActorSnapshotTag(ctx, testAtespace, "before-upgrade"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("deleted tag lookup = %v, want ErrNotFound", err)
 	}
 	if got, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
@@ -906,12 +915,12 @@ func seedTaggedSnapshot(t *testing.T, s *Persistence, ctx context.Context, snaps
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(%s) failed: %v", snapshotName, err)
 	}
-	tagged, err := s.TagActorSnapshot(ctx, testAtespace, snapshotName, &ateapipb.ActorSnapshotTag{
+	tagged, err := s.CreateActorSnapshotTag(ctx, testAtespace, snapshotName, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
 	if err != nil {
-		t.Fatalf("TagActorSnapshot(%s) failed: %v", tagName, err)
+		t.Fatalf("CreateActorSnapshotTag(%s) failed: %v", tagName, err)
 	}
 	return tagged
 }
@@ -937,9 +946,9 @@ func TestUpdateActorSnapshotTag_MutateErrorAreNotRetried(t *testing.T) {
 		t.Errorf("mutate ran %d times, want exactly 1 (a rejected precondition must not be retried)", callsToMutateFn)
 	}
 
-	_, got, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	got, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 	if err != nil {
-		t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+		t.Fatalf("GetActorSnapshotTag failed: %v", err)
 	}
 	if diff := cmp.Diff(tagged, got, protocmp.Transform()); diff != "" {
 		t.Errorf("aborted mutation was persisted (-tagged +got):\n%s", diff)
@@ -1027,9 +1036,9 @@ func TestUpdateActorSnapshotTag_RejectsImmutableFieldChange(t *testing.T) {
 				t.Errorf("UpdateActorSnapshotTag changing %s = %v, want an error containing %q", tt.name, err, want)
 			}
 
-			_, got, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+			got, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 			if err != nil {
-				t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+				t.Fatalf("GetActorSnapshotTag failed: %v", err)
 			}
 			if diff := cmp.Diff(tagged, got, protocmp.Transform()); diff != "" {
 				t.Errorf("rejected mutation was persisted anyway (-tagged +got):\n%s", diff)
@@ -1054,9 +1063,9 @@ func TestUpdateActorSnapshotTag_RetriesOnConcurrentWrite(t *testing.T) {
 		if attempts > 0 {
 			return
 		}
-		_, concurrent, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+		concurrent, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 		if err != nil {
-			t.Errorf("GetActorSnapshotByTag for concurrent write failed: %v", err)
+			t.Errorf("GetActorSnapshotTag for concurrent write failed: %v", err)
 			return
 		}
 		// Repointing the tag is not something a mutation may do, but a writer
@@ -1113,12 +1122,12 @@ func TestUpdateActorSnapshotTag_RejectsStaleUID(t *testing.T) {
 	if _, err := s.DeleteActorSnapshotTag(ctx, testAtespace, "tag-1"); err != nil {
 		t.Fatalf("DeleteActorSnapshotTag failed: %v", err)
 	}
-	recreated, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
+	recreated, err := s.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-1"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
 	if err != nil {
-		t.Fatalf("re-tag TagActorSnapshot failed: %v", err)
+		t.Fatalf("re-tag CreateActorSnapshotTag failed: %v", err)
 	}
 	if recreated.GetMetadata().GetUid() == original.GetMetadata().GetUid() {
 		t.Fatalf("recreated tag reused uid %s, want a fresh one", recreated.GetMetadata().GetUid())
@@ -1148,9 +1157,9 @@ func TestUpdateActorSnapshotTag_RejectsStaleUID(t *testing.T) {
 		t.Errorf("UpdateActorSnapshotTag error = %v, want no store.ErrVersionConflict match: no version was pinned", err)
 	}
 
-	_, stored, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	stored, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 	if err != nil {
-		t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+		t.Fatalf("GetActorSnapshotTag failed: %v", err)
 	}
 	if diff := cmp.Diff(recreated, stored, protocmp.Transform()); diff != "" {
 		t.Errorf("the rejected update still wrote (-recreated +stored):\n%s", diff)
@@ -1255,13 +1264,13 @@ func TestCreateWorker_AlreadyExists(t *testing.T) {
 func TestListWorkers_Empty(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
-	workers, _, err := s.ListWorkers(ctx, 1000, "")
+	workers, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
 
-	if len(workers) != 0 {
-		t.Errorf("expected 0 workers, got %d", len(workers))
+	if len(workers.Items) != 0 {
+		t.Errorf("expected 0 workers, got %d", len(workers.Items))
 	}
 }
 
@@ -1283,13 +1292,13 @@ func TestListWorkers_Pagination(t *testing.T) {
 	pageToken := ""
 
 	for {
-		workers, nextToken, err := s.ListWorkers(ctx, 2, pageToken)
+		page, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 2, PageToken: pageToken})
 		if err != nil {
 			t.Fatalf("ListWorkers failed: %v", err)
 		}
 
-		allWorkers = append(allWorkers, workers...)
-		pageToken = nextToken
+		allWorkers = append(allWorkers, page.Items...)
+		pageToken = page.NextPageToken
 		if pageToken == "" {
 			break
 		}
@@ -1321,13 +1330,13 @@ func TestListAtespaces_Pagination(t *testing.T) {
 	pageToken := ""
 
 	for {
-		atespaces, nextToken, err := s.ListAtespaces(ctx, 2, pageToken)
+		page, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 2, PageToken: pageToken})
 		if err != nil {
 			t.Fatalf("ListAtespaces failed: %v", err)
 		}
 
-		allAtespaces = append(allAtespaces, atespaces...)
-		pageToken = nextToken
+		allAtespaces = append(allAtespaces, page.Items...)
+		pageToken = page.NextPageToken
 		if pageToken == "" {
 			break
 		}
@@ -1349,13 +1358,13 @@ func TestListAtespaces_Pagination(t *testing.T) {
 func TestListActors_Empty(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
-	actors, _, err := s.ListActors(ctx, "", 1000, "")
+	actors, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
 
-	if len(actors) != 0 {
-		t.Errorf("expected 0 actors, got %d", len(actors))
+	if len(actors.Items) != 0 {
+		t.Errorf("expected 0 actors, got %d", len(actors.Items))
 	}
 }
 
@@ -1378,13 +1387,13 @@ func TestListActors_Pagination(t *testing.T) {
 	pageToken := ""
 
 	for {
-		actors, nextToken, err := s.ListActors(ctx, "", 2, pageToken)
+		page, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 2, PageToken: pageToken})
 		if err != nil {
 			t.Fatalf("ListActors failed: %v", err)
 		}
 
-		allActors = append(allActors, actors...)
-		pageToken = nextToken
+		allActors = append(allActors, page.Items...)
+		pageToken = page.NextPageToken
 		if pageToken == "" {
 			break
 		}
@@ -1780,28 +1789,28 @@ func TestListActors_ScopedByAtespace(t *testing.T) {
 	}
 
 	// List is scoped to one atespace.
-	teamA, _, err := s.ListActors(ctx, "team-a", 1000, "")
+	teamA, err := s.ListActors(ctx, "team-a", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActors(team-a) failed: %v", err)
 	}
-	if got := actorNameSet(teamA); !got["a1"] || !got["a2"] || got["b1"] || len(got) != 2 {
+	if got := actorNameSet(teamA.Items); !got["a1"] || !got["a2"] || got["b1"] || len(got) != 2 {
 		t.Errorf("ListActors(team-a) = %v, want exactly {a1, a2}", got)
 	}
 
-	teamB, _, err := s.ListActors(ctx, "team-b", 1000, "")
+	teamB, err := s.ListActors(ctx, "team-b", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActors(team-b) failed: %v", err)
 	}
-	if got := actorNameSet(teamB); !got["b1"] || got["a1"] || len(got) != 1 {
+	if got := actorNameSet(teamB.Items); !got["b1"] || got["a1"] || len(got) != 1 {
 		t.Errorf("ListActors(team-b) = %v, want exactly {b1}", got)
 	}
 
 	// An empty atespace lists across all atespaces (the admin/dev `-A` view).
-	all, _, err := s.ListActors(ctx, "", 1000, "")
+	all, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActors(all) failed: %v", err)
 	}
-	if got := actorNameSet(all); !got["a1"] || !got["a2"] || !got["b1"] || len(got) != 3 {
+	if got := actorNameSet(all.Items); !got["a1"] || !got["a2"] || !got["b1"] || len(got) != 3 {
 		t.Errorf("ListActors(all) = %v, want exactly {a1, a2, b1}", got)
 	}
 
@@ -1903,10 +1912,11 @@ func TestListAtespaces(t *testing.T) {
 			t.Fatalf("CreateAtespace(%s) failed: %v", n, err)
 		}
 	}
-	got, _, err := s.ListAtespaces(ctx, 1000, "")
+	gotResp, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListAtespaces failed: %v", err)
 	}
+	got := gotResp.Items
 	if len(got) != len(names) {
 		t.Fatalf("ListAtespaces returned %d atespaces, want %d", len(got), len(names))
 	}
@@ -1924,12 +1934,12 @@ func TestListAtespaces(t *testing.T) {
 func TestListAtespaces_Empty(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
-	got, _, err := s.ListAtespaces(ctx, 1000, "")
+	got, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListAtespaces failed: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("ListAtespaces on empty store = %v, want empty", got)
+	if len(got.Items) != 0 {
+		t.Errorf("ListAtespaces on empty store = %v, want empty", got.Items)
 	}
 }
 
@@ -1964,17 +1974,17 @@ func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
-	if _, err := s.TagActorSnapshot(ctx, "team-a", "snapshot-1", &ateapipb.ActorSnapshotTag{
+	if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "keep-me"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 	}); err != nil {
-		t.Fatalf("TagActorSnapshot: %v", err)
+		t.Fatalf("CreateActorSnapshotTag: %v", err)
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Fatalf("DeleteAtespace = %v, want ErrFailedPrecondition", err)
 	}
-	if _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "keep-me"); err != nil {
-		t.Fatalf("GetActorSnapshotByTag after rejected deletion: %v", err)
+	if _, err := s.GetActorSnapshotTag(ctx, "team-a", "keep-me"); err != nil {
+		t.Fatalf("GetActorSnapshotTag after rejected deletion: %v", err)
 	}
 	if _, err := s.GetAtespace(ctx, "team-a"); err != nil {
 		t.Fatalf("GetAtespace after rejected deletion: %v", err)
@@ -2222,15 +2232,15 @@ func TestListActors_MultiMaster_Pagination(t *testing.T) {
 	var allActors []*ateapipb.Actor
 	pageToken := ""
 	for {
-		actors, nextToken, err := s.ListActors(ctx, testAtespace, 2, pageToken)
+		page, err := s.ListActors(ctx, testAtespace, store.ListOptions{PageSize: 2, PageToken: pageToken})
 		if err != nil {
 			t.Fatalf("ListActors failed: %v", err)
 		}
-		allActors = append(allActors, actors...)
-		if nextToken == "" {
+		allActors = append(allActors, page.Items...)
+		if page.NextPageToken == "" {
 			break
 		}
-		pageToken = nextToken
+		pageToken = page.NextPageToken
 	}
 
 	if len(allActors) != 9 {
@@ -2307,20 +2317,20 @@ func TestListWorkers_MultiMaster_Pagination(t *testing.T) {
 			seen := make(map[string]bool)
 			pageToken := ""
 			for {
-				workers, next, err := s.ListWorkers(ctx, pageSize, pageToken)
+				page, err := s.ListWorkers(ctx, store.ListOptions{PageSize: pageSize, PageToken: pageToken})
 				if err != nil {
 					t.Fatalf("ListWorkers: %v", err)
 				}
-				for _, w := range workers {
+				for _, w := range page.Items {
 					if seen[w.GetWorkerPod()] {
 						t.Errorf("duplicate worker in paginated results: %s", w.GetWorkerPod())
 					}
 					seen[w.GetWorkerPod()] = true
 				}
-				if next == "" {
+				if page.NextPageToken == "" {
 					break
 				}
-				pageToken = next
+				pageToken = page.NextPageToken
 			}
 			if len(seen) != numShards*3 {
 				t.Fatalf("expected %d workers across %d shards, got %d", numShards*3, numShards, len(seen))
@@ -2353,20 +2363,20 @@ func TestListAtespaces_MultiMaster_Pagination(t *testing.T) {
 			seen := make(map[string]bool)
 			pageToken := ""
 			for {
-				atespaces, next, err := s.ListAtespaces(ctx, pageSize, pageToken)
+				page, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: pageSize, PageToken: pageToken})
 				if err != nil {
 					t.Fatalf("ListAtespaces: %v", err)
 				}
-				for _, a := range atespaces {
+				for _, a := range page.Items {
 					if seen[a.GetMetadata().GetName()] {
 						t.Errorf("duplicate atespace in paginated results: %s", a.GetMetadata().GetName())
 					}
 					seen[a.GetMetadata().GetName()] = true
 				}
-				if next == "" {
+				if page.NextPageToken == "" {
 					break
 				}
-				pageToken = next
+				pageToken = page.NextPageToken
 			}
 			if len(seen) != numShards*3 {
 				t.Fatalf("expected %d atespaces across %d shards, got %d", numShards*3, numShards, len(seen))
@@ -2516,10 +2526,11 @@ func TestActorTemplateLifecycle(t *testing.T) {
 		t.Errorf("CreateActorTemplate return does not match stored state (-created +got):\n%s", diff)
 	}
 
-	list, _, err := s.ListActorTemplates(ctx, "team-a", 1000, "")
+	listResp, err := s.ListActorTemplates(ctx, "team-a", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActorTemplates failed: %v", err)
 	}
+	list := listResp.Items
 	if len(list) != 1 || list[0].GetMetadata().GetName() != "tmpl-a" {
 		t.Errorf("ListActorTemplates = %v, want [tmpl-a]", list)
 	}
@@ -3010,12 +3021,12 @@ func TestListActorTemplates_Pagination(t *testing.T) {
 	var all []*ateapipb.ActorTemplate
 	pageToken := ""
 	for {
-		templates, nextToken, err := s.ListActorTemplates(ctx, "team-a", 2, pageToken)
+		page, err := s.ListActorTemplates(ctx, "team-a", store.ListOptions{PageSize: 2, PageToken: pageToken})
 		if err != nil {
 			t.Fatalf("ListActorTemplates failed: %v", err)
 		}
-		all = append(all, templates...)
-		pageToken = nextToken
+		all = append(all, page.Items...)
+		pageToken = page.NextPageToken
 		if pageToken == "" {
 			break
 		}
@@ -3048,12 +3059,12 @@ func TestListActorTemplateVersions_ParentFilter(t *testing.T) {
 		}
 	}
 
-	unfiltered, _, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{}, 1000, "")
+	unfiltered, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{}, store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActorTemplateVersions(all) failed: %v", err)
 	}
-	if len(unfiltered) != 5 {
-		t.Fatalf("unfiltered list returned %d versions, want 5", len(unfiltered))
+	if len(unfiltered.Items) != 5 {
+		t.Fatalf("unfiltered list returned %d versions, want 5", len(unfiltered.Items))
 	}
 
 	// Filtered list, paged with a small page size to exercise the
@@ -3061,12 +3072,12 @@ func TestListActorTemplateVersions_ParentFilter(t *testing.T) {
 	var filtered []*ateapipb.ActorTemplateVersion
 	pageToken := ""
 	for {
-		versions, nextToken, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, 2, pageToken)
+		page, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, store.ListOptions{PageSize: 2, PageToken: pageToken})
 		if err != nil {
 			t.Fatalf("ListActorTemplateVersions(tmpl-a) failed: %v", err)
 		}
-		filtered = append(filtered, versions...)
-		pageToken = nextToken
+		filtered = append(filtered, page.Items...)
+		pageToken = page.NextPageToken
 		if pageToken == "" {
 			break
 		}
@@ -3092,12 +3103,12 @@ func TestListActorTemplateVersions_ParentFilter(t *testing.T) {
 	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-b", "tmpl-a-v0", "tmpl-a")); err != nil {
 		t.Fatalf("failed to create team-b version: %v", err)
 	}
-	crossAtespace, _, err := s.ListActorTemplateVersions(ctx, "", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, 1000, "")
+	crossAtespace, err := s.ListActorTemplateVersions(ctx, "", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActorTemplateVersions(all atespaces, team-a/tmpl-a) failed: %v", err)
 	}
-	if len(crossAtespace) != 3 {
-		t.Errorf("cross-atespace filtered list returned %d versions, want 3: team-b/tmpl-a versions must not match", len(crossAtespace))
+	if len(crossAtespace.Items) != 3 {
+		t.Errorf("cross-atespace filtered list returned %d versions, want 3: team-b/tmpl-a versions must not match", len(crossAtespace.Items))
 	}
 }
 
@@ -3153,10 +3164,11 @@ func TestListActorTemplates_AtespaceFilter(t *testing.T) {
 		}
 	}
 
-	scoped, _, err := s.ListActorTemplates(ctx, "team-a", 1000, "")
+	scopedResp, err := s.ListActorTemplates(ctx, "team-a", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActorTemplates(team-a) failed: %v", err)
 	}
+	scoped := scopedResp.Items
 	if len(scoped) != 2 {
 		t.Errorf("ListActorTemplates(team-a) returned %d templates, want 2", len(scoped))
 	}
@@ -3166,12 +3178,12 @@ func TestListActorTemplates_AtespaceFilter(t *testing.T) {
 		}
 	}
 
-	all, _, err := s.ListActorTemplates(ctx, "", 1000, "")
+	allResp, err := s.ListActorTemplates(ctx, "", store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActorTemplates(all) failed: %v", err)
 	}
-	if len(all) != 3 {
-		t.Errorf("ListActorTemplates(all) returned %d templates, want 3", len(all))
+	if len(allResp.Items) != 3 {
+		t.Errorf("ListActorTemplates(all) returned %d templates, want 3", len(allResp.Items))
 	}
 }
 
@@ -3191,10 +3203,11 @@ func TestActorTemplateVersions_AtespaceIsolation(t *testing.T) {
 	}
 
 	// Versions of the same-named parent list per atespace.
-	scoped, _, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl"}, 1000, "")
+	scopedResp, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl"}, store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("ListActorTemplateVersions(team-a, tmpl) failed: %v", err)
 	}
+	scoped := scopedResp.Items
 	if len(scoped) != 1 || scoped[0].GetMetadata().GetAtespace() != "team-a" {
 		t.Errorf("ListActorTemplateVersions(team-a, tmpl) = %v, want team-a's tmpl-v1 only", scoped)
 	}

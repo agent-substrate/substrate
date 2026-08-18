@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package k8sjwt provides a JWT verifier tailored to Kubernetes.
-package k8sjwt
+// Package oidcjwt verifies JWTs using OIDC discovery.
+package oidcjwt
 
 import (
 	"context"
@@ -31,14 +31,11 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
-// KeyAndID wraps a crypto.PublicKey along with the key ID that will identify it during
-// the verification process.
-//
-// Use GKEKeyIDForLocallyStoredKey and GKEKeyIDForCloudKMSKey to get the correct key ID the way we
-// calculate it in GKE.
+// KeyAndID wraps a crypto.PublicKey and its JWK key ID.
 type KeyAndID struct {
 	KeyID     string
 	PublicKey crypto.PublicKey
@@ -84,9 +81,9 @@ type parseBoundObjectReference struct {
 	UID  string `json:"uid,omitempty"`
 }
 
-// KubernetesClaims covers the claims that can be extracted from a newer Kubernetes bound service
-// account JWT.
-type KubernetesClaims struct {
+// Claims contains standard JWT claims and, when present, Kubernetes
+// ServiceAccount claims.
+type Claims struct {
 	// Claims from RFC7519
 	Issuer     string
 	Subject    string
@@ -96,6 +93,11 @@ type KubernetesClaims struct {
 	IssuedAt   time.Time
 	JTI        string
 
+	KubernetesClaims
+}
+
+// KubernetesClaims contains claims added to Kubernetes ServiceAccount tokens.
+type KubernetesClaims struct {
 	Namespace string
 
 	ServiceAccountName string
@@ -111,21 +113,35 @@ type KubernetesClaims struct {
 }
 
 var (
-	permittedSkew     = 5 * time.Minute
-	defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
+	permittedSkew            = 5 * time.Minute
+	jwksRefreshInterval      = 5 * time.Minute
+	jwksRefreshRetryInterval = time.Minute
+	defaultHTTPClient        = &http.Client{Timeout: 10 * time.Second}
 )
 
-// Verify verifies and extracts claims from a Kubernetes JWT.
-//
-// For bound service account tokens, this function performs cryptographic verification of the JWT,
-// checks the issuer and audience claims, and checks the time-binding claims. It *does not* check
-// the object binding claims. If needed for your use case, you will need check the object bindings
-// by connecting to the cluster and seeing if the object(s) the bindings name still exist within the
-// cluster.
-//
-// httpClient is used for OIDC discovery and JWKS fetches; nil uses a default
-// client with a whole-request timeout.
-func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
+// Verifier verifies JWTs from one trusted OIDC issuer and caches its signing
+// keys. Keys are refreshed periodically and, at a bounded rate, when a token
+// names an unknown key ID.
+type Verifier struct {
+	issuer     string
+	audiences  []string
+	httpClient *http.Client
+
+	mu                    sync.RWMutex
+	keys                  []*KeyAndID
+	lastRefresh           time.Time
+	lastFailedRefresh     time.Time
+	lastUnknownKeyRefresh time.Time
+}
+
+// NewVerifier returns a verifier for issuer. A token is accepted when at least
+// one of its audiences matches audiences.
+func NewVerifier(issuer string, audiences []string, httpClient *http.Client) *Verifier {
+	return &Verifier{issuer: issuer, audiences: slices.Clone(audiences), httpClient: httpClient}
+}
+
+// Verify verifies and extracts claims from a JWT.
+func (v *Verifier) Verify(ctx context.Context, jwt string, now time.Time) (*Claims, error) {
 	segments := strings.Split(jwt, ".")
 	if len(segments) != 3 {
 		return nil, fmt.Errorf("malformed JWT")
@@ -170,27 +186,18 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 		return nil, fmt.Errorf("while unmarshaling payload: %w", err)
 	}
 
-	if rawClaims.Issuer != expectedIssuer {
+	if rawClaims.Issuer != v.issuer {
 		return nil, fmt.Errorf("unexpected issuer %q", rawClaims.Issuer)
-	}
-
-	// TODO: Cache keys, and only fetch new keys if the JWT's key ID is not in the cache.
-	keys, err := discoverKeysForIssuer(ctx, httpClient, rawClaims.Issuer)
-	if err != nil {
-		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
 	}
 
 	// Find the key we should use for verification based on the key ID in the JWT header.
 	if header.KeyID == "" {
 		return nil, fmt.Errorf("key ID is required")
 	}
-	selectedKeyIndex := slices.IndexFunc(keys, func(k *KeyAndID) bool {
-		return k.KeyID == header.KeyID
-	})
-	if selectedKeyIndex == -1 {
-		return nil, fmt.Errorf("unknown key ID %q", header.KeyID)
+	selectedKey, err := v.key(ctx, header.KeyID, now)
+	if err != nil {
+		return nil, err
 	}
-	selectedKey := keys[selectedKeyIndex].PublicKey
 
 	// Warning: don't ever refer to the payload data (except "iss") above this point. We need to
 	// ensure that we _never_ consider the contents of the payload when deciding how to perform
@@ -201,12 +208,11 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 
 	// It is now safe to consider arbitrary data from the payload.
 	//
-	// At this point, the payload is mostly trusted. We know that it was really issued by the selected
-	// verification key, but we need to check the issuer, audience binding, and time bindings to be
-	// sure that it's really valid.
+	// The signature proves the payload's authenticity, but the audience and time
+	// bindings still need validation before the token is accepted.
 
 	// Because the JWT spec authors wanted to be fancy, we need to try to deserialize
-	// rawClaims.Audience both as a single string and as a slice of strings.
+	// rawClaims.Audiences both as a single string and as a slice of strings.
 	var singleAudience string
 	var audiences []string
 	if err := json.Unmarshal(rawClaims.Audiences, &singleAudience); err == nil { // err EQUALS nil
@@ -216,9 +222,12 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 		return nil, fmt.Errorf("unable to parse audiences")
 	}
 
-	// Check that our expected audience is one of the audiences in the token
-	if !slices.Contains(audiences, expectedAudience) {
+	// Check that at least one configured audience is present in the token.
+	if !slices.ContainsFunc(v.audiences, func(expected string) bool { return slices.Contains(audiences, expected) }) {
 		return nil, fmt.Errorf("token is not issued for expected audience")
+	}
+	if rawClaims.Subject == "" {
+		return nil, fmt.Errorf("token subject is required")
 	}
 
 	expiration := time.Unix(int64(rawClaims.Expiration), 0)
@@ -237,7 +246,7 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 		return nil, fmt.Errorf("jwt claims to have been issued in the future")
 	}
 
-	return &KubernetesClaims{
+	return &Claims{
 		Issuer:     rawClaims.Issuer,
 		Audiences:  audiences,
 		Subject:    rawClaims.Subject,
@@ -245,19 +254,85 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 		NotBefore:  notBefore,
 		IssuedAt:   issuedAt,
 		JTI:        rawClaims.JTI,
-
-		Namespace:          rawClaims.BoundClaims.Namespace,
-		ServiceAccountName: rawClaims.BoundClaims.ServiceAccount.Name,
-		ServiceAccountUID:  rawClaims.BoundClaims.ServiceAccount.UID,
-		PodName:            rawClaims.BoundClaims.Pod.Name,
-		PodUID:             rawClaims.BoundClaims.Pod.UID,
-		SecretName:         rawClaims.BoundClaims.Secret.Name,
-		SecretUID:          rawClaims.BoundClaims.Secret.UID,
-		NodeName:           rawClaims.BoundClaims.Node.Name,
-		NodeUID:            rawClaims.BoundClaims.Node.UID,
-
-		WarnAfter: time.Unix(int64(rawClaims.BoundClaims.WarnAfter), 0),
+		KubernetesClaims: KubernetesClaims{
+			Namespace:          rawClaims.BoundClaims.Namespace,
+			ServiceAccountName: rawClaims.BoundClaims.ServiceAccount.Name,
+			ServiceAccountUID:  rawClaims.BoundClaims.ServiceAccount.UID,
+			PodName:            rawClaims.BoundClaims.Pod.Name,
+			PodUID:             rawClaims.BoundClaims.Pod.UID,
+			SecretName:         rawClaims.BoundClaims.Secret.Name,
+			SecretUID:          rawClaims.BoundClaims.Secret.UID,
+			NodeName:           rawClaims.BoundClaims.Node.Name,
+			NodeUID:            rawClaims.BoundClaims.Node.UID,
+			WarnAfter:          time.Unix(int64(rawClaims.BoundClaims.WarnAfter), 0),
+		},
 	}, nil
+}
+
+func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto.PublicKey, error) {
+	v.mu.RLock()
+	key := findKey(v.keys, keyID)
+	hasKeys := len(v.keys) > 0
+	lastRefresh := v.lastRefresh
+	lastFailedRefresh := v.lastFailedRefresh
+	lastUnknownKeyRefresh := v.lastUnknownKeyRefresh
+	v.mu.RUnlock()
+	if key != nil && now.Sub(lastRefresh) < jwksRefreshInterval {
+		return key.PublicKey, nil
+	}
+	if !lastFailedRefresh.IsZero() && now.Sub(lastFailedRefresh) < jwksRefreshRetryInterval {
+		if key != nil {
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
+	}
+	if key == nil && hasKeys && !lastUnknownKeyRefresh.IsZero() && now.Sub(lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
+		return nil, fmt.Errorf("unknown key ID %q", keyID)
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key = findKey(v.keys, keyID)
+	if key != nil && now.Sub(v.lastRefresh) < jwksRefreshInterval {
+		return key.PublicKey, nil
+	}
+	if !v.lastFailedRefresh.IsZero() && now.Sub(v.lastFailedRefresh) < jwksRefreshRetryInterval {
+		if key != nil {
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
+	}
+	if key == nil && len(v.keys) > 0 && !v.lastUnknownKeyRefresh.IsZero() && now.Sub(v.lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
+		return nil, fmt.Errorf("unknown key ID %q", keyID)
+	}
+	if key == nil && len(v.keys) > 0 {
+		v.lastUnknownKeyRefresh = now
+	}
+	keys, err := discoverKeysForIssuer(ctx, v.httpClient, v.issuer)
+	if err != nil {
+		v.lastFailedRefresh = now
+		if key != nil {
+			slog.WarnContext(ctx, "Could not refresh OIDC signing keys; using cached key", slog.String("issuer", v.issuer), slog.Any("err", err))
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
+	}
+	v.keys = keys
+	v.lastRefresh = now
+	v.lastFailedRefresh = time.Time{}
+	key = findKey(keys, keyID)
+	if key == nil {
+		return nil, fmt.Errorf("unknown key ID %q", keyID)
+	}
+	return key.PublicKey, nil
+}
+
+func findKey(keys []*KeyAndID, keyID string) *KeyAndID {
+	i := slices.IndexFunc(keys, func(k *KeyAndID) bool { return k.KeyID == keyID })
+	if i == -1 {
+		return nil
+	}
+	return keys[i]
 }
 
 func verifySignature(algorithm string, selectedKey crypto.PublicKey, toBeSignedBytes, signatureBytes []byte) error {
@@ -360,6 +435,7 @@ func ellipticCurveForJWK(crv string) (elliptic.Curve, error) {
 }
 
 type oidcConfigT struct {
+	Issuer  string `json:"issuer"`
 	JWKSURI string `json:"jwks_uri"`
 }
 
@@ -387,14 +463,17 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 		discoveryDocURL = issuer + "/.well-known/openid-configuration"
 	}
 
-	oidcConfig, err := fetchJSON[oidcConfigT](httpClient, discoveryDocURL)
+	oidcConfig, err := fetchJSON[oidcConfigT](ctx, httpClient, discoveryDocURL)
 	if err != nil {
 		return nil, fmt.Errorf("while fetching OIDC Discovery document: %w", err)
+	}
+	if oidcConfig.Issuer != issuer {
+		return nil, fmt.Errorf("discovered issuer %q does not match expected issuer %q", oidcConfig.Issuer, issuer)
 	}
 
 	slog.InfoContext(ctx, "Fetched discovery doc", slog.Any("doc", oidcConfig))
 
-	jwkSet, err := fetchJSON[jwkSetT](httpClient, oidcConfig.JWKSURI)
+	jwkSet, err := fetchJSON[jwkSetT](ctx, httpClient, oidcConfig.JWKSURI)
 	if err != nil {
 		return nil, fmt.Errorf("while fetching JWKS: %w", err)
 	}
@@ -409,7 +488,7 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 			// Skip an unusable key instead of failing the whole issuer; it's safe because
 			// keys are selected by kid and the signature is still verified, so a skipped
 			// key can't be abused. Debug, not Warn: unsupported key types are a normal
-			// config and discovery runs on every Verify (no cache yet), so Warn would spam.
+			// issuer configuration and periodic refreshes would otherwise spam warnings.
 			slog.DebugContext(ctx, "Skipping unusable JWK from issuer",
 				slog.String("kid", jwk.KeyID), slog.String("kty", jwk.KeyType), slog.Any("err", err))
 			skipped++
@@ -487,6 +566,9 @@ func parseJWK(jwk jwkT) (*KeyAndID, error) {
 		}
 		e := &big.Int{}
 		e.SetBytes(eBytes)
+		if !e.IsInt64() || e.Int64() < 2 || int64(int(e.Int64())) != e.Int64() {
+			return nil, fmt.Errorf("RSA JWK exponent is outside the supported integer range")
+		}
 
 		return &KeyAndID{
 			KeyID: jwk.KeyID,
@@ -501,12 +583,16 @@ func parseJWK(jwk jwkT) (*KeyAndID, error) {
 	}
 }
 
-func fetchJSON[T any](httpClient *http.Client, url string) (T, error) {
+func fetchJSON[T any](ctx context.Context, httpClient *http.Client, url string) (T, error) {
 	var parsedBody T
 	if httpClient == nil {
 		httpClient = defaultHTTPClient
 	}
-	resp, err := httpClient.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return parsedBody, fmt.Errorf("while creating HTTP request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return parsedBody, fmt.Errorf("while making HTTP request: %w", err)
 	}

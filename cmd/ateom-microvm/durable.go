@@ -25,9 +25,11 @@ package main
 // ateompath.DurableDirVolumeMountsDir(actorUID) and wipes them when the actor's
 // directories are reset.
 //
-// ateom exposes that host directory to the guest over a SECOND virtiofsd — the
-// kataShared share stays strictly read-only (it is the overlay lower, served
-// with cache=always), so writable volumes get their own share. Each volume is a
+// ateom exposes that host directory to the guest over a SECOND virtiofsd —
+// separate from the kataShared rootfs share because the two have different
+// owners and lifecycles: atelet owns this directory (created before boot,
+// wiped on actor reset, captured under EVERY snapshot scope), while the
+// rootfs uppers are ateom-owned and Full-scope-only. Each volume is a
 // subdirectory of the one share, at kata.GuestDurableVolumeDir(volume),
 // bind-mounted from there into every container that declares it. An actor may
 // have any number of them: they cost a subdirectory each, not a device, so
@@ -87,12 +89,11 @@ func durableMounts(mounts []*ateompb.DurableDirVolumeMount) []specs.Mount {
 	return out
 }
 
-// workloadSpec returns the OCI spec to start a container's overlay workload
-// with: the prepared spec, plus a bind for each durable-dir and image volume
-// it mounts.
+// workloadSpec returns the OCI spec to start a container with: the prepared
+// spec, plus a bind for each durable-dir and image volume it mounts.
 //
-// The spec is copied rather than mutated so the bundle's on-disk config.json and
-// the carrier's view stay as prepared — only the workload sees the binds.
+// The spec is copied rather than mutated so the bundle's on-disk config.json
+// stays as prepared — only the started container sees the binds.
 func workloadSpec(c actorContainer) *specs.Spec {
 	if len(c.durableMounts) == 0 && len(c.imageMounts) == 0 {
 		return c.spec
@@ -128,7 +129,6 @@ func (s *AteomService) stageDurableShare(ctx context.Context, rr resolvedRuntime
 		Binary:     rr.virtiofsd,
 		SocketPath: kata.DurableVirtiofsdSocketPath(actorUID),
 		SharedDir:  shared,
-		Cache:      "auto",
 		Log:        log,
 	})
 	if err != nil {

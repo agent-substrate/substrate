@@ -227,7 +227,7 @@ func egressMetadata(xfcc string) *extproc.RequestMetadata {
 	if xfcc != "" {
 		headers = append(headers, &corev3.HeaderValue{Key: forwardedClientCertHeader, RawValue: []byte(xfcc)})
 	}
-	return extproc.NewRequestMetadata(headers)
+	return extproc.NewRequestMetadata(headers, nil)
 }
 
 func wantStatus(t *testing.T, err error, want envoy_type.StatusCode) {

@@ -50,13 +50,17 @@ var (
 
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
-	// Fetches an actor by reference. Returns ErrNotFound if missing.
-	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
 	// mutated. Returns ErrAlreadyExists if key is taken.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
+
+	// Fetches an actor by reference. Returns ErrNotFound if missing.
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+
+	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is
+	// empty.
+	ListActors(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.Actor], error)
 
 	// UpdateActor performs a transactional read-modify-write and returns the stored
 	// actor with advanced metadata (version, update_time).
@@ -76,10 +80,6 @@ type Interface interface {
 	// missing, or ErrFailedPrecondition if not already deleting.
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
-	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is
-	// empty. Returns a page of actors and a next page token.
-	ListActors(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
-
 	// Creates an immutable ActorSnapshot. The caller sets snapshot_uri; the
 	// store keeps no location of its own.
 	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
@@ -87,20 +87,16 @@ type Interface interface {
 	// Fetches an ActorSnapshot.
 	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
 
-	// Resolves an Atespace-owned tag to an ActorSnapshot in constant time.
-	//
-	// TODO: rename to GetActorSnapshotTag to match the Create/Get/Update/Delete
-	// naming used by every other resource in this interface.
-	GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error)
-
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
-	ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorSnapshot, string, error)
+	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
 
 	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
-	//
-	// TODO: rename to CreateActorSnapshotTag to match the Create/Get/Update/Delete
-	// naming used by every other resource in this interface.
-	TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+
+	// Fetches an Atespace-owned tag. Returns ErrNotFound if missing. The tag's
+	// snapshot field names the ActorSnapshot it resolves to; fetch it with
+	// GetActorSnapshot if needed.
+	GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
 
 	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag
 	// addressed by atespace and name, and returns the stored ActorSnapshotTag with
@@ -128,11 +124,11 @@ type Interface interface {
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 
-	// Lists atespaces. Returns a page of atespaces and a next page token.
-	ListAtespaces(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Atespace, string, error)
-
 	// AtespaceExists reports whether the atespace object exists.
 	AtespaceExists(ctx context.Context, name string) (bool, error)
+
+	// Lists atespaces.
+	ListAtespaces(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Atespace], error)
 
 	// Removes an empty atespace and returns the deleted resource. Returns
 	// ErrNotFound if missing, or ErrFailedPrecondition if the atespace is not empty
@@ -150,13 +146,13 @@ type Interface interface {
 	// ActorTemplateExists reports whether the ActorTemplate exists.
 	ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error)
 
+	// Lists ActorTemplates in an atespace, or across all atespaces when
+	// atespace is empty.
+	ListActorTemplates(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorTemplate], error)
+
 	// UpdateActorTemplate performs a transactional read-modify-write and returns
 	// the updated template with advanced metadata (version, update_time).
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
-
-	// Lists ActorTemplates in an atespace, or across all atespaces when
-	// atespace is empty. Returns a page of templates and a next page token.
-	ListActorTemplates(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplate, string, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
 	// ErrNotFound if missing, or ErrFailedPrecondition while any
@@ -176,7 +172,7 @@ type Interface interface {
 	// Lists ActorTemplateVersions in an atespace (all atespaces when atespace
 	// is empty), filtered to one parent template when actorTemplateRef is
 	// non-zero. The parent lives in the same atespace as its versions.
-	ListActorTemplateVersions(ctx context.Context, atespace string, actorTemplateRef resources.ActorTemplateRef, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplateVersion, string, error)
+	ListActorTemplateVersions(ctx context.Context, atespace string, actorTemplateRef resources.ActorTemplateRef, opts ListOptions) (ListResponse[*ateapipb.ActorTemplateVersion], error)
 
 	// Removes an ActorTemplateVersion and returns the deleted resource, also
 	// deleting the golden snapshot recorded in golden_snapshot, if any.
@@ -184,20 +180,20 @@ type Interface interface {
 	// version is its parent's default_version_on_create.
 	DeleteActorTemplateVersion(ctx context.Context, versionRef resources.ActorTemplateVersionRef) (*ateapipb.ActorTemplateVersion, error)
 
+	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
+	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
+
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
 
-	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
-	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
+	// Lists workers.
+	ListWorkers(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Worker], error)
 
 	// Updates worker state with optimistic concurrency check. Returns ErrNotFound if missing, or ErrVersionConflict on version mismatch.
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
 
 	// Removes a worker. Idempotent: does nothing if worker is not found.
 	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
-
-	// Lists workers. Returns a page of workers and a next page token.
-	ListWorkers(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Worker, string, error)
 
 	// WatchWorkers returns an active subscription to track worker state changes.
 	// The watch's Events channel is closed when the caller calls Close, the
@@ -322,3 +318,25 @@ func (l *Lock) Context() context.Context { return l.ctx }
 // Close stops lease renewal and releases the lock. Safe to call multiple
 // times.
 func (l *Lock) Close() { l.once.Do(l.closeFn) }
+
+// ListOptions carries the pagination parameters common to every List method.
+type ListOptions struct {
+	// PageSize caps how many items a single call returns.
+	PageSize int32
+	// PageToken resumes a listing after the page it was issued for. Empty
+	// starts from the first page.
+	PageToken string
+}
+
+// ListResponse is the return value of a List method: the page of items it
+// addressed, plus the token to fetch the next page. NextPageToken is empty
+// once the listing has reached its last page.
+type ListResponse[T any] struct {
+	Items         []T
+	NextPageToken string
+}
+
+// HasNextPage reports whether another page follows this one.
+func (r ListResponse[T]) HasNextPage() bool {
+	return r.NextPageToken != ""
+}

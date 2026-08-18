@@ -66,10 +66,10 @@ func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
 	// uid is server-assigned on create, so assert it is present and non-empty
 	// rather than a fixed value.
 	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
-		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.Emit())
+		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.String())
 	}
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 1 {
-		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.Emit())
+		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.String())
 	}
 }
 
@@ -193,11 +193,11 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
-	if _, err := tc.persistence.TagActorSnapshot(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
+	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	}); err != nil {
-		t.Fatalf("TagActorSnapshot: %v", err)
+		t.Fatalf("CreateActorSnapshotTag: %v", err)
 	}
 
 	_, err = tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -250,11 +250,11 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
 	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "external-volume-snapshot"}
-	if _, err := tc.persistence.TagActorSnapshot(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
+	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	}); err != nil {
-		t.Fatalf("TagActorSnapshot: %v", err)
+		t.Fatalf("CreateActorSnapshotTag: %v", err)
 	}
 
 	_, err = tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -550,10 +550,10 @@ func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
 	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
 	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, ns)
 	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
-		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.Emit())
+		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.String())
 	}
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 2 {
-		t.Errorf("%s = %v, want int64 2 (updated version)", ateattr.ActorVersionKey, v.Emit())
+		t.Errorf("%s = %v, want int64 2 (updated version)", ateattr.ActorVersionKey, v.String())
 	}
 }
 

@@ -27,6 +27,23 @@ metadata:
 spec:
   replicas: 2
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    # Per-worker resources: these size the worker POD and advertise its
+    # scheduling capacity (the per-actor ceiling). The sandbox itself is sized by
+    # the ActorTemplate's spec.resources below, not by these (see internal/sizing).
+    #
+    # Capacity comes from the limits (workerCapacity reads limits only), while the
+    # kube-scheduler packs nodes by the requests — so the CPU request is set well
+    # below the limit to keep the pool placeable on a small node without changing
+    # what an actor is allowed to use. Memory is not compressible, so its request
+    # matches the limit.
+    resources:
+      limits:
+        cpu: "2"
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 2Gi
 ---
 apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
@@ -43,5 +60,12 @@ spec:
     env:
     - name: PORT
       value: "80"
+  # Sandbox size: an actor occupies its whole worker, so size it at (or below)
+  # the pool's per-worker capacity above. ateom writes these to the OCI spec
+  # (cgroup CPU quota + memory limit) — see internal/sizing.
+  resources:
+    limits:
+      cpu: "2"
+      memory: 1Gi
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-demo-sandbox/

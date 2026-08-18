@@ -41,6 +41,15 @@ type Constraints struct {
 	// on one of these nodes. Used when the actor's latest snapshot is local
 	// to specific node VMs.
 	RequiredNodes []string
+
+	// CPUMilli and MemoryBytes are the actor's declared resource limits, from
+	// the ActorTemplate. A worker is eligible only if its reported capacity is
+	// >= these. Zero means "unconstrained" for that dimension (the actor did not
+	// declare a limit), and a worker that reports zero capacity for a dimension
+	// is treated as unconstrained too, so placement is never blocked by missing
+	// data (matching the pre-capacity behavior).
+	CPUMilli    int64
+	MemoryBytes int64
 }
 
 // ErrNoCapacity is returned by Schedule when no free worker satisfies the
@@ -133,6 +142,18 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 	if constraints.ActorSelector != nil && !constraints.ActorSelector.Matches(set) {
+		return false
+	}
+
+	// The worker must be able to contain the actor's declared limits. A zero
+	// constraint (actor declared no limit) or zero worker capacity (capacity
+	// unknown) is treated as unconstrained, so placement is never blocked by
+	// missing data.
+	capacity := worker.GetCapacity()
+	if constraints.CPUMilli > 0 && capacity.GetCpuMilli() > 0 && capacity.GetCpuMilli() < constraints.CPUMilli {
+		return false
+	}
+	if constraints.MemoryBytes > 0 && capacity.GetMemoryBytes() > 0 && capacity.GetMemoryBytes() < constraints.MemoryBytes {
 		return false
 	}
 

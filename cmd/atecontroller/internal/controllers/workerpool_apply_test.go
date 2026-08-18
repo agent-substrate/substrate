@@ -753,11 +753,13 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithAdd(ateomGvisorCapabilities...)).
 				WithAppArmorProfile(corev1ac.AppArmorProfile().
 					WithType(corev1.AppArmorProfileTypeUnconfined))).
-			WithEnv(corev1ac.EnvVar().
-				WithName("POD_UID").
-				WithValueFrom(corev1ac.EnvVarSource().
-					WithFieldRef(corev1ac.ObjectFieldSelector().
-						WithFieldPath("metadata.uid")))).
+			WithEnv(
+				corev1ac.EnvVar().
+					WithName("POD_UID").
+					WithValueFrom(corev1ac.EnvVarSource().
+						WithFieldRef(corev1ac.ObjectFieldSelector().
+							WithFieldPath("metadata.uid"))),
+			).
 			WithVolumeMounts(
 				corev1ac.VolumeMount().
 					WithName("run-ateom").

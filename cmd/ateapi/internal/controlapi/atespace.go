@@ -108,13 +108,13 @@ func (s *Service) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespaces
 		return nil, toGRPCStatusError(errs)
 	}
 
-	atespaces, nextToken, err := s.persistence.ListAtespaces(ctx, effectivePageSize(req.GetPageSize()), req.GetPageToken())
+	page, err := s.persistence.ListAtespaces(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing atespaces in db: %w", err)
 	}
 	return &ateapipb.ListAtespacesResponse{
-		Atespaces:     atespaces,
-		NextPageToken: nextToken,
+		Atespaces:     page.Items,
+		NextPageToken: page.NextPageToken,
 	}, nil
 }
 

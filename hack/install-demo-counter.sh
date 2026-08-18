@@ -62,8 +62,8 @@ demo-counter_deploy() {
   # with a tight readiness deadline -- run against an already-warm node instead
   # of racing that cold-start work.
   log_step "Waiting for counter demo to be ready..."
-  run_kubectl rollout status deployment/counter -n ate-demo-counter --timeout=300s
-  run_kubectl wait --for=condition=Ready actortemplate/counter -n ate-demo-counter --timeout=300s
+  run_kubectl_fatal rollout status deployment/counter -n ate-demo-counter --timeout=300s
+  run_kubectl_fatal wait --for=condition=Ready actortemplate/counter -n ate-demo-counter --timeout=300s
 }
 
 demo-counter_delete() {
