@@ -103,6 +103,12 @@ jobs:
         E2E_TEMPLATE_NAME: counter-microvm
         E2E_TEMPLATE_READY_TIMEOUT: 600s
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color
+    - name: Run E2E tests (micro-VM image volumes)
+      # Same image volume e2e suite on the micro-VM runtime.
+      env:
+        E2E_SANDBOX_CLASS: microvm
+        E2E_TEMPLATE_READY_TIMEOUT: 600s
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/imagevolume -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
       run: |
