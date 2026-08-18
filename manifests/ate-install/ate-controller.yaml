@@ -133,6 +133,19 @@ spec:
         - name: healthz
           containerPort: 8081
           protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: healthz
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+          initialDelaySeconds: 10
+          periodSeconds: 10
         volumeMounts:
         # Controller's own client identity presented to ateapi.
         - name: "podidentity"

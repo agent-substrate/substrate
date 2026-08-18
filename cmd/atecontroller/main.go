@@ -144,7 +144,8 @@ func main() {
 	ateapiClient := ateapipb.NewControlClient(ateapiConn)
 
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
-		Scheme: scheme,
+		Scheme:                 scheme,
+		HealthProbeBindAddress: ":8081",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
