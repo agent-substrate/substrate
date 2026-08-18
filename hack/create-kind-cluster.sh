@@ -17,6 +17,8 @@
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "${ROOT}/hack/util/coredns-ipv6.sh"
+
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
@@ -220,21 +222,8 @@ if [[ "${IP_FAMILY}" == "ipv6" ]]; then
 
   corefile="$(kubectl --context="${KUBECTL_CONTEXT}" -n kube-system get cm coredns \
     -o jsonpath='{.data.Corefile}')"
-  # fallthrough is load-bearing: without it every name that is not the registry
-  # NXDOMAINs, trading one outage for a worse one. Both sides are left unquoted
-  # -- bash 3.2 would splice the quotes in literally.
-  search="forward . /etc/resolv.conf"
-  replace="hosts {
-       ${reg_v6} ${reg_name}
-       fallthrough
-    }
-    forward . ${IPV6_DNS_UPSTREAM}"
-  patched="${corefile/$search/$replace}"
-  if [[ "${patched}" == "${corefile}" ]]; then
-    echo "error: '${search}' not found in the CoreDNS Corefile" >&2
-    echo "       a silent no-op here is the whole failure mode; inspect it by hand" >&2
-    exit 1
-  fi
+  patched="$(coredns_ipv6_corefile \
+    "${corefile}" "${reg_v6}" "${reg_name}" "${IPV6_DNS_UPSTREAM}")"
 
   # A YAML patch file avoids escaping the Corefile's newlines into JSON.
   { printf 'data:\n  Corefile: |\n'; printf '%s\n' "${patched}" | sed 's/^/    /'; } \
