@@ -126,7 +126,14 @@ data:
                       # route's default 15s stream timeout would be a ceiling on
                       # how long an actor may hold any TCP connection open --
                       # fine for a request/response fetch, wrong for SSH or any
-                      # other protocol that idles. Idle timeouts still apply.
+                      # other protocol that idles.
+                      #
+                      # 0 removes the ceiling on the tunnel's lifetime. What
+                      # still bounds it is inactivity: this HCM leaves
+                      # stream_idle_timeout at its 5 minute default, and every
+                      # tunnelled byte in either direction resets that timer. So
+                      # a busy tunnel lives as long as its peers do, and one with
+                      # nothing on it for 5 minutes is reset.
                       timeout: 0s
                       upgrade_configs:
                       - upgrade_type: CONNECT
@@ -250,6 +257,13 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_http
+              # Absent this, Envoy answers an Upgrade request itself instead of
+              # proxying it, so every WebSocket through this leg fails at the
+              # handshake. The raw CONNECT gateway never sees the upgrade at all
+              # and so never needed it; parsing the traffic is what creates the
+              # obligation to understand it.
+              upgrade_configs:
+              - upgrade_type: websocket
               # This is the leg that knows where the traffic actually went.
               # REQUESTED_SERVER_NAME is the SNI the leaf was minted for and it
               # should always equal the authority -- dynamic_forward_proxy
@@ -286,7 +300,17 @@ data:
                   - match: { prefix: "/" }
                     route:
                       cluster: egress_forward_proxy
-                      timeout: 30s
+                      # The route timeout runs until the response is completely
+                      # processed, which for a stream is never: at 30s it cut
+                      # every Server-Sent Events response at half a minute.
+                      #
+                      # 0 removes the ceiling on the response's duration. What
+                      # still bounds it is inactivity: this HCM leaves
+                      # stream_idle_timeout at its 5 minute default, and every
+                      # chunk of the response body resets that timer. So a
+                      # ticking stream runs indefinitely and a stalled one is
+                      # reset after 5 minutes.
+                      timeout: 0s
               http_filters:
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
@@ -347,6 +371,10 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_cleartext
+              # Same reasoning as the TLS chain: this leg parses HTTP, so it has
+              # to be told which upgrades to carry rather than answer.
+              upgrade_configs:
+              - upgrade_type: websocket
               access_log:
               - name: envoy.access_loggers.file
                 typed_config:
@@ -377,7 +405,11 @@ data:
                   - match: { prefix: "/" }
                     route:
                       cluster: egress_forward_proxy_cleartext
-                      timeout: 30s
+                      # Same reasoning as the TLS chain: a streaming response
+                      # never completes, so any route timeout is a cap on how
+                      # long a stream may run, and stream_idle_timeout's 5
+                      # minute default is what bounds a stalled one instead.
+                      timeout: 0s
               http_filters:
               # Same reasoning as the TLS chain: resolve from the request's own
               # Host, so the name that was policed is the name that is dialled.

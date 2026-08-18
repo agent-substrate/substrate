@@ -123,7 +123,7 @@ func skipUntilPresubmit(t *testing.T) {
 // from Envoy's live secret set and the test would pass without sdsmint having
 // minted anything.
 func TestSdsmintMintsALeafPerSNI(t *testing.T) {
-	skipUntilPresubmit(t)
+	// skipUntilPresubmit(t)
 
 	ctx := context.Background()
 
@@ -228,7 +228,7 @@ func TestSdsmintMintsALeafPerSNI(t *testing.T) {
 // failed to dial, or that got as far as the CONNECT, would be reporting
 // something other than the front door turning it away.
 func TestGatewayRefusesANonActorWorkload(t *testing.T) {
-	skipUntilPresubmit(t)
+	// skipUntilPresubmit(t)
 
 	ctx := context.Background()
 
@@ -254,7 +254,7 @@ func TestGatewayRefusesANonActorWorkload(t *testing.T) {
 // on the certificate alone from one that authorizes on control-plane state, and
 // the difference is whether a deleted actor's credential still works.
 func TestGatewayRefusesAnUnknownActor(t *testing.T) {
-	skipUntilPresubmit(t)
+	// skipUntilPresubmit(t)
 
 	ctx := context.Background()
 

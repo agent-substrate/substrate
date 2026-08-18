@@ -112,10 +112,8 @@ spec:
 
 ---
 
-# A long-lived-stream origin for the streaming-duration egress tests. It serves
-# cleartext HTTP on purpose: that is the path the MITM egress gateway parses as
-# HTTP, and so the path where a route timeout or a missing upgrade config can
-# cut a stream that the raw CONNECT path would have carried.
+# A long-lived-stream origin for the streaming-duration egress tests.
+# It serves cleartext HTTP.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
