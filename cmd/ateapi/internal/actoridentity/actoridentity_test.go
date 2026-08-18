@@ -166,6 +166,98 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 	return New("issuer", "", poolFile, st, workers)
 }
 
+// staleWatchStore wraps a store with a WatchWorkers that never delivers,
+// freezing any workercache built over it at its seed-time state — the unit
+// analog of the watch's delivery latency.
+type staleWatchStore struct{ store.Interface }
+
+func (s staleWatchStore) WatchWorkers(context.Context) (*store.WorkerWatch, error) {
+	return store.NewWorkerWatch(make(chan store.WorkerEvent), func() {}), nil
+}
+
+// TestMintCertReadsThroughStaleWorkerCache pins the authorization
+// read-through: an atelet minting immediately after ResumeActor committed the
+// worker's assignment must be authorized from the store even though this
+// replica's cache has not yet seen the assignment. The control case keeps the
+// store unassigned too and must still deny — only fresh data may authorize,
+// and only fresh data may deny.
+func TestMintCertReadsThroughStaleWorkerCache(t *testing.T) {
+	for name, assignInStore := range map[string]bool{
+		"assignment committed but not yet in cache: authorized via read-through": true,
+		"unassigned in cache and store: denial stands":                           false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+
+			// Phase 1: worker exists, unassigned; the cache seeds this view and
+			// (via the inert watch) never learns anything newer.
+			seedActor(t, ctx, st, actorFixture{status: ateapipb.Actor_STATUS_RUNNING, workerNode: testNode, unassigned: true})
+			workers := workercache.New(staleWatchStore{st}, time.Hour)
+			cacheCtx, cancel := context.WithCancel(ctx)
+			t.Cleanup(cancel)
+			if err := workers.Start(cacheCtx); err != nil {
+				t.Fatalf("start worker cache: %v", err)
+			}
+
+			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+			if err != nil {
+				t.Fatalf("read seeded actor: %v", err)
+			}
+			if assignInStore {
+				// Phase 2: commit the assignment to the store only, as
+				// AssignWorker does (possibly on another replica).
+				worker, err := st.GetWorker(ctx, testPodNS, testPool, testWorkerPod)
+				if err != nil {
+					t.Fatalf("read seeded worker: %v", err)
+				}
+				worker.Assignment = &ateapipb.Assignment{
+					Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
+					ActorUid: actor.GetMetadata().GetUid(),
+				}
+				if err := st.UpdateWorker(ctx, worker, worker.GetVersion()); err != nil {
+					t.Fatalf("assign worker in store: %v", err)
+				}
+			}
+
+			srv := newTestServerWithCache(t, st, workers)
+			resp, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), mintCertRequest(t, actor.GetMetadata().GetUid()))
+
+			wantCode := codes.PermissionDenied
+			if assignInStore {
+				wantCode = codes.OK
+			}
+			if got := status.Code(err); got != wantCode {
+				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, wantCode)
+			}
+			if assignInStore && len(resp.GetActorCertificates()) == 0 {
+				t.Fatal("MintCert() returned no certificates")
+			}
+		})
+	}
+}
+
+// newTestServerWithCache is newTestServer with a caller-controlled worker
+// cache (e.g. one frozen at a stale state).
+func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercache.Cache) *Server {
+	t.Helper()
+
+	ca, err := localca.GenerateED25519CA("test-actor-ca")
+	if err != nil {
+		t.Fatalf("generate CA: %v", err)
+	}
+	poolBytes, err := localca.Marshal(&localca.Pool{CAs: []*localca.CA{ca}})
+	if err != nil {
+		t.Fatalf("marshal CA pool: %v", err)
+	}
+	poolFile := filepath.Join(t.TempDir(), "actor-ca-pool.json")
+	if err := os.WriteFile(poolFile, poolBytes, 0o600); err != nil {
+		t.Fatalf("write CA pool: %v", err)
+	}
+	return New("issuer", "", poolFile, st, workers)
+}
+
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
 	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example"}
 	for _, tt := range []struct {
