@@ -160,9 +160,14 @@ func defaultKataResources() *specs.LinuxResources {
 // explain where memMiB came from, so the error can name the field the user can
 // actually raise.
 //
-// memMiB is already net of reserveMiB: guest memory is reduced by the VMM
-// reserve, while vcpus is not, since applying a reserve to CPU the same way is
-// follow-up work.
+// memMiB is already net of reserveMiB, while vcpus is not. The asymmetry is
+// deliberate: an unreduced memory limit would push the worker pod past its own
+// and get it OOM-killed, whereas CPU is compressible, so the shortfall only
+// slows the workload down. cloud-hypervisor's vCPU threads, virtiofsd and ateom
+// are host processes drawing on the same worker-pod CPU quota, and the
+// scheduler's capacity check sets none of it aside, so a container gets somewhat
+// less CPU than it declared and the in-guest quota is throttled by the host
+// before it binds. Carving out a CPU reserve is left for a follow-up.
 type guestEnvelope struct {
 	memMiB        int
 	vcpus         int

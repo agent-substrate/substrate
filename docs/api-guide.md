@@ -309,8 +309,6 @@ containers:
 
 A container that exceeds its memory limit is OOM-killed on its own; the actor's other containers are unaffected.
 
-**Micro-VM rootfs is memory-backed.** A micro-VM container's writable rootfs upper layer is a guest tmpfs, and tmpfs pages are charged to the allocating cgroup. A container with `limits.memory: 256Mi` that writes a 300Mi file to its rootfs, `/tmp`, or `/run` is OOM-killed, unlike the same manifest on Kubernetes, where the rootfs is disk-backed reclaimable page cache.
-
 Only `cpu` and `memory` are accepted, each must be greater than zero, and a `cpu` limit below `10m` is raised to `10m` because the kernel rejects a CFS quota under 1ms.
 
 **Micro-VM only.** gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). A template that sets `resources` with `sandboxClass: gvisor` is rejected.
