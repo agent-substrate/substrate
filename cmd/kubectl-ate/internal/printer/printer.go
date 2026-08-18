@@ -254,8 +254,8 @@ func PrintActorSnapshots(snapshots []*ateapipb.ActorSnapshot, format string) err
 	for _, snapshot := range snapshots {
 		fmt.Fprintf(w, "%s\t%s\t%s/%s\t%d\t%s\t%s\n",
 			snapshot.GetMetadata().GetAtespace(), snapshot.GetMetadata().GetName(),
-			snapshot.GetSourceActor().GetAtespace(), snapshot.GetSourceActor().GetName(),
-			snapshot.GetSourceActorVersion(), snapshot.GetContentScope(), formatAge(snapshot.GetMetadata().GetCreateTime()))
+			snapshot.GetStatus().GetSourceActor().GetAtespace(), snapshot.GetStatus().GetSourceActor().GetName(),
+			snapshot.GetStatus().GetSourceActorVersion(), snapshot.GetStatus().GetContentScope(), formatAge(snapshot.GetMetadata().GetCreateTime()))
 	}
 	return w.Flush()
 }

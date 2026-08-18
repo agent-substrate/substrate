@@ -144,7 +144,7 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 		return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
-	if snapshot.GetActorTemplateUid() != string(template.GetUID()) {
+	if snapshot.GetStatus().GetActorTemplateUid() != string(template.GetUID()) {
 		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
 	}
 	for _, volume := range template.Spec.Volumes {

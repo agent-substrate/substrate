@@ -630,7 +630,7 @@ func validateSnapshotContentScope(ctx context.Context, t *testing.T, clients *e2
 	if err != nil {
 		t.Fatalf("failed to get ActorSnapshot %q: %v", snapRef.GetName(), err)
 	}
-	if got := snapshot.GetContentScope(); got != want {
+	if got := snapshot.GetStatus().GetContentScope(); got != want {
 		t.Errorf("snapshot %q content scope = %v, want %v", snapRef.GetName(), got, want)
 	}
 }

@@ -386,15 +386,17 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			return nil, err
 		}
 		snapshot := &ateapipb.ActorSnapshot{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: snapshotName},
-			SourceActor:            actorRef.ToObjectRef(),
-			SourceActorUid:         latestActor.GetMetadata().GetUid(),
-			SourceActorVersion:     latestActor.GetStatus().GetInProgressSnapshotSourceActorVersion(),
-			ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
-			ActorTemplateName:      latestActor.GetActorTemplateName(),
-			ActorTemplateUid:       string(actorTemplate.GetUID()),
-			ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(actorRef.Atespace, actorTemplate)),
-			SnapshotUri:            snapshotURI.String(),
+			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: snapshotName},
+			Status: &ateapipb.ActorSnapshotStatus{
+				SourceActor:            actorRef.ToObjectRef(),
+				SourceActorUid:         latestActor.GetMetadata().GetUid(),
+				SourceActorVersion:     latestActor.GetStatus().GetInProgressSnapshotSourceActorVersion(),
+				ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
+				ActorTemplateName:      latestActor.GetActorTemplateName(),
+				ActorTemplateUid:       string(actorTemplate.GetUID()),
+				ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(actorRef.Atespace, actorTemplate)),
+				SnapshotUri:            snapshotURI.String(),
+			},
 		}
 		// ErrAlreadyExists means a previous attempt crashed after creating
 		// the snapshot record; the persisted record is authoritative.

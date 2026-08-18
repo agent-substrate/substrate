@@ -281,16 +281,20 @@ message WorkerAssignment {
 // contents are immutable.
 message ActorSnapshot {
   ResourceMetadata metadata = 1;
-  ObjectRef source_actor = 2;
-  string source_actor_uid = 3;
-  int64 source_actor_version = 4;
-  string actor_template_namespace = 5;
-  string actor_template_name = 6;
-  string actor_template_uid = 7;
-  SnapshotContentScope content_scope = 8;
-  string snapshot_uri = 9;
+  ActorSnapshotStatus status = 2;
+}
+
+message ActorSnapshotStatus {
+  ObjectRef source_actor = 1;
+  string source_actor_uid = 2;
+  int64 source_actor_version = 3;
+  string actor_template_namespace = 4;
+  string actor_template_name = 5;
+  string actor_template_uid = 6;
+  SnapshotContentScope content_scope = 7;
+  string snapshot_uri = 8;
   // Immutable reference to the actor_template where the snapshot was created from.
-  ObjectRef actor_template = 10;
+  ObjectRef actor_template = 9;
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.

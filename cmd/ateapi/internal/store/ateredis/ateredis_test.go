@@ -825,12 +825,14 @@ func TestListActors(t *testing.T) {
 func TestActorSnapshotLifecycle(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	snapshot := &ateapipb.ActorSnapshot{
-		Metadata:           &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
-		SourceActor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
-		SourceActorUid:     "actor-uid",
-		SourceActorVersion: 7,
-		ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-		SnapshotUri:        "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			SourceActor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
+			SourceActorUid:     "actor-uid",
+			SourceActorVersion: 7,
+			ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:        "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+		},
 	}
 	created, err := s.CreateActorSnapshot(ctx, snapshot)
 	if err != nil {
@@ -862,8 +864,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("GetActorSnapshot(resolved tag target) = (%v, %v), want tagged snapshot", byTag, err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
-		SnapshotUri: "gs://bucket/root/snapshots/other/snapshot-2",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/other/snapshot-2"},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot second snapshot: %v", err)
 	}
@@ -914,8 +916,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 func seedTaggedSnapshot(t *testing.T, s *Persistence, ctx context.Context, snapshotName, tagName string) *ateapipb.ActorSnapshotTag {
 	t.Helper()
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
-		SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + snapshotName,
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + snapshotName},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(%s) failed: %v", snapshotName, err)
 	}
@@ -1973,8 +1975,8 @@ func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
 		t.Fatalf("CreateAtespace: %v", err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
-		SnapshotUri: "gs://bucket/root/snapshots/team-a/snapshot-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/team-a/snapshot-1"},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}

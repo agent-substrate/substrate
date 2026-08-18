@@ -462,8 +462,8 @@ func createAtespace(t *testing.T, tc *testContext, name string) {
 func createActorSnapshot(t *testing.T, tc *testContext, name string) *ateapipb.ObjectRef {
 	t.Helper()
 	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-		SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/" + name,
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/" + name},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(%s) failed: %v", name, err)
 	}
@@ -545,12 +545,14 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 
 	const goldenSnapshot = "golden"
 	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      createdTemplate.GetName(),
-		ActorTemplateUid:       string(createdTemplate.GetUID()),
-		ContentScope:           ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-		SnapshotUri:            "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
+		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
+		Status: &ateapipb.ActorSnapshotStatus{
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      createdTemplate.GetName(),
+			ActorTemplateUid:       string(createdTemplate.GetUID()),
+			ContentScope:           ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:            "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
+		},
 	}); err != nil {
 		t.Fatalf("failed to create golden ActorSnapshot: %v", err)
 	}
@@ -2161,7 +2163,7 @@ func TestSuspendActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActorSnapshot failed: %v", err)
 	}
-	if got := snapshot.GetSourceActorVersion(); got != running.GetActor().GetMetadata().GetVersion() {
+	if got := snapshot.GetStatus().GetSourceActorVersion(); got != running.GetActor().GetMetadata().GetVersion() {
 		t.Errorf("snapshot source version = %d, want %d", got, running.GetActor().GetMetadata().GetVersion())
 	}
 	listed, err := tc.client.ListActorSnapshots(context.Background(), &ateapipb.ListActorSnapshotsRequest{Atespace: testAtespace, PageSize: 1})
@@ -3634,10 +3636,10 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActorSnapshot failed: %v", err)
 	}
-	if got, want := snapshot.GetSnapshotUri(), upload.GetDestinationSnapshotUri(); got != want {
+	if got, want := snapshot.GetStatus().GetSnapshotUri(), upload.GetDestinationSnapshotUri(); got != want {
 		t.Errorf("snapshot URI = %q, want the upload destination %q", got, want)
 	}
-	if got := snapshot.GetContentScope(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
+	if got := snapshot.GetStatus().GetContentScope(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
 		t.Errorf("snapshot ContentScope = %v, want FULL", got)
 	}
 }

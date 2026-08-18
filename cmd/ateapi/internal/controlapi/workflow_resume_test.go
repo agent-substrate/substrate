@@ -865,9 +865,11 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 
 			if tt.seedGolden {
 				if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-					Metadata:     &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: tt.goldenSnapshot},
-					ContentScope: tt.goldenScope,
-					SnapshotUri:  goldenSnapshotURI,
+					Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: tt.goldenSnapshot},
+					Status: &ateapipb.ActorSnapshotStatus{
+						ContentScope: tt.goldenScope,
+						SnapshotUri:  goldenSnapshotURI,
+					},
 				}); err != nil {
 					t.Fatalf("CreateActorSnapshot(golden): %v", err)
 				}
@@ -880,10 +882,12 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 				})
 			} else {
 				snap, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-					Metadata:     &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: "snap-1"},
-					SourceActor:  &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-					ContentScope: tt.contentScope,
-					SnapshotUri:  "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+					Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: "snap-1"},
+					Status: &ateapipb.ActorSnapshotStatus{
+						SourceActor:  &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+						ContentScope: tt.contentScope,
+						SnapshotUri:  "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+					},
 				})
 				if err != nil {
 					t.Fatalf("CreateActorSnapshot: %v", err)
@@ -942,9 +946,11 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 	if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:     &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
-		ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-		SnapshotUri:  "gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			SnapshotUri:  "gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+		},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(golden): %v", err)
 	}

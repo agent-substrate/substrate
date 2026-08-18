@@ -361,13 +361,13 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSnapshotURI: %v", err)
 	}
-	if got := snapshot.GetSnapshotUri(); got != wantURI.String() {
+	if got := snapshot.GetStatus().GetSnapshotUri(); got != wantURI.String() {
 		t.Errorf("snapshot URI = %q, want %q", got, wantURI.String())
 	}
-	if got := snapshot.GetSourceActorUid(); got != created.GetMetadata().GetUid() {
+	if got := snapshot.GetStatus().GetSourceActorUid(); got != created.GetMetadata().GetUid() {
 		t.Errorf("snapshot SourceActorUid = %q, want %q", got, created.GetMetadata().GetUid())
 	}
-	if got := snapshot.GetSourceActorVersion(); got != 1 {
+	if got := snapshot.GetStatus().GetSourceActorVersion(); got != 1 {
 		t.Errorf("snapshot SourceActorVersion = %d, want 1", got)
 	}
 }
@@ -496,7 +496,7 @@ func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActorSnapshot: %v", err)
 	}
-	if got := snap.GetSourceActorVersion(); got != 42 {
+	if got := snap.GetStatus().GetSourceActorVersion(); got != 42 {
 		t.Errorf("SourceActorVersion = %d, want 42", got)
 	}
 }

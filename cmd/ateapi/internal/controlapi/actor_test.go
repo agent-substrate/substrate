@@ -184,11 +184,13 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 		t.Fatalf("Get source ActorTemplate: %v", err)
 	}
 	snapshot, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata:         &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
-		SourceActor:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: "source"},
-		ActorTemplateUid: string(tmpl.GetUID()),
-		ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-		SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/data-snapshot",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			SourceActor:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: "source"},
+			ActorTemplateUid: string(tmpl.GetUID()),
+			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/data-snapshot",
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
@@ -242,9 +244,11 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 		t.Fatalf("wait for ActorTemplate update: %v", err)
 	}
 	snapshot, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata:         &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "external-volume-snapshot"},
-		ActorTemplateUid: string(template.GetUID()),
-		SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/external-volume-snapshot",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "external-volume-snapshot"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			ActorTemplateUid: string(template.GetUID()),
+			SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/external-volume-snapshot",
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)

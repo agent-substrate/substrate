@@ -128,14 +128,14 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 // taken before that rule existed — surface a clear error instead of shipping
 // a restore request atelet would reject (or that would boot an empty guest).
 func validateGoldenSnapshotScope(snapshot *ateapipb.ActorSnapshot) error {
-	switch snapshot.GetContentScope() {
+	switch snapshot.GetStatus().GetContentScope() {
 	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
 		ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL:
 		return nil
 	default:
 		return status.Errorf(codes.FailedPrecondition,
 			"ActorTemplate golden snapshot %q was taken with scope %s, not Full; regenerate the golden snapshot",
-			snapshot.GetMetadata().GetName(), snapshot.GetContentScope())
+			snapshot.GetMetadata().GetName(), snapshot.GetStatus().GetContentScope())
 	}
 }
 
@@ -173,10 +173,10 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		if err != nil {
 			return nil, nil, src, fmt.Errorf("while getting ActorSnapshot: %w", err)
 		}
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetSnapshotUri()); err != nil {
+		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetStatus().GetSnapshotUri()); err != nil {
 			return nil, nil, src, status.Errorf(codes.DataLoss, "ActorSnapshot %s/%s: %v", ref.GetAtespace(), ref.GetName(), err)
 		}
-		src.Scope = snapshot.GetContentScope()
+		src.Scope = snapshot.GetStatus().GetContentScope()
 	} else if actorTemplate.Status.GoldenSnapshot != "" && !boot {
 		snapshot, err := w.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
 		if errors.Is(err, store.ErrNotFound) {
@@ -188,10 +188,10 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		if err := validateGoldenSnapshotScope(snapshot); err != nil {
 			return nil, nil, src, err
 		}
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetSnapshotUri()); err != nil {
+		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetStatus().GetSnapshotUri()); err != nil {
 			return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", actorTemplate.Status.GoldenSnapshot, err)
 		}
-		src.Scope = snapshot.GetContentScope()
+		src.Scope = snapshot.GetStatus().GetContentScope()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -223,7 +223,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			if err := validateGoldenSnapshotScope(goldenSnapshot); err != nil {
 				return nil, nil, src, err
 			}
-			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenSnapshot.GetSnapshotUri()); err != nil {
+			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenSnapshot.GetStatus().GetSnapshotUri()); err != nil {
 				return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", actorTemplate.Status.GoldenSnapshot, err)
 			}
 		}
