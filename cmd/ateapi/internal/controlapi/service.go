@@ -98,6 +98,10 @@ type serviceStore interface {
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error)
 	DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
+	CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error)
+	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
+	ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error)
+	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
 	AcquireLock(ctx context.Context, key string) (*store.Lock, error)
 }
