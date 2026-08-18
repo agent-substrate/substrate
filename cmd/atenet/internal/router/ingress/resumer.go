@@ -111,7 +111,7 @@ type ActorResumer struct {
 type resumerOption func(*ActorResumer)
 
 // withParking configures parking behavior from cfg. When parking is enabled,
-// FailedPrecondition ("no free workers available") becomes retryable and the
+// ResourceExhausted ("no free workers available") becomes retryable and the
 // resume is retried, at cfg's retry cadence, for up to cfg's budget. When
 // disabled, the resumer applies fail-fast-on-capacity behavior.
 func withParking(cfg ParkedRequestConfig) resumerOption {
@@ -140,18 +140,20 @@ func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *A
 
 // retryable reports whether err warrants another resume attempt while the
 // request remains parked. A concurrent-resume conflict (Aborted) is always
-// retried. Transient pool saturation (FailedPrecondition, "no free workers
+// retried. Transient pool saturation (ResourceExhausted, "no free workers
 // available") and transient control-plane unavailability (Unavailable, e.g. an
 // ateapi rolling restart) are retried only when parking is enabled, turning a
 // momentary condition into a bounded wait instead of an immediate failure — a
 // parked request should ride out a blip, not fail on it with budget remaining.
+// FailedPrecondition stays retryable too: it no longer carries saturation, but
+// it does cover states a concurrent operation can move the actor out of.
 // All other codes (NotFound, DeadlineExceeded, PermissionDenied, ...) are
 // returned to the caller so the HTTP boundary can map them with full fidelity.
 func (r *ActorResumer) retryable(err error) bool {
 	switch status.Code(err) {
 	case codes.Aborted:
 		return true
-	case codes.FailedPrecondition, codes.Unavailable:
+	case codes.ResourceExhausted, codes.FailedPrecondition, codes.Unavailable:
 		return r.parkEnabled
 	default:
 		return false

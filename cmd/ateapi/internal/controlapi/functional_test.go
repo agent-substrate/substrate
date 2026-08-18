@@ -62,6 +62,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
 )
 
@@ -113,33 +114,10 @@ func TestMain(m *testing.M) {
 		log.Fatalf("create fast storage class: %v", err)
 	}
 
-	// Create shared Atelet Pod
-	ateletPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "atelet-shared",
-			Namespace: "ate-system",
-			Labels: map[string]string{
-				"app": "atelet",
-			},
-		},
-		Spec: corev1.PodSpec{
-			NodeName: "node1",
-			Containers: []corev1.Container{
-				{Name: "main", Image: "nginx"},
-			},
-		},
-	}
-	createdAtelet, err := k8sClient.CoreV1().Pods("ate-system").Create(context.Background(), ateletPod, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		log.Fatalf("create atelet pod: %v", err)
-	}
-	if err == nil {
-		createdAtelet.Status.PodIPs = []corev1.PodIP{{IP: "127.0.0.1"}}
-		createdAtelet.Status.Phase = corev1.PodRunning
-		_, err = k8sClient.CoreV1().Pods("ate-system").UpdateStatus(context.Background(), createdAtelet, metav1.UpdateOptions{})
-		if err != nil {
-			log.Fatalf("update atelet pod status: %v", err)
-		}
+	// Create shared Atelet Pod. Tests that place workers on another node add
+	// their own atelet there via setupAteletOnNode.
+	if err := createAteletPod(k8sClient, "atelet-shared", "node1"); err != nil {
+		log.Fatalf("%v", err)
 	}
 
 	// Start Fake Atelet Server on port 8085
@@ -281,6 +259,10 @@ type testContext struct {
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister
+	// ateletIndexer is the index DialForAteletOnNode looks up atelets in.
+	// setupAteletOnNode waits on it so a test never dials a node whose atelet the
+	// informer has not seen yet.
+	ateletIndexer cache.Indexer
 }
 
 // setupTest sets up a fully isolated test environment.
@@ -440,6 +422,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
 		sandboxConfigLister: sandboxConfigLister,
+		ateletIndexer:       ateletInformer.GetIndexer(),
 	}
 }
 
@@ -768,6 +751,71 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	})
 	if err != nil {
 		t.Fatalf("failed to wait for worker to appear in worker cache: %v", err)
+	}
+}
+
+// createAteletPod creates an atelet pod on nodeName and marks it Running with
+// an IP, which DialForAteletOnNode requires. The pod carries the namespace and
+// app=atelet label AteletInformer selects on, and is indexed by its node.
+func createAteletPod(kc kubernetes.Interface, name, nodeName string) error {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ateletNamespace,
+			Labels:    map[string]string{"app": "atelet"},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:   nodeName,
+			Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+		},
+	}
+	created, err := kc.CoreV1().Pods(ateletNamespace).Create(context.Background(), pod, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("creating atelet pod %s on %s: %w", name, nodeName, err)
+	}
+	created.Status.PodIPs = []corev1.PodIP{{IP: "127.0.0.1"}}
+	created.Status.Phase = corev1.PodRunning
+	if _, err := kc.CoreV1().Pods(ateletNamespace).UpdateStatus(context.Background(), created, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("updating atelet pod %s status: %w", name, err)
+	}
+	return nil
+}
+
+// setupAteletOnNode makes nodeName dialable for the duration of the test: it
+// creates an atelet pod there, waits for the dialer's index to see it, and
+// removes it on cleanup. The package fixture only creates one atelet, on
+// node1, and the dialer resolves atelets per node, so a worker on any other
+// node is unreachable without this.
+func setupAteletOnNode(t *testing.T, tc *testContext, name, nodeName string) {
+	t.Helper()
+	if err := createAteletPod(tc.k8sClient, name, nodeName); err != nil {
+		t.Fatalf("%v", err)
+	}
+	t.Cleanup(func() {
+		_ = tc.k8sClient.CoreV1().Pods(ateletNamespace).Delete(context.Background(), name, metav1.DeleteOptions{
+			GracePeriodSeconds: ptr.To[int64](0),
+		})
+	})
+
+	// Wait for the dialer's index to see the newly created atlet
+	err := wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		atelets, err := tc.ateletIndexer.ByIndex(byNode, nodeName)
+		if err != nil {
+			return false, nil
+		}
+		for _, obj := range atelets {
+			p := obj.(*corev1.Pod)
+			if p.Name == name && len(p.Status.PodIPs) > 0 {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for atelet pod on %s to be indexed: %v", nodeName, err)
 	}
 }
 
@@ -1884,7 +1932,7 @@ func TestResumeActor_NoWorkers(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "no free workers available")
+	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
 }
 
 // TestResumeActor_MultiPoolSelector exercises the AND-of-two-selectors path
@@ -3655,5 +3703,99 @@ func TestSuspendActor_FromPaused_RetryAfterUploadFailure(t *testing.T) {
 	}
 	if got := tc.fakeAtelet.UploadRequest.GetDestinationSnapshotUri(); got != firstDestination {
 		t.Errorf("retry destination = %q, want the original %q (idempotent upload target)", got, firstDestination)
+	}
+}
+
+// TestResumeActor_RelocatesAfterSuspendFromPaused covers the capacity-recovery
+// flow: a PAUSED actor is pinned to the node holding its local snapshot, so it
+// cannot resume while that node is full. Suspending it uploads the snapshot and
+// drops the node pinning, after which it is scheduled onto a worker on a different
+// node.
+func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
+	ns := namespaceForTest("ns-resume-relocate")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	const pinned, relocated = "actor-pinned", "actor-squatter"
+	for _, name := range []string{pinned, relocated} {
+		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		}}); err != nil {
+			t.Fatalf("CreateActor(%s) failed: %v", name, err)
+		}
+	}
+
+	// The actor under test runs on node1's only worker, then pauses — which
+	// frees that worker but pins the actor to node1 via LocalSnapshotInfo.
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	}); err != nil {
+		t.Fatalf("ResumeActor(%s) failed: %v", pinned, err)
+	}
+	if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	}); err != nil {
+		t.Fatalf("PauseActor(%s) failed: %v", pinned, err)
+	}
+	paused, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	})
+	if err != nil {
+		t.Fatalf("GetActor(%s) failed: %v", pinned, err)
+	}
+	if got := paused.GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(); len(got) != 1 || got[0] != "node1" {
+		t.Fatalf("paused actor pinned to %v, want [node1]", got)
+	}
+
+	// Another actor takes node1's only worker, so the pinned actor's node is full
+	// while free capacity exists elsewhere.
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: relocated},
+	}); err != nil {
+		t.Fatalf("ResumeActor(%s) failed: %v", relocated, err)
+	}
+	createWorkerPod(t, tc, ns, "worker-2", "node2", "pool1")
+	setupAteletOnNode(t, tc, "atelet-node2", "node2")
+
+	// Capacity exhaustion is ResourceExhausted.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	})
+	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
+
+	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor(%s) failed: %v", pinned, err)
+	}
+	if got := suspended.GetActor().GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Fatalf("status after suspend = %v, want SUSPENDED", got)
+	}
+	if got := suspended.GetActor().GetLocalSnapshotInfo(); got != nil {
+		t.Fatalf("LocalSnapshotInfo = %v, want cleared so the actor can be scheduled anywhere", got)
+	}
+
+	// Resume should succeed now and the actor scheduled on node2.
+	resumed, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor(%s) after suspend failed: %v", pinned, err)
+	}
+	if got := resumed.GetActor().GetWorkerAssignment().GetWorkerPod(); got != "worker-2" {
+		t.Errorf("resumed onto worker %q, want worker-2 (the worker on node2)", got)
+	}
+	worker, err := tc.persistence.GetWorker(context.Background(), ns, "pool1", "worker-2")
+	if err != nil {
+		t.Fatalf("GetWorker(worker-2) failed: %v", err)
+	}
+	if got := worker.GetNodeName(); got != "node2" {
+		t.Errorf("worker-2 node = %q, want node2", got)
 	}
 }

@@ -27,7 +27,12 @@ metadata:
   labels:
     workload: counter
 spec:
-  replicas: 5
+  # Sized to what a small node (a single kind node in CI) can actually place,
+  # with one worker to spare: the only suites that run actors on this pool are
+  # networking and metrics, one actor each, and they can run concurrently. A
+  # pool that cannot place every replica is worse than a smaller one -- the
+  # deploy blocks on a rollout that never completes.
+  replicas: 3
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
   template:
     # Per-worker resources: these size the worker POD and advertise its
@@ -36,9 +41,9 @@ spec:
     #
     # Capacity comes from the limits (workerCapacity reads limits only), while the
     # kube-scheduler packs nodes by the requests — so the CPU request is set well
-    # below the limit to keep a 5-replica pool placeable on a small node (a single
-    # kind node in CI) without changing what an actor is allowed to use. Memory is
-    # not compressible, so its request matches the limit.
+    # below the limit to keep the pool placeable alongside the rest of the install
+    # without changing what an actor is allowed to use. Memory is not
+    # compressible, so its request matches the limit.
     resources:
       limits:
         cpu: "1"

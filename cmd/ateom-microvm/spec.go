@@ -70,10 +70,10 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxS
 		}
 	}
 
-	// NB: no virtio-fs-overlay annotation here. With the STOCK shim, this spec is
-	// for the "carrier" container that only boots the VM + shares the RO base over
-	// virtio-fs. ateom assembles the actual overlay rootfs itself by driving the
-	// kata-agent CreateContainer over ttrpc (see RunWorkload) — no patched shim.
+	// NB: no overlay-related annotations here. The rootfs overlay is assembled on
+	// the HOST (see kata.StageMergedRootfs); this spec is used directly for the
+	// container the kata-agent runs on the shared merged tree (see RunWorkload) —
+	// stock agent, no patched shim.
 
 	// Point the network namespace at our interior netns (which holds the pod's
 	// eth0); kata finds eth0 there and wires it to the VM's virtio-net.
@@ -96,9 +96,9 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxS
 	// agent accepts. (Static shaper; pod DNS integration is future work.)
 	//
 	// KNOWN GAP vs the gVisor runtime: this also drops atelet's read-only actor
-	// identity bind mount (/run/ate/actor-id). The micro-VM guest can't see host
-	// paths (the rootfs is an overlay of a virtio-fs base + a guest-RAM upper, not a
-	// host bind), so atelet's host-path identity mount has nothing to bind to.
+	// identity bind mount (/run/ate/actor-id). The micro-VM guest can't see
+	// arbitrary host paths (it sees only the virtio-fs shares), so atelet's
+	// host-path identity mount has nothing to bind to.
 	// Exposing the identity needs a per-actor volume plumbed into the guest; not yet
 	// implemented. No micro-VM workload depends on it today.
 	spec.Mounts = defaultKataMounts()

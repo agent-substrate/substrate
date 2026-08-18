@@ -113,7 +113,7 @@ fi
 # the arm64 virtiofsd sha at deploy (see that script for details). Ordering
 # matters: the control plane must be up so the SandboxConfig CRD exists.
 log "Installing micro-VM dependencies..."
-hack/install-microvm-deps.sh --install
+KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install
 
 # --- 3. apply the demo ------------------------------------------------------
 # Use ./hack/run-tool.sh ko so ko honors KO_DOCKER_REPO (the committed .ko.yaml base

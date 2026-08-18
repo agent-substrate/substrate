@@ -498,11 +498,11 @@ spec:
             - message: spec.resources.claims is not supported
               rule: '!has(self.resources) || !has(self.resources.claims)'
             - message: For sandboxClass 'microvm', spec.resources.limits.memory must
-                be at least 512Mi (256Mi VMM reserve + 256Mi guest minimum); below
+                be at least 256Mi (128Mi VMM reserve + 128Mi guest minimum); below
                 this the VM cannot boot
               rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
                 !has(self.resources) || !has(self.resources.limits) || !(''memory''
-                in self.resources.limits) || !quantity(self.resources.limits[''memory'']).isLessThan(quantity(''512Mi''))'
+                in self.resources.limits) || !quantity(self.resources.limits[''memory'']).isLessThan(quantity(''256Mi''))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

@@ -352,15 +352,33 @@ func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, namespace, p
 	return s.persistence.DeleteWorker(ctx, namespace, pool, podName)
 }
 
+// storedWorkerListBackoff and storedWorkerListCap are the exponential backoff
+// schedule for retrying a failed page of the startup stored-worker scan. They
+// are vars so tests can shrink them.
+var (
+	storedWorkerListBackoff = 500 * time.Millisecond
+	storedWorkerListCap     = 30 * time.Second
+)
+
 // enqueueStoredWorkers enqueues a key for every worker record in the store.
 // Records whose pods are live and unchanged reconcile to a no-op; orphaned
 // records (pod gone, or its name reused by a new pod UID) get cleaned up.
+//
+// Each page's ListWorkers call is retried with capped backoff until it succeeds
+// or ctx is cancelled, so a transient store error does not abandon the scan and
+// leave ghost workers behind until the next restart (the per-key workqueue
+// retries reconciles, but nothing retries this initial enqueue scan). Pages are
+// enqueued as they are read, so the whole worker set is never held in memory at
+// once and a late failure does not re-scan the pages already enqueued.
 func (s *WorkerPoolSyncer) enqueueStoredWorkers(ctx context.Context) {
 	var pageToken string
 	for {
-		page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: 1000, PageToken: pageToken})
+		page, err := s.listWorkersPageWithRetry(ctx, pageToken)
 		if err != nil {
-			slog.ErrorContext(ctx, "Syncer: failed to list workers for orphan reconcile", slog.Any("err", err))
+			// Only ctx cancellation (ate-api-server shutdown) ends the retry
+			// loop. Pages read so far are already enqueued (partial progress);
+			// the rest are recovered by the next startup scan.
+			slog.ErrorContext(ctx, "Syncer: stopped enqueue of stored workers before completing the scan; remaining workers will be retried at the next startup", slog.Any("err", err))
 			return
 		}
 		for _, w := range page.Items {
@@ -370,6 +388,38 @@ func (s *WorkerPoolSyncer) enqueueStoredWorkers(ctx context.Context) {
 			return
 		}
 		pageToken = page.NextPageToken
+	}
+}
+
+// listWorkersPageWithRetry reads one page of workers, retrying the store call
+// with capped exponential backoff until it succeeds or ctx is cancelled. The
+// page token is a stateless cursor, so retrying the failed call with the same
+// token resumes from the same position. A fresh backoff per page means only
+// consecutive failures of the same call accumulate delay; a page that succeeds
+// resets it.
+func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageToken string) (store.ListResponse[*ateapipb.Worker], error) {
+	backoff := wait.Backoff{
+		Duration: storedWorkerListBackoff,
+		Factor:   2.0,
+		Jitter:   0.1,
+		// Steps must be large enough for the ramp (Duration*Factor^n) to reach
+		// Cap, or Cap never triggers and the plateau sits at the last ramp step.
+		// With Duration=500ms, Factor=2, the ramp hits Cap=30s at step 6
+		// (0.5,1,2,4,8,16,30,30...).
+		Steps: 6,
+		Cap:   storedWorkerListCap,
+	}
+	for {
+		page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: 1000, PageToken: pageToken})
+		if err == nil {
+			return page, nil
+		}
+		slog.WarnContext(ctx, "Syncer: failed to list a page of stored workers for orphan cleanup, retrying", slog.Any("err", err))
+		select {
+		case <-ctx.Done():
+			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing stored workers aborted: %w", ctx.Err())
+		case <-time.After(backoff.Step()):
+		}
 	}
 }
 

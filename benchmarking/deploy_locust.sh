@@ -28,6 +28,7 @@ BENCHMARKING_DIR="${ROOT}/benchmarking"
 WORKER_COUNT=1
 SANDBOX_CLASS=gvisor
 SKIP_BUILD=0
+OTLP_ENDPOINT=""
 
 usage() {
   echo "Usage: $0 [options]"
@@ -38,6 +39,8 @@ usage() {
   echo "  --worker-count N        Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS   Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                          microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "  --otlp-endpoint URL     Forwarded to workloads/deploy.sh. The address to which an"
+  echo "                          instrumented actor container sends telemetry."
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -60,6 +63,8 @@ while [[ "$#" -gt 0 ]]; do
     --worker-count=*) WORKER_COUNT="${1#*=}" ;;
     --sandbox-class) shift; SANDBOX_CLASS="$1" ;;
     --sandbox-class=*) SANDBOX_CLASS="${1#*=}" ;;
+    --otlp-endpoint) shift; OTLP_ENDPOINT="$1" ;;
+    --otlp-endpoint=*) OTLP_ENDPOINT="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -81,10 +86,14 @@ esac
 
 if [[ "${action}" == "deploy" ]]; then
   echo "=== Deploying benchmark workloads (worker_count=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS}) ==="
-  "${BENCHMARKING_DIR}/workloads/deploy.sh" \
-    --deploy \
-    --worker-count "${WORKER_COUNT}" \
-    --sandbox-class "${SANDBOX_CLASS}"
+  # An empty OTLP_ENDPOINT must not become an empty --otlp-endpoint argument,
+  # which would overwrite the default in workloads/deploy.sh with an empty
+  # string and send the actor telemetry nowhere.
+  workload_args=(--deploy --worker-count "${WORKER_COUNT}" --sandbox-class "${SANDBOX_CLASS}")
+  if [[ -n "${OTLP_ENDPOINT}" ]]; then
+    workload_args+=(--otlp-endpoint "${OTLP_ENDPOINT}")
+  fi
+  "${BENCHMARKING_DIR}/workloads/deploy.sh" "${workload_args[@]}"
 
   if [[ "${SKIP_BUILD}" -eq 0 ]]; then
     echo

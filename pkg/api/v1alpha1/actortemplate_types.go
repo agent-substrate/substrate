@@ -316,14 +316,14 @@ type SnapshotsConfig struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests)",message="spec.resources.requests is not supported; actors are sized by spec.resources.limits only"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.claims)",message="spec.resources.claims is not supported"
 // A micro-VM's guest RAM is the declared memory limit minus a fixed VMM reserve
-// (256Mi, held back for cloud-hypervisor + virtiofsd); below a 256Mi guest minimum
-// the VM cannot boot. Reject at admission any micro-VM memory limit under 512Mi
-// (256Mi reserve + 256Mi guest minimum) so it fails at create time rather than at
+// (128Mi, held back for cloud-hypervisor + virtiofsd); below a 128Mi guest minimum
+// there is no useful headroom. Reject at admission any micro-VM memory limit under
+// 256Mi (128Mi reserve + 128Mi guest minimum) so it fails at create time rather than at
 // cold boot — a coarse pre-filter; the reserve-aware check in ateom (see
-// cmd/ateom-microvm/run.go: resolveGuestMemMiB) stays authoritative. The 512Mi floor
+// cmd/ateom-microvm/run.go: resolveGuestMemMiB) stays authoritative. The 256Mi floor
 // assumes the default reserve; deployments that raise --vmm-mem-reserve-mib rely on
 // the runtime check. gVisor has no reserve, so this only applies to micro-VM.
-// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.resources) || !has(self.resources.limits) || !('memory' in self.resources.limits) || !quantity(self.resources.limits['memory']).isLessThan(quantity('512Mi'))",message="For sandboxClass 'microvm', spec.resources.limits.memory must be at least 512Mi (256Mi VMM reserve + 256Mi guest minimum); below this the VM cannot boot"
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.resources) || !has(self.resources.limits) || !('memory' in self.resources.limits) || !quantity(self.resources.limits['memory']).isLessThan(quantity('256Mi'))",message="For sandboxClass 'microvm', spec.resources.limits.memory must be at least 256Mi (128Mi VMM reserve + 128Mi guest minimum); below this the VM cannot boot"
 type ActorTemplateSpec struct {
 	// Containers is the workload definition.
 	//

@@ -73,6 +73,20 @@ spec:
     - "--metrics-listen-addr=:9090"
     - "--data-dir=/tmp/glutton"
     - "--mode=http"
+    # Substrate puts no OTLP configuration in an actor container:
+    # resolveActorEnv in cmd/atelet/oci.go merges the env of the ActorTemplate
+    # and the ENV of the image, and nothing more. Without the value below, the
+    # SDK uses its default localhost:4317. No process listens on that address
+    # in the sandbox, thus substrate discards each actor span with no error
+    # message. You cannot measure the actor telemetry until you set this value.
+    env:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: "${OTLP_ENDPOINT}"
+    # The telemetry meter counts by service.name. Thus this value keeps the
+    # actor volume separate from the volume of the control plane. See
+    # benchmarking/telemetry/README.md.
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: "service.name=glutton-actor"
     # Hold ResumeActor open until port 80 actually answers.
     readyz:
       httpGet:

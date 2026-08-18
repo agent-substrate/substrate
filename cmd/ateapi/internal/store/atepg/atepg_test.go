@@ -30,7 +30,6 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -128,77 +127,6 @@ func setupPostgresStore(t *testing.T) store.Interface {
 
 func newTestAtespace(name string) *ateapipb.Atespace {
 	return &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-}
-
-func newTestActorTemplateVersion(atespace, name, template string) *ateapipb.ActorTemplateVersion {
-	return &ateapipb.ActorTemplateVersion{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: template},
-		Phase:         &ateapipb.ActorTemplateVersionPhase{Phase: ateapipb.ActorTemplateVersionPhase_PHASE_INITIAL},
-	}
-}
-
-func createTestAtespace(t *testing.T, s *Persistence, name string) {
-	t.Helper()
-	if _, err := s.CreateAtespace(context.Background(), newTestAtespace(name)); err != nil {
-		t.Fatalf("CreateAtespace(%q) failed: %v", name, err)
-	}
-}
-
-func TestDeleteActorTemplateVersion_TaggedGoldenSnapshotRollsBack(t *testing.T) {
-	s := setupPostgresPersistence(t)
-	ctx := context.Background()
-	createTestAtespace(t, s, "team-a")
-	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "ate-golden", Name: "golden-1"},
-		SnapshotUri: "gs://bucket/golden-1",
-	}); err != nil {
-		t.Fatalf("CreateActorSnapshot failed: %v", err)
-	}
-	if _, err := s.CreateActorSnapshotTag(ctx, "ate-golden", "golden-1", &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "keep-golden"},
-	}); err != nil {
-		t.Fatalf("CreateActorSnapshotTag failed: %v", err)
-	}
-	version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-	version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}
-	if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-
-	versionRef := resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-	if _, err := s.DeleteActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrFailedPrecondition) {
-		t.Fatalf("DeleteActorTemplateVersion with tagged golden snapshot = %v, want ErrFailedPrecondition", err)
-	}
-	if _, err := s.GetActorTemplateVersion(ctx, versionRef); err != nil {
-		t.Errorf("version was removed despite rolled-back delete: %v", err)
-	}
-	if _, err := s.GetActorSnapshot(ctx, "ate-golden", "golden-1"); err != nil {
-		t.Errorf("golden snapshot was removed despite rolled-back delete: %v", err)
-	}
-}
-
-func TestListActorTemplateVersions_PageTokenRejectsDifferentFilter(t *testing.T) {
-	s := setupPostgresPersistence(t)
-	ctx := context.Background()
-	createTestAtespace(t, s, "team-a")
-	for _, name := range []string{"a-1", "a-2"} {
-		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", name, "tmpl-a")); err != nil {
-			t.Fatalf("CreateActorTemplateVersion(%q) failed: %v", name, err)
-		}
-	}
-	parent := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
-	page, err := s.ListActorTemplateVersions(ctx, "team-a", parent, store.ListOptions{PageSize: 1})
-	if err != nil {
-		t.Fatalf("ListActorTemplateVersions failed: %v", err)
-	}
-	if page.NextPageToken == "" {
-		t.Fatal("expected a second page")
-	}
-	otherParent := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-b"}
-	if _, err := s.ListActorTemplateVersions(ctx, "team-a", otherParent, store.ListOptions{PageSize: 1, PageToken: page.NextPageToken}); err == nil {
-		t.Error("page token was accepted with a different parent filter")
-	}
 }
 
 // TestCreateActor_MissingAtespace_FailedPrecondition exercises the

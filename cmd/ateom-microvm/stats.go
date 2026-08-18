@@ -65,7 +65,7 @@ type guestStatsTarget struct {
 
 	// workloadIDs are the guest containers to sum, one per actor container.
 	// Each actor container exists in the guest as TWO kata containers (see
-	// overlayWorkloadID): a "carrier", whose only job is to make the agent
+	// the retired guest-overlay design): a "carrier", whose only job is to make the agent
 	// bind the read-only image rootfs at a fixed guest path, and the overlay
 	// WORKLOAD, which lays a writable upper over it and runs the container's
 	// actual process. Only workload ids belong here: a carrier is created but

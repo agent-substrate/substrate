@@ -52,9 +52,9 @@ func TestClassifyOutcome(t *testing.T) {
 			expected: "timeout",
 		},
 		{
-			name:     "FailedPrecondition gRPC code maps to no_capacity",
-			err:      status.Error(codes.FailedPrecondition, "capacity full"),
-			expected: "no_capacity",
+			name:     "FailedPrecondition gRPC code maps to failed_precondition",
+			err:      status.Error(codes.FailedPrecondition, "actor is not in a resumable state"),
+			expected: "failed_precondition",
 		},
 		{
 			name:     "Aborted gRPC code maps to lock_conflict",
@@ -72,9 +72,9 @@ func TestClassifyOutcome(t *testing.T) {
 			expected: "unavailable",
 		},
 		{
-			name:     "ResourceExhausted gRPC code maps to rate_limited",
-			err:      status.Error(codes.ResourceExhausted, "rate limit exceeded"),
-			expected: "rate_limited",
+			name:     "ResourceExhausted gRPC code maps to no_capacity",
+			err:      status.Error(codes.ResourceExhausted, "no free workers available"),
+			expected: "no_capacity",
 		},
 		{
 			name:     "StatusCode_NotFound ReqError maps to not_found",

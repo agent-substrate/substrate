@@ -31,7 +31,7 @@ func VMDir(id string) string { return filepath.Join(vcVMDir, id) }
 func VsockSocketPath(id string) string { return filepath.Join(VMDir(id), "clh.sock") }
 
 // DurableVirtiofsdSocketPath is the vhost-user-fs socket for the actor's writable
-// durable-dir share, served by a second virtiofsd alongside the RO lower's.
+// durable-dir share, served by a second virtiofsd alongside the rootfs share's.
 func DurableVirtiofsdSocketPath(id string) string {
 	return filepath.Join(VMDir(id), "virtiofsd-durable.sock")
 }

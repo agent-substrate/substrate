@@ -116,22 +116,3 @@ func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateR
 		Name:     t.GetMetadata().GetName(),
 	}
 }
-
-// ActorTemplateVersionRef identifies an ActorTemplateVersion by the
-// (atespace, name).
-type ActorTemplateVersionRef = ResourceRef[*ateapipb.ActorTemplateVersion]
-
-// ActorTemplateVersionRefFromObjectRef converts a wire reference to an
-// ActorTemplateVersionRef.
-func ActorTemplateVersionRefFromObjectRef(ref *ateapipb.ObjectRef) ActorTemplateVersionRef {
-	return resourceRefFromObjectRef[*ateapipb.ActorTemplateVersion](ref)
-}
-
-// ActorTemplateVersionRefFromActorTemplateVersion returns the reference
-// addressing the given version.
-func ActorTemplateVersionRefFromActorTemplateVersion(v *ateapipb.ActorTemplateVersion) ActorTemplateVersionRef {
-	return ActorTemplateVersionRef{
-		Atespace: v.GetMetadata().GetAtespace(),
-		Name:     v.GetMetadata().GetName(),
-	}
-}

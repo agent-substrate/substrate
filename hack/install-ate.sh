@@ -69,6 +69,7 @@ function usage() {
   echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
   echo "  --atenet-router=envoy|agentgateway     Select the atenet router dataplane (default: envoy)"
   echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
+  echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
   echo "Experiments:"
   echo ""
@@ -86,6 +87,7 @@ function usage() {
   echo "  --create-jwt-authority-pool-secret     Create JWT authority pool secret"
   echo "  --create-actor-id-ca-pool-secret       Create actor ID CA pool secret"
   echo "  --create-actor-id-ca-certs-secret      Create actor ID CA certs secret"
+  echo "  --create-egress-mitm-ca-pool-secret    Create egress MITM CA pool secret"
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-valkey-ca-certs-secret        Create Valkey's combined client/server CA bundle"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
@@ -133,6 +135,18 @@ run_kubectl() {
   kubectl \
     ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}} \
     "$@"
+}
+
+# run_kubectl_fatal runs kubectl and aborts the install if it fails. Demo
+# handlers need this: the dispatcher below calls them from an `if` condition,
+# which suppresses errexit for everything they run, so a plain run_kubectl that
+# fails is silently ignored -- a broken wait then costs its whole timeout and
+# lets the install "succeed" anyway.
+run_kubectl_fatal() {
+  if ! run_kubectl "$@"; then
+    echo "error: kubectl $* failed" >&2
+    exit 1
+  fi
 }
 
 run_kubectl_ate() {
@@ -281,6 +295,59 @@ apply_otel_config() {
   fi
 }
 
+# Apply the opt-in PostgreSQL StatefulSet. On kind it goes through an overlay
+# that right-sizes the CPU request for a 4-vCPU node; see
+# manifests/ate-install/kind/postgres/kustomization.yaml.
+apply_postgres() {
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    kubectl kustomize manifests/ate-install/kind/postgres \
+      --load-restrictor LoadRestrictionsNone | run_kubectl apply -f -
+  else
+    run_kubectl apply -f manifests/ate-install/postgres.yaml
+  fi
+}
+
+# --otlp-endpoint sends all control plane telemetry to a different collector for
+# the duration of a measurement. One patch is sufficient: each component reads
+# this ConfigMap through envFrom, and ate-controller copies the values to the
+# ateom worker pods that it creates. See benchmarking/telemetry/README.md.
+#
+# Call this AFTER every apply. The ate-system bundle contains its own copy of
+# ate-otel-config, thus an apply of the bundle replaces a patch that came
+# before it, and the endpoint returns to the cluster default with no error
+# message.
+#
+# A change to a ConfigMap starts no rollout, because the pod template stays the
+# same. Thus restart the consumers that read it. Do the restart only when the
+# value changes: a restart during the rollout of the bundle makes the two
+# rollouts compete, and `kubectl rollout status` can then exceed its timeout.
+# An absent workload is not an error, because a deploy of one component has
+# only that component.
+apply_otel_endpoint_override() {
+  if [[ -z "${ATE_OTLP_ENDPOINT:-}" ]]; then
+    return 0
+  fi
+
+  local current=""
+  current="$(run_kubectl -n ate-system get configmap ate-otel-config \
+    -o jsonpath='{.data.OTEL_EXPORTER_OTLP_ENDPOINT}' 2>/dev/null || true)"
+  if [[ "${current}" == "${ATE_OTLP_ENDPOINT}" ]]; then
+    return 0
+  fi
+
+  echo "Overriding OTEL_EXPORTER_OTLP_ENDPOINT with ${ATE_OTLP_ENDPOINT}"
+  run_kubectl -n ate-system patch configmap ate-otel-config --type=merge \
+    -p "{\"data\":{\"OTEL_EXPORTER_OTLP_ENDPOINT\":\"${ATE_OTLP_ENDPOINT}\"}}"
+
+  local workload
+  for workload in deployment/ate-api-server deployment/ate-controller \
+                  deployment/atenet-router daemonset/atelet; do
+    if run_kubectl -n ate-system get "${workload}" >/dev/null 2>&1; then
+      run_kubectl -n ate-system rollout restart "${workload}"
+    fi
+  done
+}
+
 # Extract a CA pool secret's RootCertificateDER and emit it as a PEM certificate.
 # The namespace defaults to the podcertificate controller's, where the signer
 # CAs live; the actor-identity CA pool is in ate-system, so it passes its own.
@@ -337,7 +404,7 @@ deploy_postgres() {
   run_kubectl rollout status deployment/podcertificate-controller \
     -n podcertificate-controller-system --timeout=120s
   wait_for_podcertificate_trust_bundles
-  run_kubectl apply -f manifests/ate-install/postgres.yaml
+  apply_postgres
   run_kubectl rollout status statefulset/postgres -n ate-system --timeout=120s
 }
 
@@ -381,6 +448,27 @@ create_actor_id_ca_certs_secret() {
     -n ate-system \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
+}
+
+# The MITM CA the egress gateway's sdsmint sidecar signs per-SNI leaves with.
+# ecdsa-p256 rather than the ed25519 default: these leaves are validated by
+# arbitrary clients inside actor sandboxes, where Ed25519 support cannot be
+# assumed.
+create_egress_mitm_ca_pool_secret() {
+  log_step "create_egress_mitm_ca_pool_secret"
+  run_kubectl_ate admin make-ca-pool \
+    --ca-id="mitm" \
+    --name="egress-mitm-ca-pool" \
+    --secret-namespace=ate-system \
+    --key-type=ecdsa-p256 \
+    --common-name="substrate egress MITM CA"
+}
+
+# Only the sdsmint egress variant mounts this pool.
+ensure_egress_mitm_ca_pool_secret() {
+  [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]] || return 0
+  run_kubectl get secret -n ate-system egress-mitm-ca-pool >/dev/null 2>&1 \
+    || create_egress_mitm_ca_pool_secret
 }
 
 create_podcertificate_controller_cas() {
@@ -610,7 +698,7 @@ deploy_ate_system() {
   # An externally provided database — a DSN or a Cloud SQL instance —
   # replaces the in-cluster PostgreSQL, so skip deploying it in that case.
   if [[ "$(store_backend)" == "postgres" && -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" && -z "${ATE_API_POSTGRES_CLOUDSQL_INSTANCE:-}" ]]; then
-    run_kubectl apply -f manifests/ate-install/postgres.yaml
+    apply_postgres
   fi
 
   local manifests=""
@@ -622,6 +710,7 @@ deploy_ate_system() {
   # Applied on its own rather than through the overlay above, so
   # --experimental-use-sdsmint composes with every overlay instead of needing a
   # variant of each.
+  ensure_egress_mitm_ca_pool_secret
   run_ko apply -f "$(atenet_egress_manifest)"
 
   log_step "Waiting for ATE system components to be ready..."
@@ -640,6 +729,9 @@ deploy_ate_system() {
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
+
+  # After the bundle, which carries its own copy of ate-otel-config.
+  apply_otel_endpoint_override
 }
 
 # Ensure secrets and configmaps required by ate-apiserver
@@ -674,6 +766,7 @@ deploy_ate_apiserver() {
 
   ensure_apiserver_prerequisites
   apply_otel_config
+  apply_otel_endpoint_override
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
   reconcile_cloudsql_proxy_sidecar
@@ -718,6 +811,7 @@ deploy_atelet() {
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
   apply_otel_config
+  apply_otel_endpoint_override
 
   local manifest=""
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
@@ -740,11 +834,13 @@ deploy_atenet() {
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
   apply_otel_config
+  apply_otel_endpoint_override
 
   local router_manifest=""
   router_manifest="$(render_atenet_router_manifest)"
   echo "${router_manifest}" | run_kubectl apply -f -
 
+  ensure_egress_mitm_ca_pool_secret
   run_ko apply -f "$(atenet_egress_manifest)"
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
@@ -886,10 +982,14 @@ deploy_benchmarks() {
   if [[ "${BENCHMARK_SANDBOX_CLASS}" == "microvm" ]]; then
     "${ROOT}/hack/install-microvm-deps.sh" --install
   fi
-  "${ROOT}/benchmarking/deploy_locust.sh" \
-    --deploy \
-    --worker-count "${BENCHMARK_WORKER_COUNT}" \
-    --sandbox-class "${BENCHMARK_SANDBOX_CLASS}"
+  # Send the actor telemetry to the same place as the control plane telemetry.
+  local benchmark_args=(--deploy
+    --worker-count "${BENCHMARK_WORKER_COUNT}"
+    --sandbox-class "${BENCHMARK_SANDBOX_CLASS}")
+  if [[ -n "${ATE_OTLP_ENDPOINT:-}" ]]; then
+    benchmark_args+=(--otlp-endpoint "${ATE_OTLP_ENDPOINT}")
+  fi
+  "${ROOT}/benchmarking/deploy_locust.sh" "${benchmark_args[@]}"
 }
 
 delete_benchmarks() {
@@ -977,6 +1077,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
     --benchmark-sandbox-class=*)
       BENCHMARK_SANDBOX_CLASS="${prescan_args[i]#*=}"
       ;;
+    --otlp-endpoint)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --otlp-endpoint requires a URL" >&2
+        exit 1
+      fi
+      ATE_OTLP_ENDPOINT="${prescan_args[$((i + 1))]}"
+      ;;
+    --otlp-endpoint=*) ATE_OTLP_ENDPOINT="${prescan_args[i]#*=}" ;;
     --setup-csi)
       SETUP_CSI=true
       ;;
@@ -1063,10 +1171,13 @@ while [[ "$#" -gt 0 ]]; do
     --benchmark-worker-count=*) ;;
     --benchmark-sandbox-class) shift ;;
     --benchmark-sandbox-class=*) ;;
+    --otlp-endpoint) shift ;;
+    --otlp-endpoint=*) ;;
 
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
     --create-actor-id-ca-pool-secret) create_actor_id_ca_pool_secret ;;
     --create-actor-id-ca-certs-secret) create_actor_id_ca_certs_secret ;;
+    --create-egress-mitm-ca-pool-secret) create_egress_mitm_ca_pool_secret ;;
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
     --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;
