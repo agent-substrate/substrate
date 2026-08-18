@@ -166,9 +166,9 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	}
 
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO atespaces (name, proto)
-		VALUES ($1, $2)`,
-		name, protoBytes)
+		INSERT INTO atespaces (name, uid, version, proto)
+		VALUES ($1, $2, $3, $4)`,
+		name, dbAtespace.GetMetadata().GetUid(), dbAtespace.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -791,9 +791,9 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 		return nil, fmt.Errorf("marshaling actor snapshot: %w", err)
 	}
 	if _, err := p.pool.Exec(ctx, `
-		INSERT INTO actor_snapshots (atespace, name, proto)
-		VALUES ($1, $2, $3)`,
-		atespace, name, protoBytes); err != nil {
+		INSERT INTO actor_snapshots (atespace, name, uid, version, proto)
+		VALUES ($1, $2, $3, $4, $5)`,
+		atespace, name, dbSnapshot.GetMetadata().GetUid(), dbSnapshot.GetMetadata().GetVersion(), protoBytes); err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
 		}
