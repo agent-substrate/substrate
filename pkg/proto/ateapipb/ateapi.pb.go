@@ -260,6 +260,64 @@ func (SandboxClass) EnumDescriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{3}
 }
 
+type ActorTemplatePhase int32
+
+const (
+	ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_UNSPECIFIED         ActorTemplatePhase = 0
+	ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_INITIAL             ActorTemplatePhase = 1
+	ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_RESUME_GOLDEN_ACTOR ActorTemplatePhase = 2
+	ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_WAIT_GOLDEN_ACTOR   ActorTemplatePhase = 3
+	ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_READY               ActorTemplatePhase = 4
+	ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_FAILED              ActorTemplatePhase = 5
+)
+
+// Enum value maps for ActorTemplatePhase.
+var (
+	ActorTemplatePhase_name = map[int32]string{
+		0: "ACTOR_TEMPLATE_PHASE_UNSPECIFIED",
+		1: "ACTOR_TEMPLATE_PHASE_INITIAL",
+		2: "ACTOR_TEMPLATE_PHASE_RESUME_GOLDEN_ACTOR",
+		3: "ACTOR_TEMPLATE_PHASE_WAIT_GOLDEN_ACTOR",
+		4: "ACTOR_TEMPLATE_PHASE_READY",
+		5: "ACTOR_TEMPLATE_PHASE_FAILED",
+	}
+	ActorTemplatePhase_value = map[string]int32{
+		"ACTOR_TEMPLATE_PHASE_UNSPECIFIED":         0,
+		"ACTOR_TEMPLATE_PHASE_INITIAL":             1,
+		"ACTOR_TEMPLATE_PHASE_RESUME_GOLDEN_ACTOR": 2,
+		"ACTOR_TEMPLATE_PHASE_WAIT_GOLDEN_ACTOR":   3,
+		"ACTOR_TEMPLATE_PHASE_READY":               4,
+		"ACTOR_TEMPLATE_PHASE_FAILED":              5,
+	}
+)
+
+func (x ActorTemplatePhase) Enum() *ActorTemplatePhase {
+	p := new(ActorTemplatePhase)
+	*p = x
+	return p
+}
+
+func (x ActorTemplatePhase) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ActorTemplatePhase) Descriptor() protoreflect.EnumDescriptor {
+	return file_ateapi_proto_enumTypes[4].Descriptor()
+}
+
+func (ActorTemplatePhase) Type() protoreflect.EnumType {
+	return &file_ateapi_proto_enumTypes[4]
+}
+
+func (x ActorTemplatePhase) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ActorTemplatePhase.Descriptor instead.
+func (ActorTemplatePhase) EnumDescriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{4}
+}
+
 // ResumeSource selects what supplies the guest state when an actor is resumed
 // from one of the snapshot situations named by OnResumeConfig's fields.
 type ResumeSource int32
@@ -299,11 +357,11 @@ func (x ResumeSource) String() string {
 }
 
 func (ResumeSource) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateapi_proto_enumTypes[4].Descriptor()
+	return file_ateapi_proto_enumTypes[5].Descriptor()
 }
 
 func (ResumeSource) Type() protoreflect.EnumType {
-	return &file_ateapi_proto_enumTypes[4]
+	return &file_ateapi_proto_enumTypes[5]
 }
 
 func (x ResumeSource) Number() protoreflect.EnumNumber {
@@ -312,7 +370,7 @@ func (x ResumeSource) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ResumeSource.Descriptor instead.
 func (ResumeSource) EnumDescriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{4}
+	return file_ateapi_proto_rawDescGZIP(), []int{5}
 }
 
 type ActorCertificatePurpose int32
@@ -345,11 +403,11 @@ func (x ActorCertificatePurpose) String() string {
 }
 
 func (ActorCertificatePurpose) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateapi_proto_enumTypes[5].Descriptor()
+	return file_ateapi_proto_enumTypes[6].Descriptor()
 }
 
 func (ActorCertificatePurpose) Type() protoreflect.EnumType {
-	return &file_ateapi_proto_enumTypes[5]
+	return &file_ateapi_proto_enumTypes[6]
 }
 
 func (x ActorCertificatePurpose) Number() protoreflect.EnumNumber {
@@ -358,7 +416,7 @@ func (x ActorCertificatePurpose) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ActorCertificatePurpose.Descriptor instead.
 func (ActorCertificatePurpose) EnumDescriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{5}
+	return file_ateapi_proto_rawDescGZIP(), []int{6}
 }
 
 type ExternalVolume_Status int32
@@ -400,11 +458,11 @@ func (x ExternalVolume_Status) String() string {
 }
 
 func (ExternalVolume_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateapi_proto_enumTypes[6].Descriptor()
+	return file_ateapi_proto_enumTypes[7].Descriptor()
 }
 
 func (ExternalVolume_Status) Type() protoreflect.EnumType {
-	return &file_ateapi_proto_enumTypes[6]
+	return &file_ateapi_proto_enumTypes[7]
 }
 
 func (x ExternalVolume_Status) Number() protoreflect.EnumNumber {
@@ -414,64 +472,6 @@ func (x ExternalVolume_Status) Number() protoreflect.EnumNumber {
 // Deprecated: Use ExternalVolume_Status.Descriptor instead.
 func (ExternalVolume_Status) EnumDescriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{3, 0}
-}
-
-type ActorTemplatePhase_Phase int32
-
-const (
-	ActorTemplatePhase_PHASE_UNSPECIFIED         ActorTemplatePhase_Phase = 0
-	ActorTemplatePhase_PHASE_INITIAL             ActorTemplatePhase_Phase = 1
-	ActorTemplatePhase_PHASE_RESUME_GOLDEN_ACTOR ActorTemplatePhase_Phase = 2
-	ActorTemplatePhase_PHASE_WAIT_GOLDEN_ACTOR   ActorTemplatePhase_Phase = 3
-	ActorTemplatePhase_PHASE_READY               ActorTemplatePhase_Phase = 4
-	ActorTemplatePhase_PHASE_FAILED              ActorTemplatePhase_Phase = 5
-)
-
-// Enum value maps for ActorTemplatePhase_Phase.
-var (
-	ActorTemplatePhase_Phase_name = map[int32]string{
-		0: "PHASE_UNSPECIFIED",
-		1: "PHASE_INITIAL",
-		2: "PHASE_RESUME_GOLDEN_ACTOR",
-		3: "PHASE_WAIT_GOLDEN_ACTOR",
-		4: "PHASE_READY",
-		5: "PHASE_FAILED",
-	}
-	ActorTemplatePhase_Phase_value = map[string]int32{
-		"PHASE_UNSPECIFIED":         0,
-		"PHASE_INITIAL":             1,
-		"PHASE_RESUME_GOLDEN_ACTOR": 2,
-		"PHASE_WAIT_GOLDEN_ACTOR":   3,
-		"PHASE_READY":               4,
-		"PHASE_FAILED":              5,
-	}
-)
-
-func (x ActorTemplatePhase_Phase) Enum() *ActorTemplatePhase_Phase {
-	p := new(ActorTemplatePhase_Phase)
-	*p = x
-	return p
-}
-
-func (x ActorTemplatePhase_Phase) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ActorTemplatePhase_Phase) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateapi_proto_enumTypes[7].Descriptor()
-}
-
-func (ActorTemplatePhase_Phase) Type() protoreflect.EnumType {
-	return &file_ateapi_proto_enumTypes[7]
-}
-
-func (x ActorTemplatePhase_Phase) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ActorTemplatePhase_Phase.Descriptor instead.
-func (ActorTemplatePhase_Phase) EnumDescriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{16, 0}
 }
 
 type Worker_State int32
@@ -1032,12 +1032,10 @@ func (x *ActorStatus) GetSourceSnapshot() *ActorSourceSnapshotStatus {
 // resolved to at CreateActor time. Set once, immutable afterward.
 type ActorSourceSnapshotStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Canonical (atespace, name) of the snapshot the tag resolved to at
+	// The (atespace, name) of the snapshot the tag resolved to at
 	// creation time.
 	Snapshot *ObjectRef `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	// UID of the snapshot resolved at creation time. Stays a permanent trail
-	// even if that snapshot is later deleted and its name reused by an
-	// unrelated snapshot.
+	// UID of the snapshot resolved at creation time.
 	SnapshotUid   string `protobuf:"bytes,2,opt,name=snapshot_uid,json=snapshotUid,proto3" json:"snapshot_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1335,10 +1333,11 @@ func (x *ActorSnapshotStatus) GetActorTemplate() *ObjectRef {
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
 // Its owning Atespace cannot be deleted until the tag is removed.
 type ActorSnapshotTag struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Metadata      *ResourceMetadata      `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	Snapshot      *ObjectRef             `protobuf:"bytes,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	Scope         ActorSnapshotTagScope  `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Common resource metadata: name, uid, version, timestamps.
+	Metadata      *ResourceMetadata     `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Snapshot      *ObjectRef            `protobuf:"bytes,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	Scope         ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1510,16 +1509,9 @@ type ActorTemplate struct {
 	// sandbox_config selects the sandbox runtime this version's actors run on.
 	// Required. Resolved and frozen into resolved_sandbox at creation time.
 	SandboxConfig *SandboxConfig `protobuf:"bytes,6,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
-	// golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
-	// system atespace, built for this version by ate-api. Set once state is
-	// READY.
-	GoldenSnapshot *ObjectRef `protobuf:"bytes,7,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
-	// State machine, mirroring the ActorTemplate CRD PhaseType:
-	// INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
-	// READY and FAILED are terminal; the version is only usable once READY.
-	Phase *ActorTemplatePhase `protobuf:"bytes,8,opt,name=phase,proto3" json:"phase,omitempty"`
 	// Resource usage configuration.
-	Resources     *Resources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources     *Resources           `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
+	Status        *ActorTemplateStatus `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1596,23 +1588,16 @@ func (x *ActorTemplate) GetSandboxConfig() *SandboxConfig {
 	return nil
 }
 
-func (x *ActorTemplate) GetGoldenSnapshot() *ObjectRef {
-	if x != nil {
-		return x.GoldenSnapshot
-	}
-	return nil
-}
-
-func (x *ActorTemplate) GetPhase() *ActorTemplatePhase {
-	if x != nil {
-		return x.Phase
-	}
-	return nil
-}
-
 func (x *ActorTemplate) GetResources() *Resources {
 	if x != nil {
 		return x.Resources
+	}
+	return nil
+}
+
+func (x *ActorTemplate) GetStatus() *ActorTemplateStatus {
+	if x != nil {
+		return x.Status
 	}
 	return nil
 }
@@ -1713,30 +1698,40 @@ func (x *Limits) GetQuantity() string {
 	return ""
 }
 
-type ActorTemplatePhase struct {
-	state protoimpl.MessageState   `protogen:"open.v1"`
-	Phase ActorTemplatePhase_Phase `protobuf:"varint,1,opt,name=phase,proto3,enum=ateapi.ActorTemplatePhase_Phase" json:"phase,omitempty"`
+type ActorTemplateStatus struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// State machine, mirroring the ActorTemplate CRD PhaseType:
+	// INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
+	// READY and FAILED are terminal; the version is only usable once READY.
+	Phase ActorTemplatePhase `protobuf:"varint,1,opt,name=phase,proto3,enum=ateapi.ActorTemplatePhase" json:"phase,omitempty"`
 	// message is a human-readable explanation of the current state, most
 	// useful when the ActorTemplate is FAILED.
-	Message       string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	// golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
+	// system atespace, built for this version by ate-api. Set once state is
+	// READY.
+	GoldenSnapshot *ObjectRef `protobuf:"bytes,3,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
+	// sandbox_assets is the referenced SandboxConfig's content frozen at
+	// creation time.
+	SandboxAssets *SandboxAssets `protobuf:"bytes,4,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ActorTemplatePhase) Reset() {
-	*x = ActorTemplatePhase{}
+func (x *ActorTemplateStatus) Reset() {
+	*x = ActorTemplateStatus{}
 	mi := &file_ateapi_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActorTemplatePhase) String() string {
+func (x *ActorTemplateStatus) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActorTemplatePhase) ProtoMessage() {}
+func (*ActorTemplateStatus) ProtoMessage() {}
 
-func (x *ActorTemplatePhase) ProtoReflect() protoreflect.Message {
+func (x *ActorTemplateStatus) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1748,23 +1743,37 @@ func (x *ActorTemplatePhase) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActorTemplatePhase.ProtoReflect.Descriptor instead.
-func (*ActorTemplatePhase) Descriptor() ([]byte, []int) {
+// Deprecated: Use ActorTemplateStatus.ProtoReflect.Descriptor instead.
+func (*ActorTemplateStatus) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *ActorTemplatePhase) GetPhase() ActorTemplatePhase_Phase {
+func (x *ActorTemplateStatus) GetPhase() ActorTemplatePhase {
 	if x != nil {
 		return x.Phase
 	}
-	return ActorTemplatePhase_PHASE_UNSPECIFIED
+	return ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_UNSPECIFIED
 }
 
-func (x *ActorTemplatePhase) GetMessage() string {
+func (x *ActorTemplateStatus) GetMessage() string {
 	if x != nil {
 		return x.Message
 	}
 	return ""
+}
+
+func (x *ActorTemplateStatus) GetGoldenSnapshot() *ObjectRef {
+	if x != nil {
+		return x.GoldenSnapshot
+	}
+	return nil
+}
+
+func (x *ActorTemplateStatus) GetSandboxAssets() *SandboxAssets {
+	if x != nil {
+		return x.SandboxAssets
+	}
+	return nil
 }
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
@@ -1775,12 +1784,7 @@ type SandboxConfig struct {
 	SandboxClass SandboxClass `protobuf:"varint,1,opt,name=sandbox_class,json=sandboxClass,proto3,enum=ateapi.SandboxClass" json:"sandbox_class,omitempty"`
 	// config_name names the cluster-scoped SandboxConfig Kubernetes object
 	// supplying the sandbox binaries. Required; must match sandbox_class.
-	ConfigName string `protobuf:"bytes,2,opt,name=config_name,json=configName,proto3" json:"config_name,omitempty"`
-	// sandbox_assets is the referenced SandboxConfig's content frozen at
-	// creation time.
-	SandboxAssets *SandboxAssets `protobuf:"bytes,3,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
-	// pause_image is the container to use as the root sandbox container.
-	PauseImage    string `protobuf:"bytes,4,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
+	ConfigName    string `protobuf:"bytes,2,opt,name=config_name,json=configName,proto3" json:"config_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1825,20 +1829,6 @@ func (x *SandboxConfig) GetSandboxClass() SandboxClass {
 func (x *SandboxConfig) GetConfigName() string {
 	if x != nil {
 		return x.ConfigName
-	}
-	return ""
-}
-
-func (x *SandboxConfig) GetSandboxAssets() *SandboxAssets {
-	if x != nil {
-		return x.SandboxAssets
-	}
-	return nil
-}
-
-func (x *SandboxConfig) GetPauseImage() string {
-	if x != nil {
-		return x.PauseImage
 	}
 	return ""
 }
@@ -2465,7 +2455,9 @@ type SandboxAssets struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	SandboxClass SandboxClass           `protobuf:"varint,1,opt,name=sandbox_class,json=sandboxClass,proto3,enum=ateapi.SandboxClass" json:"sandbox_class,omitempty"`
 	// assets maps architecture (GOARCH, e.g. "amd64") to that arch's files.
-	Assets        map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Assets map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// pause_image is the container to use as the root sandbox container.
+	PauseImage    string `protobuf:"bytes,3,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2512,6 +2504,13 @@ func (x *SandboxAssets) GetAssets() map[string]*ArchAssets {
 		return x.Assets
 	}
 	return nil
+}
+
+func (x *SandboxAssets) GetPauseImage() string {
+	if x != nil {
+		return x.PauseImage
+	}
+	return ""
 }
 
 type ArchAssets struct {
@@ -4918,7 +4917,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\";\n" +
 	"\tObjectRef\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xfe\x03\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xc5\x03\n" +
 	"\rActorTemplate\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x129\n" +
 	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x121\n" +
@@ -4927,32 +4926,23 @@ const file_ateapi_proto_rawDesc = "" +
 	"containers\x12(\n" +
 	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12B\n" +
 	"\x10snapshots_config\x18\x05 \x01(\v2\x17.ateapi.SnapshotsConfigR\x0fsnapshotsConfig\x12<\n" +
-	"\x0esandbox_config\x18\x06 \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12:\n" +
-	"\x0fgolden_snapshot\x18\a \x01(\v2\x11.ateapi.ObjectRefR\x0egoldenSnapshot\x120\n" +
-	"\x05phase\x18\b \x01(\v2\x1a.ateapi.ActorTemplatePhaseR\x05phase\x12/\n" +
-	"\tresources\x18\t \x01(\v2\x11.ateapi.ResourcesR\tresources\"3\n" +
+	"\x0esandbox_config\x18\x06 \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12/\n" +
+	"\tresources\x18\a \x01(\v2\x11.ateapi.ResourcesR\tresources\x123\n" +
+	"\x06status\x18\b \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status\"3\n" +
 	"\tResources\x12&\n" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xf9\x01\n" +
-	"\x12ActorTemplatePhase\x126\n" +
-	"\x05phase\x18\x01 \x01(\x0e2 .ateapi.ActorTemplatePhase.PhaseR\x05phase\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x90\x01\n" +
-	"\x05Phase\x12\x15\n" +
-	"\x11PHASE_UNSPECIFIED\x10\x00\x12\x11\n" +
-	"\rPHASE_INITIAL\x10\x01\x12\x1d\n" +
-	"\x19PHASE_RESUME_GOLDEN_ACTOR\x10\x02\x12\x1b\n" +
-	"\x17PHASE_WAIT_GOLDEN_ACTOR\x10\x03\x12\x0f\n" +
-	"\vPHASE_READY\x10\x04\x12\x10\n" +
-	"\fPHASE_FAILED\x10\x05\"\xca\x01\n" +
+	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xdb\x01\n" +
+	"\x13ActorTemplateStatus\x120\n" +
+	"\x05phase\x18\x01 \x01(\x0e2\x1a.ateapi.ActorTemplatePhaseR\x05phase\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12:\n" +
+	"\x0fgolden_snapshot\x18\x03 \x01(\v2\x11.ateapi.ObjectRefR\x0egoldenSnapshot\x12<\n" +
+	"\x0esandbox_assets\x18\x04 \x01(\v2\x15.ateapi.SandboxAssetsR\rsandboxAssets\"k\n" +
 	"\rSandboxConfig\x129\n" +
 	"\rsandbox_class\x18\x01 \x01(\x0e2\x14.ateapi.SandboxClassR\fsandboxClass\x12\x1f\n" +
 	"\vconfig_name\x18\x02 \x01(\tR\n" +
-	"configName\x12<\n" +
-	"\x0esandbox_assets\x18\x03 \x01(\v2\x15.ateapi.SandboxAssetsR\rsandboxAssets\x12\x1f\n" +
-	"\vpause_image\x18\x04 \x01(\tR\n" +
-	"pauseImage\"\xe5\x01\n" +
+	"configName\"\xe5\x01\n" +
 	"\x0fSnapshotsConfig\x127\n" +
 	"\bon_pause\x18\x01 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\aonPause\x129\n" +
 	"\ton_commit\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\bonCommit\x123\n" +
@@ -4990,10 +4980,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xd4\x01\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xf5\x01\n" +
 	"\rSandboxAssets\x129\n" +
 	"\rsandbox_class\x18\x01 \x01(\x0e2\x14.ateapi.SandboxClassR\fsandboxClass\x129\n" +
-	"\x06assets\x18\x02 \x03(\v2!.ateapi.SandboxAssets.AssetsEntryR\x06assets\x1aM\n" +
+	"\x06assets\x18\x02 \x03(\v2!.ateapi.SandboxAssets.AssetsEntryR\x06assets\x12\x1f\n" +
+	"\vpause_image\x18\x03 \x01(\tR\n" +
+	"pauseImage\x1aM\n" +
 	"\vAssetsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
 	"\x05value\x18\x02 \x01(\v2\x12.ateapi.ArchAssetsR\x05value:\x028\x01\"\x8e\x01\n" +
@@ -5171,7 +5163,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +
-	"\x15SANDBOX_CLASS_MICROVM\x10\x02*d\n" +
+	"\x15SANDBOX_CLASS_MICROVM\x10\x02*\xf7\x01\n" +
+	"\x12ActorTemplatePhase\x12$\n" +
+	" ACTOR_TEMPLATE_PHASE_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cACTOR_TEMPLATE_PHASE_INITIAL\x10\x01\x12,\n" +
+	"(ACTOR_TEMPLATE_PHASE_RESUME_GOLDEN_ACTOR\x10\x02\x12*\n" +
+	"&ACTOR_TEMPLATE_PHASE_WAIT_GOLDEN_ACTOR\x10\x03\x12\x1e\n" +
+	"\x1aACTOR_TEMPLATE_PHASE_READY\x10\x04\x12\x1f\n" +
+	"\x1bACTOR_TEMPLATE_PHASE_FAILED\x10\x05*d\n" +
 	"\fResumeSource\x12\x1d\n" +
 	"\x19RESUME_SOURCE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17RESUME_SOURCE_COLD_BOOT\x10\x01\x12\x18\n" +
@@ -5231,10 +5230,10 @@ var file_ateapi_proto_goTypes = []any{
 	(ActorSnapshotTagScope)(0),            // 1: ateapi.ActorSnapshotTagScope
 	(ActorState)(0),                       // 2: ateapi.ActorState
 	(SandboxClass)(0),                     // 3: ateapi.SandboxClass
-	(ResumeSource)(0),                     // 4: ateapi.ResumeSource
-	(ActorCertificatePurpose)(0),          // 5: ateapi.ActorCertificatePurpose
-	(ExternalVolume_Status)(0),            // 6: ateapi.ExternalVolume.Status
-	(ActorTemplatePhase_Phase)(0),         // 7: ateapi.ActorTemplatePhase.Phase
+	(ActorTemplatePhase)(0),               // 4: ateapi.ActorTemplatePhase
+	(ResumeSource)(0),                     // 5: ateapi.ResumeSource
+	(ActorCertificatePurpose)(0),          // 6: ateapi.ActorCertificatePurpose
+	(ExternalVolume_Status)(0),            // 7: ateapi.ExternalVolume.Status
 	(Worker_State)(0),                     // 8: ateapi.Worker.State
 	(*LocalSnapshotInfo)(nil),             // 9: ateapi.LocalSnapshotInfo
 	(*Selector)(nil),                      // 10: ateapi.Selector
@@ -5252,7 +5251,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*ActorTemplate)(nil),                 // 22: ateapi.ActorTemplate
 	(*Resources)(nil),                     // 23: ateapi.Resources
 	(*Limits)(nil),                        // 24: ateapi.Limits
-	(*ActorTemplatePhase)(nil),            // 25: ateapi.ActorTemplatePhase
+	(*ActorTemplateStatus)(nil),           // 25: ateapi.ActorTemplateStatus
 	(*SandboxConfig)(nil),                 // 26: ateapi.SandboxConfig
 	(*SnapshotsConfig)(nil),               // 27: ateapi.SnapshotsConfig
 	(*OnResumeConfig)(nil),                // 28: ateapi.OnResumeConfig
@@ -5321,7 +5320,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	81,  // 1: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
 	86,  // 2: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
 	86,  // 3: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
-	6,   // 4: ateapi.ExternalVolume.status:type_name -> ateapi.ExternalVolume.Status
+	7,   // 4: ateapi.ExternalVolume.status:type_name -> ateapi.ExternalVolume.Status
 	82,  // 5: ateapi.ExternalVolume.volume_context:type_name -> ateapi.ExternalVolume.VolumeContextEntry
 	11,  // 6: ateapi.Actor.metadata:type_name -> ateapi.ResourceMetadata
 	21,  // 7: ateapi.Actor.actor_template:type_name -> ateapi.ObjectRef
@@ -5350,17 +5349,17 @@ var file_ateapi_proto_depIdxs = []int32{
 	33,  // 30: ateapi.ActorTemplate.volumes:type_name -> ateapi.Volume
 	27,  // 31: ateapi.ActorTemplate.snapshots_config:type_name -> ateapi.SnapshotsConfig
 	26,  // 32: ateapi.ActorTemplate.sandbox_config:type_name -> ateapi.SandboxConfig
-	21,  // 33: ateapi.ActorTemplate.golden_snapshot:type_name -> ateapi.ObjectRef
-	25,  // 34: ateapi.ActorTemplate.phase:type_name -> ateapi.ActorTemplatePhase
-	23,  // 35: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
-	24,  // 36: ateapi.Resources.limits:type_name -> ateapi.Limits
-	7,   // 37: ateapi.ActorTemplatePhase.phase:type_name -> ateapi.ActorTemplatePhase.Phase
-	3,   // 38: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
-	37,  // 39: ateapi.SandboxConfig.sandbox_assets:type_name -> ateapi.SandboxAssets
+	23,  // 33: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
+	25,  // 34: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
+	24,  // 35: ateapi.Resources.limits:type_name -> ateapi.Limits
+	4,   // 36: ateapi.ActorTemplateStatus.phase:type_name -> ateapi.ActorTemplatePhase
+	21,  // 37: ateapi.ActorTemplateStatus.golden_snapshot:type_name -> ateapi.ObjectRef
+	37,  // 38: ateapi.ActorTemplateStatus.sandbox_assets:type_name -> ateapi.SandboxAssets
+	3,   // 39: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
 	0,   // 40: ateapi.SnapshotsConfig.on_pause:type_name -> ateapi.SnapshotContentScope
 	0,   // 41: ateapi.SnapshotsConfig.on_commit:type_name -> ateapi.SnapshotContentScope
 	28,  // 42: ateapi.SnapshotsConfig.on_resume:type_name -> ateapi.OnResumeConfig
-	4,   // 43: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
+	5,   // 43: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
 	30,  // 44: ateapi.Container.env:type_name -> ateapi.EnvVar
 	31,  // 45: ateapi.Container.readyz:type_name -> ateapi.ContainerReadyz
 	36,  // 46: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
@@ -5404,7 +5403,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	72,  // 84: ateapi.Worker.capacity:type_name -> ateapi.WorkerCapacity
 	74,  // 85: ateapi.Assignment.actor_template:type_name -> ateapi.KubeNamespacedObjectRef
 	21,  // 86: ateapi.Assignment.actor:type_name -> ateapi.ObjectRef
-	5,   // 87: ateapi.MintCertRequest.purpose:type_name -> ateapi.ActorCertificatePurpose
+	6,   // 87: ateapi.MintCertRequest.purpose:type_name -> ateapi.ActorCertificatePurpose
 	38,  // 88: ateapi.SandboxAssets.AssetsEntry.value:type_name -> ateapi.ArchAssets
 	39,  // 89: ateapi.ArchAssets.FilesEntry.value:type_name -> ateapi.AssetFile
 	50,  // 90: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
