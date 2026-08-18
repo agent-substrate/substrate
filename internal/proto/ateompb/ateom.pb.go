@@ -567,7 +567,8 @@ func (x *Container) GetImageVolumeMounts() []*ImageVolumeMount {
 // DurableDirVolumeMount is one durable-dir volume mounted into a container.
 type DurableDirVolumeMount struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// volume_name is the name the ActorTemplate gave the volume.
+	// volume_name is the name the ActorTemplate gave the volume. It selects the
+	// per-volume directory atelet prepared for the actor on the host.
 	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
 	// mount_path is where the container sees the volume.
 	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
