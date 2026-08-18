@@ -280,35 +280,22 @@ func (e *Egress) handle(downstream net.Conn) {
 }
 
 func copyBothWays(a, b net.Conn) {
-	relayWithHalfClose(context.Background(), a, b, b)
-}
-
-// relayWithHalfClose copies a bidirectional stream. Each completed copy
-// half-closes its destination, then waits for the other direction to finish.
-// This preserves request/response protocols that rely on TCP FIN to delimit a
-// request while still receiving a response.
-func relayWithHalfClose(ctx context.Context, upstream io.ReadWriter, clientReader io.Reader, clientWriter io.Writer) {
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(upstream, clientReader)
-		closeWrite(upstream)
+		_, _ = io.Copy(a, b)
+		closeWrite(a)
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(clientWriter, upstream)
-		closeWrite(clientWriter)
+		_, _ = io.Copy(b, a)
+		closeWrite(b)
 		done <- struct{}{}
 	}()
-	for range 2 {
-		select {
-		case <-ctx.Done():
-			return
-		case <-done:
-		}
-	}
+	<-done
+	<-done
 }
 
-func closeWrite(conn any) {
+func closeWrite(conn net.Conn) {
 	if conn, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = conn.CloseWrite()
 	}

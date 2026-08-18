@@ -15,7 +15,6 @@
 package atunnel
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -31,102 +30,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-func TestRelayWithHalfClose(t *testing.T) {
-	clientReader, clientInput := io.Pipe()
-	defer clientReader.Close()
-	upstream := &closeWriteReadWriter{reader: strings.NewReader("response"), closed: make(chan struct{})}
-	clientWriter := &closeWriteBuffer{closed: make(chan struct{})}
-
-	done := make(chan struct{})
-	go func() {
-		relayWithHalfClose(context.Background(), upstream, clientReader, clientWriter)
-		close(done)
-	}()
-
-	select {
-	case <-clientWriter.closed:
-		// The upstream EOF is propagated as a half-close to the client, but the
-		// relay must still wait for the client to finish its request stream.
-	case <-time.After(time.Second):
-		t.Fatal("upstream EOF did not half-close the client stream")
-	}
-	select {
-	case <-done:
-		t.Fatal("relay returned before the client stream finished")
-	default:
-	}
-
-	if _, err := io.WriteString(clientInput, "request"); err != nil {
-		t.Fatal(err)
-	}
-	if err := clientInput.Close(); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-upstream.closed:
-	case <-time.After(time.Second):
-		t.Fatal("client EOF did not half-close the upstream stream")
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("relay did not finish after both streams closed")
-	}
-	if got := upstream.String(); got != "request" {
-		t.Errorf("upstream received %q, want request", got)
-	}
-	if got := clientWriter.String(); got != "response" {
-		t.Errorf("client received %q, want response", got)
-	}
-}
-
-type closeWriteReadWriter struct {
-	reader io.Reader
-	buffer bytes.Buffer
-	closed chan struct{}
-}
-
-func (c *closeWriteReadWriter) Read(p []byte) (int, error) {
-	return c.reader.Read(p)
-}
-
-func (c *closeWriteReadWriter) Write(p []byte) (int, error) {
-	return c.buffer.Write(p)
-}
-
-func (c *closeWriteReadWriter) String() string {
-	return c.buffer.String()
-}
-
-func (c *closeWriteReadWriter) CloseWrite() error {
-	if c.closed == nil {
-		c.closed = make(chan struct{})
-	}
-	select {
-	case <-c.closed:
-	default:
-		close(c.closed)
-	}
-	return nil
-}
-
-type closeWriteBuffer struct {
-	bytes.Buffer
-	closed chan struct{}
-}
-
-func (c *closeWriteBuffer) CloseWrite() error {
-	if c.closed == nil {
-		c.closed = make(chan struct{})
-	}
-	select {
-	case <-c.closed:
-	default:
-		close(c.closed)
-	}
-	return nil
-}
 
 func TestEgressActivationFailsClosed(t *testing.T) {
 	egress, err := NewEgress(func(net.Conn) (string, error) { return "", nil })

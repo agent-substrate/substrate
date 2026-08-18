@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -289,7 +290,7 @@ func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx co
 		return
 	}
 
-	relayWithHalfClose(ctx, upstream, rw, client)
+	relayIngressWithHalfClose(ctx, upstream, rw, client, client)
 }
 
 func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context) {
@@ -301,7 +302,36 @@ func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream
 		return
 	}
 
-	relayWithHalfClose(ctx, upstream, r.Body, flushingWriter{ResponseWriter: w})
+	relayIngressWithHalfClose(ctx, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
+}
+
+// relayIngressWithHalfClose copies a CONNECT stream. When the client request
+// stream ends, it half-closes the actor connection and continues forwarding
+// actor output until that stream ends too.
+func relayIngressWithHalfClose(ctx context.Context, upstream net.Conn, clientReader io.Reader, clientWriter io.Writer, clientCloser io.Closer) {
+	stop := context.AfterFunc(ctx, func() {
+		_ = upstream.Close()
+		_ = clientCloser.Close()
+	})
+	defer stop()
+
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(upstream, clientReader)
+		closeWrite(upstream)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(clientWriter, upstream)
+		done <- struct{}{}
+	}()
+	for range 2 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+		}
+	}
 }
 
 type flushingWriter struct {

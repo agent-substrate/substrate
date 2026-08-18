@@ -15,6 +15,7 @@
 package atunnel
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,6 +24,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -33,6 +35,99 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRelayIngressWithHalfClose(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	actor, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actor.Close()
+	upstream := <-accepted
+	defer upstream.Close()
+
+	clientReader, clientInput := io.Pipe()
+	defer clientReader.Close()
+	var clientOutput bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		relayIngressWithHalfClose(context.Background(), upstream, clientReader, &clientOutput, clientReader)
+		close(done)
+	}()
+
+	if _, err := io.WriteString(clientInput, "request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientInput.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	request, err := io.ReadAll(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(request); got != "request" {
+		t.Fatalf("actor received %q, want request", got)
+	}
+
+	if _, err := io.WriteString(actor, "response"); err != nil {
+		t.Fatal(err)
+	}
+	if err := actor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not finish after the actor response ended")
+	}
+	if got := clientOutput.String(); got != "response" {
+		t.Errorf("client received %q, want response", got)
+	}
+}
+
+func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
+	upstream, actor := net.Pipe()
+	defer actor.Close()
+	clientReader, clientInput := io.Pipe()
+	defer clientInput.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		relayIngressWithHalfClose(ctx, upstream, clientReader, io.Discard, clientReader)
+		close(done)
+	}()
+
+	cancel()
+	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := actor.Read(make([]byte, 1)); err == nil {
+		t.Fatal("actor connection remained open after relay cancellation")
+	}
+	if _, err := io.WriteString(clientInput, "request"); err == nil {
+		t.Fatal("client stream remained open after relay cancellation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not return after cancellation")
+	}
+}
 
 func TestServeHTTP(t *testing.T) {
 	upstreamHost := make(chan string, 4)
