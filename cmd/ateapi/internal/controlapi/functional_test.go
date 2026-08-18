@@ -2187,8 +2187,8 @@ func TestSuspendActor(t *testing.T) {
 			Snapshot: snapshotRef,
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		},
-	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("cross-atespace CreateActorSnapshotTag status = %v, want FailedPrecondition", status.Code(err))
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("cross-atespace CreateActorSnapshotTag status = %v, want InvalidArgument", status.Code(err))
 	}
 	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
