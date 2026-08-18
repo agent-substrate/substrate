@@ -17,6 +17,7 @@ package resources
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -44,6 +45,7 @@ func (r ResourceRef[R]) String() string {
 // than flattening them into one opaque string.
 func (r ResourceRef[R]) LogValue() slog.Value {
 	return slog.GroupValue(
+		slog.String("type", reflect.TypeFor[R]().String()),
 		slog.String("atespace", r.Atespace),
 		slog.String("name", r.Name),
 	)
