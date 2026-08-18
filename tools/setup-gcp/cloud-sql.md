@@ -3,9 +3,10 @@
 The ateapi PostgreSQL store (`--store-backend=postgres`) can run against
 [Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres). The
 supported, most secure configuration uses the
-[Cloud SQL Auth Proxy](https://github.com/GoogleCloudPlatform/cloud-sql-proxy)
-as a sidecar on `ate-api-server` with **automatic IAM database
-authentication**:
+[Cloud SQL Auth Proxy](https://docs.cloud.google.com/sql/docs/postgres/sql-proxy)
+([source](https://github.com/GoogleCloudPlatform/cloud-sql-proxy)) as a
+sidecar on `ate-api-server` with [**automatic IAM database
+authentication**](https://docs.cloud.google.com/sql/docs/postgres/iam-authentication):
 
 - **Transport security** — the proxy establishes a TLS 1.3 tunnel to the
   instance using ephemeral certificates and verifies the instance's identity.
@@ -54,7 +55,8 @@ This idempotently creates:
 
 ## 2. One-time schema privileges
 
-IAM database users are created with no privileges, and PostgreSQL 15+ removed
+[IAM database users](https://docs.cloud.google.com/sql/docs/postgres/add-manage-iam-users)
+are created with no privileges, and PostgreSQL 15+ removed
 `PUBLIC`'s `CREATE` on the `public` schema. ateapi applies its schema
 idempotently at startup as the connecting user, so grant it once (connect as
 the built-in `postgres` user — note the database username is the GSA email
@@ -150,42 +152,20 @@ Common failure modes:
 
 ## 5. Scaling the database
 
-The defaults (`db-custom-2-8192`, 10 GB disk) suit development and modest
-fleets. At large actor counts the store becomes I/O-bound: once tables and
-indexes outgrow memory, uniform random reads fall out of cache and point
-lookups pay persistent-disk latency (several milliseconds) instead of
-microseconds. The knobs below address that, in order of leverage.
-
-**Instance shape** (`--tier`, `--edition` at create time; `gcloud sql
-instances patch` later — edition/tier changes restart the instance):
-
-- Memory is the primary lever: reads are served from cache until the working
-  set (tables + indexes) outgrows RAM, then p50 degrades to disk latency.
-- Once the dataset can't fit RAM on any tier, switch to
-  `--edition=enterprise-plus --tier=db-perf-optimized-N-<vCPU>`. The tool
-  enables its **local-SSD data cache**, which extends the effective cache
-  several times beyond RAM: reads that would miss to persistent disk are
-  served from local SSD at a fraction of the latency.
-
-**Storage** (`--storage-size` at create time; only grows afterwards):
-
-- Persistent-disk IOPS and throughput scale with provisioned size — the disk
-  is also the I/O knob. Pre-size to ~2× the expected dataset (records +
-  indexes + WAL + bloat) rather than relying on auto-resize, which grows in
-  small steps and stalls under bulk loads.
-
-**Connection pool** (`ATE_API_POSTGRES_POOL_MAX_CONNS` at deploy time):
-throughput is sensitive to pool sizing; sweep it per workload. A starting
-point is 1.5–2× the instance's vCPUs, split across ateapi replicas.
-
-Beyond configuration: at billions of rows per table, vacuum duration and
-index maintenance on monolithic tables become the operational limit —
-partitioning the large tables is schema work, not a configuration change.
+The provisioning defaults (`db-custom-2-8192`, 10 GB disk) suit development
+and modest fleets. For sizing at large actor counts and high request rates —
+instance shape and the data cache, storage/IOPS, connection-pool math,
+proxy sidecar resources, and Managed Connection Pooling — see
+[docs/dev/cloud-sql-scaling-guide.md](../../docs/dev/cloud-sql-scaling-guide.md).
 
 ## Alternative: any external PostgreSQL (non-GCP)
 
 For a non-Cloud-SQL database, provide a DSN directly; password lives in a
-Secret and the server certificate is verified against a mounted CA:
+Secret and the server certificate is verified against a mounted CA. (This is
+also the shape of a [direct
+connection](https://docs.cloud.google.com/sql/docs/postgres/connection-options)
+to Cloud SQL without the proxy, if you ever need one — you then manage the
+server CA and credentials yourself.)
 
 ```sh
 export ATE_API_POSTGRES_CONNECTION_STRING='postgresql://<user>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
