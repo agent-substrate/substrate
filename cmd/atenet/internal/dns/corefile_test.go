@@ -16,6 +16,8 @@ package dns
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -74,5 +76,23 @@ func TestMakeCoreFile(t *testing.T) {
 				t.Errorf("makeCoreFile(%q) rendered an unexpected Corefile\nGot:\n%s\nWant:\n%s", tc.routerIP, got, want)
 			}
 		})
+	}
+}
+
+// TestDumpCorefile writes the rendered zone to $COREFILE_DUMP_DIR so
+// hack/dns-manual-test.sh serves the real thing rather than a copy. Skipped
+// unless that variable is set.
+func TestDumpCorefile(t *testing.T) {
+	dir := os.Getenv("COREFILE_DUMP_DIR")
+	if dir == "" {
+		t.Skip("COREFILE_DUMP_DIR is unset")
+	}
+	routerIP := os.Getenv("COREFILE_DUMP_ROUTER_IP")
+	if routerIP == "" {
+		routerIP = "10.240.0.10"
+	}
+	path := filepath.Join(dir, "Corefile")
+	if err := os.WriteFile(path, []byte(makeCoreFile(routerIP)), 0o600); err != nil {
+		t.Fatalf("os.WriteFile(%q) = %v", path, err)
 	}
 }

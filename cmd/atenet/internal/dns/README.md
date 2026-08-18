@@ -46,6 +46,9 @@ The last two blocks keep the zone from ever answering SERVFAIL, which musl libc
 maps to `EAI_AGAIN` — sinking the paired A query with it — and which cannot be
 cached negatively.
 
+`hack/dns-manual-test.sh` serves this zone with the pinned CoreDNS image and
+checks the rcode for each query type, including an Alpine `getent`.
+
 ## Integration
 
 * CoreDNS: Update CoreDNS ConfigMap to add the stub resolver.
