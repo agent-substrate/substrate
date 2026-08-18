@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS actor_templates (
 CREATE TABLE IF NOT EXISTS actor_snapshots (
     atespace  text NOT NULL,
     name      text NOT NULL,
+    uid       text NOT NULL,
+    version   bigint NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
 );
