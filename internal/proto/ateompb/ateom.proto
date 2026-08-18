@@ -152,7 +152,8 @@ message Container {
 
 // DurableDirVolumeMount is one durable-dir volume mounted into a container.
 message DurableDirVolumeMount {
-  // volume_name is the name the ActorTemplate gave the volume.
+  // volume_name is the name the ActorTemplate gave the volume. It selects the
+  // per-volume directory atelet prepared for the actor on the host.
   string volume_name = 1;
   // mount_path is where the container sees the volume.
   string mount_path = 2;
