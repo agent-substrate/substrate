@@ -13,9 +13,11 @@
 // limitations under the License.
 
 // Command egress is a small HTTP service for demonstrating per-Actor egress
-// policy. It accepts a URL, fetches it, and returns the upstream response, and
-// on /tcp it opens a raw TCP connection so that egress can be exercised with
-// something other than HTTP.
+// policy. It accepts a URL, fetches it, and returns the upstream response; on
+// /tcp it opens a raw TCP connection so that egress can be exercised with
+// something other than HTTP; and on /stream it holds a Server-Sent Events or
+// WebSocket stream open so that egress can be exercised with something other
+// than a request that finishes promptly.
 package main
 
 import (
@@ -106,6 +108,7 @@ func newHandler(client *http.Client) http.Handler {
 		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body)})
 	})
 	mux.HandleFunc("/tcp", handleTCPProbe)
+	mux.HandleFunc("/stream", handleStreamProbe(newStreamProbeRegistry()))
 	return mux
 }
 

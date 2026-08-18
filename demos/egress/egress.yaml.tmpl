@@ -109,3 +109,59 @@ spec:
   - name: quiet
     port: 2223
     targetPort: quiet
+
+---
+
+# A long-lived-stream origin for the streaming-duration egress tests. It serves
+# cleartext HTTP on purpose: that is the path the MITM egress gateway parses as
+# HTTP, and so the path where a route timeout or a missing upgrade config can
+# cut a stream that the raw CONNECT path would have carried.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamserver
+  namespace: ate-demo-egress
+  labels:
+    app: streamserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamserver
+  template:
+    metadata:
+      labels:
+        app: streamserver
+    spec:
+      containers:
+      - name: streamserver
+        image: ko://github.com/agent-substrate/substrate/demos/egress/streamserver
+        ports:
+        - containerPort: 8080
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+        resources:
+          limits:
+            cpu: 100m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamserver
+  namespace: ate-demo-egress
+spec:
+  selector:
+    app: streamserver
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
