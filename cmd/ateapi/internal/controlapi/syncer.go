@@ -424,9 +424,9 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 }
 
 // releaseActorOnDeadWorker resets the actor bound to a vanishing worker pod. An
-// actor that already reached STATE_SUSPENDED (it saved its state cleanly during
+// actor that already reached ACTOR_STATE_SUSPENDED (it saved its state cleanly during
 // graceful termination) is left untouched and remains resumable. An actor that
-// was still running when the pod disappeared is moved to STATE_CRASHED and its
+// was still running when the pod disappeared is moved to ACTOR_STATE_CRASHED and its
 // pod pointers are cleared.
 //
 // UpdateActor uses optimistic version checking. A concurrent SuspendActor

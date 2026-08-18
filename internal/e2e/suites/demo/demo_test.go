@@ -118,7 +118,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
 		t.Fatalf("failed to resume source Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, sourceName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, sourceName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
 	if err != nil {
 		t.Fatalf("failed to call source Actor: %v", err)
@@ -188,7 +188,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
 		t.Fatalf("failed to resume cloned Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, cloneName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, cloneName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
 	if err != nil {
 		t.Fatalf("failed to call cloned Actor: %v", err)
@@ -513,7 +513,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -533,7 +533,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
@@ -542,7 +542,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -563,7 +563,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		}); err != nil {
 			t.Fatalf("failed to pause Actor before suspend: %v", err)
 		}
-		waitForActorStatus(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+		waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 	}
 	t.Logf("Suspending Actor %q...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
@@ -571,7 +571,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	if tc.suspendWhilePaused {
 		// The suspend must end the node pinning: a suspended actor's snapshot
@@ -598,7 +598,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -723,7 +723,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
@@ -732,7 +732,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -748,7 +748,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
@@ -757,7 +757,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -772,7 +772,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Deleting the actor
 	t.Logf("Deleting Actor %q...", actorName)
@@ -803,7 +803,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
@@ -812,7 +812,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -827,7 +827,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
@@ -836,7 +836,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -851,7 +851,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Deleting the actor
 	t.Logf("Deleting Actor %q...", actorName)
@@ -1088,27 +1088,27 @@ func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) boo
 	return err == nil
 }
 
-func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.ActorState) {
-	waitForActorStatusWithTimeout(ctx, t, clients, actorName, expectedStatus, 60*time.Second)
+func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState) {
+	waitForActorStateWithTimeout(ctx, t, clients, actorName, expectedState, 60*time.Second)
 }
 
-func waitForActorStatusWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.ActorState, timeout time.Duration) {
+func waitForActorStateWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState, timeout time.Duration) {
 	t.Helper()
-	t.Logf("Waiting for Actor %q to be %v...", actorName, expectedStatus)
+	t.Logf("Waiting for Actor %q to be %v...", actorName, expectedState)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 		})
 		if err == nil {
-			if resp.GetStatus().GetState() == expectedStatus {
-				t.Logf("Actor %q reached status %v", actorName, expectedStatus)
+			if resp.GetStatus().GetState() == expectedState {
+				t.Logf("Actor %q reached state %v", actorName, expectedState)
 				return
 			}
 		}
 		time.Sleep(1 * time.Second)
 	}
-	t.Fatalf("timed out waiting for actor %q to reach status %v", actorName, expectedStatus)
+	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, expectedState)
 }
 
 func callActor(t *testing.T, actorRef resources.ActorRef) (string, error) {
@@ -1264,7 +1264,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 		})
 	}()
 
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
@@ -1273,7 +1273,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	// Get actor to find the pod details
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
@@ -1315,7 +1315,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 
 	// Wait for the actor to be marked as CRASHED
 	t.Logf("Waiting for actor %q to transition to CRASHED...", actorName)
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_CRASHED)
 
 	// Verify the worker is cleaned up (deleted) from store
 	t.Logf("Verifying worker for pod %s/%s is removed from store...", podNamespace, podName)

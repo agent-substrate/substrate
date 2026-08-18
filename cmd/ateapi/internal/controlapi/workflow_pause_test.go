@@ -163,27 +163,27 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 // a non-RUNNING actor and the idempotent fast-forward for a PAUSED one.
 func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	tests := []struct {
-		name       string
-		seedStatus ateapipb.ActorState
+		name      string
+		seedState ateapipb.ActorState
 		// wantErr true means PauseActor must fail with FailedPrecondition.
 		wantErr bool
-		// wantStatus is the stored status after the call.
-		wantStatus ateapipb.ActorState
+		// wantState is the stored state after the call.
+		wantState ateapipb.ActorState
 	}{
 		{
 			// Pausing a SUSPENDED actor is rejected by MarkPausingStep's
-			// CheckPrerequisite and the actor's status is left untouched.
-			name:       "not running rejected",
-			seedStatus: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			wantErr:    true,
-			wantStatus: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			// CheckPrerequisite and the actor's state is left untouched.
+			name:      "not running rejected",
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantErr:   true,
+			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 		{
 			// Pausing a PAUSED actor succeeds idempotently via IsComplete
 			// fast-forward without calling atelet.
-			name:       "already paused succeeds",
-			seedStatus: ateapipb.ActorState_ACTOR_STATE_PAUSED,
-			wantStatus: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			name:      "already paused succeeds",
+			seedState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
 		},
 	}
 	for _, tc := range tests {
@@ -193,7 +193,7 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			defer cleanup()
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus)
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedState)
 
 			actor, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
@@ -204,8 +204,8 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				if err != nil {
 					t.Fatalf("PauseActor failed: %v", err)
 				}
-				if actor.GetStatus().GetState() != tc.wantStatus {
-					t.Errorf("returned state = %v, want %v", actor.GetStatus().GetState(), tc.wantStatus)
+				if actor.GetStatus().GetState() != tc.wantState {
+					t.Errorf("returned state = %v, want %v", actor.GetStatus().GetState(), tc.wantState)
 				}
 			}
 
@@ -213,25 +213,25 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetActor failed: %v", err)
 			}
-			if got.GetStatus().GetState() != tc.wantStatus {
-				t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), tc.wantStatus)
+			if got.GetStatus().GetState() != tc.wantState {
+				t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
 			}
 		})
 	}
 }
 
-// TestEnsureMarkedPausing_StatusMatrix verifies the pause edge's status gating
-// against every actor status: RUNNING takes the edge, PAUSING skips (a
+// TestEnsureMarkedPausing_StateMatrix verifies the pause edge's state gating
+// against every actor state: RUNNING takes the edge, PAUSING skips (a
 // previous attempt already marked the actor), everything else is rejected
 // with FailedPrecondition. PAUSED is rejected here because the orchestrator
 // early-returns before this step for a fully paused actor.
-func TestEnsureMarkedPausing_StatusMatrix(t *testing.T) {
+func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 	allowed := map[ateapipb.ActorState]bool{
 		ateapipb.ActorState_ACTOR_STATE_RUNNING: true,
 		ateapipb.ActorState_ACTOR_STATE_PAUSING: true, // skipped, not re-marked
 	}
 
-	for _, seedStatus := range allActorStatuses {
+	for _, seedState := range allActorStates {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
 		w := &ActorWorkflow{store: persistence}
@@ -239,16 +239,16 @@ func TestEnsureMarkedPausing_StatusMatrix(t *testing.T) {
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 		actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-			Status:   &ateapipb.ActorStatus{State: seedStatus},
+			Status:   &ateapipb.ActorStatus{State: seedState},
 		})
 		if err != nil {
-			t.Fatalf("status %v: CreateActor: %v", seedStatus, err)
+			t.Fatalf("state %v: CreateActor: %v", seedState, err)
 		}
 
 		marked, err := w.ensureMarkedPausing(ctx, actorRef, actor)
-		assertPrerequisiteResult(t, seedStatus, err, allowed[seedStatus])
+		assertPrerequisiteResult(t, seedState, err, allowed[seedState])
 		if err == nil && marked.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSING {
-			t.Errorf("state %v: ensureMarkedPausing returned actor in %v, want PAUSING", seedStatus, marked.GetStatus().GetState())
+			t.Errorf("state %v: ensureMarkedPausing returned actor in %v, want PAUSING", seedState, marked.GetStatus().GetState())
 		}
 	}
 }

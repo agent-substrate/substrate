@@ -357,14 +357,14 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 	t.Run("DeleteActor", func(t *testing.T) {
 		tests := []struct {
 			name    string
-			status  ateapipb.ActorState
+			state   ateapipb.ActorState
 			wantErr error
 		}{
-			{name: "suspended", status: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
-			{name: "crashed", status: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
-			{name: "deleting", status: ateapipb.ActorState_ACTOR_STATE_DELETING},
-			{name: "running", status: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
-			{name: "paused", status: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
+			{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
+			{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
+			{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING},
+			{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
+			{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
 		}
 
 		for _, tt := range tests {
@@ -377,7 +377,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
 					ActorTemplateNamespace: "default",
 					ActorTemplateName:      "test-template",
-					Status:                 &ateapipb.ActorStatus{State: tt.status},
+					Status:                 &ateapipb.ActorStatus{State: tt.state},
 				}
 				if _, err := s.CreateActor(ctx, actor); err != nil {
 					t.Fatalf("CreateActor failed: %v", err)
@@ -392,8 +392,8 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					if getErr != nil {
 						t.Fatalf("GetActor after rejected delete failed: %v", getErr)
 					}
-					if got.GetStatus().GetState() != tt.status {
-						t.Errorf("actor state after rejected delete = %v, want %v", got.GetStatus().GetState(), tt.status)
+					if got.GetStatus().GetState() != tt.state {
+						t.Errorf("actor state after rejected delete = %v, want %v", got.GetStatus().GetState(), tt.state)
 					}
 					return
 				}

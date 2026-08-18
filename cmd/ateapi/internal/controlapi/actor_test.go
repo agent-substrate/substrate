@@ -664,7 +664,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	// The stored record must still be actor B as its creator left it. Any of A's
 	// state showing up here is the clobber.
 	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("stored status = %v, want %v: recreated actor was overwritten with the deleted actor's state",
+		t.Errorf("stored state = %v, want %v: recreated actor was overwritten with the deleted actor's state",
 			got, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 	if got := stored.GetStatus().GetWorkerAssignment(); got != nil {
@@ -693,7 +693,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 		t.Fatalf("seed CreateActor: %v", err)
 	}
 
-	// A suspend workflow bumps status (a field that a later update operation will not touch)
+	// A suspend workflow bumps state (a field that a later update operation will not touch)
 	// inside the handler's read-modify-write window.
 	racing := &conflictInjectingStore{
 		Interface: persistence,
@@ -708,7 +708,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	}
 	svc := &Service{persistence: racing}
 
-	// Update operation is changing the worker_selector field, not the actor's status (like the concurrent op)
+	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	if _, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
@@ -723,12 +723,12 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
-	// Both worker selector and status updates survive
+	// Both worker selector and state updates survive
 	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
 		t.Errorf("stored worker_selector[tier] = %q, want %q", got, "paid")
 	}
 	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
-		t.Errorf("stored status = %v, want %v: the concurrent writer's field must survive", got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
+		t.Errorf("stored state = %v, want %v: the concurrent writer's field must survive", got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 	}
 }
 
@@ -839,7 +839,7 @@ func TestValidateDeleteActorRequest(t *testing.T) {
 	}
 }
 
-func TestDeleteActor_StatusDeleting(t *testing.T) {
+func TestDeleteActor_StateDeleting(t *testing.T) {
 	ns := namespaceForTest("ns-delete-deleting")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -861,7 +861,7 @@ func TestDeleteActor_StatusDeleting(t *testing.T) {
 	if _, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "deleting-actor"},
 	}); err != nil {
-		t.Fatalf("DeleteActor on STATE_DELETING actor failed: %v", err)
+		t.Fatalf("DeleteActor on ACTOR_STATE_DELETING actor failed: %v", err)
 	}
 
 	if _, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "deleting-actor"}); err == nil {
@@ -869,7 +869,7 @@ func TestDeleteActor_StatusDeleting(t *testing.T) {
 	}
 }
 
-func TestDeleteActor_WrongStatus(t *testing.T) {
+func TestDeleteActor_WrongState(t *testing.T) {
 	ns := namespaceForTest("ns-delete-wrong-status")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -892,7 +892,7 @@ func TestDeleteActor_WrongStatus(t *testing.T) {
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "running-actor"},
 	})
 	if err == nil {
-		t.Fatalf("expected DeleteActor on STATE_RUNNING actor to fail, but it succeeded")
+		t.Fatalf("expected DeleteActor on ACTOR_STATE_RUNNING actor to fail, but it succeeded")
 	}
 }
 

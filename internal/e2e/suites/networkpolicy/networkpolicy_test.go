@@ -377,12 +377,12 @@ func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients
 			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 		})
 		if err == nil && resp.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-			t.Logf("Actor %q reached RUNNING status", actorName)
+			t.Logf("Actor %q reached RUNNING state", actorName)
 			return
 		}
 		time.Sleep(1 * time.Second)
 	}
-	t.Fatalf("timed out waiting for actor %q to reach RUNNING status", actorName)
+	t.Fatalf("timed out waiting for actor %q to reach RUNNING state", actorName)
 }
 
 func waitForPodRunning(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace, podName string) {

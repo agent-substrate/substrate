@@ -143,12 +143,12 @@ func createLiveActor() (*probeActor, error) {
 	}
 
 	deadline := time.Now().Add(4 * time.Minute)
-	var lastStatus ateapipb.ActorState
+	var lastState ateapipb.ActorState
 	for time.Now().Before(deadline) {
 		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
 		if err == nil {
-			lastStatus = actor.GetStatus().GetState()
-			if lastStatus == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			lastState = actor.GetStatus().GetState()
+			if lastState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
 				uid := actor.GetMetadata().GetUid()
 				if uid == "" {
 					return nil, fmt.Errorf("actor %s/%s is running but has no UID", probeAtespace, name)
@@ -162,8 +162,8 @@ func createLiveActor() (*probeActor, error) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return nil, fmt.Errorf("actor %s/%s never reached STATUS_RUNNING (last status %v); a saturated worker pool is the usual cause",
-		probeAtespace, name, lastStatus)
+	return nil, fmt.Errorf("actor %s/%s never reached ACTOR_STATE_RUNNING (last state %v); a saturated worker pool is the usual cause",
+		probeAtespace, name, lastState)
 }
 
 // actorIdentityCA returns the CA that signs actor certificates, straight from

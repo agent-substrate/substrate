@@ -290,8 +290,8 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	if err := fakeK8s.CoreV1().Pods(ns).Delete(ctx, pod, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete pod: %v", err)
 	}
-	// The actor was STATE_RUNNING when its pod vanished (it never suspended
-	// cleanly), so cleanup marks it STATE_CRASHED.
+	// The actor was ACTOR_STATE_RUNNING when its pod vanished (it never suspended
+	// cleanly), so cleanup marks it ACTOR_STATE_CRASHED.
 	var got *ateapipb.Actor
 	if err := wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 2*time.Second, true, func(c context.Context) (bool, error) {
 		a, gerr := persistence.GetActor(c, resources.ActorRef{Atespace: "team-orphan", Name: actorName})
@@ -891,23 +891,23 @@ func TestSyncer_EnqueueStoredWorkers_StreamsPagesAndRetriesLatePage(t *testing.T
 	}
 }
 
-// TestReleaseActorOnDeadWorker_StatusTransitions verifies that a running actor on
+// TestReleaseActorOnDeadWorker_StateTransitions verifies that a running actor on
 // a deleted worker becomes CRASHED, while an actor that had already suspended
 // cleanly stays SUSPENDED (resumable).
-func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
+func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 	ns, pool, pod, ip := "ns-status", "pool1", "worker-status", "10.0.0.3"
 	tests := []struct {
 		name       string
 		start      ateapipb.ActorState
-		wantStatus ateapipb.ActorState
+		wantState  ateapipb.ActorState
 		wantOp     string
 		wantMetric bool
 	}{
-		{name: "running becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantStatus: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationUnknown, wantMetric: true},
-		{name: "resuming becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantStatus: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
-		{name: "suspending becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, wantStatus: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
-		{name: "pausing becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_PAUSING, wantStatus: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationPause, wantMetric: true},
-		{name: "suspended stays suspended", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantStatus: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantMetric: false},
+		{name: "running becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationUnknown, wantMetric: true},
+		{name: "resuming becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
+		{name: "suspending becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
+		{name: "pausing becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_PAUSING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationPause, wantMetric: true},
+		{name: "suspended stays suspended", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantMetric: false},
 	}
 
 	for _, tc := range tests {
@@ -960,10 +960,10 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get actor: %v", err)
 			}
-			if got.GetStatus().GetState() != tc.wantStatus {
-				t.Errorf("actor state = %v, want %v", got.GetStatus().GetState(), tc.wantStatus)
+			if got.GetStatus().GetState() != tc.wantState {
+				t.Errorf("actor state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
 			}
-			if tc.wantStatus == ateapipb.ActorState_ACTOR_STATE_CRASHED && got.GetStatus().GetWorkerAssignment() != nil {
+			if tc.wantState == ateapipb.ActorState_ACTOR_STATE_CRASHED && got.GetStatus().GetWorkerAssignment() != nil {
 				t.Errorf("crashed actor WorkerAssignment = %v, want cleared", got.GetStatus().GetWorkerAssignment())
 			}
 

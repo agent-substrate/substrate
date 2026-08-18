@@ -1507,7 +1507,6 @@ type ActorTemplate struct {
 	Volumes         []*Volume        `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
 	// sandbox_config selects the sandbox runtime this version's actors run on.
-	// Required. Resolved and frozen into resolved_sandbox at creation time.
 	SandboxConfig *SandboxConfig `protobuf:"bytes,6,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
 	// Resource usage configuration.
 	Resources     *Resources           `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
@@ -2862,7 +2861,7 @@ type CreateActorTemplateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor template version to create. Server-assigned metadata (uid,
 	// version, timestamps) is ignored, as are the status fields: the server
-	// initializes new versions to PHASE_INITIAL.
+	// initializes new versions to ACTOR_TEMPLATE_PHASE_INITIAL.
 	ActorTemplate *ActorTemplate `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3206,7 +3205,7 @@ func (x *CreateActorRequest) GetActor() *Actor {
 }
 
 // Request to update mutable fields on an existing Actor.
-// May be called regardless of the actor's current status.
+// May be called regardless of the actor's current state.
 // Changes take effect on the next ResumeActor call.
 type UpdateActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`

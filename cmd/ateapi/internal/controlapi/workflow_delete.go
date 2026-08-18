@@ -89,7 +89,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
-		return nil, fmt.Errorf("while setting actor status to DELETING: %w", err)
+		return nil, fmt.Errorf("while setting actor state to DELETING: %w", err)
 	}
 	return storedActor, nil
 }
@@ -122,7 +122,7 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actorRef resources.
 			if getErr == nil {
 				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, current.GetStatus().GetState())
 			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status", actorRef)
+			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state", actorRef)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

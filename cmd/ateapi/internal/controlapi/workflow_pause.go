@@ -245,14 +245,14 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			return nil, err
 		}
 		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
-		newStatus := ateapipb.ActorState_ACTOR_STATE_PAUSED
+		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
 			// stuck in PAUSED.
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", actorRef))
-			newStatus = ateapipb.ActorState_ACTOR_STATE_CRASHED
+			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		}
 		contentScope := toActorSnapshotContentScope(actorTemplate.Spec.SnapshotsConfig.OnPause)
 		sandboxClass := ""
@@ -260,18 +260,18 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			sandboxClass = worker.GetSandboxClass()
 		}
 		// Snapshot crash attributes before pod and pool pointers are cleared below.
-		latestActor.Status.State = newStatus
+		latestActor.Status.State = newState
 		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 
 		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
-			toUpdate.Status.State = newStatus
+			toUpdate.Status.State = newState
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
 			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
 				localInfo := &ateapipb.LocalSnapshotInfo{
 					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
 				}
-				if newStatus != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
 				}
 				toUpdate.Status.LocalSnapshotInfo = localInfo

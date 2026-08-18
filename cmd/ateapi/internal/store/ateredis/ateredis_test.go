@@ -666,14 +666,14 @@ func TestDeleteWorker(t *testing.T) {
 func TestDeleteActor(t *testing.T) {
 	tests := []struct {
 		name    string
-		status  ateapipb.ActorState
+		state   ateapipb.ActorState
 		wantErr error
 	}{
-		{name: "suspended", status: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
-		{name: "crashed", status: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
-		{name: "deleting", status: ateapipb.ActorState_ACTOR_STATE_DELETING},
-		{name: "running", status: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
-		{name: "paused", status: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
+		{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
+		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
+		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING},
+		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
+		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
 	}
 
 	for _, tt := range tests {
@@ -684,7 +684,7 @@ func TestDeleteActor(t *testing.T) {
 				Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "test-template",
-				Status:                 &ateapipb.ActorStatus{State: tt.status},
+				Status:                 &ateapipb.ActorStatus{State: tt.state},
 			}
 
 			if _, err := s.CreateActor(ctx, actor); err != nil {

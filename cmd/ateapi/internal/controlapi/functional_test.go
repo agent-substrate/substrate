@@ -1025,7 +1025,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if createResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("expected initial state STATE_SUSPENDED, got %v", createResp.GetStatus().GetState())
+		t.Fatalf("expected initial state ACTOR_STATE_SUSPENDED, got %v", createResp.GetStatus().GetState())
 	}
 	if len(createResp.GetStatus().GetActorVolumes()) != 1 || createResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
 		t.Fatalf("expected 1 pending volume after CreateActor, got %v", createResp.GetStatus().GetActorVolumes())
@@ -1039,7 +1039,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
 	if resumeResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Fatalf("expected state STATE_RUNNING after resume, got %v", resumeResp.GetActor().GetStatus().GetState())
+		t.Fatalf("expected state ACTOR_STATE_RUNNING after resume, got %v", resumeResp.GetActor().GetStatus().GetState())
 	}
 	if len(resumeResp.GetActor().GetStatus().GetActorVolumes()) != 1 || resumeResp.GetActor().GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED {
 		t.Fatalf("expected 1 created volume after ResumeActor, got %v", resumeResp.GetActor().GetStatus().GetActorVolumes())
@@ -1056,7 +1056,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		t.Fatalf("PauseActor failed: %v", err)
 	}
 	if pauseResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		t.Fatalf("expected state STATE_PAUSED after pause, got %v", pauseResp.GetActor().GetStatus().GetState())
+		t.Fatalf("expected state ACTOR_STATE_PAUSED after pause, got %v", pauseResp.GetActor().GetStatus().GetState())
 	}
 
 	// 4. ResumeActor from paused
@@ -1067,7 +1067,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		t.Fatalf("ResumeActor from paused failed: %v", err)
 	}
 	if resumeResp2.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Fatalf("expected state STATE_RUNNING after second resume, got %v", resumeResp2.GetActor().GetStatus().GetState())
+		t.Fatalf("expected state ACTOR_STATE_RUNNING after second resume, got %v", resumeResp2.GetActor().GetStatus().GetState())
 	}
 
 	// 5. SuspendActor
@@ -1078,7 +1078,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
 	if suspendResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("expected state STATE_SUSPENDED after suspend, got %v", suspendResp.GetActor().GetStatus().GetState())
+		t.Fatalf("expected state ACTOR_STATE_SUSPENDED after suspend, got %v", suspendResp.GetActor().GetStatus().GetState())
 	}
 
 	// 6. DeleteActor
@@ -1127,7 +1127,7 @@ func (f *partialFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID str
 }
 
 // TestResumeActor_VolumeCreationFailure tests that when volume provisioning fails during ResumeActor,
-// successfully created volumes are saved, the actor remains in STATE_SUSPENDED,
+// successfully created volumes are saved, the actor remains in ACTOR_STATE_SUSPENDED,
 // and that calling DeleteActor on the suspended actor cleans up all partially created volumes.
 func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	ns := namespaceForTest("ns-resume-vol-fail")
@@ -1187,7 +1187,7 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 		t.Fatalf("expected ResumeActor to fail due to volume creation error, but it succeeded")
 	}
 
-	// Verify GetActor returns the actor in STATE_SUSPENDED status
+	// Verify GetActor returns the actor in ACTOR_STATE_SUSPENDED state
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
 	})
@@ -1218,7 +1218,7 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 		t.Errorf("fail-vol2 unexpected state: %v", v2)
 	}
 
-	// Call DeleteActor on the actor in STATE_SUSPENDED
+	// Call DeleteActor on the actor in ACTOR_STATE_SUSPENDED
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
 	})
@@ -1337,7 +1337,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		t.Fatalf("expected first ResumeActor to fail due to temporary volume creation error, but it succeeded")
 	}
 
-	// Verify GetActor returns the actor in STATE_SUSPENDED status with succ-vol1 created and retry-vol2 pending
+	// Verify GetActor returns the actor in ACTOR_STATE_SUSPENDED state with succ-vol1 created and retry-vol2 pending
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
 	})
@@ -1345,7 +1345,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		t.Fatalf("GetActor after first resume failed: %v", err)
 	}
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("actor status after first resume = %v, want %v", getResp.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+		t.Errorf("actor state after first resume = %v, want %v", getResp.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 	}
 
 	volsByName := make(map[string]*ateapipb.ExternalVolume)
@@ -1367,7 +1367,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		t.Fatalf("expected second ResumeActor to succeed, got: %v", err)
 	}
 
-	// Verify GetActor returns the actor in STATE_RUNNING status with both volumes CREATED
+	// Verify GetActor returns the actor in ACTOR_STATE_RUNNING state with both volumes CREATED
 	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
 	})
@@ -1375,7 +1375,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		t.Fatalf("GetActor after second resume failed: %v", err)
 	}
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("actor status after second resume = %v, want %v", getResp.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		t.Errorf("actor state after second resume = %v, want %v", getResp.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
 	for _, v := range getResp.GetStatus().GetActorVolumes() {
 		if v.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v.GetStorageVolumeId() == "" {
@@ -1751,7 +1751,7 @@ func TestListWorkers(t *testing.T) {
 // 5. Creates an actor (starts as SUSPENDED).
 // 6. Calls ResumeActor RPC.
 // 7. Verifies that the fake Atelet received the Restore call.
-// 8. Verifies that the actor status is updated to RUNNING.
+// 8. Verifies that the actor state is updated to RUNNING.
 func TestResumeActor(t *testing.T) {
 	ns := namespaceForTest("ns-resume")
 	tc := setupTest(t, ns)
@@ -2039,9 +2039,9 @@ func TestResumeActor_RequiresBothSelectorsToMatch(t *testing.T) {
 // 3. Waits for the WorkerPoolSyncer to mirror the worker to store.
 // 4. Creates an actor in SUSPENDED state.
 // 5. Configures fake Atelet to FAIL on Restore.
-// 6. Calls ResumeActor and verifies it fails, but actor status becomes RESUMING.
+// 6. Calls ResumeActor and verifies it fails, but actor state becomes RESUMING.
 // 7. Configures fake Atelet to SUCCEED on Restore.
-// 8. Calls ResumeActor again and verifies it succeeds and actor status becomes RUNNING.
+// 8. Calls ResumeActor again and verifies it succeeds and actor state becomes RUNNING.
 func TestResumeActor_Reentrancy(t *testing.T) {
 	ns := namespaceForTest("ns-resume-reentrancy")
 	tc := setupTest(t, ns)
@@ -2702,7 +2702,7 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if got := getResp.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("expected actor status CRASHED, got %v", got)
+		t.Errorf("expected actor state CRASHED, got %v", got)
 	}
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
@@ -2822,7 +2822,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if got := getResp.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("expected actor status CRASHED, got %v", got)
+		t.Errorf("expected actor state CRASHED, got %v", got)
 	}
 	if got := getResp.GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "" {
 		t.Errorf("expected actor pod name to be empty, got %q", got)
@@ -2930,7 +2930,7 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 		t.Errorf("expected actor to resume onto worker-b after selector update, got worker_assignment.worker_pod=%q", got)
 	}
 	if got := getResp.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("expected actor status RUNNING after second resume, got %v", got)
+		t.Errorf("expected actor state RUNNING after second resume, got %v", got)
 	}
 }
 
@@ -3113,8 +3113,8 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected ResumeActor to fail because worker is gone")
 	}
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATE_CRASHED") {
-		t.Errorf("expected FailedPrecondition/STATE_CRASHED error, got %v", err)
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "ACTOR_STATE_CRASHED") {
+		t.Errorf("expected FailedPrecondition/ACTOR_STATE_CRASHED error, got %v", err)
 	}
 
 	// Verify actor state is CRASHED and worker assignment is empty
@@ -3167,7 +3167,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected SuspendActor to fail because worker is gone")
 	}
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATE_CRASHED") {
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "ACTOR_STATE_CRASHED") {
 		t.Errorf("expected FailedPrecondition error, got %v", err)
 	}
 
@@ -3282,7 +3282,7 @@ func TestDeleteActor_Crashed(t *testing.T) {
 		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
 	}
 	if got := deleted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
-		t.Errorf("deleted actor status = %v, want %v", got, ateapipb.ActorState_ACTOR_STATE_DELETING)
+		t.Errorf("deleted actor state = %v, want %v", got, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
@@ -3708,7 +3708,7 @@ func TestSuspendActor_FromPaused_RetryAfterUploadFailure(t *testing.T) {
 		t.Fatalf("SuspendActor retry failed: %v", err)
 	}
 	if got := retried.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Errorf("status after retry = %v, want SUSPENDED", got)
+		t.Errorf("state after retry = %v, want SUSPENDED", got)
 	}
 	if got := tc.fakeAtelet.UploadRequest.GetDestinationSnapshotUri(); got != firstDestination {
 		t.Errorf("retry destination = %q, want the original %q (idempotent upload target)", got, firstDestination)
@@ -3784,7 +3784,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 		t.Fatalf("SuspendActor(%s) failed: %v", pinned, err)
 	}
 	if got := suspended.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		t.Fatalf("status after suspend = %v, want SUSPENDED", got)
+		t.Fatalf("state after suspend = %v, want SUSPENDED", got)
 	}
 	if got := suspended.GetActor().GetStatus().GetLocalSnapshotInfo(); got != nil {
 		t.Fatalf("LocalSnapshotInfo = %v, want cleared so the actor can be scheduled anywhere", got)

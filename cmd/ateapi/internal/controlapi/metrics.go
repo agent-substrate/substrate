@@ -42,7 +42,7 @@ func RegisterActorCrashes(meter metric.Meter) error {
 	counter, err := meter.Int64Counter(
 		actorCrashesMetric,
 		metric.WithUnit("{crash}"),
-		metric.WithDescription("Number of times actors transitioned to STATE_CRASHED with failure reasons."),
+		metric.WithDescription("Number of times actors transitioned to ACTOR_STATE_CRASHED with failure reasons."),
 	)
 	if err != nil {
 		return fmt.Errorf("create %s counter: %w", actorCrashesMetric, err)

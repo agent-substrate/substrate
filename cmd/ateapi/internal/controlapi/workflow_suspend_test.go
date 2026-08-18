@@ -106,19 +106,19 @@ func TestEnsureMarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *testing
 // for a non-RUNNING actor and the idempotent fast-forward for a SUSPENDED one.
 func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	tests := []struct {
-		name       string
-		seedStatus ateapipb.ActorState
+		name      string
+		seedState ateapipb.ActorState
 		// wantErr true means SuspendActor must fail with FailedPrecondition.
 		wantErr bool
-		// wantStatus is the stored status after the call.
-		wantStatus ateapipb.ActorState
+		// wantState is the stored state after the call.
+		wantState ateapipb.ActorState
 	}{
 		{
 			// Suspending a SUSPENDED actor succeeds idempotently via
 			// IsComplete fast-forward without calling atelet.
-			name:       "newly created suspended succeeds",
-			seedStatus: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			wantStatus: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			name:      "newly created suspended succeeds",
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 		},
 	}
 	for _, tc := range tests {
@@ -128,7 +128,7 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			defer cleanup()
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus)
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedState)
 
 			actor, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
@@ -139,8 +139,8 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				if err != nil {
 					t.Fatalf("SuspendActor failed: %v", err)
 				}
-				if actor.GetStatus().GetState() != tc.wantStatus {
-					t.Errorf("returned state = %v, want %v", actor.GetStatus().GetState(), tc.wantStatus)
+				if actor.GetStatus().GetState() != tc.wantState {
+					t.Errorf("returned state = %v, want %v", actor.GetStatus().GetState(), tc.wantState)
 				}
 			}
 
@@ -148,28 +148,28 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetActor failed: %v", err)
 			}
-			if got.GetStatus().GetState() != tc.wantStatus {
-				t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), tc.wantStatus)
+			if got.GetStatus().GetState() != tc.wantState {
+				t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
 			}
 		})
 	}
 }
 
-// TestEnsureMarkedSuspending_StatusMatrix verifies the suspend edge's status
-// gating against every actor status: RUNNING takes the edge (checkpoint the
+// TestEnsureMarkedSuspending_StateMatrix verifies the suspend edge's state
+// gating against every actor state: RUNNING takes the edge (checkpoint the
 // workload), PAUSED takes it too (upload the node-local pause snapshot),
 // SUSPENDING skips (a previous attempt already marked the actor), everything
 // else is rejected with FailedPrecondition. SUSPENDED is rejected here
 // because the orchestrator early-returns before this step for a fully
 // suspended actor.
-func TestEnsureMarkedSuspending_StatusMatrix(t *testing.T) {
+func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 	allowed := map[ateapipb.ActorState]bool{
 		ateapipb.ActorState_ACTOR_STATE_RUNNING:    true,
 		ateapipb.ActorState_ACTOR_STATE_PAUSED:     true,
 		ateapipb.ActorState_ACTOR_STATE_SUSPENDING: true, // skipped, not re-marked
 	}
 
-	for _, seedStatus := range allActorStatuses {
+	for _, seedState := range allActorStates {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
 		w := &ActorWorkflow{store: persistence}
@@ -177,19 +177,19 @@ func TestEnsureMarkedSuspending_StatusMatrix(t *testing.T) {
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 		actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-			Status:   &ateapipb.ActorStatus{State: seedStatus},
+			Status:   &ateapipb.ActorStatus{State: seedState},
 		})
 		if err != nil {
-			t.Fatalf("status %v: CreateActor: %v", seedStatus, err)
+			t.Fatalf("state %v: CreateActor: %v", seedState, err)
 		}
 
 		tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"},
 		}}
 		marked, err := w.ensureMarkedSuspending(ctx, actorRef, actor, tmpl)
-		assertPrerequisiteResult(t, seedStatus, err, allowed[seedStatus])
+		assertPrerequisiteResult(t, seedState, err, allowed[seedState])
 		if err == nil && marked.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
-			t.Errorf("state %v: ensureMarkedSuspending returned actor in %v, want SUSPENDING", seedStatus, marked.GetStatus().GetState())
+			t.Errorf("state %v: ensureMarkedSuspending returned actor in %v, want SUSPENDING", seedState, marked.GetStatus().GetState())
 		}
 	}
 }
@@ -532,7 +532,7 @@ func TestCommitSnapshotScope(t *testing.T) {
 
 // TestIsPausedOriginSuspend pins the paused-origin discriminator:
 // LocalSnapshotInfo alone must not select the paused path, because resume
-// leaves it stale on RUNNING actors; only PAUSED status, or SUSPENDING with
+// leaves it stale on RUNNING actors; only PAUSED state, or SUSPENDING with
 // no worker assignment, means the suspend uploads a local snapshot.
 func TestIsPausedOriginSuspend(t *testing.T) {
 	assignment := &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod-1"}

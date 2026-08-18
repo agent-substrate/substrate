@@ -733,8 +733,8 @@ deploy_atenet() {
   run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
 }
 
-# get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
-get_actor_status() {
+# get_actor_state echoes the actor's state enum (e.g. ACTOR_STATE_SUSPENDED).
+get_actor_state() {
   local actor_name="$1"
   local atespace="$2"
   local json
@@ -742,44 +742,44 @@ get_actor_status() {
   if ! json=$(run_kubectl_ate get actor "${actor_name}" -a "${atespace}" -o json 2>/dev/null); then
     return 1
   fi
-  jq -r '.actors[0].status // empty' <<<"${json}"
+  jq -r '.actors[0].status.state // empty' <<<"${json}"
 }
 
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
-# is allowed. Actors must be STATUS_SUSPENDED before deletion.
+# is allowed. Actors must be ACTOR_STATE_SUSPENDED before deletion.
 prepare_actor_for_delete() {
   local actor_name="$1"
   local atespace="$2"
   local timeout_secs="${3:-120}"
   local deadline=$((SECONDS + timeout_secs))
-  local status
+  local state
 
   while ((SECONDS < deadline)); do
-    if ! status=$(get_actor_status "${actor_name}" "${atespace}"); then
+    if ! state=$(get_actor_state "${actor_name}" "${atespace}"); then
       return 0
     fi
 
-    case "${status}" in
-      STATUS_SUSPENDED)
+    case "${state}" in
+      ACTOR_STATE_SUSPENDED)
         return 0
         ;;
-      STATUS_PAUSED)
+      ACTOR_STATE_PAUSED)
         run_kubectl_ate resume actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
-      STATUS_RUNNING)
+      ACTOR_STATE_RUNNING)
         run_kubectl_ate suspend actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
-      STATUS_RESUMING | STATUS_SUSPENDING | STATUS_PAUSING)
+      ACTOR_STATE_RESUMING | ACTOR_STATE_SUSPENDING | ACTOR_STATE_PAUSING)
         ;;
       *)
-        echo "cannot delete actor ${actor_name}: unexpected status ${status}" >&2
+        echo "cannot delete actor ${actor_name}: unexpected state ${state}" >&2
         return 1
         ;;
     esac
     sleep 2
   done
 
-  echo "timed out waiting for actor ${actor_name} to reach STATUS_SUSPENDED" >&2
+  echo "timed out waiting for actor ${actor_name} to reach ACTOR_STATE_SUSPENDED" >&2
   return 1
 }
 

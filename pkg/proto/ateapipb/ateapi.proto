@@ -384,6 +384,8 @@ message ActorTemplateStatus {
   // READY.
   ObjectRef golden_snapshot = 3;
 
+  // sandbox_assets is the referenced SandboxConfig's content frozen at
+  // creation time.
   SandboxAssets sandbox_assets = 4;
 }
 
@@ -590,7 +592,7 @@ message DeleteAtespaceRequest {
 message CreateActorTemplateRequest {
   // The actor template version to create. Server-assigned metadata (uid,
   // version, timestamps) is ignored, as are the status fields: the server
-  // initializes new versions to PHASE_INITIAL.
+  // initializes new versions to ACTOR_TEMPLATE_PHASE_INITIAL.
   ActorTemplate actor_template = 1;
 }
 
@@ -637,7 +639,7 @@ message CreateActorRequest {
 }
 
 // Request to update mutable fields on an existing Actor.
-// May be called regardless of the actor's current status.
+// May be called regardless of the actor's current state.
 // Changes take effect on the next ResumeActor call.
 message UpdateActorRequest {
   // The actor to update.

@@ -369,11 +369,11 @@ Activates a suspended actor by restoring it onto a physical worker.
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
-*   **Response:** `SuspendActorResponse` containing the `Actor` object in `STATE_SUSPENDED`.
+*   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`.
 
 #### `DeleteActor`
 Removes an actor from the registry.
-*   **Constraints:** Only actors in `STATE_SUSPENDED` can be deleted.
+*   **Constraints:** Only actors in `ACTOR_STATE_SUSPENDED` can be deleted.
 *   **Request:** `DeleteActorRequest`
 *   **Response:** `DeleteActorResponse` (empty).
 
