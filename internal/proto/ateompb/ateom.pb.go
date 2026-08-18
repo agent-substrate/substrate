@@ -1850,8 +1850,9 @@ type PrepareSandboxRequest struct {
 	MemoryBytes int64 `protobuf:"varint,5,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// Runtime assets needed before a microVM can boot. Empty for gVisor.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,6,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// The runtime-specific sandbox preparation may depend on workload shape,
-	// while application image contents are consumed only by RunWorkload.
+	// Runtime-specific preparation needs the workload shape: gVisor declares
+	// durable mount hints while microVM decides its early sandbox shape.
+	// Application image contents are consumed only by RunWorkload.
 	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
