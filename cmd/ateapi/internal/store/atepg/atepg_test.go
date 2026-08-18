@@ -154,7 +154,7 @@ func TestUpdateActor_RetriesConcurrentWrite(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "template-a",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -172,7 +172,7 @@ func TestUpdateActor_RetriesConcurrentWrite(t *testing.T) {
 				return fmt.Errorf("concurrent actor update: %w", err)
 			}
 		}
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if err != nil {
@@ -181,8 +181,8 @@ func TestUpdateActor_RetriesConcurrentWrite(t *testing.T) {
 	if attempts != 2 {
 		t.Errorf("mutate ran %d times, want 2", attempts)
 	}
-	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("status = %v, want RUNNING", updated.GetStatus())
+	if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", updated.GetStatus().GetState())
 	}
 	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
 		t.Errorf("worker selector tier = %q, want paid: concurrent update was lost", got)
@@ -200,7 +200,7 @@ func TestUpdateActor_ExhaustsOptimisticRetries(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "template-a",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -211,7 +211,7 @@ func TestUpdateActor_ExhaustsOptimisticRetries(t *testing.T) {
 	_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
 		attempts++
 		_, err := s.UpdateActor(ctx, actorRef, func(concurrent *ateapipb.Actor) error {
-			concurrent.Status = ateapipb.Actor_STATUS_RUNNING
+			concurrent.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			return nil
 		})
 		return err
@@ -242,7 +242,7 @@ func TestUpdateActorTemplate_RetriesConcurrentWrite(t *testing.T) {
 				return fmt.Errorf("concurrent actor template update: %w", err)
 			}
 		}
-		toUpdate.Phase = &ateapipb.ActorTemplatePhase{Message: "ready"}
+		toUpdate.Status = &ateapipb.ActorTemplateStatus{Message: "ready"}
 		return nil
 	})
 	if err != nil {
@@ -254,7 +254,7 @@ func TestUpdateActorTemplate_RetriesConcurrentWrite(t *testing.T) {
 	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
 		t.Errorf("worker selector tier = %q, want paid: concurrent update was lost", got)
 	}
-	if got := updated.GetPhase().GetMessage(); got != "ready" {
+	if got := updated.GetStatus().GetMessage(); got != "ready" {
 		t.Errorf("phase message = %q, want ready", got)
 	}
 }
@@ -265,8 +265,8 @@ func TestUpdateActorSnapshotTag_UIDPreventsDeleteRecreateABA(t *testing.T) {
 	createTestAtespace(t, s, "team-a")
 	for _, name := range []string{"snapshot-a", "snapshot-b"} {
 		if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-			Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
-			SnapshotUri: "gs://bucket/" + name,
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
+			Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/" + name},
 		}); err != nil {
 			t.Fatalf("CreateActorSnapshot(%q) failed: %v", name, err)
 		}
