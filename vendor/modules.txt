@@ -109,6 +109,15 @@ github.com/alicebob/miniredis/v2/metro
 github.com/alicebob/miniredis/v2/proto
 github.com/alicebob/miniredis/v2/server
 github.com/alicebob/miniredis/v2/size
+# github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.5.3
+## explicit; go 1.18
+github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss
+github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/arn
+github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials
+github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/crypto
+github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/retry
+github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/signer
+github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/transport
 # github.com/asaskevich/EventBus v0.0.0-20200907212545-49d423059eef
 ## explicit
 github.com/asaskevich/EventBus

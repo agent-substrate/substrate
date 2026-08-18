@@ -57,6 +57,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
+	osscredentials "github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -213,6 +215,7 @@ func main() {
 
 	var gcsClient *storage.Client
 	var s3Client *s3.Client
+	var ossClient *oss.Client
 	storageBackend := os.Getenv("ATE_STORAGE_BACKEND")
 	switch storageBackend {
 	case "s3":
@@ -228,6 +231,21 @@ func main() {
 				o.UsePathStyle = true
 			}
 		})
+	case "oss":
+		slog.InfoContext(ctx, "Using Alibaba OSS storage backend")
+
+		region := os.Getenv("OSS_REGION")
+		if region == "" {
+			serverboot.Fatal(ctx, "OSS_REGION is required when ATE_STORAGE_BACKEND=oss (e.g. cn-hangzhou)", fmt.Errorf("OSS_REGION not set"))
+		}
+
+		cfg := oss.LoadDefaultConfig().
+			WithCredentialsProvider(osscredentials.NewEnvironmentVariableCredentialsProvider()).
+			WithRegion(region)
+		if endpoint := os.Getenv("OSS_ENDPOINT"); endpoint != "" {
+			cfg.WithEndpoint(endpoint)
+		}
+		ossClient = oss.NewClient(cfg)
 	// GCS is currently the default, TODO: we assume workload identity / ADC
 	default:
 		gcsClient, err = storage.NewClient(ctx)
@@ -244,6 +262,8 @@ func main() {
 	var wrappedGCS ategcs.ObjectStorage
 	if s3Client != nil {
 		wrappedGCS = ategcs.NewS3Client(s3Client)
+	} else if ossClient != nil {
+		wrappedGCS = ategcs.NewOSSClient(ossClient)
 	} else if gcsClient != nil {
 		wrappedGCS = ategcs.NewGCSClient(gcsClient)
 	}
