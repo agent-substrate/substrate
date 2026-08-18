@@ -50,6 +50,33 @@ subjects:
   name: prometheus
   namespace: benchmarking
 ---
+# A node is a cluster-scoped resource. Thus the namespaced Role above cannot
+# give access to node discovery or to the kubelet proxy. The cadvisor scrape
+# job needs the two permissions.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-benchmarking-nodes
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "nodes/metrics"]
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-benchmarking-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-benchmarking-nodes
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: benchmarking
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -82,6 +109,64 @@ data:
             regex: ([^:]+)(?::\d+)?;(\d+)
             replacement: $1:$2
             target_label: __address__
+
+      # The telemetry-meter gives its substrate_* counts on port 8889, which
+      # the annotation job above collects. It gives its own otelcol_* counters
+      # on port 8888. The annotation relabel can name only one port, thus
+      # scrape port 8888 here. When a service reports zero volume,
+      # otelcol_receiver_accepted_* shows the difference between "sent nothing"
+      # and "arrived nowhere".
+      - job_name: 'telemetry-meter-self'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - benchmarking
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_label_app
+              - __meta_kubernetes_pod_container_port_number
+            action: keep
+            regex: telemetry-meter;8888
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+
+      # The container memory directly from the cAdvisor endpoint of the
+      # kubelet. `kubectl top` reads metrics-server, which reports an average
+      # across its own window and hides short peaks.
+      # container_memory_working_set_bytes is the value that the OOM killer
+      # uses.
+      - job_name: 'kubernetes-cadvisor'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+        metric_relabel_configs:
+          # cAdvisor sends a very large number of metrics. Keep only the
+          # metrics that the benchmarks read.
+          - source_labels: [__name__]
+            action: keep
+            regex: container_(memory_working_set_bytes|cpu_usage_seconds_total|spec_memory_limit_bytes)
+          # Drop the series that have an empty container label, not the label
+          # itself. cAdvisor gives a rollup for the whole pod cgroup next to
+          # the series for each container. Keeping both counts the memory of
+          # each pod two times.
+          - source_labels: [container]
+            action: drop
+            regex: ""
 ---
 apiVersion: apps/v1
 kind: Deployment

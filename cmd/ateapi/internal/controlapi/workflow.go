@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -67,7 +68,7 @@ func markSkipped(ctx context.Context, reason string) {
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
 type ActorWorkflow struct {
-	store                store.Interface
+	store                actorWorkflowStore
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
@@ -82,7 +83,7 @@ type ActorWorkflow struct {
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
 func NewActorWorkflow(
-	store store.Interface,
+	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
 	actorTemplateLister listersv1alpha1.ActorTemplateLister,
@@ -106,6 +107,19 @@ func NewActorWorkflow(
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
 	}
+}
+
+// actorWorkflowStore enumerates the exact storage methods needed by
+// ActorWorkflow and nothing more.
+type actorWorkflowStore interface {
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
+	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
+	AcquireLock(ctx context.Context, key string) (*store.Lock, error)
 }
 
 func (w *ActorWorkflow) acquireActorLock(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lock, error) {

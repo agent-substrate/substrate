@@ -39,7 +39,7 @@ const relistPageSize = 1000
 // TODO: add metrics — at minimum a gauge for worker count, a counter for
 // resync events, and a counter for failed PUBLISH operations (in ateredis).
 type Cache struct {
-	store          store.Interface
+	store          workerListWatcher
 	relistInterval time.Duration
 
 	mu      sync.RWMutex
@@ -51,12 +51,19 @@ type Cache struct {
 // New creates a Cache backed by a given store. relistInterval controls how
 // often the cache performs a full ListWorkers to recover from state drifts
 // caused by missing WorkerWatch events.
-func New(store store.Interface, relistInterval time.Duration) *Cache {
+func New(store workerListWatcher, relistInterval time.Duration) *Cache {
 	return &Cache{
 		store:          store,
 		relistInterval: relistInterval,
 		workers:        make(map[string]*ateapipb.Worker),
 	}
+}
+
+// workerListWatcher enumerates the exact storage methods needed by this
+// package and nothing more.
+type workerListWatcher interface {
+	WatchWorkers(ctx context.Context) (*store.WorkerWatch, error)
+	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
 }
 
 // Start syncs the cache synchronously, then spawns a background goroutine

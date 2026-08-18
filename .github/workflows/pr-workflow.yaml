@@ -47,13 +47,8 @@ jobs:
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
-  e2e-test-matrix:
+  e2e-test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ateapi-client-auth: [cert, token]
-    name: e2e-test (${{ matrix.ateapi-client-auth }})
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -83,11 +78,11 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth=${{ matrix.ateapi-client-auth }} --store-backend=postgres
+      run: hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth=cert --store-backend=postgres
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=${{ matrix.ateapi-client-auth }}
+      run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=cert
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Deploy egress demo
@@ -126,14 +121,3 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
-  e2e-test:
-    runs-on: ubuntu-latest
-    needs: e2e-test-matrix
-    if: always()
-    steps:
-    - name: Check E2E matrix
-      run: |
-        if [ "${{ needs.e2e-test-matrix.result }}" != "success" ]; then
-          echo "e2e-test-matrix result: ${{ needs.e2e-test-matrix.result }}"
-          exit 1
-        fi

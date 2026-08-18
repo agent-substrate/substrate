@@ -31,9 +31,11 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -52,7 +54,9 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -238,12 +242,33 @@ func do(ctx context.Context) error {
 	}()
 	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
 
+	ateomService := NewService(*podUID, *chBinary, *kataConfig, *kataDebug, *vmmMemReserve, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle)
+
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
-	ateompb.RegisterAteomServer(svr, NewService(*podUID, *chBinary, *kataConfig, *kataDebug, *vmmMemReserve, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle))
+	ateompb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
+
+	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination grace
+	// period) and propagate it into the guest so the actor can save its state and
+	// exit cleanly before the grace period expires. The server deliberately keeps
+	// serving throughout gracefulShutdown: new workload RPCs are rejected with
+	// codes.Unavailable (see rejectIfDraining) while a suspend arriving mid-drain
+	// is still honored, which is what lets an actor checkpoint itself on eviction.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		slog.InfoContext(ctx, "Received signal; beginning graceful shutdown", slog.String("signal", sig.String()))
+		// Use a fresh context: the do() context is torn down on return, but the
+		// shutdown must outlive it until the guest has stopped and the VM is down.
+		ateomService.gracefulShutdown(context.Background())
+		// Only now stop the server, which blocks until any in-flight RPC (notably a
+		// concurrent CheckpointWorkload) has completed, then unblocks svr.Serve below.
+		svr.GracefulStop()
+	}()
 
 	slog.InfoContext(ctx, "ateom-microvm serving", slog.String("socket", sockPath))
 	if err := svr.Serve(lis); err != nil {
@@ -280,13 +305,74 @@ func ensureSharedPropagation(ctx context.Context, path string) error {
 	return nil
 }
 
+const (
+	rpcRunWorkload        = "RunWorkload"
+	rpcRestoreWorkload    = "RestoreWorkload"
+	rpcCheckpointWorkload = "CheckpointWorkload"
+)
+
+// activeRPCInfo identifies the workload RPC currently holding lock, so graceful
+// shutdown can cancel a boot that would otherwise hold it for minutes.
+type activeRPCInfo struct {
+	name   string
+	cancel context.CancelFunc
+}
+
+// cancelableMutex is a mutex whose acquisition can be abandoned. sync.Mutex has
+// no bounded Lock, and graceful shutdown must not park forever behind an RPC
+// that is wedged: it needs to give up and get on with signaling the guest
+// while the pod's termination grace period still has room.
+type cancelableMutex struct {
+	ch chan struct{}
+}
+
+func newCancelableMutex() *cancelableMutex {
+	ch := make(chan struct{}, 1)
+	ch <- struct{}{}
+	return &cancelableMutex{ch: ch}
+}
+
+func (m *cancelableMutex) Lock() {
+	<-m.ch
+}
+
+func (m *cancelableMutex) Unlock() {
+	m.ch <- struct{}{}
+}
+
+// LockContext acquires the mutex, reporting false if ctx terminates first. On
+// false the mutex is NOT held and must not be unlocked.
+func (m *cancelableMutex) LockContext(ctx context.Context) bool {
+	select {
+	case <-m.ch:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // AteomService is the cloud-hypervisor implementation of ateompb.AteomServer.
 type AteomService struct {
 	ateompb.UnimplementedAteomServer
 
 	// lock serializes RPCs; like ateom-gvisor, the run/checkpoint/restore
 	// lifecycle is not safe to drive concurrently.
-	lock sync.Mutex
+	lock *cancelableMutex
+
+	// shuttingDown is set once SIGTERM has been received. While true, new workload
+	// RPCs are rejected with codes.Unavailable so the control plane reschedules.
+	//
+	// Atomic rather than lock-guarded: gracefulShutdown sets it before it tries to
+	// take lock, precisely so an RPC that arrives while it is still waiting is
+	// turned away instead of queueing behind it.
+	shuttingDown atomic.Bool
+
+	// activeRPC is the workload RPC in flight, tracked so gracefulShutdown can
+	// cancel a run or restore rather than wait out its boot. Guarded by
+	// activeRPCMu, which is separate from lock because the whole point is to reach
+	// it while lock is held by the RPC being cancelled.
+	activeRPCMu sync.Mutex
+	activeRPC   *activeRPCInfo
 
 	podUID     string
 	chBinary   string
@@ -374,6 +460,7 @@ var _ ateompb.AteomServer = (*AteomService)(nil)
 // NewService creates a new AteomService.
 func NewService(podUID, chBinary, kataConfig string, kataDebug bool, memReserveMiB int, interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
 	return &AteomService{
+		lock:                         newCancelableMutex(),
 		podUID:                       podUID,
 		chBinary:                     chBinary,
 		kataConfig:                   kataConfig,
@@ -468,4 +555,38 @@ func (s *AteomService) egressRedirectPort(redirectEgress bool) uint16 {
 		return 0
 	}
 	return s.atunnelEgressPort
+}
+
+// rejectIfDraining returns a codes.Unavailable error if ateom has begun graceful
+// shutdown, so the control plane reschedules the actor onto a live worker.
+func (s *AteomService) rejectIfDraining() error {
+	if s.shuttingDown.Load() {
+		return status.Error(codes.Unavailable, "worker draining: not accepting new workloads")
+	}
+	return nil
+}
+
+func (s *AteomService) setActiveRPC(name string, cancel context.CancelFunc) {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	s.activeRPC = &activeRPCInfo{name: name, cancel: cancel}
+}
+
+func (s *AteomService) clearActiveRPC() {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	s.activeRPC = nil
+}
+
+// cancelActiveRestoreOrRunRPC cancels an in-flight run or restore so it releases
+// lock instead of running its boot to completion. A checkpoint is deliberately
+// left alone: it is the one workload RPC worth finishing during a drain, since
+// it is what saves the actor's state.
+func (s *AteomService) cancelActiveRestoreOrRunRPC() {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	if s.activeRPC != nil && (s.activeRPC.name == rpcRestoreWorkload || s.activeRPC.name == rpcRunWorkload) {
+		slog.Info("Cancelling in-progress workload startup RPC due to graceful shutdown", slog.String("rpc", s.activeRPC.name))
+		s.activeRPC.cancel()
+	}
 }

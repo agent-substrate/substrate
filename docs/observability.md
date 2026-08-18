@@ -110,7 +110,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
-| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `STATUS_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.name`, `ate.sandbox.class`) |
+| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `STATUS_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.namespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.namespace`, `ate.template.name`) |
@@ -119,8 +119,8 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`assigned`) and sandbox class to provide fleet capacity and saturation at a glance |
-| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool, sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
-| `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`) and sandbox class to catch scheduling latency and capacity starvation problems |
+| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
+| `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.namespace`, `ate.template.name`, `ate.sandbox.class`, plus `ate.failure.reason` on failure) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
@@ -132,7 +132,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 * **Autoscaling Control Loop & Anti-Windup**: `desired - ready > 0` sustained beyond a few minutes indicates undelivered capacity due to node pool exhaustion, quota limits, or stuck worker pods, serving as anti-windup input for demand-reactive capacity scaling.
 
 For `atenet.router.route.duration`:
-* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
+* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
 
 For `ate.scheduler.eligible_workers`:
@@ -141,6 +141,12 @@ For `ate.scheduler.eligible_workers`:
 For `ate.imagecache.requests`:
 * `ate.imagecache.outcome` is `hit` when the node holds a complete image record — every layer directory the record names is present — and `miss` when the lookup must pull. A failed lookup is neither: `error` is a failed lookup whatever the cause, and `cancelled` or `timeout` is the caller giving up, as on `ate.router.outcome`. So the hit ratio is `hit / (hit + miss)`, with failures and abandoned lookups out of the denominator.
 * `error.type` is present only on the `error` outcome, and carries the registry's own HTTP status for its rejection, from a fixed set: `401`, `403`, `404`, `429`, `500`, `502`, `503`, `504`. The set is an allow-list because the registry client reports whatever the remote returned. Each other status, and each failure that carries no status, reports `_OTHER`.
+
+`ate.workerpool.namespace` and `ate.workerpool.name` identify a pool together, on every instrument that names one. A WorkerPool is a namespaced resource, so the name on its own merges same-named pools from different namespaces into one series. The pair means that capacity (`ate.workerpool.workers`, `ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`) joins to demand (`ate.scheduler.assignment.duration`, `ate.actor.lifecycle.operation.duration`, `ate.actor.crashes`) by pool.
+
+Two states read differently:
+* **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_free_worker` outcome, names no pool.
+* **Both keys empty** means no pool matched. Only `ate.scheduler.eligible_workers` reports it, as one zero-valued series that keeps "nothing is schedulable" on the same chart as the per-pool series.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).

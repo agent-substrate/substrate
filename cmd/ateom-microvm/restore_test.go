@@ -86,8 +86,8 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 	})
 
 	t.Run("each share keeps its own socket", func(t *testing.T) {
-		// Ordered durable-first to catch a rewrite that assumes the RO lower comes
-		// first, which would hand the guest the wrong filesystem.
+		// Ordered with the rootfs share last to catch a rewrite that assumes it
+		// comes first, which would hand the guest the wrong filesystem.
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.DurableFsTag, "socket": "/run/vc/vm/golden/virtiofsd-durable.sock"},
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
@@ -110,11 +110,16 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 	})
 
 	t.Run("unknown tag is an error", func(t *testing.T) {
-		dir := writeSnapshotConfig(t, []map[string]any{
-			{"tag": "somethingElse", "socket": "/run/vc/vm/golden/other.sock"},
-		})
-		if err := rewriteSnapshotSocketPaths(dir, id); err == nil {
-			t.Fatal("rewriteSnapshotSocketPaths accepted an unknown fs tag, want an error")
+		// "ateUpper" is the retired third share's tag: it never appears in
+		// snapshots this code produces, and one showing up must fail loudly
+		// rather than be silently repointed.
+		for _, tag := range []string{"somethingElse", "ateUpper"} {
+			dir := writeSnapshotConfig(t, []map[string]any{
+				{"tag": tag, "socket": "/run/vc/vm/golden/other.sock"},
+			})
+			if err := rewriteSnapshotSocketPaths(dir, id); err == nil {
+				t.Fatalf("rewriteSnapshotSocketPaths accepted fs tag %q, want an error", tag)
+			}
 		}
 	})
 

@@ -52,7 +52,7 @@ spec:
     arm64:
       cloud-hypervisor:
         url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
-        sha256: "bf004ddc1a148f47caa87ac49a783b8dbd6bf9bc27abe522ed197df7b982d3b1"
+        sha256: "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
       # virtiofsd serves the overlay RO lower (virtio-fs); v1.14.0 carries the
       # vhost-0.16 snapshot/restore fix the kata-bundled v1.13.3 lacks.
       virtiofsd:
@@ -75,7 +75,7 @@ spec:
     amd64:
       cloud-hypervisor:
         url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
-        sha256: "829af01ff075bb96c4f183905134c453a88d68cbabdc6b87df21098842581ee9"
+        sha256: "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
       virtiofsd:
         url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
         # The x86_64-musl binary attached to the upstream v1.14.0 release (downloaded

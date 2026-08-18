@@ -210,7 +210,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplateName:      "support-agent",
 		ActorTemplateNamespace: "ate-agents",
-		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerPool: "pool-a"},
+		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
 	}
 	template := &atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
@@ -223,6 +223,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		ateattr.ActorOperationNameKey,
 		ateattr.TemplateNameKey,
 		ateattr.TemplateNamespaceKey,
+		ateattr.WorkerPoolNamespaceKey,
 		ateattr.WorkerPoolNameKey,
 		ateattr.SandboxClassKey,
 		ateattr.SnapshotKindKey,
@@ -230,6 +231,11 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	)
 	if op, _ := attrString(dp, ateattr.ActorOperationNameKey); op != ateattr.OperationResume {
 		t.Errorf("operation = %q, want %q", op, ateattr.OperationResume)
+	}
+	// The pool is only identified by the pair: two pools may share a name in
+	// different namespaces.
+	if ns, _ := attrString(dp, ateattr.WorkerPoolNamespaceKey); ns != "ate-workers" {
+		t.Errorf("worker pool namespace = %q, want %q", ns, "ate-workers")
 	}
 	// Kind and scope are independent: a data_on_golden restore of the actor's
 	// own latest snapshot must stay distinguishable from one of a local snapshot.
@@ -243,11 +249,13 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 
 // TestLifecycleOpAttrsOmitsUnknownScope guards the failure path: a resume that
 // dies before the restore request is built has no scope, and an empty-string
-// series would be indistinguishable from a real one.
+// series would be indistinguishable from a real one. The unassigned actor also
+// pins the pool pair: a failure before the assign step emits neither key.
 func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
 	actor := &ateapipb.Actor{ActorTemplateName: "support-agent", ActorTemplateNamespace: "ate-agents"}
 	for _, kv := range lifecycleOpAttrs(actor, nil, "", "") {
-		if kv.Key == ateattr.SnapshotScopeKey || kv.Key == ateattr.SnapshotKindKey {
+		switch kv.Key {
+		case ateattr.SnapshotScopeKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey:
 			t.Errorf("attribute %s must be omitted while unknown, got %q", kv.Key, kv.Value.AsString())
 		}
 	}
@@ -293,12 +301,13 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 }
 
 // TestSchedulerAssignmentShapeAndOutcomes asserts the assignment histogram stamps
-// pool only when a worker was assigned and error.type only for the error outcome,
-// so no_free_worker (a capacity signal) carries neither.
+// the pool pair only when a worker was assigned and error.type only for the error
+// outcome, so no_free_worker (a capacity signal) carries neither.
 func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	tests := []struct {
 		name          string
 		outcome       string
+		poolNamespace string
 		pool          string
 		class         string
 		err           error
@@ -306,15 +315,16 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 		wantErrorType string
 	}{
 		{
-			name:     "assigned stamps pool and class, no error.type",
-			outcome:  ateattr.SchedulerOutcomeAssigned,
-			pool:     "pool-a",
-			class:    "gvisor",
-			err:      nil,
-			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey},
+			name:          "assigned stamps the pool pair and class, no error.type",
+			outcome:       ateattr.SchedulerOutcomeAssigned,
+			poolNamespace: "ate-workers",
+			pool:          "pool-a",
+			class:         "gvisor",
+			err:           nil,
+			wantKeys:      []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey},
 		},
 		{
-			name:     "no_free_worker carries class but neither pool nor error.type",
+			name:     "no_free_worker carries class but neither pool key nor error.type",
 			outcome:  ateattr.SchedulerOutcomeNoFreeWorker,
 			pool:     "",
 			class:    "gvisor",
@@ -322,7 +332,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.SandboxClassKey},
 		},
 		{
-			name:          "error carries error.type, no pool, class omitted when unknown",
+			name:          "error carries error.type, no pool keys, class omitted when unknown",
 			outcome:       ateattr.SchedulerOutcomeError,
 			pool:          "",
 			class:         "",
@@ -334,7 +344,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inst, reader := newTestInstruments(t)
-			inst.recordSchedulerAssignment(context.Background(), time.Now(), tt.outcome, tt.pool, tt.class, tt.err)
+			inst.recordSchedulerAssignment(context.Background(), time.Now(), tt.outcome, tt.poolNamespace, tt.pool, tt.class, tt.err)
 
 			dp := singleHistogramDP(t, reader, schedulerAssignmentMetric)
 			assertAttrKeys(t, dp, tt.wantKeys...)

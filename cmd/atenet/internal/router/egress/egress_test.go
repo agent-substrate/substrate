@@ -238,7 +238,7 @@ func agentgatewayEgressMetadata(certificate string) *extproc.RequestMetadata {
 	}, map[string]*structpb.Struct{
 		"envoy.filters.http.ext_proc": {
 			Fields: map[string]*structpb.Value{
-				ClientCertificateAttribute: structpb.NewStringValue(certificate),
+				agentgatewayClientCertificateAttribute: structpb.NewStringValue(certificate),
 			},
 		},
 	})

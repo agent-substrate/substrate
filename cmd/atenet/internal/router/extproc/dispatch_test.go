@@ -123,7 +123,7 @@ func TestDirectionOfAgentgatewayAttribute(t *testing.T) {
 	req.Attributes = map[string]*structpb.Struct{
 		"envoy.filters.http.ext_proc": {
 			Fields: map[string]*structpb.Value{
-				DirectionAttribute: structpb.NewStringValue(string(DirectionEgress)),
+				directionAttribute: structpb.NewStringValue(string(DirectionEgress)),
 			},
 		},
 	}

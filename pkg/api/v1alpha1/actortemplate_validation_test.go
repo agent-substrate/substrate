@@ -414,11 +414,11 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "microvm memory limit at the 512Mi floor is valid",
+		name: "microvm memory limit at the 256Mi floor is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.Resources = &corev1.ResourceRequirements{
-				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
 			}
 		},
 		wantErr: false,
@@ -436,21 +436,21 @@ func TestActorTemplateValidation(t *testing.T) {
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.Resources = &corev1.ResourceRequirements{
-				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")},
 			}
 		},
 		wantErr: true,
-		errMsg:  "must be at least 512Mi",
+		errMsg:  "must be at least 256Mi",
 	}, {
 		name: "microvm memory limit just below the floor is rejected",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.Resources = &corev1.ResourceRequirements{
-				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("511Mi")},
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("255Mi")},
 			}
 		},
 		wantErr: true,
-		errMsg:  "must be at least 512Mi",
+		errMsg:  "must be at least 256Mi",
 	}, {
 		name: "microvm with no resources is valid (floor only applies to a set limit)",
 		mutate: func(at *ActorTemplate) {

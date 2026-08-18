@@ -159,27 +159,6 @@ type Interface interface {
 	// ActorTemplateVersion still names it as parent.
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 
-	// Stores a new ActorTemplateVersion and returns the stored resource with
-	// server-assigned metadata. The caller is responsible for the
-	// parent-exists check and for initializing the status fields. The input is not
-	// mutated. Returns ErrAlreadyExists if the (atespace, name) is taken.
-	CreateActorTemplateVersion(ctx context.Context, version *ateapipb.ActorTemplateVersion) (*ateapipb.ActorTemplateVersion, error)
-
-	// Fetches an ActorTemplateVersion by reference. Returns ErrNotFound if
-	// missing.
-	GetActorTemplateVersion(ctx context.Context, versionRef resources.ActorTemplateVersionRef) (*ateapipb.ActorTemplateVersion, error)
-
-	// Lists ActorTemplateVersions in an atespace (all atespaces when atespace
-	// is empty), filtered to one parent template when actorTemplateRef is
-	// non-zero. The parent lives in the same atespace as its versions.
-	ListActorTemplateVersions(ctx context.Context, atespace string, actorTemplateRef resources.ActorTemplateRef, opts ListOptions) (ListResponse[*ateapipb.ActorTemplateVersion], error)
-
-	// Removes an ActorTemplateVersion and returns the deleted resource, also
-	// deleting the golden snapshot recorded in golden_snapshot, if any.
-	// Returns ErrNotFound if missing, or ErrFailedPrecondition while the
-	// version is its parent's default_version_on_create.
-	DeleteActorTemplateVersion(ctx context.Context, versionRef resources.ActorTemplateVersionRef) (*ateapipb.ActorTemplateVersion, error)
-
 	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
 

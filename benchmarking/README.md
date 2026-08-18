@@ -2,6 +2,12 @@
 
 This is the nascent suite for benchmarking Substrate's performance at scale.
 
+The suite also measures the telemetry volume and the capacity of the OTel
+collector: how much trace data and metric data substrate and its actors send,
+and if the collector can accept it. To make a measurement, read
+[telemetry/README.md](telemetry/README.md). For the prerequisites and the
+scenario ladder, read [observability.md](observability.md).
+
 ## Deploy benchmarks
 
 > [!IMPORTANT]

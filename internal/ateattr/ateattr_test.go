@@ -244,19 +244,21 @@ func TestActorMetricAttributes(t *testing.T) {
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "counter-template",
 		WorkerAssignment: &ateapipb.WorkerAssignment{
-			WorkerPool: "default-pool",
+			WorkerNamespace: "ate-workers",
+			WorkerPool:      "default-pool",
 		},
 	}
 
 	t.Run("explicit operation and reason", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:  "default",
-			TemplateNameKey:       "counter-template",
-			WorkerPoolNameKey:     "default-pool",
-			SandboxClassKey:       "gvisor",
-			ActorOperationNameKey: OperationResume,
-			FailureReasonKey:      ReasonCorruptedAssignment,
+			TemplateNamespaceKey:   "default",
+			TemplateNameKey:        "counter-template",
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "default-pool",
+			SandboxClassKey:        "gvisor",
+			ActorOperationNameKey:  OperationResume,
+			FailureReasonKey:       ReasonCorruptedAssignment,
 		}
 
 		assertAttrs(t, got, want)
@@ -265,12 +267,13 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("default unknown values", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:  "default",
-			TemplateNameKey:       "counter-template",
-			WorkerPoolNameKey:     "default-pool",
-			SandboxClassKey:       "gvisor",
-			ActorOperationNameKey: OperationUnknown,
-			FailureReasonKey:      ReasonUnknown,
+			TemplateNamespaceKey:   "default",
+			TemplateNameKey:        "counter-template",
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "default-pool",
+			SandboxClassKey:        "gvisor",
+			ActorOperationNameKey:  OperationUnknown,
+			FailureReasonKey:       ReasonUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -279,15 +282,67 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
 		want := map[attribute.Key]any{
+			TemplateNamespaceKey:   "default",
+			TemplateNameKey:        "counter-template",
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "default-pool",
+			SandboxClassKey:        "gvisor",
+			ActorOperationNameKey:  OperationUnknown,
+			FailureReasonKey:       ReasonUnknown,
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	// An actor that crashed before it reached a worker has no pool. Reporting
+	// one key of the pair, or an empty-string name, would put that crash in a
+	// series that looks like a real pool.
+	t.Run("unassigned actor omits both pool keys", func(t *testing.T) {
+		unassigned := &ateapipb.Actor{
+			ActorTemplateNamespace: "default",
+			ActorTemplateName:      "counter-template",
+		}
+		got := toMap(ActorMetricAttributes(unassigned, "gvisor", OperationCreate, ReasonUnknown))
+		want := map[attribute.Key]any{
 			TemplateNamespaceKey:  "default",
 			TemplateNameKey:       "counter-template",
-			WorkerPoolNameKey:     "default-pool",
 			SandboxClassKey:       "gvisor",
-			ActorOperationNameKey: OperationUnknown,
+			ActorOperationNameKey: OperationCreate,
 			FailureReasonKey:      ReasonUnknown,
 		}
 
 		assertAttrs(t, got, want)
+	})
+}
+
+// TestWorkerPoolAttributes pins the both-or-neither rule. A WorkerPool is
+// namespaced, so a name on its own merges same-named pools from different
+// namespaces and cannot join against the instruments that carry the pair.
+func TestWorkerPoolAttributes(t *testing.T) {
+	t.Run("known pool returns the pair", func(t *testing.T) {
+		got := toMap(WorkerPoolAttributes("ate-workers", "pool-a"))
+		want := map[attribute.Key]any{
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "pool-a",
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	t.Run("unknown pool returns neither key", func(t *testing.T) {
+		for _, namespace := range []string{"", "ate-workers"} {
+			if got := WorkerPoolAttributes(namespace, ""); len(got) != 0 {
+				t.Errorf("WorkerPoolAttributes(%q, \"\") = %v, want no attributes", namespace, got)
+			}
+		}
+	})
+
+	// The reverse of the case this helper exists for: a name without a namespace
+	// half-identifies the pool, which joins to nothing on the paired instruments.
+	t.Run("name without a namespace returns neither key", func(t *testing.T) {
+		if got := WorkerPoolAttributes("", "pool-a"); len(got) != 0 {
+			t.Errorf("WorkerPoolAttributes(\"\", \"pool-a\") = %v, want no attributes", got)
+		}
 	})
 }
 

@@ -491,3 +491,62 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
 		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
 }
+
+// failingUpdateWorkerStore wraps a store and fails every UpdateWorker call,
+// simulating a transient state-store error while releasing a worker.
+type failingUpdateWorkerStore struct {
+	store.Interface
+	err error
+}
+
+func (f failingUpdateWorkerStore) UpdateWorker(context.Context, *ateapipb.Worker, int64) error {
+	return f.err
+}
+
+// A transient failure releasing the worker must not move the actor to the
+// terminal CRASHED state: doing so would strand the still-assigned worker with
+// no actor left to drive a retry, permanently consuming the worker slot.
+// crashActor must return the error with the actor and worker left intact so the
+// caller retries and the worker is reclaimed.
+func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	seedActor(t, ctx, st, actorRef)
+	seedWorker(t, ctx, st, actorRef)
+
+	releaseErr := errors.New("state store unavailable")
+	err := crashActor(ctx, failingUpdateWorkerStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
+
+	if err == nil {
+		t.Fatal("crashActor() = nil, want error")
+	}
+	if !errors.Is(err, releaseErr) {
+		t.Errorf("crashActor() error = %v, want it to wrap %v", err, releaseErr)
+	}
+
+	// The actor must stay RUNNING with its worker assignment intact, so a retry
+	// can re-release the worker.
+	got, gerr := st.GetActor(ctx, actorRef)
+	if gerr != nil {
+		t.Fatalf("GetActor() = %v, want nil", gerr)
+	}
+	if got.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+	}
+	if got.GetWorkerAssignment() == nil {
+		t.Error("WorkerAssignment cleared, want preserved so the release can be retried")
+	}
+
+	// The worker must still be assigned to the actor (the failed release did not
+	// persist): it is not leaked, and a retry will reclaim it.
+	worker, werr := st.GetWorker(ctx, "ns", "pool", "pod")
+	if werr != nil {
+		t.Fatalf("GetWorker() = %v, want nil", werr)
+	}
+	if worker.GetAssignment() == nil {
+		t.Error("worker assignment = nil, want still assigned (release failed, must remain retriable)")
+	}
+}

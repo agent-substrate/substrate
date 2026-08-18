@@ -93,6 +93,18 @@ if [[ -z "${action}" ]]; then
   exit 1
 fi
 
+# kubectl falls back to localhost:8080 when neither --context nor a kubeconfig
+# current-context is set, which surfaces mid-install as a confusing "connection
+# refused" from the apply -- after the assets have already been assembled and
+# staged. Resolve the target cluster up front instead.
+if [[ -z "${KUBECTL_CONTEXT}" ]] && ! kubectl config current-context >/dev/null 2>&1; then
+  echo "Error: no kube context to target: KUBECTL_CONTEXT is empty and the" >&2
+  echo "       kubeconfig has no current-context." >&2
+  echo "       Set KUBECTL_CONTEXT (e.g. in .ate-dev-env.sh) or run:" >&2
+  echo "         kubectl config use-context <name>" >&2
+  exit 1
+fi
+
 # ANSI color codes for prettier output (mirrors hack/install-ate.sh).
 COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'

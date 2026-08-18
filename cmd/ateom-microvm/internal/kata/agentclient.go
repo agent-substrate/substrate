@@ -137,7 +137,7 @@ func (a *AgentClient) Close() error {
 // CreateContainer asks the agent to create a container: mount its storages (in
 // order) and build the rootfs, then fork the parked init process. This is the
 // hook point — the agent mounts storages[] (here: a bind of the virtio-fs lower
-// followed by the tmpfs-upper overlay) before init_rootfs consumes the rootfs.
+// followed by the disk-backed-upper overlay) before init_rootfs consumes the rootfs.
 // Mirrors grpc.AgentService/CreateContainer (returns google.protobuf.Empty).
 func (a *AgentClient) CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest) error {
 	if err := a.client.Call(ctx, "grpc.AgentService", "CreateContainer", req, &emptypb.Empty{}); err != nil {
@@ -201,6 +201,32 @@ func (a *AgentClient) AddARPNeighbors(ctx context.Context, neighbors []*agentpb.
 		return fmt.Errorf("agent AddARPNeighbors: %w", err)
 	}
 	return nil
+}
+
+// SignalProcess sends signal to a process in the guest. Targeting the container's
+// init process (ExecId == ContainerId) delivers the signal to the workload; an
+// empty execID delivers it to ALL processes in the container. Used during
+// graceful shutdown to propagate SIGTERM into the actor. Mirrors
+// grpc.AgentService/SignalProcess (returns google.protobuf.Empty).
+func (a *AgentClient) SignalProcess(ctx context.Context, containerID, execID string, signal uint32) error {
+	req := &agentpb.SignalProcessRequest{ContainerId: containerID, ExecId: execID, Signal: signal}
+	if err := a.client.Call(ctx, "grpc.AgentService", "SignalProcess", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent SignalProcess: %w", err)
+	}
+	return nil
+}
+
+// WaitProcess blocks until the identified guest process exits and returns its
+// exit status (mimics waitpid(2)). Used during graceful shutdown to confirm the
+// actor has stopped before ateom tears the VM down. Mirrors
+// grpc.AgentService/WaitProcess.
+func (a *AgentClient) WaitProcess(ctx context.Context, containerID, execID string) (int32, error) {
+	resp := &agentpb.WaitProcessResponse{}
+	req := &agentpb.WaitProcessRequest{ContainerId: containerID, ExecId: execID}
+	if err := a.client.Call(ctx, "grpc.AgentService", "WaitProcess", req, resp); err != nil {
+		return 0, fmt.Errorf("agent WaitProcess: %w", err)
+	}
+	return resp.GetStatus(), nil
 }
 
 // ReadStdout reads up to max bytes from the container process's stdout. It is a

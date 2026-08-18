@@ -199,7 +199,7 @@ data:
           host: 127.0.0.1:50051
           failureMode: failClosed
           requestAttributes:
-            substrate.direction: "'egress'"
+            ate.extproc.direction: "'egress'"
             source.certificate: source.certificate
           processingOptions:
             requestHeaderMode: send
