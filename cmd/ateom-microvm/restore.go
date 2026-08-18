@@ -40,30 +40,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
-// just told us about itself over vmm.ping.
-//
-// OnDemand is what we want: it faults pages in as the guest touches them, so an idle
-// restored actor holds its working set rather than its whole snapshot — on the counter
-// demo, 16MiB against 158MiB. Eager gives that up, reading every populated extent up
-// front.
-//
-// It is still the right choice on a VMM that prefaults, where OnDemand is not merely
-// wasteful but unusable: the prefault storm starves the guest and its readiness probe
-// never passes.
-func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
-	if !info.PrefaultsUnconditionally() {
-		return ch.MemRestoreOnDemand
-	}
-	if info.Version == "" && info.BuildVersion == "" {
-		// Unknown version: eager works everywhere, so prefer a bigger idle footprint
-		// over an actor that cannot start. Say so, because that cost is invisible.
-		slog.WarnContext(ctx, "cloud-hypervisor did not report a version; restoring eagerly",
-			slog.String("mode", ch.MemRestoreEager))
-	}
-	return ch.MemRestoreEager
-}
-
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
 // pod. What that means depends on the scope the snapshot was taken with:
 //
@@ -170,8 +146,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // actor's; re-materialize the uppers from rootfs-upper.tar (in the background,
 // overlapped with bundle preparation) and re-mount the merged trees at the frozen
 // find-paths paths; start the virtiofsd serving them; rebuild the tap (the snapshot's
-// virtio-net is fd-backed → fresh net_fds); relaunch CH with --restore (OnDemand),
-// and resume. Guest RAM — the actor's in-memory state and the frozen network config —
+// virtio-net is fd-backed → fresh net_fds); relaunch CH with --restore, and resume.
+// Guest RAM — the actor's in-memory state and the frozen network config —
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
 func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, restoreDir string, tStart time.Time) (retErr error) {
@@ -338,21 +314,13 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			_ = chCmd.Process.Kill()
 		}
 	}()
-	// How guest RAM comes back depends on the VMM (see restoreMemMode), and the rest
-	// of the actor's lifecycle follows from that choice:
-	//
-	//   - OnDemand: cloud-hypervisor demand-pages from restoreDir for the VM's whole
-	//     lifetime, so it must stay put, and the snapshot it writes later holds only
-	//     the pages faulted in meanwhile — CheckpointWorkload overlays that delta onto
-	//     this source to rebuild a complete one.
-	//   - Eager: every populated extent is read here and now. Nothing pages from the
-	//     source afterwards and nothing merges against it, so it is dropped below and
-	//     the next snapshot stands on its own.
+	// Guest RAM is read eagerly: every populated extent lands here and now, so nothing
+	// pages from restoreDir afterwards and the snapshot this VM writes later stands on
+	// its own (no delta to overlay onto a base).
 	tLaunch := time.Now()
-	memMode := restoreMemMode(ctx, client.Info())
 	slog.InfoContext(ctx, "restoring guest memory",
-		slog.String("mode", memMode), slog.String("vmm_version", client.Info().Version))
-	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, memMode); err != nil {
+		slog.String("vmm_version", client.Info().Version))
+	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets); err != nil {
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	tVMRestore := time.Now()
@@ -383,25 +351,22 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		slog.Duration("readyz", time.Since(tResume)),
 		slog.Duration("total", time.Since(tStart)))
 
-	// An eager restore has read the whole snapshot into guest memory, and nothing
-	// merges against it afterwards, so the staged copy is dead weight from here on —
-	// a second ~160MiB per running actor on top of the checkpoint it will write.
-	// Drop the memory image but keep the directory: atelet re-stages it wholesale
-	// before any later restore, and the small files beside it stay cheap to keep.
-	if memMode == ch.MemRestoreEager {
-		staged := filepath.Join(restoreDir, "memory-ranges")
-		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
-			// Not fatal: it only costs disk until the actor is torn down.
-			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
-		} else {
-			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
-		}
+	// The restore has read the whole snapshot into guest memory, so the staged copy is
+	// dead weight from here on — a second ~160MiB per running actor on top of the
+	// checkpoint it will write. Drop the memory image but keep the directory: atelet
+	// re-stages it wholesale before any later restore, and the small files beside it
+	// stay cheap to keep.
+	staged := filepath.Join(restoreDir, "memory-ranges")
+	if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+		// Not fatal: it only costs disk until the actor is torn down.
+		slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
+	} else {
+		slog.InfoContext(ctx, "dropped the staged memory image")
 	}
 
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd,
-		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
-		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
+		apiSocket: apiSocket, baseID: srcID,
 		// Signaling an id the agent does not know fails the whole graceful
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
 		workloadIDs: workloadIDs(ctrs),

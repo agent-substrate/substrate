@@ -227,6 +227,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
 // (config.json + state.json + memory-ranges) plus the base-id the restore side
 // needs, and returns how long the snapshot itself took.
+//
+// What CH writes here is always a COMPLETE guest, never a delta against the dir the
+// actor was restored from: guest RAM comes back eagerly (see RestoreWithNetFDs), so
+// every page is resident by the time we pause. Nothing has to be overlaid onto a
+// base to make the snapshot re-restorable.
 func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (time.Duration, error) {
 	// Record the FROZEN base id (the id the guest's virtio-fs find-paths are pinned
 	// to, <baseID>/rootfs). For a cold-run actor this is its own id; for a restored
@@ -250,34 +255,8 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	}
 	dSnapshot := time.Since(tSnapshot)
 
-	// Diff-snapshot completion for an OnDemand-restored actor: CH's snapshot here is
-	// sparse — only the pages faulted in since the OnDemand restore — so on its own
-	// it's INCOMPLETE (the un-faulted pages were being demand-paged from the restore
-	// source). Overlay it onto that source to rebuild a COMPLETE memory-ranges, so the
-	// snapshot is self-contained and re-restorable. (A cold-run actor has no restore
-	// source and its snapshot is already complete — no merge.)
-	if ra != nil && ra.snapshotIsSelfContained {
-		// Eager restore already pulled every populated extent into guest memory, so
-		// what cloud-hypervisor just wrote is the whole guest, not a delta. Merging
-		// would copy the entire resident set onto the restore source for nothing.
-		slog.InfoContext(ctx, "Snapshot is self-contained (eager restore); skipping merge",
-			slog.String("id", actorUID))
-	} else if ra != nil && ra.restoreSourceDir != "" {
-		base := filepath.Join(ra.restoreSourceDir, "memory-ranges")
-		delta := filepath.Join(checkpointDir, "memory-ranges")
-		tMerge := time.Now()
-		// Reuse base's on-disk working set (rename + overlay) instead of copying it —
-		// CH is paused and about to be torn down, and base is discarded after. See
-		// MergeDeltaIntoBase. (Falls back to the copying merge across filesystems.)
-		if err := ch.MergeDeltaIntoBase(ctx, base, delta); err != nil {
-			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
-		}
-		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
-			slog.String("id", actorUID), slog.Duration("merge", time.Since(tMerge)))
-	}
-
 	// The RO lower never ships (reconstructed from the OCI image at restore).
-	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
+	// The disk-backed upper ships as its own tar from CheckpointWorkload.
 	return dSnapshot, nil
 }
 
