@@ -14,17 +14,22 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `ateomImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family for the pool: `gvisor` (default) or `microvm`. Drives the worker pod shape (e.g. KVM device mounts, node placement) and which `SandboxConfig`s are eligible. |
 | `sandboxConfigName` | `string` | Optional. Name of a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) providing the sandbox binaries and pause image. If empty, the cluster default `SandboxConfig` for the pool's `sandboxClass` is used. |
-| `template` | `WorkerPoolPodTemplate` | **Optional.** Pod scheduling and resource settings for worker pods. |
+| `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
 
-| Field | Type | Pod mapping |
+| Field | Type | Workload mapping |
 | :--- | :--- | :--- |
+| `labels` | `map[string]string` | Generated Deployment and `spec.template.metadata.labels` (max 64) |
+| `annotations` | `map[string]string` | Generated Deployment and `spec.template.metadata.annotations` (max 64) |
 | `nodeSelector` | `map[string]string` | `spec.nodeSelector` |
 | `tolerations` | `[]Toleration` | `spec.tolerations` (max 16) |
 | `priorityClassName` | `string` | `spec.priorityClassName` |
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 | `resources` | `ResourceRequirements` | `spec.containers[].resources` |
+
+`ate.dev/worker-pool` is reserved for the controller and cannot be set in
+`template.labels`. Metadata keys and label values must follow Kubernetes syntax.
 
 #### Worker Capacity (`spec.template.resources`)
 
@@ -46,6 +51,11 @@ metadata:
 spec:
   replicas: 10
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    labels:
+      project: agent-platform
+    annotations:
+      policy.example.com/exemption: sandbox-host
   # sandboxClass defaults to gvisor; the pool resolves to the cluster's default
   # gvisor SandboxConfig unless sandboxConfigName is set.
 ```
