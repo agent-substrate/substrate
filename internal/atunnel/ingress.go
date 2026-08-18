@@ -21,7 +21,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -256,7 +255,8 @@ func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstream, err := net.DialTimeout("tcp", net.JoinHostPort(s.upstream.Hostname(), port), 5*time.Second)
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	upstream, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(s.upstream.Hostname(), port))
 	if err != nil {
 		slog.WarnContext(r.Context(), "atunnel CONNECT upstream failed", slog.Any("actor", ref), slog.Any("err", err))
 		http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -289,13 +289,7 @@ func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx co
 		return
 	}
 
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, rw); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(client, upstream); done <- struct{}{} }()
-	select {
-	case <-ctx.Done():
-	case <-done:
-	}
+	relayWithHalfClose(ctx, upstream, rw, client)
 }
 
 func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context) {
@@ -307,16 +301,7 @@ func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream
 		return
 	}
 
-	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(upstream, r.Body); done <- struct{}{} }()
-	go func() {
-		_, _ = io.Copy(flushingWriter{ResponseWriter: w}, upstream)
-		done <- struct{}{}
-	}()
-	select {
-	case <-ctx.Done():
-	case <-done:
-	}
+	relayWithHalfClose(ctx, upstream, r.Body, flushingWriter{ResponseWriter: w})
 }
 
 type flushingWriter struct {
