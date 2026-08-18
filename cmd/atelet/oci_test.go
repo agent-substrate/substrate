@@ -323,8 +323,8 @@ func TestResolveCapabilities(t *testing.T) {
 	}
 }
 
-// The resolved set lands in all four OCI capability sets. Ambient stays empty
-// (see the gvisor#3166 TODO in buildActorOCISpec).
+// The resolved set lands in bounding, effective and permitted. Inheritable and
+// ambient stay empty — see the comment in buildActorOCISpec.
 func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 	want := []string{"CAP_CHOWN", "CAP_KILL"}
 	spec := buildActorOCISpec("actor_uid", []string{"/app"}, nil, nil, "/run/netns/x", "", nil, nil, want)
@@ -339,15 +339,22 @@ func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 	}{
 		{"Bounding", caps.Bounding},
 		{"Effective", caps.Effective},
-		{"Inheritable", caps.Inheritable},
 		{"Permitted", caps.Permitted},
 	} {
 		if !slices.Equal(set.got, want) {
 			t.Errorf("%s = %v, want %v", set.name, set.got, want)
 		}
 	}
-	if len(caps.Ambient) != 0 {
-		t.Errorf("Ambient = %v, want empty", caps.Ambient)
+	for _, set := range []struct {
+		name string
+		got  []string
+	}{
+		{"Inheritable", caps.Inheritable},
+		{"Ambient", caps.Ambient},
+	} {
+		if len(set.got) != 0 {
+			t.Errorf("%s = %v, want empty", set.name, set.got)
+		}
 	}
 }
 

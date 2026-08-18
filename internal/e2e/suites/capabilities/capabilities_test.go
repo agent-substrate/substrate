@@ -111,6 +111,12 @@ func TestActorCapabilities(t *testing.T) {
 			assertSameCapabilities(t, "effective", got.Effective, tt.want)
 			assertSameCapabilities(t, "permitted", got.Permitted, tt.want)
 
+			// Inheritable only applies on execve and would let a container that
+			// drops to an unprivileged uid regain a capability (CVE-2022-24769);
+			// ambient is not supported. Both must reach the guest empty.
+			if len(got.Inheritable) != 0 {
+				t.Errorf("inheritable = %v, want empty", got.Inheritable)
+			}
 			if len(got.Ambient) != 0 {
 				t.Errorf("ambient = %v, want empty (ambient capabilities are not supported)", got.Ambient)
 			}

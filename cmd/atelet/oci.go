@@ -279,10 +279,15 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 			Env:  env,
 			Cwd:  "/",
 			Capabilities: &specs.LinuxCapabilities{
-				Bounding:    capabilities,
-				Effective:   capabilities,
-				Inheritable: capabilities,
-				Permitted:   capabilities,
+				Bounding:  capabilities,
+				Effective: capabilities,
+				Permitted: capabilities,
+				// Inheritable stays empty, as in containerd/CRI-O/Docker: it only
+				// applies on execve, ANDed with the file's own inheritable set, so
+				// a non-empty one lets a container that drops to an unprivileged
+				// uid regain a capability (CVE-2022-24769). Children inherit via
+				// Bounding.
+				//
 				// TODO(gvisor.dev/issue/3166): support ambient capabilities
 			},
 			Rlimits: []specs.POSIXRlimit{
