@@ -32,10 +32,12 @@ import (
 
 type mockConfigReloader struct {
 	reloaded bool
+	reloads  int
 }
 
 func (m *mockConfigReloader) Reload(ctx context.Context) error {
 	m.reloaded = true
+	m.reloads++
 	return nil
 }
 
@@ -142,6 +144,131 @@ func TestReconcile(t *testing.T) {
 	otherIPs, exists := stubDomains["other-domain.com"]
 	if !exists || len(otherIPs) != 1 || otherIPs[0] != "8.8.8.8" {
 		t.Errorf("expected stubDomains to preserve other-domain.com mapping, but got: %v", stubDomains)
+	}
+}
+
+// TestReconcileRouterIPFamilies covers what the controller publishes for each
+// shape the atenet-router Service takes. The v6-only row is the one that used
+// to be broken: the sole ClusterIP was read out of Spec.ClusterIP and written
+// into an `IN A` answer, which loads as a valid Corefile and then SERVFAILs
+// every query in the zone.
+func TestReconcileRouterIPFamilies(t *testing.T) {
+	tests := []struct {
+		name string
+		// routerSpec is the atenet-router Service's spec; the dns Service is
+		// always a plain single-stack v4 one, since it feeds kube-dns rather
+		// than the zone under test.
+		routerSpec corev1.ServiceSpec
+		// wantAnswers are the answer lines the rendered Corefile must have.
+		wantAnswers []string
+		// wantNoAnswer, when true, means reconcile should leave the Corefile
+		// untouched rather than publish anything.
+		wantNoAnswer bool
+	}{
+		{
+			name:        "single stack IPv4",
+			routerSpec:  corev1.ServiceSpec{ClusterIP: "10.0.0.1", ClusterIPs: []string{"10.0.0.1"}},
+			wantAnswers: []string{`answer "{{ .Name }} 60 IN A 10.0.0.1"`},
+		},
+		{
+			name:        "single stack IPv6",
+			routerSpec:  corev1.ServiceSpec{ClusterIP: "fd00:10:96::8857", ClusterIPs: []string{"fd00:10:96::8857"}},
+			wantAnswers: []string{`answer "{{ .Name }} 60 IN AAAA fd00:10:96::8857"`},
+		},
+		{
+			name:       "dual stack",
+			routerSpec: corev1.ServiceSpec{ClusterIP: "10.0.0.1", ClusterIPs: []string{"10.0.0.1", "fd00:10:96::8857"}},
+			wantAnswers: []string{
+				`answer "{{ .Name }} 60 IN A 10.0.0.1"`,
+				`answer "{{ .Name }} 60 IN AAAA fd00:10:96::8857"`,
+			},
+		},
+		{
+			name:         "not yet allocated",
+			routerSpec:   corev1.ServiceSpec{},
+			wantNoAnswer: true,
+		},
+		{
+			name:         "headless",
+			routerSpec:   corev1.ServiceSpec{ClusterIP: corev1.ClusterIPNone, ClusterIPs: []string{corev1.ClusterIPNone}},
+			wantNoAnswer: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			_ = corev1.AddToScheme(scheme)
+
+			routerSvc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "atenet-router", Namespace: "ate-system"},
+				Spec:       tc.routerSpec,
+			}
+			dnsSvc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "dns", Namespace: "ate-system"},
+				Spec:       corev1.ServiceSpec{ClusterIP: "10.0.0.2"},
+			}
+
+			const placeholder = "# not written yet\n"
+			corefilePath := filepath.Join(t.TempDir(), "Corefile")
+			if err := os.WriteFile(corefilePath, []byte(placeholder), 0644); err != nil {
+				t.Fatalf("failed to write initial Corefile: %v", err)
+			}
+
+			reloader := &mockConfigReloader{}
+			controller := &Controller{
+				Client:       fake.NewClientBuilder().WithScheme(scheme).WithObjects(routerSvc, dnsSvc).Build(),
+				Interval:     1 * time.Second,
+				CorefilePath: corefilePath,
+				Reloader:     reloader,
+			}
+
+			ctx := context.Background()
+			if err := controller.reconcile(ctx); err != nil {
+				t.Fatalf("reconcile failed: %v", err)
+			}
+
+			corefileBytes, err := os.ReadFile(corefilePath)
+			if err != nil {
+				t.Fatalf("failed to read Corefile: %v", err)
+			}
+			got := string(corefileBytes)
+
+			if tc.wantNoAnswer {
+				if got != placeholder {
+					t.Errorf("reconcile() rewrote the Corefile for a Service with no usable ClusterIP; want it left alone\nGot:\n%s", got)
+				}
+				if reloader.reloads != 0 {
+					t.Errorf("reconcile() reloaded CoreDNS %d times for a Service with no usable ClusterIP, want 0", reloader.reloads)
+				}
+				return
+			}
+
+			for _, want := range tc.wantAnswers {
+				if !strings.Contains(got, want) {
+					t.Errorf("reconcile() wrote a Corefile missing %q\nGot:\n%s", want, got)
+				}
+			}
+			// Exactly the expected answers and no others: an address template for
+			// a family the Service does not have would publish an unreachable
+			// address, and on the A side would not even parse as an RR.
+			if answers := strings.Count(got, `answer "`); answers != len(tc.wantAnswers) {
+				t.Errorf("reconcile() wrote %d answer directives, want %d\nGot:\n%s", answers, len(tc.wantAnswers), got)
+			}
+			if reloader.reloads != 1 {
+				t.Errorf("reconcile() reloaded CoreDNS %d times, want 1", reloader.reloads)
+			}
+
+			// A second pass must be a no-op. The controller reconciles on a
+			// ticker, so anything unstable in the render -- a timestamp, most
+			// easily -- would rewrite the file and signal CoreDNS every interval.
+			if err := controller.reconcile(ctx); err != nil {
+				t.Fatalf("second reconcile failed: %v", err)
+			}
+			if reloader.reloads != 1 {
+				t.Errorf("second reconcile() reloaded CoreDNS again (%d total), want it to recognise the Corefile as up to date", reloader.reloads)
+			}
+		})
 	}
 }
 
