@@ -30,6 +30,11 @@ func init() {
 }
 
 func buildTemplate() string {
+	const (
+		fallthroughDirective = "  fallthrough"
+		soaDirective         = `  authority "{{ .Zone }} 60 IN SOA ns.dns.{{ .Zone }} hostmaster.{{ .Zone }} (1 60 60 60 60)"`
+	)
+
 	// Build up the corefileTemplate programmatically to make it easier to understand.
 	var directives []string
 	// Plugins to enable.
@@ -44,9 +49,27 @@ func buildTemplate() string {
 	directives = append(directives, fmt.Sprintf("template IN A %s {", resources.ActorDNSSuffix))
 	// Escape the suffix's dots so they match literally; the final \. matches the FQDN's trailing dot.
 	escapedSuffix := strings.ReplaceAll(resources.ActorDNSSuffix, ".", `\.`)
-	directives = append(directives, fmt.Sprintf(`  match "^%s\.%s\.%s\.$"`, resources.ResourceNameRegexPattern, resources.ResourceNameRegexPattern, escapedSuffix))
+	actorMatch := fmt.Sprintf(`  match "^%s\.%s\.%s\.$"`, resources.ResourceNameRegexPattern, resources.ResourceNameRegexPattern, escapedSuffix)
+	directives = append(directives, actorMatch)
 	// Note the %s -- this will be filled with the router IP.
 	directives = append(directives, `  answer "{{ .Name }} 60 IN A %s"`)
+	directives = append(directives, fallthroughDirective)
+	directives = append(directives, "}")
+
+	// Valid actor names return NOERROR (NODATA) for non-A queries.
+	directives = append(directives, fmt.Sprintf("template ANY ANY %s {", resources.ActorDNSSuffix))
+	directives = append(directives, actorMatch)
+	directives = append(directives, "  rcode NOERROR")
+	directives = append(directives, soaDirective)
+	directives = append(directives, fallthroughDirective)
+	directives = append(directives, "}")
+
+	// Returns rcode NXDOMAIN (Non-Existent Domain) for any query that did not
+	// match the valid actor regex in the previous blocks.
+	// TODO(#922): answer empty non-terminals with NODATA.
+	directives = append(directives, fmt.Sprintf("template ANY ANY %s {", resources.ActorDNSSuffix))
+	directives = append(directives, "  rcode NXDOMAIN")
+	directives = append(directives, soaDirective)
 	directives = append(directives, "}")
 
 	// Generate the template.
