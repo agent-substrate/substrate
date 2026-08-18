@@ -255,6 +255,15 @@ jobs:
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       run: hack/run-microvm-demo-kind.sh
+    - name: Verify prepared micro-VM filesystem visibility
+      run: |
+        go -C tools/junittool run . register "${ARTIFACTS}/microvm-prepared.xml"
+        runner="$(hack/run-tool.sh --print-bin-path gotestsum)"
+        sudo -E env "PATH=${PATH}" \
+          VIRTIOFSD_TEST_BINARY="${GITHUB_WORKSPACE}/bin/microvm-assets/amd64/virtiofsd" \
+          "${runner}" --junitfile "${ARTIFACTS}/microvm-prepared.xml" -- \
+          -race -count=1 -tags=microvm_integration ./cmd/ateworker-microvm \
+          -run '^TestPreparedRootfsBecomesVisibleToVirtiofsd$'
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Deploy egress demos

@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/workerstats"
 
 	"go.ate.dev/substrate/internal/ateworker/actornet"
@@ -251,6 +250,13 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	}
 	defer release()
 
+	prepared := s.preparedSandbox(req.GetActorUid())
+	if prepared != nil {
+		if err := prepared.validate(&ateworkerpb.PrepareSandboxRequest{Workload: req}); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
@@ -270,12 +276,14 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	attribution := p.actorAttribution()
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
-	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
-		return nil, err
-	}
-	// Publish attribution before boot so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution, false); err != nil {
-		return nil, err
+	if prepared == nil {
+		if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
+			return nil, err
+		}
+		// Publish attribution before boot so stats can include startup usage.
+		if _, err := s.hostActor(ctx, attribution, false); err != nil {
+			return nil, err
+		}
 	}
 	defer func() {
 		if retErr != nil {
@@ -376,58 +384,29 @@ func (s *AteWorkerService) coldBootActorRetrying(ctx context.Context, p actorBoo
 // the actor's lifecycle lock and owns the lifecycle logging.
 func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams) (retErr error) {
 	actorUID := p.actorUID
-
-	// All of the actor's containers share the one micro-VM (which is the pod
-	// sandbox): each gets its own overlay rootfs and its own kata-agent
-	// CreateContainer/StartContainer, driven below after the shared boot +
-	// CreateSandbox + guest networking.
 	containers := p.containers
-	if len(containers) == 0 {
-		return apierror.InvalidArgument("actor spec has no containers")
+	prepared := s.preparedSandbox(actorUID)
+	if prepared == nil {
+		var err error
+		prepared, err = s.bootSandbox(ctx, p)
+		if err != nil {
+			return err
+		}
+	} else {
+		s.lookupActor(actorUID).prepared = nil
 	}
-	if len(containers) > maxActorContainers {
-		return apierror.Unimplemented("ateworker-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
-	}
-
-	// ateworker builds the CH vm.create itself, so it needs the guest kernel + image
-	// paths directly.
-	paths := p.assetPaths
-	kernel, image := paths[assetKernel], paths[assetImage]
-	if kernel == "" || image == "" {
-		return fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
-	}
-	rr := s.resolveRuntime(paths)
-	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
-	if err != nil {
-		return err
-	}
-
-	// Networking (host side): the actor's own namespace. The tap is built below
-	// (after the VM exists) so its FDs are fresh. The caller unhosts on final
-	// failure; a retry keeps the actor's slot and replaces its network.
 	defer func() {
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
-			if cleanupErr := s.tunnel.Deactivate(cleanupCtx, p.attribution()); cleanupErr != nil {
-				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", cleanupErr))
-			}
-			// Detach any bundle rootfs overlays mounted by buildActorContainers
-			// before the failure, mirroring teardownActor's cleanup.
-			if err := imagecache.UnmountAllUnder(p.actorDirs.GetOciBundleDir()); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure", slog.Any("err", err))
-			}
+			retErr = errors.Join(retErr, s.teardownActor(cleanupCtx, actorUID, p.actorDirs, prepared.actor, ch.NewClient(prepared.actor.apiSocket)))
+			retErr = errors.Join(retErr, s.tunnel.Deactivate(cleanupCtx, p.attribution()))
 		}
 	}()
-
-	// Clean stale per-sandbox state before anything touches the host upper dir.
-	// Also  create the runtime dir for the sockets.
-
-	s.cleanupSandboxState(ctx, actorUID)
-	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
-		return fmt.Errorf("while creating VM dir: %w", err)
+	egress, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
+	if err != nil {
+		return err
 	}
-
 	// Stage the host upper dir in the background (pristine, or from a ROOTFS
 	// snapshot's tars) and join it right before the overlay mounts need it,
 	// hiding it behind the bundle preparation below. Every return before the
@@ -443,23 +422,6 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		}
 	}()
 
-	kparams := s.kernelParams()
-
-	// Size the VM to the actor's declared limits (see internal/sizing), which the
-	// API requires. vCPUs round up; VM RAM reserves a fixed margin for the VMM +
-	// virtiofsd, which share the pod cgroup with the guest RAM. NB: a MEMORY
-	// snapshot restore reuses the size baked into the snapshot
-	// (restoreMemoryFidelity), so resizing an existing actor takes effect on its
-	// next cold boot.
-	vcpus := p.size.VCPUs()
-	if vcpus == 0 {
-		return errors.New("actor has no cpu limit to size the micro-VM's vCPUs")
-	}
-	memMiB, err := resolveGuestMemMiB(p.size.MemoryBytes, s.memReserveMiB)
-	if err != nil {
-		return err
-	}
-
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay
 	// lower the host merges under the container's writable upper).
 	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
@@ -472,10 +434,10 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 	// template spec is immutable, so an actor's limits were validated when its
 	// golden was built.
 	if err := checkResourceEnvelope(ctrs, guestEnvelope{
-		memMiB:        memMiB,
-		vcpus:         vcpus,
+		memMiB:        prepared.envelope.memMiB,
+		vcpus:         prepared.envelope.vcpus,
 		declaredBytes: p.size.MemoryBytes,
-		reserveMiB:    s.memReserveMiB,
+		reserveMiB:    prepared.envelope.reserveMiB,
 	}); err != nil {
 		return err
 	}
@@ -486,107 +448,12 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		return err
 	}
 
-	// Assemble each container's merged rootfs on the host (overlay of image lower +
-	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
-	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
-	// and demand-pages for the actor's lifetime, so ateworker owns the process (killed in teardownActor).
-	leaf, err := s.actorLeaf(actorUID, p.size)
-	if err != nil {
+	if err := s.stageMergedRootfsMounts(ctx, actorUID, p.actorDirs, ctrs, containers); err != nil {
 		return err
 	}
-	defer leaf.Close()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, p.actorDirs, ctrs, containers, leaf.SysProcAttr())
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if retErr != nil && vfsdCmd.Process != nil {
-			_ = vfsdCmd.Process.Kill()
-			_, _ = vfsdCmd.Process.Wait()
-		}
-	}()
-
-	// Launch a bare VMM (CH + api-socket); ateworker owns this process for teardown.
-	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api.sock")
-	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
-		Binary:      rr.chBinary,
-		APISocket:   apiSocket,
-		Stdout:      slogWriter{ctx},
-		Stderr:      slogWriter{ctx},
-		SysProcAttr: leaf.SysProcAttr(),
-	})
-	if err != nil {
-		return fmt.Errorf("while launching VMM: %w", err)
-	}
-	defer func() {
-		if retErr != nil && chCmd.Process != nil {
-			_ = chCmd.Process.Kill()
-			_, _ = chCmd.Process.Wait()
-		}
-	}()
-
-	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/pmem0 +
-	// the virtio-fs device; no actor virtio-blk disks — rootfs writes land in the
-	// host-side overlay upper through the shared mount). The console log is also read
-	// on a failed agent dial below, so keep it here.
-	consoleLog := kata.ConsoleLogPath(actorUID)
-	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.guestDebug)
-	if err := client.CreateVM(ctx, vmCfg); err != nil {
-		return fmt.Errorf("while creating VM: %w", err)
-	}
-
-	// Network device: build the actor's tap and add a virtio-net to the created
-	// (pre-boot) VM with its FDs (SCM_RIGHTS).
-	tapFiles, err := setupActorTap(ctx, s.sandboxNetNS(actorUID), "tap0_kata", 1)
-	if err != nil {
-		return fmt.Errorf("while building tap: %w", err)
-	}
-	defer func() {
-		for _, f := range tapFiles {
-			_ = f.Close() // CH dups adopted FDs; ours always close.
-		}
-	}()
-	var fds []int
-	for _, f := range tapFiles {
-		fds = append(fds, int(f.Fd()))
-	}
-	if err := client.AddNetWithFDs(ctx, actorGuestMAC, 2*len(tapFiles), fds); err != nil {
-		return fmt.Errorf("while adding net device: %w", err)
-	}
-
-	// Boot.
-	if err := client.BootVM(ctx); err != nil {
-		return fmt.Errorf("while booting VM: %w", err)
-	}
-	slog.InfoContext(ctx, "Micro-VM booted", slog.String("id", actorUID), slog.String("api", apiSocket))
-
-	// Dial the kata-agent over hybrid-vsock. The agent only starts listening once
-	// the guest's init reaches kata-containers.target — well after CH creates the
-	// vsock socket file — so poll the CONNECT until it answers (as the kata shim
-	// does), rather than dialing once.
-	tBooted := time.Now()
+	ac := prepared.actor.guestAgent
 	vsockPath := kata.VsockSocketPath(actorUID)
-	if !waitForFile(vsockPath, 15*time.Second) {
-		return fmt.Errorf("kata-agent vsock socket %q did not appear", vsockPath)
-	}
-	tVsock := time.Now()
-	ac, err := dialAgentRetry(ctx, vsockPath, 60*time.Second)
-	if err != nil {
-		logGuestBootDiagnostics(ctx, actorUID, consoleLog)
-		return fmt.Errorf("while dialing kata-agent: %w", err)
-	}
-	tDialed := time.Now()
-	// The agent client must stay open past this RPC: the stdout/stderr forwarding
-	// goroutines (started below) read over it for the actor's lifetime. It is stored
-	// on the runningActor and closed by teardownActor. Close it here only if Run
-	// fails after this point (no runningActor recorded).
-	defer func() {
-		if retErr != nil {
-			_ = ac.Close()
-		}
-	}()
-
+	tBooted, tVsock, tDialed := prepared.booted, prepared.vsockReady, prepared.agentReady
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
 	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
 		return err
@@ -607,7 +474,8 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 		slog.Duration("wakeup_probe", time.Since(tContainers)),
 		slog.Duration("since_boot", time.Since(tBooted)))
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
+	ra := prepared.actor
+	ra.workloadIDs = workloadIDs(ctrs)
 	if err := s.tunnel.Activate(p.attribution(), s.sandboxDialer(p.actorUID), egress); err != nil {
 		return err
 	}
@@ -688,32 +556,46 @@ func (s *AteWorkerService) buildActorContainers(actorUID string, actorDirs *atew
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
 func (s *AteWorkerService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
+	if err := s.stageMergedRootfsMounts(ctx, id, actorDirs, ctrs, containers); err != nil {
+		return nil, err
+	}
+	return s.startRootfsShare(ctx, rr, id, procAttr)
+}
+
+func (s *AteWorkerService) stageMergedRootfsMounts(ctx context.Context, id string, actorDirs *ateworkerpb.ActorDirs, ctrs []actorContainer, containers []*ateworkerpb.Container) error {
 	upperBase := rootfsUpperDir(actorDirs)
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
-			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
+			return fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
 			src := imagecache.ImageVolumeMountPath(c.bundle, vm.GetVolumeName())
 			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
-				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
+				return fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
 			}
 		}
 	}
 	if hasDurableVolumes(containers) {
 		if err := s.stageDurableVolumes(ctx, id, actorDirs.GetDurableDirVolumeMountsDir()); err != nil {
-			return nil, fmt.Errorf("while staging durable-dir volumes: %w", err)
+			return fmt.Errorf("while staging durable-dir volumes: %w", err)
 		}
 	}
 	if hasCsiVolumes(containers) {
 		if err := s.stageCsiVolumes(ctx, id, actorDirs.GetVolumesDir()); err != nil {
-			return nil, fmt.Errorf("while staging CSI volumes: %w", err)
+			return fmt.Errorf("while staging CSI volumes: %w", err)
 		}
 	}
 	if hasSystemInfoVolumes(containers) {
 		if err := s.stageSystemInfoVolumes(ctx, id, actorDirs.GetSystemInfoVolumeRootsDir()); err != nil {
-			return nil, fmt.Errorf("while staging system-info volumes: %w", err)
+			return fmt.Errorf("while staging system-info volumes: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *AteWorkerService) startRootfsShare(ctx context.Context, rr resolvedRuntime, id string, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {
+	if err := os.MkdirAll(kata.SharedDir(id), 0o700); err != nil {
+		return nil, err
 	}
 	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{

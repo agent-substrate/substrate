@@ -24,8 +24,10 @@ package main
 
 import (
 	"context"
+
 	"errors"
 	"fmt"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"log/slog"
 	"sync"
 	"syscall"
@@ -86,6 +88,11 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 	if !s.inFlight.WaitIdle(waitCtx) {
 		slog.ErrorContext(ctx, "Giving up waiting for in-flight RPCs during graceful shutdown",
 			slog.Any("rpcs", s.inFlight.Names()))
+	}
+	for _, h := range s.hostedActors() {
+		if _, err := s.DiscardPreparedSandbox(waitCtx, &ateworkerpb.DiscardPreparedSandboxRequest{ActorUid: h.attribution.UID}); err != nil {
+			slog.WarnContext(ctx, "Failed to discard prepared sandbox during shutdown", slog.Any("err", err))
+		}
 	}
 	// Copy VM records under actorsMu; a concurrent teardown clears guestAgent.
 	s.actorsMu.RLock()

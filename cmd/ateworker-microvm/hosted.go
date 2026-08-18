@@ -43,6 +43,8 @@ type hostedActor struct {
 	network *actornet.SandboxSession
 	// Nil until boot publishes the VM.
 	vm *runningActor
+	// Prepared startup state, guarded by the actor lifecycle lock.
+	prepared *preparedSandbox
 	// Nil when no guest stats connection is available.
 	guest *guestStatsTarget
 
