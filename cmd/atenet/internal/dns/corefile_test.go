@@ -76,3 +76,16 @@ func TestMakeCoreFile(t *testing.T) {
 		})
 	}
 }
+
+// TestMakeCoreFileStable pins the property that keeps the reconcile loop quiet:
+// the render depends only on its arguments. reconcileCoreDNSConfig rewrites the
+// Corefile and signals CoreDNS whenever the render differs from what is on
+// disk, so anything time-varying in the output -- the "Generated at" stamp, in
+// particular -- would reload the DNS server on every tick.
+func TestMakeCoreFileStable(t *testing.T) {
+	first := makeCoreFile("10.240.0.10")
+	second := makeCoreFile("10.240.0.10")
+	if first != second {
+		t.Errorf("makeCoreFile() is not stable across calls; the reconcile loop would rewrite and reload every tick\nFirst:\n%s\nSecond:\n%s", first, second)
+	}
+}

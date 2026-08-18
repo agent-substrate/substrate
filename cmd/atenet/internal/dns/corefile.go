@@ -25,6 +25,12 @@ import (
 // corefileTemplate is a Sprintf template for the CoreDNS configuration.
 var corefileTemplate string
 
+// generatedAt stamps the rendered Corefile once per process, and must not be
+// recomputed per render: reconcileCoreDNSConfig decides whether to rewrite the
+// file and signal CoreDNS by comparing the render against what is on disk, so a
+// moving timestamp would reload the server on every tick of the reconcile loop.
+var generatedAt = time.Now()
+
 func init() {
 	corefileTemplate = buildTemplate()
 }
@@ -74,7 +80,7 @@ func buildTemplate() string {
 
 	// Generate the template.
 	b := strings.Builder{}
-	fmt.Fprintf(&b, "# Generated at %s\n", time.Now())
+	fmt.Fprintf(&b, "# Generated at %s\n", generatedAt)
 	fmt.Fprintf(&b, "%s:53 {\n  ", resources.ActorDNSSuffix)
 	fmt.Fprint(&b, strings.Join(directives, "\n  "))
 	fmt.Fprint(&b, "\n}\n")
