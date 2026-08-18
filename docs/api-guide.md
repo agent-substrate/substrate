@@ -201,7 +201,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 
 ### Container Capabilities (`securityContext.capabilities`)
 
-Each container runs with a default set of Linux capabilities. `securityContext.capabilities` adjusts that set, mirroring `securityContext.capabilities` on a Kubernetes Pod container.
+Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, `KILL` and `NET_BIND_SERVICE`. `securityContext.capabilities` adjusts that set, mirroring `securityContext.capabilities` on a Kubernetes Pod container.
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
