@@ -109,7 +109,9 @@ func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMet
 // its optimistic uid/version check loses to a concurrent writer.
 const updateMaxAttempts = 5
 
-func validateMetadataProjection(resource string, metadata *ateapipb.ResourceMetadata, uid string, version int64) error {
+// validateProtoMetadataMatchesColumns verifies that the metadata in the database
+// matches the metadata in the proto.
+func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.ResourceMetadata, uid string, version int64) error {
 	if metadata.GetUid() != uid {
 		return fmt.Errorf("%s uid projection %q does not match proto metadata uid %q", resource, uid, metadata.GetUid())
 	}
@@ -360,7 +362,7 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 		if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
 			return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
 		}
-		if err := validateMetadataProjection("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
+		if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
 			return nil, err
 		}
 		if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
@@ -585,7 +587,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		if err := proto.Unmarshal(currentBytes, dbActor); err != nil {
 			return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
 		}
-		if err := validateMetadataProjection("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
+		if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
 			return nil, err
 		}
 		if err := precondition.Check(dbActor.GetMetadata()); err != nil {
@@ -1048,7 +1050,7 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
 			return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
 		}
-		if err := validateMetadataProjection(fmt.Sprintf("actor snapshot tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
+		if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("actor snapshot tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
 			return nil, err
 		}
 		if err := precondition.Check(dbTag.GetMetadata()); err != nil {

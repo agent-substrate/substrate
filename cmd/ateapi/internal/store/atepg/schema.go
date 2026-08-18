@@ -29,6 +29,8 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS atespaces (
     name   text PRIMARY KEY,
+    uid    text NOT NULL,
+    version bigint NOT NULL,
     proto  bytea NOT NULL
 );
 
