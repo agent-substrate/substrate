@@ -58,7 +58,7 @@ repositories under `agent-substrate` does not.
 Two cases, depending on what the repository actually is:
 
 **Capability-named**, when it provides a general Substrate capability that
-happens to have one implementation today. Prefer `code-execution-sandbox` over
+happens to have one implementation today. Prefer `execution-sandbox` over
 `sandbox` (too broad) or a vendor's product name (too narrow).
 
 **Integration-named**, when it integrates one specific *open-source* project.
@@ -70,13 +70,19 @@ name refers to something anyone can read, run, and fork, so using it
 descriptively claims nothing. A proprietary product's name is a brand we would
 be borrowing, and borrowing it implies an endorsement or a compatibility promise
 that neither side has made. When the thing being integrated is proprietary, use
-a capability name instead: `code-execution-sandbox`, not the vendor's product
+a capability name instead: `execution-sandbox`, not the vendor's product
 name.
 
 Avoid:
 
 - **Generic names** such as `sandbox` or `plugins`, which claim far more ground
   than any one repository covers.
+- **Over-specific names**, which have the opposite failure: they steer people
+  away from a solution that would have worked for them. A sandbox that is often
+  used for code execution is still a general execution sandbox, and naming it
+  `code-execution-sandbox` invites a reader with a different workload to
+  conclude it is not for them. A name should be just long enough to describe
+  the thing, and no longer.
 - **Names that clone a proprietary API or brand**, which quietly commits the
   project to chasing someone else's naming decisions.
 - **The `-integration` suffix.** Every repository in this category is an
@@ -120,9 +126,11 @@ first" a short path rather than a blocking one.
 
 These two validate the convention rather than merely following it:
 
-- **`agent-substrate/code-execution-sandbox`** — capability-named. A sandboxed
-  code-execution service built on Substrate, in the spirit of existing
-  code-execution products but not modeled on any one of their APIs.
+- **`agent-substrate/execution-sandbox`** — capability-named. A sandboxed
+  execution service built on Substrate, in the spirit of existing sandbox
+  products but not modeled on any one of their APIs. The name stops at the
+  capability on purpose: code execution is one workload it serves, not the
+  boundary of what it is.
 
 - **`agent-substrate/always-on-agent`** — a connection-holding agent: a
   multi-tenant gateway plus a suspendable per-conversation actor. Its first
