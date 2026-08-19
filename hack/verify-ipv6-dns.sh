@@ -57,16 +57,20 @@ echo "Verifying DNS from a pod..."
 # The registry leg fetches rather than resolves -- the hosts entry is AAAA-only,
 # which fails nslookup's A query but satisfies getaddrinfo.
 #
-# --attach gives one stream and only the last leg's exit status, so each leg
+# One stream carries every leg and only the last one's exit status, so each leg
 # reports a marker on stdout and no failure message may contain one; PROBE_RAN
-# separates a failed leg from a pod that never ran. Retry the pod, not the
-# query: one that asks before CoreDNS settles stays broken for ~30s, while a
-# fresh pod 10s later resolves first try.
+# and PROBE_DONE bracket the run so a short read is told apart from a leg that
+# failed. Read the log once the pod has terminated rather than attaching to it:
+# an attach can drop the tail, and a lost registry marker then reads as an
+# unreachable registry. Retry the pod, not the query: one that asks before
+# CoreDNS settles stays broken for ~30s, while a fresh pod 10s later resolves
+# first try.
 probe=""
 probe_max=4
 for ((probe_attempt = 1; probe_attempt <= probe_max; probe_attempt++)); do
-  attempt_out="$(kubectl --context="${KUBECTL_CONTEXT}" run "coredns-probe-$$-${probe_attempt}" \
-    --rm --attach --quiet --restart=Never --image=busybox:1.36 --command -- \
+  probe_pod="coredns-probe-$$-${probe_attempt}"
+  kubectl --context="${KUBECTL_CONTEXT}" run "${probe_pod}" \
+    --restart=Never --image=busybox:1.36 --command -- \
     sh -c "echo PROBE_RAN
            if out=\$(nslookup storage.googleapis.com 2>&1); then
              echo RESOLVE_OK
@@ -77,13 +81,28 @@ for ((probe_attempt = 1; probe_attempt <= probe_max; probe_attempt++)); do
              echo REGISTRY_OK
            else
              echo \"registry fetch failed: \$(echo \"\$out\" | tail -1)\"
-           fi")" || true
+           fi
+           echo PROBE_DONE" >/dev/null || true
+  for ((probe_wait = 0; probe_wait < 120; probe_wait++)); do
+    phase="$(kubectl --context="${KUBECTL_CONTEXT}" get pod "${probe_pod}" \
+      -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    [[ "${phase}" == "Succeeded" || "${phase}" == "Failed" ]] && break
+    sleep 1
+  done
+  attempt_out="$(kubectl --context="${KUBECTL_CONTEXT}" logs "${probe_pod}" 2>/dev/null || true)"
+  kubectl --context="${KUBECTL_CONTEXT}" delete pod "${probe_pod}" \
+    --now --ignore-not-found --wait=false >/dev/null 2>&1 || true
   # A pod that never started must not bury an earlier one's real failure.
   if [[ "${attempt_out}" == *PROBE_RAN* ]]; then probe="${attempt_out}"; fi
-  # Only the resolve leg is a settling race; a down registry will not fix itself.
-  [[ "${probe}" == *RESOLVE_OK* ]] && break
+  # Only the resolve leg is a settling race; a down registry will not fix
+  # itself, so a finished probe is a verdict either way. An unfinished one
+  # reported no registry result at all, which is not the same as a failure.
+  if [[ "${probe}" == *RESOLVE_OK* ]] &&
+    [[ "${probe}" == *REGISTRY_OK* || "${probe}" == *PROBE_DONE* ]]; then
+    break
+  fi
   if ((probe_attempt < probe_max)); then
-    echo "  the cluster is not resolving yet; re-probing (attempt $((probe_attempt + 1)) of ${probe_max})..."
+    echo "  the probe did not come back clean; re-probing (attempt $((probe_attempt + 1)) of ${probe_max})..."
     sleep 10
   fi
 done
@@ -94,6 +113,9 @@ if [[ "${probe}" != *RESOLVE_OK* || "${probe}" != *REGISTRY_OK* ]]; then
   elif [[ "${probe}" != *RESOLVE_OK* ]]; then
     echo "error: a pod cannot resolve an external name" >&2
     echo "       IPV6_DNS_UPSTREAM is '${IPV6_DNS_UPSTREAM}'; set it to a reachable resolver" >&2
+  elif [[ "${probe}" != *PROBE_DONE* ]]; then
+    echo "error: the probe stopped early, so the registry leg is unverified" >&2
+    echo "       re-run this script; DNS itself answered" >&2
   else
     echo "error: DNS works but a pod cannot reach '${REG_NAME}'${reg_at}" >&2
     echo "       check the registry container is up and on the 'kind' network" >&2
