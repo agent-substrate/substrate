@@ -295,9 +295,9 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapip
 	return dbTemplate, nil
 }
 
-func getActorTemplateRow(ctx context.Context, q querier, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -309,10 +309,6 @@ func getActorTemplateRow(ctx context.Context, q querier, templateRef resources.A
 		return nil, fmt.Errorf("unmarshaling actor template: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
-	return getActorTemplateRow(ctx, p.pool, templateRef)
 }
 
 func (p *Persistence) ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error) {
