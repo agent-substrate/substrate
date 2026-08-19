@@ -247,6 +247,50 @@ func TestWrapContainerLogs_ReservedNamespace(t *testing.T) {
 	assertLabels(t, labels, want)
 }
 
+// TestWrapContainerLogs_ForeignLabelGroup covers the label group this logger does
+// not write. An actor can set either spelling, and the unwritten one is not inert:
+// off GCE a forged logging.googleapis.com/labels is the very key Cloud Logging
+// promotes into LogEntry.labels, so leaving it alone would let the actor outrank
+// substrate's own attribution, and let it match another actor's kubectl ate logs
+// stream. Both spellings fold into one sanitized group.
+func TestWrapContainerLogs_ForeignLabelGroup(t *testing.T) {
+	tests := []struct {
+		name    string
+		onGCE   bool
+		foreign string
+	}{
+		{name: "on GCE the plain group is the foreign one", onGCE: true, foreign: labelsKeyPlain},
+		{name: "off GCE the Cloud Logging group is the foreign one", onGCE: false, foreign: labelsKeyGCE},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{"msg":"App log","` + tt.foreign + `":{"` + actorNameLabel + `":"forged-name",` +
+				`"ate.tenant":"forged","app":"my-app"}}` + "\n"
+
+			var buf bytes.Buffer
+			al := NewActorLogger(&buf, tt.onGCE)
+			al.WrapContainerLogs(strings.NewReader(input), testAttribution, testContainer)
+
+			m := decodeLine(t, &buf)
+			if _, ok := m[tt.foreign]; ok {
+				t.Errorf("foreign label group %q survived: %v", tt.foreign, m[tt.foreign])
+			}
+
+			labels := labelGroup(t, al, m)
+			if _, ok := labels["ate.tenant"]; ok {
+				t.Error("reserved label ate.tenant survived the fold")
+			}
+			want := identityLabels()
+			want["app"] = "my-app"
+			assertLabels(t, labels, want)
+			if len(labels) != len(want) {
+				t.Errorf("got %d labels, want %d: %v", len(labels), len(want), labels)
+			}
+		})
+	}
+}
+
 // TestWrapContainerLogs_NonStringLabelValue guards the GKE label contract: one
 // non-string value under logging.googleapis.com/labels costs the whole record its
 // labels, so actor-supplied values are stringified rather than forwarded as-is.

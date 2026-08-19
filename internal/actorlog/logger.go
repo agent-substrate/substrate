@@ -66,11 +66,18 @@ type ActorLogger struct {
 	labelsKey string
 }
 
+// The two spellings of the label group. Cloud Logging promotes the second into
+// LogEntry.labels, so that is the one to use on GCE.
+const (
+	labelsKeyPlain = "labels"
+	labelsKeyGCE   = "logging.googleapis.com/labels"
+)
+
 // NewActorLogger creates a new ActorLogger wrapping the provided destination writer.
 func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
-	labelsKey := "labels"
+	labelsKey := labelsKeyPlain
 	if isOnGCE {
-		labelsKey = "logging.googleapis.com/labels"
+		labelsKey = labelsKeyGCE
 	}
 	return &ActorLogger{
 		writer:    w,
@@ -152,7 +159,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, a resources.ActorAttributi
 						delete(m, k)
 					}
 				}
-				labels := sanitizeLabels(m[al.labelsKey])
+				labels := al.foldLabelGroups(m)
 				for k, v := range ateattr.ActorLogLabels(a, containerName) {
 					labels[k] = v
 				}
@@ -184,6 +191,31 @@ func addTraceContext(ctx context.Context, envelope map[string]any) {
 	envelope[ateattr.LogTraceIDField] = sc.TraceID().String()
 	envelope[ateattr.LogSpanIDField] = sc.SpanID().String()
 	envelope[ateattr.LogTraceFlagsField] = fmt.Sprintf("%02x", byte(sc.TraceFlags()))
+}
+
+// foldLabelGroups reduces the record to a single sanitized label group, under the
+// key this logger writes.
+//
+// Both spellings have to be handled whichever one is ours, because nothing stops
+// an actor setting either, and the one we do not write is not inert: off GCE, a
+// forged logging.googleapis.com/labels is precisely the key Cloud Logging promotes
+// into LogEntry.labels, so it would outrank the group we wrote. Keys the active
+// group already holds win, so the fold cannot change what this logger's own group
+// says.
+func (al *ActorLogger) foldLabelGroups(m map[string]any) map[string]any {
+	labels := sanitizeLabels(m[al.labelsKey])
+	for _, key := range []string{labelsKeyPlain, labelsKeyGCE} {
+		if key == al.labelsKey {
+			continue
+		}
+		for k, v := range sanitizeLabels(m[key]) {
+			if _, taken := labels[k]; !taken {
+				labels[k] = v
+			}
+		}
+		delete(m, key)
+	}
+	return labels
 }
 
 // sanitizeLabels drops reserved keys from the actor's label group and stringifies
