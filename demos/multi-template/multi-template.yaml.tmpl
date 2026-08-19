@@ -47,6 +47,7 @@ metadata:
 spec:
   replicas: 3
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+${WORKERPOOL_PULL_SECRETS}
 ---
 apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate

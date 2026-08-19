@@ -430,6 +430,11 @@ func applyWorkerPoolPodTemplate(
 			resourcesAC.WithLimits(tmpl.Resources.Limits)
 		}
 	}
+
+	for i := range tmpl.ImagePullSecrets {
+		podSpecAC.WithImagePullSecrets(corev1ac.LocalObjectReference().
+			WithName(tmpl.ImagePullSecrets[i].Name))
+	}
 }
 
 func tolerationApplyValues(tolerations []*corev1ac.TolerationApplyConfiguration) []corev1ac.TolerationApplyConfiguration {

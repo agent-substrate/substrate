@@ -87,6 +87,14 @@ resolve_otlp_endpoint() {
   fi
 }
 
+workerpool_pull_secret_sed_expr() {
+  if [[ -n "${ATE_DOCKER_PULL_SECRET_NAME:-}" ]]; then
+    printf 's|${WORKERPOOL_PULL_SECRETS}|  template:\\n    imagePullSecrets:\\n    - name: %s|g' "${ATE_DOCKER_PULL_SECRET_NAME}"
+    return
+  fi
+  printf '/${WORKERPOOL_PULL_SECRETS}/d'
+}
+
 substitute() {
   # SandboxConfig names are pinned per class (rather than defaulted) so a stale
   # config from a dirty teardown fails loudly instead of silently binding this
@@ -103,6 +111,7 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "$(workerpool_pull_secret_sed_expr)" \
       "${MANIFEST_TEMPLATE}"
 }
 

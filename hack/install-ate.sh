@@ -68,6 +68,7 @@ function usage() {
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
+  echo "  --install-docker-pull-secret[=NAME]    Install image pull secret from current Docker login config (default: ate-docker-pull-secret)"
   echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -205,6 +206,128 @@ store_backend() {
 
 default_postgres_connection_string() {
   echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+}
+
+docker_config_file() {
+  if [[ -n "${DOCKER_CONFIG:-}" ]]; then
+    echo "${DOCKER_CONFIG}/config.json"
+    return
+  fi
+  if [[ -n "${HOME:-}" ]]; then
+    echo "${HOME}/.docker/config.json"
+    return
+  fi
+  echo "Error: HOME or DOCKER_CONFIG must be set to locate Docker login config" >&2
+  exit 1
+}
+
+docker_pull_secret_name() {
+  echo "${ATE_DOCKER_PULL_SECRET_NAME:-ate-docker-pull-secret}"
+}
+
+validate_docker_pull_secret_name() {
+  local secret_name="$1"
+  if [[ ${#secret_name} -gt 253 || ! "${secret_name}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+    echo "Error: Docker pull secret name must be a valid Kubernetes DNS label, got '${secret_name}'" >&2
+    exit 1
+  fi
+}
+
+install_docker_pull_secret_in_namespace() {
+  local namespace="$1"
+  shift
+  local secret_name=""
+  secret_name="$(docker_pull_secret_name)"
+  local docker_config=""
+  docker_config="$(docker_config_file)"
+
+  if [[ ! -f "${docker_config}" ]]; then
+    echo "Error: Docker config not found at ${docker_config}; run docker login first" >&2
+    exit 1
+  fi
+
+  run_kubectl create namespace "${namespace}" --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+  run_kubectl create secret generic "${secret_name}" \
+    --from-file=.dockerconfigjson="${docker_config}" \
+    --type=kubernetes.io/dockerconfigjson \
+    -n "${namespace}" \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+
+  local service_account=""
+  for service_account in "$@"; do
+    run_kubectl get serviceaccount "${service_account}" -n "${namespace}" >/dev/null 2>&1 \
+      || run_kubectl create serviceaccount "${service_account}" -n "${namespace}"
+    run_kubectl patch serviceaccount "${service_account}" -n "${namespace}" \
+      -p "{\"imagePullSecrets\":[{\"name\":\"${secret_name}\"}]}"
+  done
+}
+
+install_docker_pull_secret() {
+  local secret_name=""
+  secret_name="$(docker_pull_secret_name)"
+  validate_docker_pull_secret_name "${secret_name}"
+  log_step "install_docker_pull_secret (${secret_name})"
+
+  install_docker_pull_secret_in_namespace ate-system \
+    default ate-api-server ate-controller atelet atenet-router atenet-dns
+  install_docker_pull_secret_in_namespace podcertificate-controller-system default
+}
+
+maybe_install_docker_pull_secret() {
+  if [[ "${INSTALL_DOCKER_PULL_SECRET:-false}" == "true" ]]; then
+    install_docker_pull_secret
+  fi
+}
+
+maybe_install_docker_pull_secret_in_namespace() {
+  if [[ "${INSTALL_DOCKER_PULL_SECRET:-false}" == "true" ]]; then
+    validate_docker_pull_secret_name "$(docker_pull_secret_name)"
+    install_docker_pull_secret_in_namespace "$@"
+  fi
+}
+
+workerpool_pull_secret_sed_expr() {
+  if [[ "${INSTALL_DOCKER_PULL_SECRET:-false}" == "true" ]]; then
+    validate_docker_pull_secret_name "$(docker_pull_secret_name)"
+    printf 's|${WORKERPOOL_PULL_SECRETS}|  template:\\n    imagePullSecrets:\\n    - name: %s|g' "$(docker_pull_secret_name)"
+    return
+  fi
+  printf '/${WORKERPOOL_PULL_SECRETS}/d'
+}
+
+workerpool_pull_secret_in_template_sed_expr() {
+  if [[ "${INSTALL_DOCKER_PULL_SECRET:-false}" == "true" ]]; then
+    validate_docker_pull_secret_name "$(docker_pull_secret_name)"
+    printf 's|${WORKERPOOL_PULL_SECRETS_IN_TEMPLATE}|    imagePullSecrets:\\n    - name: %s|g' "$(docker_pull_secret_name)"
+    return
+  fi
+  printf '/${WORKERPOOL_PULL_SECRETS_IN_TEMPLATE}/d'
+}
+
+apply_docker_pull_secret_to_pod_template() {
+  if [[ "${INSTALL_DOCKER_PULL_SECRET:-false}" != "true" ]]; then
+    return
+  fi
+
+  local resource="$1"
+  local namespace="$2"
+  local secret_name=""
+  secret_name="$(docker_pull_secret_name)"
+  validate_docker_pull_secret_name "${secret_name}"
+
+  run_kubectl patch "${resource}" -n "${namespace}" --type=merge \
+    -p "{\"spec\":{\"template\":{\"spec\":{\"imagePullSecrets\":[{\"name\":\"${secret_name}\"}]}}}}"
+}
+
+apply_docker_pull_secret_to_ate_system_workloads() {
+  apply_docker_pull_secret_to_pod_template deployment/ate-api-server ate-system
+  apply_docker_pull_secret_to_pod_template deployment/ate-controller ate-system
+  apply_docker_pull_secret_to_pod_template daemonset/atelet ate-system
+  apply_docker_pull_secret_to_pod_template deployment/atenet-router ate-system
+  apply_docker_pull_secret_to_pod_template deployment/dns ate-system
+  apply_docker_pull_secret_to_pod_template statefulset/valkey-cluster ate-system
 }
 
 render_ate_system_manifests() {
@@ -616,9 +739,11 @@ deploy_ate_system() {
   apply_otel_config
 
   ensure_apiserver_prerequisites
+  maybe_install_docker_pull_secret
 
   # Deploy podcertificate-controller first so it starts signing and creating trust bundles immediately
   run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+  apply_docker_pull_secret_to_pod_template deployment/podcertificate-controller podcertificate-controller-system
   run_kubectl rollout status deployment/podcertificate-controller -n podcertificate-controller-system --timeout=120s
 
   wait_for_podcertificate_trust_bundles
@@ -635,6 +760,7 @@ deploy_ate_system() {
   local manifests=""
   manifests="$(render_ate_system_manifests)"
   echo "${manifests}" | run_kubectl apply -f -
+  apply_docker_pull_secret_to_ate_system_workloads
 
   # Applied on its own rather than through the overlay above, so
   # --experimental-use-sdsmint composes with every overlay instead of needing a
@@ -696,8 +822,10 @@ deploy_ate_apiserver() {
   ensure_apiserver_prerequisites
   apply_otel_config
   apply_otel_endpoint_override
+  maybe_install_docker_pull_secret
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
+  apply_docker_pull_secret_to_pod_template deployment/ate-api-server ate-system
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
 }
 
@@ -711,6 +839,7 @@ deploy_atelet() {
 
   apply_otel_config
   apply_otel_endpoint_override
+  maybe_install_docker_pull_secret
 
   local manifest=""
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
@@ -721,6 +850,7 @@ deploy_atelet() {
     manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml)
   fi
   echo "${manifest}" | run_kubectl apply -f -
+  apply_docker_pull_secret_to_pod_template daemonset/atelet ate-system
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
 
@@ -734,16 +864,19 @@ deploy_atenet() {
 
   apply_otel_config
   apply_otel_endpoint_override
+  maybe_install_docker_pull_secret
 
   local router_manifest=""
   router_manifest="$(render_atenet_router_manifest)"
   echo "${router_manifest}" | run_kubectl apply -f -
+  apply_docker_pull_secret_to_pod_template deployment/atenet-router ate-system
 
   ensure_egress_mitm_ca_pool_secret
   local egress_manifests=""
   egress_manifests="$(render_atenet_egress_manifest)"
   echo "${egress_manifests}" | run_kubectl apply -f -
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
+  apply_docker_pull_secret_to_pod_template deployment/dns ate-system
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
@@ -939,6 +1072,7 @@ BENCHMARK_WORKER_COUNT=1
 BENCHMARK_SANDBOX_CLASS=gvisor
 # Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).
 BENCHMARK_ACTOR_MEMORY=""
+INSTALL_DOCKER_PULL_SECRET=false
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
   case "${prescan_args[i]}" in
@@ -1003,6 +1137,13 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
     --otlp-endpoint=*) ATE_OTLP_ENDPOINT="${prescan_args[i]#*=}" ;;
     --setup-csi)
       SETUP_CSI=true
+      ;;
+    --install-docker-pull-secret)
+      INSTALL_DOCKER_PULL_SECRET=true
+      ;;
+    --install-docker-pull-secret=*)
+      INSTALL_DOCKER_PULL_SECRET=true
+      ATE_DOCKER_PULL_SECRET_NAME="${prescan_args[i]#*=}"
       ;;
   esac
 done
@@ -1081,6 +1222,8 @@ while [[ "$#" -gt 0 ]]; do
 
     --deploy-benchmarks) deploy_benchmarks ;;
     --delete-benchmarks) delete_benchmarks ;;
+    --install-docker-pull-secret) install_docker_pull_secret ;;
+    --install-docker-pull-secret=*) install_docker_pull_secret ;;
     # Value captured in the pre-scan above; consume the value arg here so the
     # dispatch loop's `*)` unknown-option branch doesn't reject it.
     --benchmark-worker-count) shift ;;

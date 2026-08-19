@@ -121,6 +121,7 @@ KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install
 # `--`; thread --context there (mirrors the run_ko helper in hack/install-ate.sh).
 log "Applying the counter-microvm demo manifest..."
 sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+  -e "/\${WORKERPOOL_PULL_SECRETS_IN_TEMPLATE}/d" \
     demos/counter/counter-microvm.yaml.tmpl \
   | ./hack/run-tool.sh ko apply -f - ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
 

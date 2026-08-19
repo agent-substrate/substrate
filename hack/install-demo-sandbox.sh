@@ -32,13 +32,18 @@ demo-sandbox_cmdline() {
 demo-sandbox_deploy() {
   log_step "demo-sandbox_deploy"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/sandbox/sandbox.yaml.tmpl \
+  maybe_install_docker_pull_secret_in_namespace ate-demo-sandbox default
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "$(workerpool_pull_secret_in_template_sed_expr)" \
+      demos/sandbox/sandbox.yaml.tmpl \
     | run_ko apply -f -
 }
 
 demo-sandbox_delete() {
   log_step "demo-sandbox_delete"
   delete_demo_actors ate-demo-sandbox sandbox-template
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/sandbox/sandbox.yaml.tmpl \
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "$(workerpool_pull_secret_in_template_sed_expr)" \
+      demos/sandbox/sandbox.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

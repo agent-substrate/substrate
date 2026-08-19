@@ -38,6 +38,7 @@ demo-counter_deploy() {
   local with_external_volume="${1:-false}"
   log_step "demo-counter_deploy (with_external_volume=${with_external_volume})"
   ensure_crds
+  maybe_install_docker_pull_secret_in_namespace ate-demo-counter default
 
   local validate_cmd=("-e" "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d")
   local ext_vol_mount_cmd=("-e" "/\${EXTERNAL_VOLUME_MOUNTS}/d")
@@ -52,6 +53,7 @@ demo-counter_deploy() {
       "${validate_cmd[@]}" \
       "${ext_vol_mount_cmd[@]}" \
       "${ext_vol_spec_cmd[@]}" \
+      -e "$(workerpool_pull_secret_in_template_sed_expr)" \
       demos/counter/counter.yaml.tmpl \
     | run_ko apply -f -
 
@@ -73,6 +75,7 @@ demo-counter_delete() {
       -e "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d" \
       -e "/\${EXTERNAL_VOLUME_MOUNTS}/d" \
       -e "/\${EXTERNAL_VOLUMES}/d" \
+      -e "$(workerpool_pull_secret_in_template_sed_expr)" \
       demos/counter/counter.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

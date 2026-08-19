@@ -159,6 +159,18 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 			}),
 		},
 		{
+			name: "with image pull secrets",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				ImagePullSecrets: []corev1.LocalObjectReference{
+					{Name: "ate-docker-pull-secret"},
+				},
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithImagePullSecrets(corev1ac.LocalObjectReference().
+					WithName("ate-docker-pull-secret"))
+			}),
+		},
+		{
 			name: "with combined scheduling fields",
 			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
 				NodeSelector: map[string]string{

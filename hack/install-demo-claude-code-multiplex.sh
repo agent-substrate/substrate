@@ -66,6 +66,7 @@ demo-claude-code-multiplex_deploy() {
     echo "KO_DOCKER_REPO must be set (see hack/ate-dev-env.sh.example)" >&2
     return 1
   fi
+  maybe_install_docker_pull_secret_in_namespace claude-multiplex-demo default
 
   local workload_image
   workload_image=$(demo-claude-code-multiplex_build_workload)
@@ -77,7 +78,8 @@ demo-claude-code-multiplex_deploy() {
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY}|g" \
       -e "s|\${WORKLOAD_IMAGE}|${workload_image}|g" \
-      demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
+  -e "$(workerpool_pull_secret_sed_expr)" \
+  demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
     | run_ko apply -f -
 }
 
@@ -93,7 +95,8 @@ demo-claude-code-multiplex_delete() {
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME:-placeholder}|g" \
       -e "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY:-placeholder}|g" \
       -e "s|\${WORKLOAD_IMAGE}|placeholder|g" \
-      demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
+  -e "$(workerpool_pull_secret_sed_expr)" \
+  demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }
 

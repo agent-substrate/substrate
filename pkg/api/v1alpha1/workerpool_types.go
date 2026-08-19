@@ -49,6 +49,14 @@ type WorkerPoolPodTemplate struct {
 	//
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ImagePullSecrets references Secrets in the WorkerPool namespace to use when
+	// pulling the worker pod image.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass == 'gvisor' || !has(self.template) || !has(self.template.resources) || !((has(self.template.resources.limits) && 'nvidia.com/gpu' in self.template.resources.limits) || (has(self.template.resources.requests) && 'nvidia.com/gpu' in self.template.resources.requests))",message="nvidia.com/gpu is only supported when sandboxClass is 'gvisor'"
