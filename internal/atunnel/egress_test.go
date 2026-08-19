@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,53 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// TestListenEgressIPv4Only pins the egress listener to IPv4, because
+// TCPOriginalDestination can only recover an IPv4 original destination. The
+// wildcard address does not carry that constraint. Every listener here uses the
+// same address, "0.0.0.0:0", so the network string is the only variable.
+func TestListenEgressIPv4Only(t *testing.T) {
+	// The negative control comes first because it decides whether the rest means
+	// anything: "tcp" and "tcp4" differ only on a host that binds "tcp"
+	// dual-stack, and only there can this test observe the bug it guards.
+	control, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("net.Listen(%q, \"0.0.0.0:0\") = %v", "tcp", err)
+	}
+	t.Cleanup(func() { control.Close() })
+	if controlAddr := control.Addr().(*net.TCPAddr); controlAddr.IP.To4() != nil {
+		t.Skipf("net.Listen(%q, \"0.0.0.0:0\") bound IPv4 %v, so this host cannot "+
+			"distinguish it from %q", "tcp", controlAddr, "tcp4")
+	}
+
+	listener, err := ListenEgressIPv4("0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("ListenEgressIPv4() = %v", err)
+	}
+	t.Cleanup(func() { listener.Close() })
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("ListenEgressIPv4() bound %T, want *net.TCPAddr", listener.Addr())
+	}
+	if addr.IP.To4() == nil {
+		t.Fatalf("ListenEgressIPv4() bound %v, want an IPv4 address; net.Listen(%q, ...) "+
+			"bound %v on the same address, and an IPv6 client would be accepted and then "+
+			"fail TCPOriginalDestination", addr, "tcp", control.Addr())
+	}
+
+	// What the pin is for: there is no IPv6 socket, so an IPv6 client is refused
+	// at connect rather than accepted and then failed.
+	t.Run("an IPv6 client is refused", func(t *testing.T) {
+		port := strconv.Itoa(addr.Port)
+		conn, err := net.DialTimeout("tcp6", net.JoinHostPort("::1", port), 5*time.Second)
+		if err == nil {
+			conn.Close()
+			t.Errorf("net.Dial(%q, \"[::1]:%s\") succeeded, want refused; the egress listener "+
+				"is accepting IPv6 it cannot resolve an original destination for", "tcp6", port)
+		}
+	})
+}
 
 func TestEgressActivationFailsClosed(t *testing.T) {
 	egress, err := NewEgress(func(net.Conn) (string, error) { return "", nil })

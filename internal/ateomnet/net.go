@@ -229,8 +229,10 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	// rules in an ateom-owned table makes cleanup simple and avoids mutating
 	// Kubernetes or CNI-managed chains directly.
 	//
-	// TODO: Add IPv6 veth addressing, forwarding, and nftables rules once actor
-	// networking supports dual-stack pods. The current actor network is IPv4-only.
+	// TODO(#945): Add IPv6 veth addressing, forwarding, and nftables rules once
+	// actor networking supports dual-stack pods. The current actor network is
+	// IPv4-only, which is why atunnel opens the listener these rules redirect to
+	// with ListenEgressIPv4.
 	//
 	// The rules do three things:
 	//

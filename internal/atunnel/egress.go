@@ -42,6 +42,22 @@ type actorCertificateSource interface {
 // connection originally targeted.
 type OriginalDestination func(net.Conn) (string, error)
 
+// ListenEgressIPv4 opens the transparent egress listener on address. The family
+// is in the name because it cannot be left to the address: Go treats every
+// unspecified address as a wildcard, so net.Listen("tcp", "0.0.0.0:15001") binds
+// "::" dual-stack and accepts IPv6 too. TCPOriginalDestination reads only the
+// IPv4 SOL_IP/SO_ORIGINAL_DST, so such a connection is accepted and then fails.
+//
+// TODO(#945): use "tcp" once actor networking is dual-stack; the IPv6
+// original-destination lookup is #686.
+func ListenEgressIPv4(address string) (net.Listener, error) {
+	listener, err := net.Listen("tcp4", address)
+	if err != nil {
+		return nil, fmt.Errorf("atunnel: egress listener is IPv4-only: %w", err)
+	}
+	return listener, nil
+}
+
 // Egress proxies actor TCP connections through an egress CONNECT dialer. It is
 // long-lived across actor activations, but only carries traffic while an actor
 // is assigned to its worker.

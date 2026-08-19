@@ -27,9 +27,9 @@ import (
 )
 
 // TCPOriginalDestination reads the IPv4 destination preserved by a Linux
-// REDIRECT rule. Actor networking is currently IPv4-only.
-// TODO(liorlieberman) add the IPv6 IP6T_SO_ORIGINAL_DST variant
-// when actor veth setup gains dual-stack support.
+// REDIRECT rule. Actor networking is currently IPv4-only; see ListenEgressIPv4.
+// TODO(#686): add the IPv6 IP6T_SO_ORIGINAL_DST variant when actor veth setup
+// gains dual-stack support.
 func TCPOriginalDestination(conn net.Conn) (string, error) {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {

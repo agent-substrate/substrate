@@ -65,8 +65,10 @@ var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
 	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
-	atunnelListenAddress        = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
-	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", "0.0.0.0:444", "Address for actor ingress mTLS CONNECT")
+	//
+	// Ingress is dual-stack; egress is pinned to IPv4 by atunnel.ListenEgressIPv4.
+	atunnelListenAddress        = pflag.String("atunnel-listen-address", ":443", "Address for actor ingress HTTPS")
+	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", ":444", "Address for actor ingress mTLS CONNECT")
 	workerCredentialBundle      = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
 	podIdentityTrustBundle      = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
 	atunnelClientIdentity       = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
@@ -277,7 +279,7 @@ func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunn
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("while configuring atunnel egress: %w", err)
 	}
-	egressListener, err := net.Listen("tcp", *atunnelEgressListenAddress)
+	egressListener, err := atunnel.ListenEgressIPv4(*atunnelEgressListenAddress)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("while opening atunnel egress listener: %w", err)
 	}
