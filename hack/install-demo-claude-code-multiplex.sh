@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,6 +34,8 @@ demo-claude-code-multiplex_cmdline() {
 # The workload is a Dockerfile-based Python+Claude-Code wrapper (not a Go
 # binary), so it uses docker buildx rather than ko.
 demo-claude-code-multiplex_build_workload() {
+  check_docker_buildx
+  check_jq
   local repo="${KO_DOCKER_REPO}/claude-multiplex-demo-workload"
   # shellcheck disable=SC2155 # safe initialization
   local stage_tag="${repo}:build-$(date +%s)"

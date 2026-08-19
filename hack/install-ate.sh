@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Copyright 2026 Google LLC
+# Copyright 2026 The Agent Substrate Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,14 @@
 # limitations under the License.
 
 set -o errexit -o nounset -o pipefail
+
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+if [[ "${SCRIPT_DIR}" == "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="."
+fi
+source "${SCRIPT_DIR}/check-prerequisites.sh"
+
+check_git
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
@@ -353,6 +361,54 @@ ca_pool_root_pem() {
   echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem
 }
 
+create_valkey_ca_certs_secret() {
+  log_step "create_valkey_ca_certs_secret"
+  check_openssl
+  # Valkey uses one CA file to verify certificates in both directions:
+  #   - servicedns CA: verifies Valkey peers.
+  #   - podidentity CA: verifies clients such as ateapi and Valkey's init job.
+  # Extract each root into its own variable: errexit cannot see a substitution
+  # failing inside printf's argument list, which would silently produce a CA
+  # file with a missing root.
+  local servicedns_root=""
+  servicedns_root=$(ca_pool_root_pem service-dns-ca-pool)
+  local podidentity_root=""
+  podidentity_root=$(ca_pool_root_pem pod-identity-ca-pool)
+  if [[ -z "${servicedns_root}" || -z "${podidentity_root}" ]]; then
+    echo "error: failed to extract a CA root for valkey-ca-certs" >&2
+    return 1
+  fi
+  local ca_certs=""
+  ca_certs=$(printf '%s\n%s\n' "${servicedns_root}" "${podidentity_root}")
+
+  run_kubectl create secret generic valkey-ca-certs \
+    --from-literal=ca.crt="${ca_certs}" \
+    -n ate-system \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+}
+
+# deploy_postgres deploys only the experimental single-replica PostgreSQL
+# StatefulSet. Full-system installs select it with --store-backend=postgres.
+deploy_postgres() {
+  log_step "deploy_postgres"
+  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
+    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+  run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
+    || create_podcertificate_controller_cas
+  run_kubectl get secret -n podcertificate-controller-system pod-identity-ca-pool >/dev/null 2>&1 \
+    || create_podcertificate_controller_cas
+  # The StatefulSet's projected serving certificate is issued by this
+  # controller. Applying it here makes --deploy-postgres usable on a fresh
+  # cluster as well as after --deploy-ate-system.
+  run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+  run_kubectl rollout status deployment/podcertificate-controller \
+    -n podcertificate-controller-system --timeout=120s
+  wait_for_podcertificate_trust_bundles
+  apply_postgres
+  run_kubectl rollout status statefulset/postgres -n ate-system --timeout=120s
+}
+
 create_jwt_authority_pool_secret() {
   log_step "create_jwt_authority_pool_secret"
   run_kubectl_ate admin make-jwt-pool \
@@ -526,6 +582,7 @@ setup_csi() {
 
 deploy_ate_system() {
   log_step "deploy_ate_system"
+  check_openssl
   # Ensure namespace exists before applying RBAC or CRDs
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
@@ -616,6 +673,7 @@ ensure_apiserver_prerequisites() {
 # Redeploy only the ate-apiserver
 deploy_ate_apiserver() {
   log_step "deploy_ate_apiserver"
+  check_openssl
   ensure_crds
 
   # Ensure namespace exists
@@ -732,10 +790,7 @@ prepare_actor_for_delete() {
 #   delete_demo_actors ate-demo-counter counter
 #   delete_demo_actors ns-a tmpl-a ns-b tmpl-b
 delete_demo_actors() {
-  if ! command -v jq &>/dev/null; then
-    echo "jq is required to delete demo actors" >&2
-    return 1
-  fi
+  check_jq
 
   if (($# == 0 || $# % 2 != 0)); then
     echo "delete_demo_actors expects namespace/template pairs" >&2
@@ -803,6 +858,8 @@ delete_atenet() {
 
 deploy_benchmarks() {
   log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT}, sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
+  check_docker
+  check_envsubst
   # The microvm SandboxConfig lives outside --deploy-ate-system's default set
   # (which only installs gvisor-default); the workloads deploy references it
   # by name and would fail if we skipped this.
@@ -824,6 +881,7 @@ deploy_benchmarks() {
 
 delete_benchmarks() {
   log_step "delete_benchmarks (sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
+  check_envsubst
   "${ROOT}/benchmarking/deploy_locust.sh" --delete
   # only tear down the microvm SandboxConfig if the caller opted into microvm.
   if [[ "${BENCHMARK_SANDBOX_CLASS}" == "microvm" ]]; then
@@ -833,6 +891,7 @@ delete_benchmarks() {
 
 delete_all() {
   log_step "delete_all"
+  check_jq
   for demo_name in "${ATE_DEMOS[@]}"; do
     if declare -F "${demo_name}_delete" >/dev/null 2>&1; then
       "${demo_name}_delete"
@@ -855,6 +914,8 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+check_prerequisites
 
 # Pre-scan value-bearing flags so they can appear before or after the action
 # flag they configure (e.g. --benchmark-worker-count before/after
