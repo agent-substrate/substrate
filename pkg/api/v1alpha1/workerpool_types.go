@@ -30,19 +30,21 @@ type WorkerPoolLabelValue string
 // settings for worker workloads. NodeAffinity is mapped to
 // spec.affinity.nodeAffinity on the pod.
 type WorkerPoolPodTemplate struct {
-	// Labels are added to the generated Deployment and worker pods. The
-	// controller owns the ate.dev/worker-pool label.
+	// Labels are added to the generated Deployment and worker pods. Keys in
+	// the ate.dev domain and its subdomains are reserved for controllers.
 	//
 	// +optional
 	// +kubebuilder:validation:MaxProperties=64
-	// +kubebuilder:validation:XValidation:rule="!('ate.dev/worker-pool' in self)",message="ate.dev/worker-pool is managed by the controller"
+	// +kubebuilder:validation:XValidation:rule="self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))",message="ate.dev and its subdomains are reserved"
 	// +kubebuilder:validation:XValidation:rule="self.all(key, !format.qualifiedName().validate(key).hasValue())",message="label keys must be valid Kubernetes qualified names"
 	Labels map[string]WorkerPoolLabelValue `json:"labels,omitempty"`
 
-	// Annotations are added to the generated Deployment and worker pods.
+	// Annotations are added to the generated Deployment and worker pods. Keys
+	// in the ate.dev domain and its subdomains are reserved for controllers.
 	//
 	// +optional
 	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))",message="ate.dev and its subdomains are reserved"
 	// +kubebuilder:validation:XValidation:rule="self.all(key, !format.qualifiedName().validate(key).hasValue())",message="annotation keys must be valid Kubernetes qualified names"
 	Annotations map[string]string `json:"annotations,omitempty"`
 

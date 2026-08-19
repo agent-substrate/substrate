@@ -106,11 +106,14 @@ spec:
                   annotations:
                     additionalProperties:
                       type: string
-                    description: Annotations are added to the generated Deployment
-                      and worker pods.
+                    description: |-
+                      Annotations are added to the generated Deployment and worker pods. Keys
+                      in the ate.dev domain and its subdomains are reserved for controllers.
                     maxProperties: 64
                     type: object
                     x-kubernetes-validations:
+                    - message: ate.dev and its subdomains are reserved
+                      rule: self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))
                     - message: annotation keys must be valid Kubernetes qualified
                         names
                       rule: self.all(key, !format.qualifiedName().validate(key).hasValue())
@@ -123,13 +126,13 @@ spec:
                       pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
                       type: string
                     description: |-
-                      Labels are added to the generated Deployment and worker pods. The
-                      controller owns the ate.dev/worker-pool label.
+                      Labels are added to the generated Deployment and worker pods. Keys in
+                      the ate.dev domain and its subdomains are reserved for controllers.
                     maxProperties: 64
                     type: object
                     x-kubernetes-validations:
-                    - message: ate.dev/worker-pool is managed by the controller
-                      rule: '!(''ate.dev/worker-pool'' in self)'
+                    - message: ate.dev and its subdomains are reserved
+                      rule: self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))
                     - message: label keys must be valid Kubernetes qualified names
                       rule: self.all(key, !format.qualifiedName().validate(key).hasValue())
                   nodeAffinity:

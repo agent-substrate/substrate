@@ -115,12 +115,33 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.template.labels.project in body should match",
 	}, {
-		name: "reserved worker-pool label",
+		name: "reserved ate.dev label",
 		mutate: func(wp *WorkerPool) {
-			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: map[string]WorkerPoolLabelValue{"ate.dev/worker-pool": "other"}}
+			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: map[string]WorkerPoolLabelValue{"ate.dev/custom": "value"}}
 		},
 		wantErr: true,
-		errMsg:  "ate.dev/worker-pool is managed by the controller",
+		errMsg:  "ate.dev and its subdomains are reserved",
+	}, {
+		name: "reserved ate.dev subdomain label",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: map[string]WorkerPoolLabelValue{"policy.ate.dev/exemption": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "ate.dev and its subdomains are reserved",
+	}, {
+		name: "reserved ate.dev annotation",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Annotations: map[string]string{"ate.dev/custom": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "ate.dev and its subdomains are reserved",
+	}, {
+		name: "reserved ate.dev subdomain annotation",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Annotations: map[string]string{"policy.ate.dev/exemption": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "ate.dev and its subdomains are reserved",
 	}, {
 		name: "invalid worker annotation key",
 		mutate: func(wp *WorkerPool) {
@@ -236,5 +257,34 @@ func TestWorkerPoolValidation(t *testing.T) {
 				_ = k8sClient.Delete(ctx, wp)
 			}
 		})
+	}
+}
+
+func TestWorkerPoolReservedMetadataUpdate(t *testing.T) {
+	ctx := context.Background()
+	wp := &WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-reserved-metadata-update",
+			Namespace: "default",
+		},
+		Spec: WorkerPoolSpec{
+			Replicas:   1,
+			AteomImage: "example.com/ateom:latest",
+		},
+	}
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, wp) })
+
+	wp.Spec.Template = &WorkerPoolPodTemplate{
+		Annotations: map[string]string{"security.ate.dev/exemption": "value"},
+	}
+	err := k8sClient.Update(ctx, wp)
+	if err == nil {
+		t.Fatal("update unexpectedly accepted a reserved annotation")
+	}
+	if want := "ate.dev and its subdomains are reserved"; !strings.Contains(err.Error(), want) {
+		t.Errorf("wrong error:\n  wanted: %q\n     got: %q", want, err.Error())
 	}
 }

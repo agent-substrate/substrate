@@ -28,8 +28,14 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 | `resources` | `ResourceRequirements` | `spec.containers[].resources` |
 
-`ate.dev/worker-pool` is reserved for the controller and cannot be set in
-`template.labels`. Metadata keys and label values must follow Kubernetes syntax.
+Keys in `ate.dev/` and its subdomains (for example, `policy.ate.dev/`) are
+reserved for controllers and cannot be set in `template.labels` or
+`template.annotations`. Metadata keys and label values must follow Kubernetes
+syntax.
+
+`template.labels` and `template.annotations` only configure Kubernetes workload
+metadata; they do not affect actor scheduling. Actor selectors match
+`WorkerPool.metadata.labels`, not `WorkerPool.spec.template.labels`.
 
 #### Worker Capacity (`spec.template.resources`)
 
