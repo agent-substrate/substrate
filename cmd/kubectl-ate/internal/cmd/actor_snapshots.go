@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -147,15 +149,10 @@ var updateActorSnapshotTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-			Tag: &ateapipb.ActorSnapshotTag{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: updateTagAtespaceFlag, Name: args[0]},
-				Scope:    scope,
-			},
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
-		})
+		ref := &ateapipb.ObjectRef{Atespace: updateTagAtespaceFlag, Name: args[0]}
+		resp, err := updateActorSnapshotTagScope(ctx, client, ref, scope)
 		if err != nil {
-			return fmt.Errorf("failed to update actor snapshot tag: %w", err)
+			return err
 		}
 		return printer.PrintActorSnapshotTag(resp, outputFmt)
 	},
@@ -181,6 +178,28 @@ var deleteActorSnapshotTagCmd = &cobra.Command{
 		fmt.Printf("actor snapshot tag %q deleted\n", args[0])
 		return nil
 	},
+}
+
+type actorSnapshotTagClient interface {
+	GetActorSnapshotTag(ctx context.Context, in *ateapipb.GetActorSnapshotTagRequest, opts ...grpc.CallOption) (*ateapipb.ActorSnapshotTag, error)
+	UpdateActorSnapshotTag(ctx context.Context, in *ateapipb.UpdateActorSnapshotTagRequest, opts ...grpc.CallOption) (*ateapipb.ActorSnapshotTag, error)
+}
+
+func updateActorSnapshotTagScope(ctx context.Context, client actorSnapshotTagClient, ref *ateapipb.ObjectRef, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
+	tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{Tag: ref})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get actor snapshot tag %q: %w", ref.GetName(), err)
+	}
+	tag.Scope = scope
+
+	resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag:        tag,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update actor snapshot tag: %w", err)
+	}
+	return resp, nil
 }
 
 func parseActorSnapshotTagScope(value string) (ateapipb.ActorSnapshotTagScope, error) {
