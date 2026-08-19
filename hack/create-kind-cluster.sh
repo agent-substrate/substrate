@@ -21,6 +21,7 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
 reg_port="${KIND_REGISTRY_PORT:-5001}"
+IPV6_DNS_UPSTREAM="${IPV6_DNS_UPSTREAM:-2001:4860:4860::8888 2001:4860:4860::8844}"
 
 if [[ $# -gt 0 ]]; then
   case "$1" in
@@ -31,6 +32,8 @@ if [[ $# -gt 0 ]]; then
       echo "Configured through the environment:"
       echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
       echo "  IP_FAMILY          Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      echo "  IPV6_DNS_UPSTREAM  Space-separated IPv6 resolvers CoreDNS forwards to when IP_FAMILY=ipv6"
+      echo "                     (default: Google Public DNS). Override where those are unreachable."
       exit 0
       ;;
   esac
@@ -194,6 +197,61 @@ done
 echo "Connecting local registry to cluster network..."
 if [ "$(docker inspect -f='{{json .NetworkSettings.Networks.kind}}' "${reg_name}")" = "null" ]; then
   docker network connect "kind" "${reg_name}"
+fi
+
+# 4.5. Give CoreDNS an IPv6 forwarder and a registry entry
+#
+# CoreDNS runs dnsPolicy: Default, inheriting the node's IPv4 resolver, which
+# no pod here can reach, so external lookups SERVFAIL. Step 3's registry
+# wiring is node-side, so it misses atelet too: that pull runs in atelet's own
+# netns, where "kind-registry" NXDOMAINs.
+if [[ "${IP_FAMILY}" == "ipv6" ]]; then
+  echo "Repointing CoreDNS at an IPv6 resolver and teaching it '${reg_name}'..."
+  reg_v6="$(docker inspect "${reg_name}" \
+    --format '{{.NetworkSettings.Networks.kind.GlobalIPv6Address}}')"
+  if [[ -z "${reg_v6}" ]]; then
+    echo "error: '${reg_name}' has no IPv6 address on the 'kind' network" >&2
+    exit 1
+  fi
+
+  corefile="$(kubectl --context="${KUBECTL_CONTEXT}" -n kube-system get cm coredns \
+    -o jsonpath='{.data.Corefile}')"
+  search="forward . /etc/resolv.conf"
+  replace="forward . ${IPV6_DNS_UPSTREAM}"
+  # $search unquoted: bash 3.2 splices the quotes in literally. Replacing just
+  # the target leaves kind's trailing "{ max_concurrent 1000 }" in place.
+  patched="${corefile/$search/$replace}"
+  if [[ "${patched}" == "${corefile}" ]]; then
+    echo "error: '${search}' not found in the CoreDNS Corefile" >&2
+    echo "       the Corefile layout changed upstream; update this block" >&2
+    exit 1
+  fi
+
+  # Its own server block, not a hosts entry in .:53. A query is served by the
+  # one block whose zone is its longest suffix, so only "${reg_name}" arrives
+  # here -- which is why this hosts needs no fallthrough to avoid NXDOMAINing
+  # every other name.
+  patched="${patched}
+${reg_name}:53 {
+    errors
+    hosts {
+        ${reg_v6} ${reg_name}
+    }
+}"
+
+  # A YAML patch file avoids escaping the Corefile's newlines into JSON.
+  { printf 'data:\n  Corefile: |\n'; printf '%s\n' "${patched}" | sed 's/^/    /'; } \
+    > "${ROOT}/bin/coredns-patch.yaml"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system patch cm coredns \
+    --type=merge --patch-file "${ROOT}/bin/coredns-patch.yaml"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout restart deploy/coredns
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout status deploy/coredns \
+    --timeout=120s
+
+  # Its own script so it can be re-run against a live cluster: the hosts entry
+  # above is a snapshot of an address the registry can move off (#1049).
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" REG_NAME="${reg_name}" \
+    IPV6_DNS_UPSTREAM="${IPV6_DNS_UPSTREAM}" "${ROOT}"/hack/verify-ipv6-dns.sh
 fi
 
 # 5. Document the local registry in kube-public ConfigMap
