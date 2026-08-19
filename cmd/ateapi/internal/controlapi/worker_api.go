@@ -41,11 +41,3 @@ func (s *Service) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRe
 func (s *Service) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "DrainWorker is not implemented yet")
 }
-
-func (s *Service) AssignWorker(ctx context.Context, req *ateapipb.AssignWorkerRequest) (*ateapipb.Worker, error) {
-	return nil, status.Error(codes.Unimplemented, "AssignWorker is not implemented yet")
-}
-
-func (s *Service) ReleaseWorker(ctx context.Context, req *ateapipb.ReleaseWorkerRequest) (*ateapipb.Worker, error) {
-	return nil, status.Error(codes.Unimplemented, "ReleaseWorker is not implemented yet")
-}

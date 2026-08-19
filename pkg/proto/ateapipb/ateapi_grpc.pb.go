@@ -52,8 +52,6 @@ const (
 	Control_UpdateWorker_FullMethodName           = "/ateapi.Control/UpdateWorker"
 	Control_DeleteWorker_FullMethodName           = "/ateapi.Control/DeleteWorker"
 	Control_DrainWorker_FullMethodName            = "/ateapi.Control/DrainWorker"
-	Control_AssignWorker_FullMethodName           = "/ateapi.Control/AssignWorker"
-	Control_ReleaseWorker_FullMethodName          = "/ateapi.Control/ReleaseWorker"
 	Control_ListActors_FullMethodName             = "/ateapi.Control/ListActors"
 	Control_CreateAtespace_FullMethodName         = "/ateapi.Control/CreateAtespace"
 	Control_GetAtespace_FullMethodName            = "/ateapi.Control/GetAtespace"
@@ -114,12 +112,6 @@ type ControlClient interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// Bind an Actor to a Worker. Returns FAILED_PRECONDITION if the Worker is
-	// not ACTIVE or is already bound to a different Actor — in both cases the
-	// caller should pick a different Worker rather than retry this one.
-	AssignWorker(ctx context.Context, in *AssignWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// Unbind an Actor from a Worker. Valid in any state, including DRAINING.
-	ReleaseWorker(ctx context.Context, in *ReleaseWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	// List Actors.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
@@ -337,26 +329,6 @@ func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest,
 	return out, nil
 }
 
-func (c *controlClient) AssignWorker(ctx context.Context, in *AssignWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Worker)
-	err := c.cc.Invoke(ctx, Control_AssignWorker_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *controlClient) ReleaseWorker(ctx context.Context, in *ReleaseWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Worker)
-	err := c.cc.Invoke(ctx, Control_ReleaseWorker_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *controlClient) ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorsResponse)
@@ -496,12 +468,6 @@ type ControlServer interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
-	// Bind an Actor to a Worker. Returns FAILED_PRECONDITION if the Worker is
-	// not ACTIVE or is already bound to a different Actor — in both cases the
-	// caller should pick a different Worker rather than retry this one.
-	AssignWorker(context.Context, *AssignWorkerRequest) (*Worker, error)
-	// Unbind an Actor from a Worker. Valid in any state, including DRAINING.
-	ReleaseWorker(context.Context, *ReleaseWorkerRequest) (*Worker, error)
 	// List Actors.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
@@ -585,12 +551,6 @@ func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerReq
 }
 func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
-}
-func (UnimplementedControlServer) AssignWorker(context.Context, *AssignWorkerRequest) (*Worker, error) {
-	return nil, status.Error(codes.Unimplemented, "method AssignWorker not implemented")
-}
-func (UnimplementedControlServer) ReleaseWorker(context.Context, *ReleaseWorkerRequest) (*Worker, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReleaseWorker not implemented")
 }
 func (UnimplementedControlServer) ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActors not implemented")
@@ -982,42 +942,6 @@ func _Control_DrainWorker_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_AssignWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AssignWorkerRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).AssignWorker(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_AssignWorker_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).AssignWorker(ctx, req.(*AssignWorkerRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_ReleaseWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReleaseWorkerRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).ReleaseWorker(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_ReleaseWorker_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).ReleaseWorker(ctx, req.(*ReleaseWorkerRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Control_ListActors_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorsRequest)
 	if err := dec(in); err != nil {
@@ -1262,14 +1186,6 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DrainWorker",
 			Handler:    _Control_DrainWorker_Handler,
-		},
-		{
-			MethodName: "AssignWorker",
-			Handler:    _Control_AssignWorker_Handler,
-		},
-		{
-			MethodName: "ReleaseWorker",
-			Handler:    _Control_ReleaseWorker_Handler,
 		},
 		{
 			MethodName: "ListActors",

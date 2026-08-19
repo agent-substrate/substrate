@@ -55,14 +55,6 @@ func TestWorkerAPIUnimplemented(t *testing.T) {
 			_, err := s.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{})
 			return err
 		}},
-		{"AssignWorker", func() error {
-			_, err := s.AssignWorker(ctx, &ateapipb.AssignWorkerRequest{})
-			return err
-		}},
-		{"ReleaseWorker", func() error {
-			_, err := s.ReleaseWorker(ctx, &ateapipb.ReleaseWorkerRequest{})
-			return err
-		}},
 	}
 
 	for _, tc := range tests {

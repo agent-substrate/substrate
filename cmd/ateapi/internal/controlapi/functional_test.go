@@ -3796,7 +3796,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if got := resumed.GetActor().GetWorkerAssignment().GetWorkerPod(); got != "worker-2" {
 		t.Errorf("resumed onto worker %q, want worker-2 (the worker on node2)", got)
 	}
-	worker, err := tc.persistence.GetWorker(context.Background(), ns, "pool1", "worker-2")
+	worker, err := tc.persistence.GetWorker(context.Background(), resumed.GetActor().GetWorkerAssignment().GetWorker().GetName())
 	if err != nil {
 		t.Fatalf("GetWorker(worker-2) failed: %v", err)
 	}

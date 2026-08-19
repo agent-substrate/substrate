@@ -85,14 +85,6 @@ service Control {
   // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
   rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
 
-  // Bind an Actor to a Worker. Returns FAILED_PRECONDITION if the Worker is
-  // not ACTIVE or is already bound to a different Actor — in both cases the
-  // caller should pick a different Worker rather than retry this one.
-  rpc AssignWorker(AssignWorkerRequest) returns (Worker) {}
-
-  // Unbind an Actor from a Worker. Valid in any state, including DRAINING.
-  rpc ReleaseWorker(ReleaseWorkerRequest) returns (Worker) {}
-
   // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
@@ -830,9 +822,6 @@ message UpdateWorkerRequest {
   //   - sandbox_class
   //   - labels
   //   - state
-  //
-  // assignment is owned exclusively by AssignWorker/ReleaseWorker and is never
-  // valid here.
   google.protobuf.FieldMask update_mask = 2;
 }
 
@@ -847,32 +836,6 @@ message DeleteWorkerRequest {
 message DrainWorkerRequest {
   // The Worker to mark as terminating.
   ObjectRef worker = 1;
-}
-
-message AssignWorkerRequest {
-  // The Worker to bind.
-  ObjectRef worker = 1;
-
-  // The Actor to bind to it.
-  ActorAssignment assignment = 2;
-
-  // Optional precondition. Zero skips the check. Callers that hold no prior
-  // read of the Worker should pass zero and rely on the server-side
-  // availability check, which is what makes the bind mutually exclusive.
-  int64 version = 3;
-}
-
-message ReleaseWorkerRequest {
-  // The Worker to unbind.
-  ObjectRef worker = 1;
-
-  // If non-empty, release only if the current assignment names this Actor
-  // incarnation. A mismatch means a newer assignment superseded this one and
-  // is reported as success, leaving the Worker untouched.
-  string actor_uid = 2;
-
-  // Optional precondition. Zero skips the check.
-  int64 version = 3;
 }
 
 // List actors with pagination. Provides "soft" guarantees: actors may be
@@ -933,8 +896,7 @@ message Worker {
   // The compute capacity this worker can give an actor sandbox.
   WorkerCapacity capacity = 12;
 
-  // The Actor currently bound to this Worker, if any. Owned exclusively by
-  // AssignWorker/ReleaseWorker; never valid in an UpdateWorker mask.
+  // The Actor currently bound to this Worker, if any.
   ActorAssignment assignment = 13;
 }
 
