@@ -188,6 +188,11 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
 		_ = reaper.Run(exec.Command("umount", "-l", dst))
 	}
+	// The workdir is scratch: wipe it so a volatile mount is never refused by a
+	// dirty marker left behind by the previous activation.
+	if err := os.RemoveAll(work); err != nil {
+		return fmt.Errorf("clearing overlay workdir %q: %w", work, err)
+	}
 	for _, d := range []string{dst, upper, work} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("creating %q: %w", d, err)
@@ -203,8 +208,13 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	// off, every copy-up is a full data copy and the upper is self-contained —
 	// the portability the find-paths comment above promises. (redirect_dir is
 	// path-based and travels fine, so it stays at the kernel default.)
+	// volatile: skip the sync overlayfs would otherwise do on this upper,
+	// including at umount. The upper is throwaway — it is tarred into the
+	// snapshot and then deleted — so the durability volatile gives up is
+	// durability we do not use. It refuses to mount over a workdir left dirty by
+	// a previous volatile mount, hence the wipe above.
 	opts := "lowerdir=" + bundleRootfs + ",upperdir=" + upper + ",workdir=" + work +
-		",metacopy=off,index=off"
+		",metacopy=off,index=off,volatile"
 	cmd := exec.CommandContext(ctx, "mount", "-t", "overlay", "overlay", "-o", opts, dst)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
