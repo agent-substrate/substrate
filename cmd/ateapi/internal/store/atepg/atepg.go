@@ -174,9 +174,9 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	return dbAtespace, nil
 }
 
-func getAtespaceRow(ctx context.Context, q querier, name string) (*ateapipb.Atespace, error) {
+func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -188,10 +188,6 @@ func getAtespaceRow(ctx context.Context, q querier, name string) (*ateapipb.Ates
 		return nil, fmt.Errorf("unmarshaling atespace: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
-	return getAtespaceRow(ctx, p.pool, name)
 }
 
 func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
@@ -521,24 +517,20 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	return dbActor, nil
 }
 
-func getActorRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.Actor, error) {
+func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("getting actor %s/%s: %w", atespace, name, err)
+		return nil, fmt.Errorf("getting actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
 	}
 	out := &ateapipb.Actor{}
 	if err := proto.Unmarshal(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	return getActorRow(ctx, p.pool, actorRef.Atespace, actorRef.Name)
 }
 
 // validateUpdateActorMutation reports whether an actor mutation changed fields
@@ -794,9 +786,9 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 	return dbSnapshot, nil
 }
 
-func getActorSnapshotRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.ActorSnapshot, error) {
+func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
 	var protoBytes []byte
-	if err := q.QueryRow(ctx, `
+	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM actor_snapshots
 		WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -809,10 +801,6 @@ func getActorSnapshotRow(ctx context.Context, q querier, atespace, name string) 
 		return nil, fmt.Errorf("unmarshaling actor snapshot: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
-	return getActorSnapshotRow(ctx, p.pool, atespace, name)
 }
 
 func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
