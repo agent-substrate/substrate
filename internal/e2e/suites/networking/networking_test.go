@@ -33,24 +33,9 @@ import (
 
 const networkingAtespace = "networking-e2e"
 
-// actorTemplate identifies a demo ActorTemplate to build test Actors from,
-// along with the hack/install-ate.sh flag that deploys it.
-type actorTemplate struct {
-	namespace string
-	name      string
-	// deployFlag names the install flag that creates the template, so a
-	// missing fixture reports how to fix it rather than just failing.
-	deployFlag string
-}
-
-var (
-	counterTemplate = actorTemplate{namespace: "ate-demo-counter", name: "counter", deployFlag: "--deploy-demo-counter"}
-	egressTemplate  = actorTemplate{namespace: "ate-demo-egress", name: "egress", deployFlag: "--deploy-demo-egress"}
-)
-
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
-	actorName, actor := createAndResumeActor(t, ctx, "direct", counterTemplate)
+	actorName, actor := createAndResumeActor(t, ctx, "direct", e2e.CounterFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -74,7 +59,7 @@ func TestActorDirectAccess(t *testing.T) {
 // asserts the gateway is deployed and that it did not reject the Actor.
 func TestActorEgress(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "egress", egressTemplate)
+	actorName, _ := createAndResumeActor(t, ctx, "egress", e2e.EgressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -93,7 +78,7 @@ func TestActorEgress(t *testing.T) {
 // between the Actor and the origin.
 func TestActorEgressHTTPS(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "egress-https", egressTemplate)
+	actorName, _ := createAndResumeActor(t, ctx, "egress-https", e2e.EgressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -231,7 +216,7 @@ func accessLogField(line, key string) (string, bool) {
 	return value, true
 }
 
-func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template actorTemplate) (string, *ateapipb.Actor) {
+func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture) (string, *ateapipb.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
@@ -243,10 +228,10 @@ func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, temp
 	})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName},
-		ActorTemplateNamespace: template.namespace,
-		ActorTemplateName:      template.name,
+		ActorTemplateNamespace: template.Namespace,
+		ActorTemplateName:      template.Name,
 	}}); err != nil {
-		t.Fatalf("CreateActor from %s/%s: %v (deploy the fixture with %s)", template.namespace, template.name, err, template.deployFlag)
+		t.Fatalf("CreateActor from %s/%s: %v (deploy the fixture with %s)", template.Namespace, template.Name, err, template.DeployWith)
 	}
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
@@ -303,7 +288,7 @@ func waitForRouteReady(t *testing.T, what string, request func() (*http.Response
 
 func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapipb.Actor) {
 	t.Helper()
-	if actor.GetWorkerAssignment().GetWorkerNamespace() == "" || actor.GetWorkerAssignment().GetWorkerPod() == "" {
+	if actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace() == "" || actor.GetStatus().GetWorkerAssignment().GetWorkerPod() == "" {
 		t.Fatalf("resumed Actor has no worker pod assignment: %+v", actor)
 	}
 
@@ -312,16 +297,16 @@ func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Cli
 	// verifies that the old direct path remains unavailable without relying on
 	// the test runner having a route to the pod CIDR.
 	result := clients.K8s.CoreV1().RESTClient().Get().
-		Namespace(actor.GetWorkerAssignment().GetWorkerNamespace()).
+		Namespace(actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()).
 		Resource("pods").
-		Name(actor.GetWorkerAssignment().GetWorkerPod() + ":80").
+		Name(actor.GetStatus().GetWorkerAssignment().GetWorkerPod() + ":80").
 		SubResource("proxy").
 		Suffix("readyz").
 		Do(ctx)
 	body, err := result.Raw()
 
 	if err == nil {
-		t.Fatalf("direct Actor access through %s/%s:80 unexpectedly succeeded; body: %s", actor.GetWorkerAssignment().GetWorkerNamespace(), actor.GetWorkerAssignment().GetWorkerPod(), body)
+		t.Fatalf("direct Actor access through %s/%s:80 unexpectedly succeeded; body: %s", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), body)
 	}
-	t.Logf("direct Actor access through %s/%s:80 was blocked as expected: %v", actor.GetWorkerAssignment().GetWorkerNamespace(), actor.GetWorkerAssignment().GetWorkerPod(), err)
+	t.Logf("direct Actor access through %s/%s:80 was blocked as expected: %v", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), err)
 }

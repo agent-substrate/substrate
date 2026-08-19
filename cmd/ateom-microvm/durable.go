@@ -25,16 +25,11 @@ package main
 // ateompath.DurableDirVolumeMountsDir(actorUID) and wipes them when the actor's
 // directories are reset.
 //
-// ateom exposes that host directory to the guest over a SECOND virtiofsd —
-// separate from the kataShared rootfs share because the two have different
-// owners and lifecycles: atelet owns this directory (created before boot,
-// wiped on actor reset, captured under EVERY snapshot scope), while the
-// rootfs uppers are ateom-owned and Full-scope-only. Each volume is a
-// subdirectory of the one share, at kata.GuestDurableVolumeDir(volume),
-// bind-mounted from there into every container that declares it. An actor may
-// have any number of them: they cost a subdirectory each, not a device, so
-// nothing here scales with the volume count (gVisor is the runtime that caps
-// this at one, via the ActorTemplate CEL rules).
+// ateom exposes that host directory to the guest under the single kataShared
+// virtio-fs share at SharedDir(actorUID)/durable (in-guest path:
+// kata.GuestDurableVolumeDir(volume)), bind-mounted from there into every
+// container that declares it. An actor may have any number of them: they cost a
+// subdirectory each, not a device, so nothing here scales with the volume count.
 //
 // Snapshots carry the contents as a tar of the whole per-actor directory, so
 // every volume rides along and the layout is reproduced verbatim on restore.
@@ -48,8 +43,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/tarutil"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -95,45 +92,41 @@ func durableMounts(mounts []*ateompb.DurableDirVolumeMount) []specs.Mount {
 // The spec is copied rather than mutated so the bundle's on-disk config.json
 // stays as prepared — only the started container sees the binds.
 func workloadSpec(c actorContainer) *specs.Spec {
-	if len(c.durableMounts) == 0 {
+	if len(c.durableMounts) == 0 && len(c.csiMounts) == 0 {
 		return c.spec
 	}
 	spec := *c.spec
-	spec.Mounts = append(append([]specs.Mount(nil), c.spec.Mounts...), durableMounts(c.durableMounts)...)
+
+	var mounts []specs.Mount
+	mounts = append(mounts, c.spec.Mounts...)
+	mounts = append(mounts, durableMounts(c.durableMounts)...)
+	mounts = append(mounts, csiMounts(c.csiMounts)...)
+	spec.Mounts = mounts
 	return &spec
 }
 
-// durableVirtiofsdLogPath is where the durable-dir share's virtiofsd logs,
-// beside the overlay lower's (see virtiofsdLogPath) under the actor's VM dir.
-func durableVirtiofsdLogPath(id string) string {
-	return filepath.Join(kata.VMDir(id), "virtiofsd-durable.log")
-}
-
-// stageDurableShare starts the virtiofsd serving the actor's durable-dir volumes.
-//
-// It serves ateompath.DurableDirVolumeMountsDir directly — no bind into the
-// kataShared tree — so teardown has nothing extra to unmount. Unlike the RO
-// lower's virtiofsd this one runs with cache=auto: the host contents change
-// underneath the guest whenever a snapshot is restored into them.
-//
-// The returned cmd outlives this call (CH talks to it for the VM's lifetime);
-// the caller owns it (tracked on runningActor, killed in teardownActor).
-func (s *AteomService) stageDurableShare(ctx context.Context, rr resolvedRuntime, actorUID string) (*exec.Cmd, error) {
-	shared := ateompath.DurableDirVolumeMountsDir(actorUID)
-	if _, err := os.Stat(shared); err != nil {
-		return nil, fmt.Errorf("while checking durable-dir volumes dir %q: %w", shared, err)
+// stageDurableVolumes bind-mounts the actor's host durable-dir directory
+// into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/durable.
+func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID string) error {
+	src := ateompath.DurableDirVolumeMountsDir(actorUID)
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("while checking durable-dir volumes dir %q: %w", src, err)
 	}
-	log, _ := os.OpenFile(durableVirtiofsdLogPath(actorUID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	cmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
-		Binary:     rr.virtiofsd,
-		SocketPath: kata.DurableVirtiofsdSocketPath(actorUID),
-		SharedDir:  shared,
-		Log:        log,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("while starting durable-dir virtiofsd: %w", err)
+	dst := filepath.Join(kata.SharedDir(actorUID), "durable")
+	// Drop any stale mount first (lazy if busy), then ensure clean mountpoint.
+	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
+		_ = reaper.Run(exec.Command("umount", "-l", dst))
 	}
-	return cmd, nil
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("creating %q: %w", dst, err)
+	}
+	cmd := exec.CommandContext(ctx, "mount", "--bind", src, dst)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := reaper.Run(cmd); err != nil {
+		return fmt.Errorf("bind-mounting durable-dir volumes at %q: %w (%s)", dst, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // tarDurableVolumes archives the actor's durable-dir volumes (dir) into the

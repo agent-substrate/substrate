@@ -80,10 +80,20 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+# Tests whose User class is implemented in Python. Closed set: new load
+# generators are written in boomer, so anything else runs on boomer. Remove
+# entries as these are retired; when empty, drop needs_boomer entirely.
+PYTHON_TESTS = frozenset({
+    "ate_api.py",
+    "counter_demo.py",
+    "sleep.py",
+    "usermem.py",
+    "kernelmem.py",
+})
+
+
 def needs_boomer(test_file: str) -> bool:
-    """Return True if the test file is the glutton stub; the real GluttonUser
-    implementation lives in the boomer-glutton binary."""
-    return os.path.basename(test_file) == "glutton.py"
+    return os.path.basename(test_file) not in PYTHON_TESTS
 
 
 def tee(logs: TextIO, msg: str) -> None:
@@ -208,7 +218,7 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
 
     boomer_proc = None
     if with_boomer:
-        boomer_cmd = [BOOMER_BINARY]
+        boomer_cmd = [BOOMER_BINARY, "--user-class", Path(args.file).stem]
         cfg_json = build_config_json(args.locust_extra)
         if cfg_json:
             boomer_cmd += ["--config-json", cfg_json]

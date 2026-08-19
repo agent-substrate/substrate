@@ -235,7 +235,8 @@ const (
 	// the OCI image (including any attached DurableDir volumes).
 	SnapshotScopeFull SnapshotScope = "Full"
 	// Data captures only the contents of attached volumes that support
-	// snapshots (currently DurableDir-typed volumes). Process memory and
+	// snapshots (currently DurableDir-typed volumes; external/CSI volumes
+	// are not snapshotted as they persist independently). Process memory and
 	// the rest of rootfs are excluded.
 	SnapshotScopeData SnapshotScope = "Data"
 )
@@ -282,6 +283,8 @@ type SnapshotsConfig struct {
 
 	// OnPause specifies what to include in the snapshot when the actor is paused.
 	// If not provided, the "Full" behavior is used by default.
+	// Note: Data scope only captures DurableDir-typed volumes; external/CSI
+	// volumes are not snapshotted as they persist independently.
 	//
 	// +optional
 	// +kubebuilder:default=Full
@@ -290,6 +293,8 @@ type SnapshotsConfig struct {
 	// OnCommit specifies what to include in the snapshot when a commit is requested.
 	// If not provided, the "Full" behavior is used by default.
 	// onCommit must be a subset of the onPause content.
+	// Note: Data scope only captures DurableDir-typed volumes; external/CSI
+	// volumes are not snapshotted as they persist independently.
 	//
 	// For example:
 	//   - if onPause is "Full", then onCommit can be "Full" or "Data".
@@ -311,7 +316,6 @@ type SnapshotsConfig struct {
 // ActorTemplateSpec defined desired spec of an actor.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.all(v, has(self.containers) && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm, vm.name == v.name)))",message="All volumes defined in spec.volumes must be mounted by at least one container"
-// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
 // +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData) ? self.snapshotsConfig.onResume.fromData : 'ColdBoot') != 'Golden'",message="onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests)",message="spec.resources.requests is not supported; actors are sized by spec.resources.limits only"
 // +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.claims)",message="spec.resources.claims is not supported"
@@ -324,6 +328,7 @@ type SnapshotsConfig struct {
 // assumes the default reserve; deployments that raise --vmm-mem-reserve-mib rely on
 // the runtime check. gVisor has no reserve, so this only applies to micro-VM.
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.resources) || !has(self.resources.limits) || !('memory' in self.resources.limits) || !quantity(self.resources.limits['memory']).isLessThan(quantity('256Mi'))",message="For sandboxClass 'microvm', spec.resources.limits.memory must be at least 256Mi (128Mi VMM reserve + 128Mi guest minimum); below this the VM cannot boot"
+// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.all(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name)))",message="All volume mounts must refer to a volume defined in spec.volumes"
 type ActorTemplateSpec struct {
 	// Containers is the workload definition.
 	//
@@ -369,6 +374,8 @@ type ActorTemplateSpec struct {
 	//
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
+	// +listType=map
+	// +listMapKey=name
 	Volumes []Volume `json:"volumes,omitempty"`
 
 	// Resources declares the compute resources for each actor of this template.

@@ -16,62 +16,18 @@ package controlapi
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/volume"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
-	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
-
-// CreateActor is the only lifecycle op with the full identity (incl. version)
-// available in the request, so the whole ate.* set should land on its span.
-func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-create")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.CreateActor(ctx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-				ActorTemplateNamespace: ns,
-				ActorTemplateName:      "tmpl1",
-			},
-		}); err != nil {
-			t.Fatalf("CreateActor: %v", err)
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
-	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, ns)
-	// uid is server-assigned on create, so assert it is present and non-empty
-	// rather than a fixed value.
-	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
-		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.String())
-	}
-	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 1 {
-		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.String())
-	}
-}
 
 func TestValidateCreateActorRequest(t *testing.T) {
 	validActor := func(mutate func(*ateapipb.Actor)) *ateapipb.CreateActorRequest {
@@ -169,104 +125,6 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateCreateActorRequest(tt.req), tt.want)
 		})
-	}
-}
-
-func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
-	ns := namespaceForTest("ns-data-snapshot-template")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-	createTemplateWithSelector(t, tc, ns, "tmpl2", nil)
-
-	tmpl, err := tc.actorTemplateLister.ActorTemplates(ns).Get("tmpl1")
-	if err != nil {
-		t.Fatalf("Get source ActorTemplate: %v", err)
-	}
-	snapshot, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata:         &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
-		SourceActor:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: "source"},
-		ActorTemplateUid: string(tmpl.GetUID()),
-		ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-		SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/data-snapshot",
-	})
-	if err != nil {
-		t.Fatalf("CreateActorSnapshot: %v", err)
-	}
-	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-	}); err != nil {
-		t.Fatalf("CreateActorSnapshotTag: %v", err)
-	}
-
-	_, err = tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl2",
-			SourceSnapshot:         &ateapipb.ActorSnapshotSource{Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "data-snapshot"}},
-		},
-	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))
-	}
-}
-
-func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
-	ns := namespaceForTest("ns-snapshot-external-volume")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	template, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), &atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: ns},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"},
-			Containers: []atev1alpha1.Container{{
-				Name: "main", Image: "main@sha256:abc", VolumeMounts: []atev1alpha1.VolumeMount{{Name: "data", MountPath: "/data"}},
-			}},
-			Volumes: []atev1alpha1.Volume{{
-				Name: "data",
-				VolumeSource: atev1alpha1.VolumeSource{ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-					Capacity: resource.MustParse("1Gi"), StorageClassName: "standard",
-				}},
-			}},
-		},
-	}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("Create ActorTemplate: %v", err)
-	}
-	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		got, err := tc.actorTemplateLister.ActorTemplates(ns).Get("tmpl1")
-		return err == nil && len(got.Spec.Volumes) == 1, nil
-	}); err != nil {
-		t.Fatalf("wait for ActorTemplate update: %v", err)
-	}
-	snapshot, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata:         &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "external-volume-snapshot"},
-		ActorTemplateUid: string(template.GetUID()),
-		SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/external-volume-snapshot",
-	})
-	if err != nil {
-		t.Fatalf("CreateActorSnapshot: %v", err)
-	}
-	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "external-volume-snapshot"}
-	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-	}); err != nil {
-		t.Fatalf("CreateActorSnapshotTag: %v", err)
-	}
-
-	_, err = tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
-			SourceSnapshot:         &ateapipb.ActorSnapshotSource{Tag: tagRef},
-		},
-	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))
 	}
 }
 
@@ -515,71 +373,6 @@ func TestUpdateActor_FieldMasks(t *testing.T) {
 	}
 }
 
-func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-update")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	if _, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
-		},
-	}); err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
-
-	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-				WorkerSelector: &ateapipb.Selector{
-					MatchLabels: map[string]string{"env": "prod"},
-				},
-			},
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
-		}); err != nil {
-			t.Fatalf("UpdateActor: %v", err)
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
-	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, ns)
-	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
-		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.String())
-	}
-	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 2 {
-		t.Errorf("%s = %v, want int64 2 (updated version)", ateattr.ActorVersionKey, v.String())
-	}
-}
-
-func TestUpdateActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
-	ns := namespaceForTest("ns-span-update-err")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
-			Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}},
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
-		}); status.Code(err) != codes.NotFound {
-			t.Fatalf("UpdateActor(missing) error = %v, want code NotFound", err)
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.TemplateNameKey, ateattr.TemplateNamespaceKey, ateattr.ActorVersionKey} {
-		if _, ok := attrs[k]; ok {
-			t.Errorf("unexpected %s on failed-update span", k)
-		}
-	}
-}
-
 // TestUpdateActor_DeleteRecreateRace checks that an update is not applied
 // if an actor was deleted and recreated during the update operation.
 func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
@@ -595,8 +388,10 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
-		Status:                 ateapipb.Actor_STATUS_RUNNING,
-		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerPod: "pod-a"},
+		Status: &ateapipb.ActorStatus{
+			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPod: "pod-a"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("seed CreateActor: %v", err)
@@ -610,7 +405,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 		Interface: persistence,
 		inject: func() {
 			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-				toUpdate.Status = ateapipb.Actor_STATUS_DELETING
+				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 				return nil
 			}); err != nil {
 				t.Fatalf("racing writer: mark deleting: %v", err)
@@ -622,7 +417,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 				ActorTemplateNamespace: "ns1",
 				ActorTemplateName:      "tmpl1",
-				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			})
 			if err != nil {
 				t.Fatalf("racing writer: recreate CreateActor: %v", err)
@@ -657,11 +452,11 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	}
 	// The stored record must still be actor B as its creator left it. Any of A's
 	// state showing up here is the clobber.
-	if got := stored.GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDED {
-		t.Errorf("stored status = %v, want %v: recreated actor was overwritten with the deleted actor's state",
-			got, ateapipb.Actor_STATUS_SUSPENDED)
+	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("stored state = %v, want %v: recreated actor was overwritten with the deleted actor's state",
+			got, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 	}
-	if got := stored.GetWorkerAssignment(); got != nil {
+	if got := stored.GetStatus().GetWorkerAssignment(); got != nil {
 		t.Errorf("stored worker_assignment = %v, want nil: recreated actor inherited the deleted actor's worker", got)
 	}
 	if got := stored.GetWorkerSelector(); got != nil {
@@ -682,18 +477,18 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
-		Status:                 ateapipb.Actor_STATUS_RUNNING,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	}); err != nil {
 		t.Fatalf("seed CreateActor: %v", err)
 	}
 
-	// A suspend workflow bumps status (a field that a later update operation will not touch)
+	// A suspend workflow bumps state (a field that a later update operation will not touch)
 	// inside the handler's read-modify-write window.
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
 			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-				toUpdate.Status = ateapipb.Actor_STATUS_SUSPENDING
+				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 				return nil
 			}); err != nil {
 				t.Fatalf("racing writer: mark suspending: %v", err)
@@ -702,7 +497,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	}
 	svc := &Service{persistence: racing}
 
-	// Update operation is changing the worker_selector field, not the actor's status (like the concurrent op)
+	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	if _, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
@@ -717,12 +512,12 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
-	// Both worker selector and status updates survive
+	// Both worker selector and state updates survive
 	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
 		t.Errorf("stored worker_selector[tier] = %q, want %q", got, "paid")
 	}
-	if got := stored.GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDING {
-		t.Errorf("stored status = %v, want %v: the concurrent writer's field must survive", got, ateapipb.Actor_STATUS_SUSPENDING)
+	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		t.Errorf("stored state = %v, want %v: the concurrent writer's field must survive", got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 	}
 }
 
@@ -767,35 +562,6 @@ func serviceWithActor(t *testing.T, actor *ateapipb.Actor) (*Service, *ateapipb.
 	return &Service{persistence: persistence}, created
 }
 
-// Delete addresses the actor by ref (atespace + id) and does not resolve the
-// template/version, so only the ref identity is stamped.
-func TestDeleteActor_StampsRefSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-delete")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-	if _, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
-		},
-	}); err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
-
-	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
-		}); err != nil {
-			t.Fatalf("DeleteActor: %v", err)
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-}
-
 func TestValidateDeleteActorRequest(t *testing.T) {
 	tests := []struct {
 		name string
@@ -830,144 +596,6 @@ func TestValidateDeleteActorRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateDeleteActorRequest(tt.req), tt.want)
 		})
-	}
-}
-
-func TestDeleteActor_StatusDeleting(t *testing.T) {
-	ns := namespaceForTest("ns-delete-deleting")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	deletingActor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: testAtespace,
-			Name:     "deleting-actor",
-		},
-		Status:                 ateapipb.Actor_STATUS_DELETING,
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
-	}
-	if _, err := tc.persistence.CreateActor(context.Background(), deletingActor); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
-
-	if _, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "deleting-actor"},
-	}); err != nil {
-		t.Fatalf("DeleteActor on STATUS_DELETING actor failed: %v", err)
-	}
-
-	if _, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "deleting-actor"}); err == nil {
-		t.Errorf("expected actor to be deleted, but it still exists")
-	}
-}
-
-func TestDeleteActor_WrongStatus(t *testing.T) {
-	ns := namespaceForTest("ns-delete-wrong-status")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	runningActor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: testAtespace,
-			Name:     "running-actor",
-		},
-		Status:                 ateapipb.Actor_STATUS_RUNNING,
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
-	}
-	if _, err := tc.persistence.CreateActor(context.Background(), runningActor); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
-
-	_, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "running-actor"},
-	})
-	if err == nil {
-		t.Fatalf("expected DeleteActor on STATUS_RUNNING actor to fail, but it succeeded")
-	}
-}
-
-type failingVolumePlugin struct {
-	volume.VolumePluginControlPlane
-	deletedIDs []string
-}
-
-func (f *failingVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
-	f.deletedIDs = append(f.deletedIDs, volumeID)
-	return fmt.Errorf("simulated delete error for %s", volumeID)
-}
-
-func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
-	ns := namespaceForTest("ns-delete-multivol-fail")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
-	plugin := &failingVolumePlugin{}
-	tc.service.volumePlugins = map[string]volume.VolumePluginControlPlane{
-		"substrate.io/mock": plugin,
-	}
-
-	actor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: testAtespace,
-			Name:     "multi-vol-actor",
-		},
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
-		ActorVolumes: []*ateapipb.ExternalVolume{
-			{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
-			{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
-		},
-	}
-	if _, err := tc.persistence.CreateActor(context.Background(), actor); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
-
-	_, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-vol-actor"},
-	})
-	if err == nil {
-		t.Fatalf("expected DeleteActor to fail when volume deletion fails, but it succeeded")
-	}
-
-	wantDeleted := []string{"storage-vol-1", "storage-vol-2"}
-	if diff := cmp.Diff(wantDeleted, plugin.deletedIDs); diff != "" {
-		t.Errorf("deletedIDs mismatch (-want +got):\n%s", diff)
-	}
-
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, "storage-vol-1") || !strings.Contains(errMsg, "storage-vol-2") {
-		t.Errorf("expected error message to contain both volume failure details, got: %v", errMsg)
-	}
-}
-
-// Pause stamps the ref identity before resolving the Actor record, so a failed
-// lookup still carries who/where; it must not invent template/version, which are
-// known only once the record resolves (and stamped on success).
-func TestPauseActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
-	ns := namespaceForTest("ns-span-pause-err")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
-		}); status.Code(err) != codes.NotFound {
-			t.Fatalf("PauseActor(missing) error = %v, want code NotFound", err)
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.TemplateNameKey, ateattr.TemplateNamespaceKey, ateattr.ActorVersionKey} {
-		if _, ok := attrs[k]; ok {
-			t.Errorf("unexpected %s on failed-pause span", k)
-		}
 	}
 }
 
@@ -1006,25 +634,6 @@ func TestValidatePauseActorRequest(t *testing.T) {
 			assertValidateErr(t, validatePauseActorRequest(tt.req), tt.want)
 		})
 	}
-}
-
-// The early ref stamp must land on the span even when the op fails, so a failed
-// resume is still attributable to who/where.
-func TestResumeActor_ErrorStillStampsRefSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-resume-err")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing"},
-		}); err == nil {
-			t.Fatal("expected error resuming missing actor")
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorNameKey, "missing")
 }
 
 func TestValidateResumeActorRequest(t *testing.T) {

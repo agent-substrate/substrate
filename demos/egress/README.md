@@ -107,7 +107,7 @@ TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterI
 # 2. Create and resume an Actor.
 kubectl ate create atespace demo
 kubectl ate create actor egress-demo -a demo --template ate-demo-egress/egress
-kubectl ate resume actor egress-demo -a demo   # wait for STATUS_RUNNING
+kubectl ate resume actor egress-demo -a demo   # wait for ACTOR_STATE_RUNNING
 
 # 3. Drive the Actor's egress through the ingress gateway.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &

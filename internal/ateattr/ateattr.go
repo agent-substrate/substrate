@@ -307,7 +307,7 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 	}
 	operationName = NormalizeOperationName(operationName)
 
-	ass := a.GetWorkerAssignment()
+	ass := a.GetStatus().GetWorkerAssignment()
 	attrs := []attribute.KeyValue{
 		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		TemplateNameKey.String(a.GetActorTemplateName()),

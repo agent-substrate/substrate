@@ -82,7 +82,7 @@ func TestCreateActor_Success(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 
 	created, err := s.CreateActor(ctx, actor)
@@ -130,7 +130,7 @@ func TestCreateActor_AlreadyExists(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 
 	_, err := s.CreateActor(ctx, actor)
@@ -150,7 +150,7 @@ func newTestActor(name string) *ateapipb.Actor {
 		Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 }
 
@@ -164,7 +164,7 @@ func TestUpdateActor_Success(t *testing.T) {
 
 	actorRef := resources.ActorRefFromActor(actor)
 	updated, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if err != nil {
@@ -173,8 +173,8 @@ func TestUpdateActor_Success(t *testing.T) {
 
 	// UpdateActor returns the stored resource: the mutation applied and version
 	// advanced, with uid and create_time preserved from creation.
-	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("UpdateActor returned status %v, want RUNNING", updated.GetStatus())
+	if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("UpdateActor returned state %v, want RUNNING", updated.GetStatus().GetState())
 	}
 	if updated.GetMetadata().GetVersion() != 2 {
 		t.Errorf("UpdateActor returned version %d, want 2", updated.GetMetadata().GetVersion())
@@ -210,7 +210,7 @@ func TestUpdateActor_MutateErrorAreNotRetried(t *testing.T) {
 	callsToMutateFn := 0
 	_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
 		callsToMutateFn++
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return fmt.Errorf("actor %s: %w", actorRef, mutationError)
 	})
 	// The error must arrive intact
@@ -247,7 +247,7 @@ func TestUpdateActor_DiscardsServerOwnedFieldsEdits(t *testing.T) {
 		toUpdate.Metadata.Version = 99
 		toUpdate.Metadata.CreateTime = nil
 		toUpdate.Metadata.UpdateTime = nil
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if err != nil {
@@ -263,8 +263,8 @@ func TestUpdateActor_DiscardsServerOwnedFieldsEdits(t *testing.T) {
 	if got := updated.GetMetadata().GetCreateTime(); got == nil || !got.AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) {
 		t.Errorf("create_time = %v, want the creation value %v", got, created.GetMetadata().GetCreateTime())
 	}
-	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("status = %v, want RUNNING: discarding metadata edits must not discard the mutation", updated.GetStatus())
+	if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING: discarding metadata edits must not discard the mutation", updated.GetStatus().GetState())
 	}
 }
 
@@ -312,7 +312,7 @@ func TestUpdateActor_RejectsImmutableFieldChange(t *testing.T) {
 			_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
 				// Paired with a legitimate edit, so the rejection cannot be
 				// mistaken for a no-op mutation.
-				toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 				tt.mutate(toUpdate)
 				return nil
 			})
@@ -386,7 +386,7 @@ func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
 
 	updated, err := racing.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
 		attempts++
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if err != nil {
@@ -395,8 +395,8 @@ func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
 	if attempts < 2 {
 		t.Errorf("mutate ran %d times, want at least 2: the firts write is racey and must be rejected", attempts)
 	}
-	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("status = %v, want RUNNING", updated.GetStatus())
+	if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", updated.GetStatus().GetState())
 	}
 	// 1. The concurrent tx wrote "tier: paid" worker selector. This change should survive instead of
 	// being reverted by a mutation computed against the older state.
@@ -425,7 +425,7 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 	}
 	actorRef := resources.ActorRefFromActor(original)
 	if _, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_DELETING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 		return nil
 	}); err != nil {
 		t.Fatalf("marking actor deleting failed: %v", err)
@@ -448,7 +448,7 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 	}
 	_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(pinUID, func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate ran past its precondition once the pinned incarnation was gone")
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	}))
 	if !errors.Is(err, store.ErrUIDConflict) {
@@ -479,7 +479,7 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 	actorRef := resources.ActorRefFromActor(created)
 
 	if _, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
@@ -488,7 +488,7 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 	// The write above moved the version, so created is now a stale observation.
 	_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(created, func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate ran past its precondition once the pinned version had moved")
-		toUpdate.Status = ateapipb.Actor_STATUS_SUSPENDED
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		return nil
 	}))
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -666,14 +666,14 @@ func TestDeleteWorker(t *testing.T) {
 func TestDeleteActor(t *testing.T) {
 	tests := []struct {
 		name    string
-		status  ateapipb.Actor_Status
+		state   ateapipb.ActorState
 		wantErr error
 	}{
-		{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED, wantErr: store.ErrFailedPrecondition},
-		{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED, wantErr: store.ErrFailedPrecondition},
-		{name: "deleting", status: ateapipb.Actor_STATUS_DELETING},
-		{name: "running", status: ateapipb.Actor_STATUS_RUNNING, wantErr: store.ErrFailedPrecondition},
-		{name: "paused", status: ateapipb.Actor_STATUS_PAUSED, wantErr: store.ErrFailedPrecondition},
+		{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
+		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
+		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING},
+		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
+		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
 	}
 
 	for _, tt := range tests {
@@ -684,7 +684,7 @@ func TestDeleteActor(t *testing.T) {
 				Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "test-template",
-				Status:                 tt.status,
+				Status:                 &ateapipb.ActorStatus{State: tt.state},
 			}
 
 			if _, err := s.CreateActor(ctx, actor); err != nil {
@@ -775,15 +775,19 @@ func TestListActors(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
+		Status: &ateapipb.ActorStatus{
+			State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
+		},
 	}
 	actor2 := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
+		Status: &ateapipb.ActorStatus{
+			State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
+		},
 	}
 
 	if _, err := s.CreateActor(ctx, actor1); err != nil {
@@ -821,12 +825,14 @@ func TestListActors(t *testing.T) {
 func TestActorSnapshotLifecycle(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	snapshot := &ateapipb.ActorSnapshot{
-		Metadata:           &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
-		SourceActor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
-		SourceActorUid:     "actor-uid",
-		SourceActorVersion: 7,
-		ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-		SnapshotUri:        "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			SourceActor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
+			SourceActorUid:     "actor-uid",
+			SourceActorVersion: 7,
+			ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:        "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+		},
 	}
 	created, err := s.CreateActorSnapshot(ctx, snapshot)
 	if err != nil {
@@ -858,8 +864,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("GetActorSnapshot(resolved tag target) = (%v, %v), want tagged snapshot", byTag, err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
-		SnapshotUri: "gs://bucket/root/snapshots/other/snapshot-2",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/other/snapshot-2"},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot second snapshot: %v", err)
 	}
@@ -910,8 +916,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 func seedTaggedSnapshot(t *testing.T, s *Persistence, ctx context.Context, snapshotName, tagName string) *ateapipb.ActorSnapshotTag {
 	t.Helper()
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
-		SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + snapshotName,
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + snapshotName},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(%s) failed: %v", snapshotName, err)
 	}
@@ -1376,7 +1382,7 @@ func TestListActors_Pagination(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 		if _, err := s.CreateActor(ctx, actor); err != nil {
 			t.Fatalf("failed to create actor %d: %v", i, err)
@@ -1775,7 +1781,7 @@ func TestListActors_ScopedByAtespace(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 	}
 	for _, a := range []*ateapipb.Actor{
@@ -1969,8 +1975,8 @@ func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
 		t.Fatalf("CreateAtespace: %v", err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
-		SnapshotUri: "gs://bucket/root/snapshots/team-a/snapshot-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/team-a/snapshot-1"},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
@@ -2026,7 +2032,7 @@ func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
+	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
@@ -2044,7 +2050,7 @@ func TestDeleteAtespace_EmptyAfterActorsRemoved(t *testing.T) {
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_DELETING}); err != nil {
+	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
@@ -2068,7 +2074,7 @@ func TestDeleteAtespace_EmptyWhileOtherAtespaceNonEmpty(t *testing.T) {
 		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 	}
 	// Actor lives ONLY in team-b.
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-b"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
+	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-b"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
@@ -2194,7 +2200,7 @@ func TestListActors_MultiMaster_Pagination(t *testing.T) {
 				},
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "test-template",
-				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			}
 			if _, err := tempS.CreateActor(ctx, actor); err != nil {
 				t.Fatalf("failed to seed actor: %v", err)

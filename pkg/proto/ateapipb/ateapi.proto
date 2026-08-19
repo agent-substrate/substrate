@@ -189,52 +189,72 @@ message Actor {
   string actor_template_name = 3;
 
   // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
-  ObjectRef actor_template = 13;
-
-  enum Status {
-    STATUS_UNSPECIFIED = 0;
-    STATUS_RESUMING = 1;
-    STATUS_RUNNING = 2;
-    STATUS_SUSPENDING = 3;
-    STATUS_SUSPENDED = 4;
-    STATUS_PAUSING = 5;
-    STATUS_PAUSED = 6;
-    STATUS_CRASHED = 7;
-    STATUS_DELETING = 8;
-  }
-  Status status = 4;
-
-  // worker_assignment points at the worker currently hosting this Actor.
-  // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
-  WorkerAssignment worker_assignment = 5;
-
-  string in_progress_snapshot_name = 6;
+  ObjectRef actor_template = 4;
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
-  // find eligible pools. Set at CreateActor; may be updated at any time via
-  // UpdateActor. Changes take effect on the next ResumeActor call.
-  Selector worker_selector = 7;
+  // find eligible pools.
+  // Changes take effect on the next ResumeActor call.
+  Selector worker_selector = 5;
+
+  // The tag specified by the caller at CreateActor to seed this Actor from an
+  // ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
+  // once at creation and immutable afterward.
+  ObjectRef source_snapshot_tag = 6;
+
+  ActorStatus status = 7;
+}
+
+enum ActorState {
+  ACTOR_STATE_UNSPECIFIED = 0;
+  ACTOR_STATE_RESUMING = 1;
+  ACTOR_STATE_RUNNING = 2;
+  ACTOR_STATE_SUSPENDING = 3;
+  ACTOR_STATE_SUSPENDED = 4;
+  ACTOR_STATE_PAUSING = 5;
+  ACTOR_STATE_PAUSED = 6;
+  ACTOR_STATE_CRASHED = 7;
+  ACTOR_STATE_DELETING = 8;
+}
+
+message ActorStatus {
+  ActorState state = 1;
+
+  // worker_assignment points at the worker currently hosting this Actor.
+  // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+  WorkerAssignment worker_assignment = 2;
+
+  string in_progress_snapshot_name = 3;
 
   // The latest durable snapshot created for this Actor.
-  ObjectRef latest_snapshot = 8;
+  ObjectRef latest_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
-  LocalSnapshotInfo local_snapshot_info = 9;
+  LocalSnapshotInfo local_snapshot_info = 5;
 
   // Actor version captured when the current durable snapshot began.
-  int64 in_progress_snapshot_source_actor_version = 10;
+  int64 in_progress_snapshot_source_actor_version = 6;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
-  repeated ExternalVolume actor_volumes = 11;
+  repeated ExternalVolume actor_volumes = 7;
 
-  string in_progress_local_snapshot_name = 12;
+  string in_progress_local_snapshot_name = 8;
 
   // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
-  // the Actor was not created from a snapshot. Set once at creation and
-  // immutable afterward.
-  ActorSnapshotSource source_snapshot = 14;
+  // the Actor was not created from a snapshot.
+  ActorSourceSnapshotStatus source_snapshot = 9;
+}
+
+// ActorSourceSnapshotStatus records what an Actor's source_snapshot_tag
+// resolved to at CreateActor time. Set once, immutable afterward.
+message ActorSourceSnapshotStatus {
+  // The (atespace, name) of the snapshot the tag resolved to at
+  // creation time.
+  ObjectRef snapshot = 1;
+
+  // UID of the snapshot resolved at creation time.
+  string snapshot_uid = 2;
 }
 
 // WorkerAssignment identifies the Worker currently hosting an Actor.
@@ -259,21 +279,26 @@ message WorkerAssignment {
 // contents are immutable.
 message ActorSnapshot {
   ResourceMetadata metadata = 1;
-  ObjectRef source_actor = 2;
-  string source_actor_uid = 3;
-  int64 source_actor_version = 4;
-  string actor_template_namespace = 5;
-  string actor_template_name = 6;
-  string actor_template_uid = 7;
-  SnapshotContentScope content_scope = 8;
-  string snapshot_uri = 9;
+  ActorSnapshotStatus status = 2;
+}
+
+message ActorSnapshotStatus {
+  ObjectRef source_actor = 1;
+  string source_actor_uid = 2;
+  int64 source_actor_version = 3;
+  string actor_template_namespace = 4;
+  string actor_template_name = 5;
+  string actor_template_uid = 6;
+  SnapshotContentScope content_scope = 7;
+  string snapshot_uri = 8;
   // Immutable reference to the actor_template where the snapshot was created from.
-  ObjectRef actor_template = 10;
+  ObjectRef actor_template = 9;
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
 // Its owning Atespace cannot be deleted until the tag is removed.
 message ActorSnapshotTag {
+  // Common resource metadata: name, uid, version, timestamps.
   ResourceMetadata metadata = 1;
   ObjectRef snapshot = 2;
   ActorSnapshotTagScope scope = 3;
@@ -293,22 +318,6 @@ message ObjectRef {
   // The name of the resource. Required. Unique within an atespace, or globally
   // unique if the resource is global-scoped.
   string name = 2;
-}
-
-// ActorSnapshotSource records how an Actor was seeded from an ActorSnapshot.
-// Set once at CreateActor; every field is immutable afterward.
-message ActorSnapshotSource {
-  // The tag specified by the caller at CreateActor.
-  ObjectRef tag = 1;
-
-  // Output only. Canonical (atespace, name) of the snapshot the tag
-  // resolved to at creation time.
-  ObjectRef snapshot = 2;
-
-  // Output only. UID of the snapshot resolved at creation time. Stays a
-  // permanent trail even if that snapshot is later deleted and its name
-  // reused by an unrelated snapshot.
-  string snapshot_uid = 3;
 }
 
 // SandboxClass selects the sandbox runtime family. Snapshots are not portable
@@ -334,21 +343,12 @@ message ActorTemplate {
   SnapshotsConfig snapshots_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
-  // Required. Resolved and frozen into resolved_sandbox at creation time.
   SandboxConfig sandbox_config = 6;
 
-  // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
-  // system atespace, built for this version by ate-api. Set once state is
-  // READY.
-  ObjectRef golden_snapshot = 7;
-
-  // State machine, mirroring the ActorTemplate CRD PhaseType:
-  // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
-  // READY and FAILED are terminal; the version is only usable once READY.
-  ActorTemplatePhase phase = 8;
-
   // Resource usage configuration.
-  Resources resources = 9;
+  Resources resources = 7;
+
+  ActorTemplateStatus status = 8;
 }
 
 message Resources {
@@ -360,20 +360,33 @@ message Limits {
   string quantity = 2;
 }
 
-message ActorTemplatePhase {
-  enum Phase {
-    PHASE_UNSPECIFIED = 0;
-    PHASE_INITIAL = 1;
-    PHASE_RESUME_GOLDEN_ACTOR = 2;
-    PHASE_WAIT_GOLDEN_ACTOR = 3;
-    PHASE_READY = 4;
-    PHASE_FAILED = 5;
-  }
-  Phase phase = 1;
+enum ActorTemplatePhase {
+  ACTOR_TEMPLATE_PHASE_UNSPECIFIED = 0;
+  ACTOR_TEMPLATE_PHASE_INITIAL = 1;
+  ACTOR_TEMPLATE_PHASE_RESUME_GOLDEN_ACTOR = 2;
+  ACTOR_TEMPLATE_PHASE_WAIT_GOLDEN_ACTOR = 3;
+  ACTOR_TEMPLATE_PHASE_READY = 4;
+  ACTOR_TEMPLATE_PHASE_FAILED = 5;
+}
+
+message ActorTemplateStatus {
+  // State machine, mirroring the ActorTemplate CRD PhaseType:
+  // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
+  // READY and FAILED are terminal; the version is only usable once READY.
+  ActorTemplatePhase phase = 1;
 
   // message is a human-readable explanation of the current state, most
   // useful when the ActorTemplate is FAILED.
   string message = 2;
+
+  // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
+  // system atespace, built for this version by ate-api. Set once state is
+  // READY.
+  ObjectRef golden_snapshot = 3;
+
+  // sandbox_assets is the referenced SandboxConfig's content frozen at
+  // creation time.
+  SandboxAssets sandbox_assets = 4;
 }
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
@@ -385,13 +398,6 @@ message SandboxConfig {
   // config_name names the cluster-scoped SandboxConfig Kubernetes object
   // supplying the sandbox binaries. Required; must match sandbox_class.
   string config_name = 2;
-
-  // sandbox_assets is the referenced SandboxConfig's content frozen at
-  // creation time.
-  SandboxAssets sandbox_assets = 3;
-
-  // pause_image is the container to use as the root sandbox container.
-  string pause_image = 4;
 }
 
 message SnapshotsConfig {
@@ -531,6 +537,9 @@ message SandboxAssets {
   SandboxClass sandbox_class = 1;
   // assets maps architecture (GOARCH, e.g. "amd64") to that arch's files.
   map<string, ArchAssets> assets = 2;
+
+  // pause_image is the container to use as the root sandbox container.
+  string pause_image = 3;
 }
 
 message ArchAssets {
@@ -583,7 +592,7 @@ message DeleteAtespaceRequest {
 message CreateActorTemplateRequest {
   // The actor template version to create. Server-assigned metadata (uid,
   // version, timestamps) is ignored, as are the status fields: the server
-  // initializes new versions to PHASE_INITIAL.
+  // initializes new versions to ACTOR_TEMPLATE_PHASE_INITIAL.
   ActorTemplate actor_template = 1;
 }
 
@@ -630,7 +639,7 @@ message CreateActorRequest {
 }
 
 // Request to update mutable fields on an existing Actor.
-// May be called regardless of the actor's current status.
+// May be called regardless of the actor's current state.
 // Changes take effect on the next ResumeActor call.
 message UpdateActorRequest {
   // The actor to update.

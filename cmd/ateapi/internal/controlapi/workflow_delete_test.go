@@ -27,37 +27,37 @@ import (
 
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 	tests := []struct {
-		name       string
-		seedStatus ateapipb.Actor_Status
-		wantErr    bool
-		wantCode   codes.Code
+		name      string
+		seedState ateapipb.ActorState
+		wantErr   bool
+		wantCode  codes.Code
 	}{
 		{
-			name:       "delete suspended actor succeeds",
-			seedStatus: ateapipb.Actor_STATUS_SUSPENDED,
-			wantErr:    false,
+			name:      "delete suspended actor succeeds",
+			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantErr:   false,
 		},
 		{
-			name:       "delete crashed actor succeeds",
-			seedStatus: ateapipb.Actor_STATUS_CRASHED,
-			wantErr:    false,
+			name:      "delete crashed actor succeeds",
+			seedState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			wantErr:   false,
 		},
 		{
-			name:       "delete deleting actor succeeds",
-			seedStatus: ateapipb.Actor_STATUS_DELETING,
-			wantErr:    false,
+			name:      "delete deleting actor succeeds",
+			seedState: ateapipb.ActorState_ACTOR_STATE_DELETING,
+			wantErr:   false,
 		},
 		{
-			name:       "delete running actor rejected",
-			seedStatus: ateapipb.Actor_STATUS_RUNNING,
-			wantErr:    true,
-			wantCode:   codes.FailedPrecondition,
+			name:      "delete running actor rejected",
+			seedState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantErr:   true,
+			wantCode:  codes.FailedPrecondition,
 		},
 		{
-			name:       "delete paused actor rejected",
-			seedStatus: ateapipb.Actor_STATUS_PAUSED,
-			wantErr:    true,
-			wantCode:   codes.FailedPrecondition,
+			name:      "delete paused actor rejected",
+			seedState: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			wantErr:   true,
+			wantCode:  codes.FailedPrecondition,
 		},
 	}
 
@@ -69,7 +69,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", tc.seedStatus)
+			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", tc.seedState)
 
 			deleted, err := w.DeleteActor(ctx, actorRef)
 			if tc.wantErr {
@@ -91,29 +91,29 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 	}
 }
 
-func TestEnsureMarkedDeleting_StatusMatrix(t *testing.T) {
-	allowed := map[ateapipb.Actor_Status]bool{
-		ateapipb.Actor_STATUS_SUSPENDED: true,
-		ateapipb.Actor_STATUS_CRASHED:   true,
-		ateapipb.Actor_STATUS_DELETING:  true, // skipped, not re-marked
+func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
+	allowed := map[ateapipb.ActorState]bool{
+		ateapipb.ActorState_ACTOR_STATE_SUSPENDED: true,
+		ateapipb.ActorState_ACTOR_STATE_CRASHED:   true,
+		ateapipb.ActorState_ACTOR_STATE_DELETING:  true, // skipped, not re-marked
 	}
 
-	for _, seedStatus := range allActorStatuses {
+	for _, seedState := range allActorStates {
 		ctx := context.Background()
 		st, cleanup := storetest.SetupTestStore(t)
 		w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-		seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", seedStatus)
+		seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", seedState)
 		actor, err := st.GetActor(ctx, actorRef)
 		if err != nil {
-			t.Fatalf("status %v: get seeded actor: %v", seedStatus, err)
+			t.Fatalf("state %v: get seeded actor: %v", seedState, err)
 		}
 
 		updated, err := w.ensureMarkedDeleting(ctx, actorRef, actor)
-		assertPrerequisiteResult(t, seedStatus, err, allowed[seedStatus])
-		if err == nil && updated.GetStatus() != ateapipb.Actor_STATUS_DELETING {
-			t.Errorf("status %v: ensureMarkedDeleting returned actor in %v, want DELETING", seedStatus, updated.GetStatus())
+		assertPrerequisiteResult(t, seedState, err, allowed[seedState])
+		if err == nil && updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
+			t.Errorf("state %v: ensureMarkedDeleting returned actor in %v, want DELETING", seedState, updated.GetStatus().GetState())
 		}
 		cleanup()
 	}

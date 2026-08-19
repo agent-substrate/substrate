@@ -66,7 +66,7 @@ function usage() {
   echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
-  echo "  --atenet-router=envoy|agentgateway     Select the atenet router dataplane (default: envoy)"
+  echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
   echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -104,6 +104,8 @@ function usage() {
   echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
   echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                                         microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "  --benchmark-actor-memory SIZE          Memory limit for the benchmark ActorTemplates (default: 256Mi,"
+  echo "                                         the smallest size microvm admits)"
   echo ""
   for demo_name in "${ATE_DEMOS[@]}"; do
     echo "Demo: ${demo_name}"
@@ -234,6 +236,15 @@ atenet_egress_manifest() {
     echo "manifests/ate-install/atenet-egress-with-sdsmint.yaml"
   else
     echo "manifests/ate-install/atenet-egress.yaml"
+  fi
+}
+
+render_atenet_egress_manifest() {
+  if [[ "$(atenet_router)" == "agentgateway" ]]; then
+    kubectl kustomize manifests/ate-install/agentgateway-egress \
+      --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+  else
+    run_ko resolve -f "$(atenet_egress_manifest)"
   fi
 }
 
@@ -422,6 +433,7 @@ create_egress_mitm_ca_pool_secret() {
 
 # Only the sdsmint egress variant mounts this pool.
 ensure_egress_mitm_ca_pool_secret() {
+  [[ "$(atenet_router)" != "agentgateway" ]] || return 0
   [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]] || return 0
   run_kubectl get secret -n ate-system egress-mitm-ca-pool >/dev/null 2>&1 \
     || create_egress_mitm_ca_pool_secret
@@ -598,7 +610,9 @@ deploy_ate_system() {
   # --experimental-use-sdsmint composes with every overlay instead of needing a
   # variant of each.
   ensure_egress_mitm_ca_pool_secret
-  run_ko apply -f "$(atenet_egress_manifest)"
+  local egress_manifests=""
+  egress_manifests="$(render_atenet_egress_manifest)"
+  echo "${egress_manifests}" | run_kubectl apply -f -
 
   log_step "Waiting for ATE system components to be ready..."
   case "$(store_backend)" in
@@ -696,15 +710,17 @@ deploy_atenet() {
   echo "${router_manifest}" | run_kubectl apply -f -
 
   ensure_egress_mitm_ca_pool_secret
-  run_ko apply -f "$(atenet_egress_manifest)"
+  local egress_manifests=""
+  egress_manifests="$(render_atenet_egress_manifest)"
+  echo "${egress_manifests}" | run_kubectl apply -f -
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
 }
 
-# get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
-get_actor_status() {
+# get_actor_state echoes the actor's state enum (e.g. ACTOR_STATE_SUSPENDED).
+get_actor_state() {
   local actor_name="$1"
   local atespace="$2"
   local json
@@ -712,44 +728,44 @@ get_actor_status() {
   if ! json=$(run_kubectl_ate get actor "${actor_name}" -a "${atespace}" -o json 2>/dev/null); then
     return 1
   fi
-  jq -r '.actors[0].status // empty' <<<"${json}"
+  jq -r '.actors[0].status.state // empty' <<<"${json}"
 }
 
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
-# is allowed. Actors must be STATUS_SUSPENDED before deletion.
+# is allowed. Actors must be ACTOR_STATE_SUSPENDED before deletion.
 prepare_actor_for_delete() {
   local actor_name="$1"
   local atespace="$2"
   local timeout_secs="${3:-120}"
   local deadline=$((SECONDS + timeout_secs))
-  local status
+  local state
 
   while ((SECONDS < deadline)); do
-    if ! status=$(get_actor_status "${actor_name}" "${atespace}"); then
+    if ! state=$(get_actor_state "${actor_name}" "${atespace}"); then
       return 0
     fi
 
-    case "${status}" in
-      STATUS_SUSPENDED)
+    case "${state}" in
+      ACTOR_STATE_SUSPENDED)
         return 0
         ;;
-      STATUS_PAUSED)
+      ACTOR_STATE_PAUSED)
         run_kubectl_ate resume actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
-      STATUS_RUNNING)
+      ACTOR_STATE_RUNNING)
         run_kubectl_ate suspend actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
-      STATUS_RESUMING | STATUS_SUSPENDING | STATUS_PAUSING)
+      ACTOR_STATE_RESUMING | ACTOR_STATE_SUSPENDING | ACTOR_STATE_PAUSING)
         ;;
       *)
-        echo "cannot delete actor ${actor_name}: unexpected status ${status}" >&2
+        echo "cannot delete actor ${actor_name}: unexpected state ${state}" >&2
         return 1
         ;;
     esac
     sleep 2
   done
 
-  echo "timed out waiting for actor ${actor_name} to reach STATUS_SUSPENDED" >&2
+  echo "timed out waiting for actor ${actor_name} to reach ACTOR_STATE_SUSPENDED" >&2
   return 1
 }
 
@@ -844,6 +860,9 @@ deploy_benchmarks() {
   if [[ -n "${ATE_OTLP_ENDPOINT:-}" ]]; then
     benchmark_args+=(--otlp-endpoint "${ATE_OTLP_ENDPOINT}")
   fi
+  if [[ -n "${BENCHMARK_ACTOR_MEMORY}" ]]; then
+    benchmark_args+=(--actor-memory "${BENCHMARK_ACTOR_MEMORY}")
+  fi
   "${ROOT}/benchmarking/deploy_locust.sh" "${benchmark_args[@]}"
 }
 
@@ -888,6 +907,8 @@ done
 SETUP_CSI=false
 BENCHMARK_WORKER_COUNT=1
 BENCHMARK_SANDBOX_CLASS=gvisor
+# Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).
+BENCHMARK_ACTOR_MEMORY=""
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
   case "${prescan_args[i]}" in
@@ -923,6 +944,16 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ;;
     --benchmark-sandbox-class=*)
       BENCHMARK_SANDBOX_CLASS="${prescan_args[i]#*=}"
+      ;;
+    --benchmark-actor-memory)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --benchmark-actor-memory requires a size (e.g. 256Mi)" >&2
+        exit 1
+      fi
+      BENCHMARK_ACTOR_MEMORY="${prescan_args[$((i + 1))]}"
+      ;;
+    --benchmark-actor-memory=*)
+      BENCHMARK_ACTOR_MEMORY="${prescan_args[i]#*=}"
       ;;
     --otlp-endpoint)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1009,6 +1040,8 @@ while [[ "$#" -gt 0 ]]; do
     --benchmark-worker-count=*) ;;
     --benchmark-sandbox-class) shift ;;
     --benchmark-sandbox-class=*) ;;
+    --benchmark-actor-memory) shift ;;
+    --benchmark-actor-memory=*) ;;
     --otlp-endpoint) shift ;;
     --otlp-endpoint=*) ;;
 

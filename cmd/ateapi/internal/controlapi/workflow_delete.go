@@ -69,18 +69,18 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
 
-	if actor.GetStatus() == ateapipb.Actor_STATUS_DELETING {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
 		markSkipped(ctx, "actor already DELETING")
 		return actor, nil
 	}
-	if actor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED &&
-		actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
-		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", actorRef, actor.GetStatus())
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED &&
+		actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, actor.GetStatus().GetState())
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_DELETING
-		for _, vol := range toUpdate.GetActorVolumes() {
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+		for _, vol := range toUpdate.GetStatus().GetActorVolumes() {
 			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 		}
 		return nil
@@ -89,7 +89,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
-		return nil, fmt.Errorf("while setting actor status to DELETING: %w", err)
+		return nil, fmt.Errorf("while setting actor state to DELETING: %w", err)
 	}
 	return storedActor, nil
 }
@@ -100,7 +100,7 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 	ctx, done := stepSpan(ctx, "DeleteVolumes")
 	defer func() { err = done(err) }()
 
-	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetActorVolumes()); err != nil {
+	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetActorVolumes()); err != nil {
 		return status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
 	}
 	return nil
@@ -120,9 +120,9 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actorRef resources.
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			current, getErr := w.store.GetActor(ctx, actorRef)
 			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", actorRef, current.GetStatus())
+				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, current.GetStatus().GetState())
 			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status", actorRef)
+			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state", actorRef)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

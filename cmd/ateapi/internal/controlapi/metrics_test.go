@@ -210,7 +210,9 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplateName:      "support-agent",
 		ActorTemplateNamespace: "ate-agents",
-		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
+		Status: &ateapipb.ActorStatus{
+			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
+		},
 	}
 	template := &atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},

@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -280,14 +279,8 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 
 func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (*v1alpha1.WorkerPool, *v1alpha1.ActorTemplate) {
 	t.Helper()
-	srcNS := "ate-demo-counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
-		srcNS = v
-	}
-	srcName := "counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
-		srcName = v
-	}
+	src := e2e.CounterFixture()
+	srcNS, srcName := src.Namespace, src.Name
 
 	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(srcNS).Get(ctx, srcName, metav1.GetOptions{})
 	if err != nil {
@@ -325,8 +318,12 @@ func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 			WorkerSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"netpol-test": ns},
 			},
-			SandboxClass:    existingAt.Spec.SandboxClass,
-			Containers:      existingAt.Spec.Containers,
+			SandboxClass: existingAt.Spec.SandboxClass,
+			Containers:   existingAt.Spec.Containers,
+			// The source's limits size the sandbox. Copying them matters most on
+			// micro-VM, where an ActorTemplate that declares none boots the guest
+			// at the kata config default (2GiB) instead of the demo's 512Mi.
+			Resources:       existingAt.Spec.Resources,
 			SnapshotsConfig: existingAt.Spec.SnapshotsConfig,
 			Volumes:         existingAt.Spec.Volumes,
 		},
@@ -336,14 +333,7 @@ func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 	}
 
 	t.Logf("Waiting for ActorTemplate %s/%s to be Ready...", ns, at.Name)
-	tmplTimeout := 90 * time.Second
-	if v := os.Getenv("E2E_TEMPLATE_READY_TIMEOUT"); v != "" {
-		d, perr := time.ParseDuration(v)
-		if perr != nil {
-			t.Fatalf("invalid E2E_TEMPLATE_READY_TIMEOUT %q: %v", v, perr)
-		}
-		tmplTimeout = d
-	}
+	tmplTimeout := e2e.TemplateReadyTimeout(t)
 	tmplCtx, tmplCancel := context.WithTimeout(ctx, tmplTimeout)
 	defer tmplCancel()
 	var lastPhase v1alpha1.PhaseType
@@ -376,13 +366,13 @@ func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 		})
-		if err == nil && resp.GetStatus() == ateapipb.Actor_STATUS_RUNNING {
-			t.Logf("Actor %q reached RUNNING status", actorName)
+		if err == nil && resp.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			t.Logf("Actor %q reached RUNNING state", actorName)
 			return
 		}
 		time.Sleep(1 * time.Second)
 	}
-	t.Fatalf("timed out waiting for actor %q to reach RUNNING status", actorName)
+	t.Fatalf("timed out waiting for actor %q to reach RUNNING state", actorName)
 }
 
 func waitForPodRunning(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace, podName string) {

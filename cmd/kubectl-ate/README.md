@@ -109,7 +109,7 @@ kubectl ate get workers -l <label-selector>
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, as `<namespace>/<name>` (the template namespace is distinct from `ATESPACE`). |
-| `STATUS` | One of `STATUS_RESUMING`, `STATUS_RUNNING`, `STATUS_SUSPENDING`, `STATUS_SUSPENDED`. |
+| `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
 | `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `ATEOM IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
@@ -207,7 +207,7 @@ kubectl ate logs actors my-actor -a <atespace>
 kubectl ate logs actors my-actor -a <atespace> -f
 ```
 
-Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
+Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
 
 ### Administration & Setup
 Commands for bootstrapping the Substrate control plane and debugging local environments.

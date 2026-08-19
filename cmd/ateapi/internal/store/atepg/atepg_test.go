@@ -141,7 +141,7 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)
@@ -239,7 +239,7 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 	}
 	for _, name := range []string{"a1", "a2"} {
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
+		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 	}

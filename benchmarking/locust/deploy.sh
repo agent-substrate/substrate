@@ -29,15 +29,20 @@ if [ -z "${PROJECT_ID:-}" ]; then
   exit 1
 fi
 
-MANIFEST="benchmarking/locust/manifests/locust.yaml"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
+
+# Substituted into the boomer container's --user-class argument and the master's -f.
+BENCHMARK_USER_CLASS=glutton
 
 usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy   Deploy the locust workers"
-  echo "  --delete   Delete the locust workers"
-  echo "  -h|--help  Show this help message"
+  echo "  --deploy           Deploy the locust workers"
+  echo "  --delete           Delete the locust workers"
+  echo "  --user-class NAME  Locust user class, lowercase; runs tests/NAME.py (default: glutton)"
+  echo "  -h|--help          Show this help message"
 }
 
 deploy() {
@@ -46,7 +51,7 @@ deploy() {
   # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID})..."
+  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS})..."
   envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
@@ -65,6 +70,8 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --deploy) action="deploy" ;;
     --delete) action="delete" ;;
+    --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
+    --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -74,6 +81,12 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ ! -f "${SCRIPT_DIR}/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
+  echo "Error: no tests/${BENCHMARK_USER_CLASS}.py; --user-class must name a test file" >&2
+  exit 1
+fi
+export BENCHMARK_USER_CLASS
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

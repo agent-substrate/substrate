@@ -1105,7 +1105,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "Volumes: ExternalVolumeTemplate volume with SandboxClass microvm is invalid",
+		name: "Volumes: ExternalVolumeTemplate volume with SandboxClass microvm is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.Volumes = []Volume{
@@ -1123,8 +1123,7 @@ func TestActorTemplateValidation(t *testing.T) {
 				{Name: "vol1", MountPath: "/mnt/data"},
 			}
 		},
-		wantErr: true,
-		errMsg:  "ExternalVolumes are not supported when sandboxClass is 'microvm'",
+		wantErr: false,
 	}, {
 		name: "Volumes: ExternalVolumeTemplate volume with SandboxClass gvisor is valid",
 		mutate: func(at *ActorTemplate) {
@@ -1189,6 +1188,28 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "All volumes defined in spec.volumes must be mounted by at least one container",
+	}, {
+		name: "Volumes: volumeMount without volume is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "missing-vol", MountPath: "/mnt/data"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "All volume mounts must refer to a volume defined in spec.volumes",
+	}, {
+		name: "Volumes: duplicate volume names is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/data"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "vol1",
 	}}
 
 	for _, tt := range tests {
