@@ -75,13 +75,6 @@ func GuestSystemInfoVolumeDir(volumeName string) string {
 	return guestSharedDir + "system-info/" + volumeName
 }
 
-// GuestSystemInfoVolumeDir is the in-guest path holding one system-info
-// volume's contents, i.e. the bind source for that volume's container mount
-// points.
-func GuestSystemInfoVolumeDir(volumeName string) string {
-	return guestSystemInfoDir + "/" + volumeName
-}
-
 // SharedDir is the host directory virtiofsd serves into the guest as the RO base.
 // Its layout (<cid>/rootfs) is what find-paths re-opens by path on restore.
 func SharedDir(id string) string {
