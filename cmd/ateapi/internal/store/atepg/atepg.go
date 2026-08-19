@@ -105,10 +105,6 @@ func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMet
 	return metadata
 }
 
-// updateMaxAttempts bounds how many times a read-modify-write is retried after
-// its optimistic uid/version check loses to a concurrent writer.
-const updateMaxAttempts = 5
-
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database
 // matches the metadata in the proto.
 func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.ResourceMetadata, uid string, version int64) error {
@@ -345,56 +341,54 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	for range updateMaxAttempts {
-		var currentUID string
-		var currentVersion int64
-		var currentBytes []byte
-		if err := p.pool.QueryRow(ctx, `
+	var currentUID string
+	var currentVersion int64
+	var currentBytes []byte
+	if err := p.pool.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actor_templates
 			WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, store.ErrNotFound
-			}
-			return nil, fmt.Errorf("getting actor template %s for update: %w", templateRef, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
 		}
+		return nil, fmt.Errorf("getting actor template %s for update: %w", templateRef, err)
+	}
 
-		dbTemplate := &ateapipb.ActorTemplate{}
-		if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
-			return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
-		}
-		if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
-			return nil, err
-		}
-		if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
-			return nil, err
-		}
-		templateBeforeMutation := proto.Clone(dbTemplate).(*ateapipb.ActorTemplate)
-		if err := mutate(dbTemplate); err != nil {
-			return nil, err
-		}
-		if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
-			return nil, err
-		}
-		dbTemplate.Metadata = newUpdateMetadata(templateBeforeMutation.GetMetadata())
-		updatedBytes, err := proto.Marshal(dbTemplate)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling actor template: %w", err)
-		}
-		commandTag, err := p.pool.Exec(ctx, `
+	dbTemplate := &ateapipb.ActorTemplate{}
+	if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
+	}
+	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
+		return nil, err
+	}
+	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapipb.ActorTemplate)
+	if err := mutate(dbTemplate); err != nil {
+		return nil, err
+	}
+	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
+		return nil, err
+	}
+	dbTemplate.Metadata = newUpdateMetadata(templateBeforeMutation.GetMetadata())
+	updatedBytes, err := proto.Marshal(dbTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor template: %w", err)
+	}
+	commandTag, err := p.pool.Exec(ctx, `
 			UPDATE actor_templates SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
-			dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name, currentUID, currentVersion)
-		if err != nil {
-			return nil, fmt.Errorf("updating actor template %s: %w", templateRef, err)
-		}
-		if commandTag.RowsAffected() == 1 {
-			return dbTemplate, nil
-		}
-		if commandTag.RowsAffected() != 0 {
-			return nil, fmt.Errorf("updating actor template %s affected %d rows, want at most 1", templateRef, commandTag.RowsAffected())
-		}
+		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name, currentUID, currentVersion)
+	if err != nil {
+		return nil, fmt.Errorf("updating actor template %s: %w", templateRef, err)
 	}
-	return nil, store.ErrVersionConflict
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("updating actor template %s affected %d rows, want 1", templateRef, commandTag.RowsAffected())
+	}
+	return dbTemplate, nil
 }
 
 func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
@@ -570,60 +564,58 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	atespace, name := actorRef.Atespace, actorRef.Name
-	for range updateMaxAttempts {
-		var currentUID string
-		var currentVersion int64
-		var currentBytes []byte
-		if err := p.pool.QueryRow(ctx, `
+	var currentUID string
+	var currentVersion int64
+	var currentBytes []byte
+	if err := p.pool.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actors
 			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, store.ErrNotFound
-			}
-			return nil, fmt.Errorf("getting actor %s/%s for update: %w", atespace, name, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
 		}
+		return nil, fmt.Errorf("getting actor %s/%s for update: %w", atespace, name, err)
+	}
 
-		dbActor := &ateapipb.Actor{}
-		if err := proto.Unmarshal(currentBytes, dbActor); err != nil {
-			return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
-		}
-		if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
-			return nil, err
-		}
-		if err := precondition.Check(dbActor.GetMetadata()); err != nil {
-			return nil, err
-		}
-		actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
-		if err := mutate(dbActor); err != nil {
-			return nil, err
-		}
-		if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
-			return nil, err
-		}
-		// Stored metadata is authoritative; discard any metadata edits made by the
-		// closure and derive the next revision from the state this attempt read.
-		dbActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
+	dbActor := &ateapipb.Actor{}
+	if err := proto.Unmarshal(currentBytes, dbActor); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
+	}
+	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
+		return nil, err
+	}
+	actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
+	if err := mutate(dbActor); err != nil {
+		return nil, err
+	}
+	if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
+		return nil, err
+	}
+	// Stored metadata is authoritative; discard any metadata edits made by the
+	// closure and derive the next revision from the state this attempt read.
+	dbActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
 
-		updatedBytes, err := proto.Marshal(dbActor)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling actor: %w", err)
-		}
-		commandTag, err := p.pool.Exec(ctx, `
+	updatedBytes, err := proto.Marshal(dbActor)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor: %w", err)
+	}
+	commandTag, err := p.pool.Exec(ctx, `
 			UPDATE actors
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
-			dbActor.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
-		if err != nil {
-			return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
-		}
-		if commandTag.RowsAffected() == 1 {
-			return dbActor, nil
-		}
-		if commandTag.RowsAffected() != 0 {
-			return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want at most 1", atespace, name, commandTag.RowsAffected())
-		}
+		dbActor.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
+	if err != nil {
+		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
 	}
-	return nil, store.ErrVersionConflict
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
+	}
+	return dbActor, nil
 }
 
 func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
@@ -1033,60 +1025,58 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-	for range updateMaxAttempts {
-		var currentUID string
-		var currentVersion int64
-		var currentBytes []byte
-		if err := p.pool.QueryRow(ctx, `
+	var currentUID string
+	var currentVersion int64
+	var currentBytes []byte
+	if err := p.pool.QueryRow(ctx, `
 			SELECT uid, version, proto FROM actor_snapshot_tags
 			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, store.ErrNotFound
-			}
-			return nil, fmt.Errorf("getting actor snapshot tag %s/%s for update: %w", atespace, name, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
 		}
+		return nil, fmt.Errorf("getting actor snapshot tag %s/%s for update: %w", atespace, name, err)
+	}
 
-		dbTag := &ateapipb.ActorSnapshotTag{}
-		if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
-			return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
-		}
-		if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("actor snapshot tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
-			return nil, err
-		}
-		if err := precondition.Check(dbTag.GetMetadata()); err != nil {
-			return nil, err
-		}
-		tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.ActorSnapshotTag)
-		if err := mutate(dbTag); err != nil {
-			return nil, err
-		}
-		if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, dbTag); err != nil {
-			return nil, err
-		}
-		// Stored metadata is authoritative; discard any metadata edits made by the
-		// closure and derive the next revision from the state this attempt read.
-		dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
+	dbTag := &ateapipb.ActorSnapshotTag{}
+	if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("actor snapshot tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
+	}
+	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
+		return nil, err
+	}
+	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.ActorSnapshotTag)
+	if err := mutate(dbTag); err != nil {
+		return nil, err
+	}
+	if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, dbTag); err != nil {
+		return nil, err
+	}
+	// Stored metadata is authoritative; discard any metadata edits made by the
+	// closure and derive the next revision from the state this attempt read.
+	dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
 
-		updatedBytes, err := proto.Marshal(dbTag)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling actor snapshot tag: %w", err)
-		}
-		commandTag, err := p.pool.Exec(ctx, `
+	updatedBytes, err := proto.Marshal(dbTag)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor snapshot tag: %w", err)
+	}
+	commandTag, err := p.pool.Exec(ctx, `
 			UPDATE actor_snapshot_tags
 			SET version = $1, proto = $2
 			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
-			dbTag.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
-		if err != nil {
-			return nil, fmt.Errorf("updating actor snapshot tag %s/%s: %w", atespace, name, err)
-		}
-		if commandTag.RowsAffected() == 1 {
-			return dbTag, nil
-		}
-		if commandTag.RowsAffected() != 0 {
-			return nil, fmt.Errorf("updating actor snapshot tag %s/%s affected %d rows, want at most 1", atespace, name, commandTag.RowsAffected())
-		}
+		dbTag.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
+	if err != nil {
+		return nil, fmt.Errorf("updating actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
-	return nil, store.ErrVersionConflict
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("updating actor snapshot tag %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
+	}
+	return dbTag, nil
 }
 
 func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
