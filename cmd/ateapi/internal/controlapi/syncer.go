@@ -258,8 +258,10 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			NodeName:        pod.Spec.NodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
-			State:           ateapipb.Worker_STATE_ACTIVE,
 			Capacity:        workerCapacity(pod),
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			},
 		}
 		// TODO(thockin): for now this is the only place Workers are
 		// created.  If/when this becomes a regular API, validation should
@@ -350,11 +352,11 @@ func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, key workerKey
 		}
 		return err
 	}
-	if worker.GetState() == ateapipb.Worker_STATE_DRAINING {
+	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		return nil
 	}
 	slog.InfoContext(ctx, "Syncer: marking worker draining (pod deleting)", key.logAttrs()...)
-	worker.State = ateapipb.Worker_STATE_DRAINING
+	worker.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 	return s.persistence.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion())
 }
 
@@ -465,10 +467,10 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, name st
 		}
 		return err
 	}
-	if worker.Assignment == nil || worker.Assignment.GetActor() == nil {
+	if worker.GetStatus().GetAssignment().GetActor() == nil {
 		return nil
 	}
-	actorRef := resources.ActorRefFromObjectRef(worker.Assignment.GetActor())
+	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
 	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -476,7 +478,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, name st
 		}
 		return err
 	}
-	if actor.GetMetadata().GetUid() != worker.Assignment.GetActorUid() {
+	if actor.GetMetadata().GetUid() != worker.GetStatus().GetAssignment().GetActorUid() {
 		return nil
 	}
 	// Skip if a concurrent SuspendActor already cleared the pointer, or if the

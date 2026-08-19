@@ -127,7 +127,7 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 
 			status := "FREE"
 			assignedActor := "<none>"
-			if wass := worker.Assignment; wass != nil {
+			if wass := worker.GetStatus().GetAssignment(); wass != nil {
 				status = "ASSIGNED"
 				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
 					wass.ActorTemplate.Namespace, wass.ActorTemplate.Name, wass.Actor.Atespace, wass.Actor.Name)

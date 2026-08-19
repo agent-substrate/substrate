@@ -1638,22 +1638,24 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		WorkerPodUid:    podUID,
-		Assignment: &ateapipb.ActorAssignment{
-			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-				Namespace: ns,
-				Name:      "tmpl1",
+		Ip:              "127.0.0.1",
+		NodeName:        "node1",
+		SandboxClass:    "gvisor",
+		Labels:          map[string]string{poolLabelKey: ns},
+		Status: &ateapipb.WorkerStatus{
+			Assignment: &ateapipb.ActorAssignment{
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+					Namespace: ns,
+					Name:      "tmpl1",
+				},
+				Actor: &ateapipb.ObjectRef{
+					Name:     name,
+					Atespace: testAtespace,
+				},
+				ActorUid: getResp.GetMetadata().GetUid(),
 			},
-			Actor: &ateapipb.ObjectRef{
-				Name:     name,
-				Atespace: testAtespace,
-			},
-			ActorUid: getResp.GetMetadata().GetUid(),
+			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 		},
-		Ip:           "127.0.0.1",
-		NodeName:     "node1",
-		SandboxClass: "gvisor",
-		Labels:       map[string]string{poolLabelKey: ns},
-		State:        ateapipb.Worker_STATE_ACTIVE,
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), ignoreServerMetadata,
@@ -2320,7 +2322,7 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 		}
 		switch w.GetWorkerPool() {
 		case "pool-a":
-			if wass := w.Assignment; wass != nil {
+			if wass := w.GetStatus().GetAssignment(); wass != nil {
 				got := "<nil-actor>"
 				if wass.Actor != nil {
 					got = wass.Actor.Name
@@ -2328,7 +2330,7 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor name=%q", got)
 			}
 		case "pool-b":
-			if wass := w.Assignment; wass != nil {
+			if wass := w.GetStatus().GetAssignment(); wass != nil {
 				got := "<nil-actor>"
 				if wass.Actor != nil {
 					got = wass.Actor.Name
@@ -2391,7 +2393,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorker(%s) failed: %v", assignedPod, err)
 	}
-	assigned.State = ateapipb.Worker_STATE_DRAINING
+	assigned.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 	if err := tc.persistence.UpdateWorker(context.Background(), assigned, assigned.GetMetadata().GetVersion()); err != nil {
 		t.Fatalf("marking worker %s draining failed: %v", assignedPod, err)
 	}
@@ -2405,7 +2407,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 		}
 		for _, w := range resp.GetWorkers() {
 			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == assignedPod {
-				return w.GetState() == ateapipb.Worker_STATE_DRAINING, nil
+				return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING, nil
 			}
 		}
 		return false, nil
@@ -2443,8 +2445,8 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 			continue
 		}
 		if w.GetWorkerPod() == assignedPod {
-			if w.GetAssignment() != nil {
-				t.Errorf("expected draining worker %q to be released, still assigned to %q", assignedPod, w.GetAssignment().GetActor().GetName())
+			if w.GetStatus().GetAssignment() != nil {
+				t.Errorf("expected draining worker %q to be released, still assigned to %q", assignedPod, w.GetStatus().GetAssignment().GetActor().GetName())
 			}
 		}
 	}

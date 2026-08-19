@@ -20,6 +20,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -47,4 +49,24 @@ func validateListWorkersRequest(req *ateapipb.ListWorkersRequest) field.ErrorLis
 	}
 
 	return errs
+}
+
+func (s *Service) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest) (*ateapipb.Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "GetWorker is not implemented yet")
+}
+
+func (s *Service) CreateWorker(ctx context.Context, req *ateapipb.CreateWorkerRequest) (*ateapipb.Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "CreateWorker is not implemented yet")
+}
+
+func (s *Service) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorkerRequest) (*ateapipb.Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "UpdateWorker is not implemented yet")
+}
+
+func (s *Service) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteWorker is not implemented yet")
+}
+
+func (s *Service) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "DrainWorker is not implemented yet")
 }

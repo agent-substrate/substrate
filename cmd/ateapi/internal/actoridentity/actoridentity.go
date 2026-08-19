@@ -338,7 +338,7 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 		return nil, resources.ActorRef{}, deny("worker is hosted on a different node", slog.String("workerNode", worker.GetNodeName()))
 	}
 
-	actorRef := resources.ActorRefFromObjectRef(worker.GetAssignment().GetActor())
+	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
 	if actorRef == (resources.ActorRef{}) {
 		return nil, resources.ActorRef{}, deny("worker has no actor assignment")
 	}
@@ -367,7 +367,7 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 		slog.ErrorContext(ctx, "ActorIdentity: running actor has no worker assignment", slog.Any("actor", actorRef))
 		return nil, resources.ActorRef{}, status.Error(codes.FailedPrecondition, "actor has no worker assigned")
 	}
-	if worker.GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
+	if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
 		return nil, resources.ActorRef{}, deny("worker is no longer assigned to this actor incarnation", slog.Any("actor", actorRef))
 	}
 	if assignment.GetWorker().GetName() != worker.GetMetadata().GetName() {

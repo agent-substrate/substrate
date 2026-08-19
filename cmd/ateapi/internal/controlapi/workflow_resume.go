@@ -361,7 +361,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, fmt.Errorf("failed to get already assigned worker for actor %w", err)
 	}
-	if worker.GetState() == ateapipb.Worker_STATE_DRAINING {
+	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 			slog.String("actor", actorRef.String()),
 			slog.String("worker", worker.GetWorkerNamespace()+"/"+worker.GetWorkerPod()))
@@ -371,10 +371,10 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef.String())
 	}
 	// Verify the worker is still assigned to the same Actor.
-	if worker.GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
+	if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
 			slog.String("worker", worker.GetWorkerPod()),
-			slog.Any("assignment", worker.GetAssignment()))
+			slog.Any("assignment", worker.GetStatus().GetAssignment()))
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
@@ -387,7 +387,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if !w.scheduler.Applies(worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		release := proto.Clone(worker).(*ateapipb.Worker)
-		release.Assignment = nil
+		release.Status.Assignment = nil
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
 		// to the free pool instead of leaving it claimed forever — nothing else
@@ -447,10 +447,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// This can happen if ateapi crashed after updating worker with actor assignment,
 	// but has not yet updated the actor.
 	for _, worker := range workers {
-		if worker.Assignment == nil {
+		if worker.GetStatus().GetAssignment() == nil {
 			continue
 		}
-		if worker.Assignment.GetActorUid() != actor.GetMetadata().GetUid() {
+		if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
 			continue
 		}
 		if w.scheduler.Applies(worker, constraints) {
@@ -460,7 +460,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		// Workers() returns pointers directly from the cache so we need to clone before
 		// mutating so that the cache is not corrupted if UpdateWorker fails.
 		releaseWorker := proto.Clone(worker).(*ateapipb.Worker)
-		releaseWorker.Assignment = nil
+		releaseWorker.Status.Assignment = nil
 		// The claimed worker is no longer eligible (e.g. the actor's
 		// worker_selector changed after the failed attempt); release it back
 		// to the free pool — nothing else reclaims a healthy worker whose
@@ -492,7 +492,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// Workers() returns pointers directly from the cache so we need to clone before
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
 	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.Assignment = &ateapipb.ActorAssignment{
+	assignedWorker.Status.Assignment = &ateapipb.ActorAssignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: actor.GetActorTemplateNamespace(),
 			Name:      actor.GetActorTemplateName(),

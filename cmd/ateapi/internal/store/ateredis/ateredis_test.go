@@ -524,6 +524,7 @@ func TestCreateWorker_Success(t *testing.T) {
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
@@ -557,6 +558,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
@@ -568,7 +570,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 
-	worker.Assignment = &ateapipb.ActorAssignment{
+	worker.Status.Assignment = &ateapipb.ActorAssignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "default", Name: "test-template"},
 		Actor:         &ateapipb.ObjectRef{Name: "actor-1"},
 		ActorUid:      "actor-1-uid",
@@ -606,6 +608,7 @@ func TestUpdateWorker_NotFound(t *testing.T) {
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	err := s.UpdateWorker(ctx, worker, 1)
 	if !errors.Is(err, store.ErrNotFound) {
@@ -621,6 +624,7 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
@@ -638,7 +642,7 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.Assignment = &ateapipb.ActorAssignment{
+	worker1.Status.Assignment = &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
 		ActorUid: "actor-1-uid",
 	}
@@ -647,7 +651,7 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Try to update instance 2
-	worker2.Assignment = &ateapipb.ActorAssignment{
+	worker2.Status.Assignment = &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-2"},
 		ActorUid: "actor-2-uid",
 	}
@@ -665,6 +669,7 @@ func TestCreateWorker_AlreadyExists(t *testing.T) {
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
@@ -684,6 +689,7 @@ func TestDeleteWorker(t *testing.T) {
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)

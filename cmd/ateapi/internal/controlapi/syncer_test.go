@@ -281,7 +281,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 		t.Fatalf("create actor: %v", err)
 	}
 	w, _ := persistence.GetWorker(ctx, testPodUID)
-	w.Assignment = &ateapipb.ActorAssignment{
+	w.Status.Assignment = &ateapipb.ActorAssignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: ns,
 			Name:      "tmpl",
@@ -432,7 +432,9 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 		Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: ip,
 		WorkerPodUid: testPodUID, NodeName: "node1",
-		State: ateapipb.Worker_STATE_ACTIVE,
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		},
 	}); err != nil {
 		t.Fatalf("create worker: %v", err)
 	}
@@ -458,8 +460,8 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	if err != nil {
 		t.Fatalf("worker should still exist while draining: %v", err)
 	}
-	if w.GetState() != ateapipb.Worker_STATE_DRAINING {
-		t.Errorf("expected worker state DRAINING, got %v", w.GetState())
+	if w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("expected worker state DRAINING, got %v", w.GetStatus().GetState())
 	}
 }
 
@@ -477,7 +479,9 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 		Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: "10.0.0.3",
 		WorkerPodUid: testPodUID, NodeName: "node1",
-		State: ateapipb.Worker_STATE_ACTIVE,
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		},
 	}); err != nil {
 		t.Fatalf("create worker: %v", err)
 	}
@@ -504,8 +508,8 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get worker: %v", err)
 	}
-	if w.GetState() != ateapipb.Worker_STATE_DRAINING {
-		t.Errorf("worker state = %v, want DRAINING", w.GetState())
+	if w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING", w.GetStatus().GetState())
 	}
 }
 
@@ -516,12 +520,14 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 func TestMarkWorkerDraining(t *testing.T) {
 	ctx := context.Background()
 	ns, pool, pod := "ns-mark", "pool1", "worker-mark"
-	newWorker := func(state ateapipb.Worker_State) *ateapipb.Worker {
+	newWorker := func(state ateapipb.WorkerState) *ateapipb.Worker {
 		return &ateapipb.Worker{
 			Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: "10.0.0.4",
 			WorkerPodUid: testPodUID, NodeName: "node1",
-			State: state,
+			Status: &ateapipb.WorkerStatus{
+				State: state,
+			},
 		}
 	}
 
@@ -537,7 +543,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 	t.Run("already draining returns nil", func(t *testing.T) {
 		persistence, cleanup := storetest.SetupTestStore(t)
 		defer cleanup()
-		if err := persistence.CreateWorker(ctx, newWorker(ateapipb.Worker_STATE_DRAINING)); err != nil {
+		if err := persistence.CreateWorker(ctx, newWorker(ateapipb.WorkerState_WORKER_STATE_DRAINING)); err != nil {
 			t.Fatalf("create worker: %v", err)
 		}
 		s := &WorkerPoolSyncer{persistence: persistence}
@@ -549,7 +555,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 	t.Run("active worker marked draining", func(t *testing.T) {
 		persistence, cleanup := storetest.SetupTestStore(t)
 		defer cleanup()
-		if err := persistence.CreateWorker(ctx, newWorker(ateapipb.Worker_STATE_ACTIVE)); err != nil {
+		if err := persistence.CreateWorker(ctx, newWorker(ateapipb.WorkerState_WORKER_STATE_ACTIVE)); err != nil {
 			t.Fatalf("create worker: %v", err)
 		}
 		s := &WorkerPoolSyncer{persistence: persistence}
@@ -560,8 +566,8 @@ func TestMarkWorkerDraining(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get worker: %v", err)
 		}
-		if w.GetState() != ateapipb.Worker_STATE_DRAINING {
-			t.Errorf("worker state = %v, want DRAINING", w.GetState())
+		if w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+			t.Errorf("worker state = %v, want DRAINING", w.GetStatus().GetState())
 		}
 	})
 }
@@ -593,11 +599,13 @@ func TestReconcileDeadWorker(t *testing.T) {
 		Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: "10.0.0.5",
 		WorkerPodUid: testPodUID, NodeName: "node1",
-		State: ateapipb.Worker_STATE_DRAINING,
-		Assignment: &ateapipb.ActorAssignment{
-			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
-			Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
-			ActorUid:      createdActor.GetMetadata().GetUid(),
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_DRAINING,
+			Assignment: &ateapipb.ActorAssignment{
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
+				Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
+				ActorUid:      createdActor.GetMetadata().GetUid(),
+			},
 		},
 	}); err != nil {
 		t.Fatalf("create worker: %v", err)
@@ -646,11 +654,13 @@ func TestReconcileDeadWorker_IgnoresStaleIncarnationAssignment(t *testing.T) {
 		Metadata:        &ateapipb.ResourceMetadata{Name: uid},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod,
 		WorkerPodUid: uid,
-		State:        ateapipb.Worker_STATE_DRAINING,
-		Assignment: &ateapipb.ActorAssignment{
-			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
-			Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
-			ActorUid:      "old-incarnation-uid",
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_DRAINING,
+			Assignment: &ateapipb.ActorAssignment{
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
+				Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
+				ActorUid:      "old-incarnation-uid",
+			},
 		},
 	}); err != nil {
 		t.Fatalf("create worker: %v", err)
@@ -711,7 +721,7 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: liveUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-live", Ip: "10.0.0.9",
-		WorkerPodUid: liveUID, NodeName: "node1", State: ateapipb.Worker_STATE_ACTIVE,
+		WorkerPodUid: liveUID, NodeName: "node1", Status: &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE},
 	}); err != nil {
 		t.Fatalf("create live worker: %v", err)
 	}
@@ -736,11 +746,13 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 		Metadata:        &ateapipb.ResourceMetadata{Name: orphanUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-orphan", Ip: "10.0.0.10",
 		WorkerPodUid: orphanUID, NodeName: "node1",
-		State: ateapipb.Worker_STATE_DRAINING,
-		Assignment: &ateapipb.ActorAssignment{
-			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
-			Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
-			ActorUid:      createdActor.GetMetadata().GetUid(),
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_DRAINING,
+			Assignment: &ateapipb.ActorAssignment{
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
+				Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
+				ActorUid:      createdActor.GetMetadata().GetUid(),
+			},
 		},
 	}); err != nil {
 		t.Fatalf("create orphan worker: %v", err)
@@ -806,7 +818,9 @@ func TestSyncer_EnqueueStoredWorkers_RetriesTransientListError(t *testing.T) {
 	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-1", Ip: "10.0.0.10",
 		WorkerPodUid: "22222222-2222-2222-2222-222222222222", NodeName: "node1",
-		State: ateapipb.Worker_STATE_ACTIVE,
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		},
 	}); err != nil {
 		t.Fatalf("create worker: %v", err)
 	}
@@ -963,11 +977,13 @@ func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: ip,
 				WorkerPodUid: testPodUID, NodeName: "node1",
 				SandboxClass: "gvisor",
-				State:        ateapipb.Worker_STATE_ACTIVE,
-				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
-					Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
-					ActorUid:      createdActor.GetMetadata().GetUid(),
+				Status: &ateapipb.WorkerStatus{
+					State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+					Assignment: &ateapipb.ActorAssignment{
+						ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
+						Actor:         &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
+						ActorUid:      createdActor.GetMetadata().GetUid(),
+					},
 				},
 			}); err != nil {
 				t.Fatalf("create worker: %v", err)
@@ -1286,7 +1302,7 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 		if err != nil {
 			return false, err
 		}
-		return w.GetState() == ateapipb.Worker_STATE_DRAINING, nil
+		return w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING, nil
 	}); err != nil {
 		t.Fatalf("Worker not marked DRAINING after DeletionTimestamp set: %v", err)
 	}

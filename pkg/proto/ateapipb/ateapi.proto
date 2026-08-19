@@ -830,7 +830,6 @@ message UpdateWorkerRequest {
   // Only the following fields are supported:
   //   - sandbox_class
   //   - labels
-  //   - state
   google.protobuf.FieldMask update_mask = 2;
 }
 
@@ -891,22 +890,26 @@ message Worker {
   string sandbox_class = 8;
   map<string, string> labels = 9;
 
-  enum State {
-    STATE_UNSPECIFIED = 0;
-    // Ready; schedulable.
-    STATE_ACTIVE = 1;
-    // Pod Ready=false. Not schedulable.
-    STATE_NOT_READY = 2;
-    // Pod terminating. Not schedulable.
-    STATE_DRAINING = 3;
-  }
-  State state = 11;
-
   // The compute capacity this worker can give an actor sandbox.
-  WorkerCapacity capacity = 12;
+  WorkerCapacity capacity = 10;
+
+  // Server-managed state. Absent from Create/Update request payloads.
+  WorkerStatus status = 11;
+}
+
+enum WorkerState {
+  WORKER_STATE_UNSPECIFIED = 0;
+  // Ready; schedulable.
+  WORKER_STATE_ACTIVE = 1;
+  // Pod terminating. Not schedulable.
+  WORKER_STATE_DRAINING = 2;
+}
+
+message WorkerStatus {
+  WorkerState state = 1;
 
   // The Actor currently bound to this Worker, if any.
-  ActorAssignment assignment = 13;
+  ActorAssignment assignment = 2;
 }
 
 // WorkerCapacity is the worker pod's compute capacity available to host an

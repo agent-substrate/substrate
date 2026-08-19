@@ -15,9 +15,12 @@
 package controlapi
 
 import (
+	"context"
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -42,6 +45,50 @@ func TestValidateListWorkersRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateListWorkersRequest(tt.req), tt.want)
+		})
+	}
+}
+
+// The Worker CRUD methods are declared but not implemented. This pins that they
+// report UNIMPLEMENTED rather than panicking on their nil dependencies, and
+// will fail loudly as each one is filled in — at which point the corresponding
+// case moves to a real test.
+func TestWorkerAPIUnimplemented(t *testing.T) {
+	s := &Service{}
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"GetWorker", func() error {
+			_, err := s.GetWorker(ctx, &ateapipb.GetWorkerRequest{})
+			return err
+		}},
+		{"CreateWorker", func() error {
+			_, err := s.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{})
+			return err
+		}},
+		{"UpdateWorker", func() error {
+			_, err := s.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{})
+			return err
+		}},
+		{"DeleteWorker", func() error {
+			_, err := s.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{})
+			return err
+		}},
+		{"DrainWorker", func() error {
+			_, err := s.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{})
+			return err
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if got := status.Code(err); got != codes.Unimplemented {
+				t.Errorf("%s: got code %v (err %v), want %v", tc.name, got, err, codes.Unimplemented)
+			}
 		})
 	}
 }

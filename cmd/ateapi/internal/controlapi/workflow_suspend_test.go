@@ -431,9 +431,11 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 				WorkerPool:      "pool",
 				WorkerPod:       "pod-1",
 				WorkerPodUid:    testWorkerUID("pod-1"),
-				Assignment: &ateapipb.ActorAssignment{
-					Actor:    &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
-					ActorUid: uid,
+				Status: &ateapipb.WorkerStatus{
+					Assignment: &ateapipb.ActorAssignment{
+						Actor:    &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+						ActorUid: uid,
+					},
 				},
 			}
 			if err := persistence.CreateWorker(ctx, worker); err != nil {
@@ -450,8 +452,8 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
-			if released := stored.GetAssignment() == nil; released != tt.wantReleased {
-				t.Errorf("worker released = %t, want %t (assignment: %v)", released, tt.wantReleased, stored.GetAssignment())
+			if released := stored.GetStatus().GetAssignment() == nil; released != tt.wantReleased {
+				t.Errorf("worker released = %t, want %t (assignment: %v)", released, tt.wantReleased, stored.GetStatus().GetAssignment())
 			}
 		})
 	}

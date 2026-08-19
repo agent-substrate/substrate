@@ -116,7 +116,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 
 		status := "FREE"
 		assignedActor := "<none>"
-		if wass := w.GetAssignment(); wass != nil && wass.GetActor() != nil {
+		if wass := w.GetStatus().GetAssignment(); wass != nil && wass.GetActor() != nil {
 			status = "ASSIGNED"
 			if tpl := wass.GetActorTemplate(); tpl != nil && tpl.GetNamespace() != "" {
 				assignedActor = fmt.Sprintf("%s/%s/%s/%s",

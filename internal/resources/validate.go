@@ -240,8 +240,8 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 		}
 	}
 
-	if val := worker.Assignment; val != nil {
-		errs = append(errs, ValidateAssignment(val, fldPath.Child("assignment"))...)
+	if val := worker.GetStatus().GetAssignment(); val != nil {
+		errs = append(errs, ValidateAssignment(val, fldPath.Child("status", "assignment"))...)
 	}
 
 	if val, fldPath := worker.Ip, fldPath.Child("ip"); val == "" {
@@ -265,12 +265,12 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 	}
 
 	// state is server-managed; accept any defined enum value (the unset/zero
-	// STATE_UNSPECIFIED is tolerated for backward compatibility), reject unknowns.
-	if val, fldPath := worker.State, fldPath.Child("state"); ateapipb.Worker_State_name[int32(val)] == "" {
+	// WORKER_STATE_UNSPECIFIED is tolerated for backward compatibility), reject
+	// unknowns.
+	if val, fldPath := worker.GetStatus().GetState(), fldPath.Child("status", "state"); ateapipb.WorkerState_name[int32(val)] == "" {
 		errs = append(errs, field.NotSupported(fldPath, val, []string{
-			ateapipb.Worker_STATE_ACTIVE.String(),
-			ateapipb.Worker_STATE_NOT_READY.String(),
-			ateapipb.Worker_STATE_DRAINING.String(),
+			ateapipb.WorkerState_WORKER_STATE_ACTIVE.String(),
+			ateapipb.WorkerState_WORKER_STATE_DRAINING.String(),
 		}))
 	}
 

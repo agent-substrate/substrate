@@ -134,7 +134,7 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 	}
 
 	sandboxClass := worker.GetSandboxClass()
-	wass := worker.GetAssignment()
+	wass := worker.GetStatus().GetAssignment()
 	if wass == nil {
 		slog.WarnContext(ctx, "Worker's assignment is already nil, skipping release", slog.String("worker", workerName))
 		return sandboxClass, nil
@@ -145,7 +145,7 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 		return sandboxClass, nil
 	}
 
-	worker.Assignment = nil
+	worker.Status.Assignment = nil
 	if err := st.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
 		return sandboxClass, fmt.Errorf("while releasing worker: %w", err)
 	}
