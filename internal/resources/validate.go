@@ -278,9 +278,7 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 }
 
 // validateWorkerMetadata checks the Worker's identity. Workers are
-// global-scoped, so atespace must be empty, and metadata.name is the
-// Kubernetes pod UID rather than a separately chosen name — so it must both
-// look like a UUID and agree with worker_pod_uid.
+// global-scoped, so atespace must be empty.
 func validateWorkerMetadata(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
 
