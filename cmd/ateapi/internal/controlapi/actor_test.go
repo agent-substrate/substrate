@@ -21,13 +21,17 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/client-go/tools/cache"
 )
 
 type createActorErrorStore struct {
@@ -39,15 +43,23 @@ func (s *createActorErrorStore) CreateActor(context.Context, *ateapipb.Actor) (*
 	return nil, s.err
 }
 
-func TestCreateActor_AtespaceDeletedAfterPrecheck(t *testing.T) {
-	ns := namespaceForTest("ns-create-atespace-race")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-	tc.service.persistence = &createActorErrorStore{serviceStore: tc.service.persistence, err: store.ErrFailedPrecondition}
+func (s *createActorErrorStore) AtespaceExists(context.Context, string) (bool, error) {
+	return true, nil
+}
 
-	_, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "racing-create"},
+func TestCreateActor_AtespaceDeletedAfterPrecheck(t *testing.T) {
+	const ns = "ns-create-atespace-race"
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(&atev1alpha1.ActorTemplate{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "tmpl1"}}); err != nil {
+		t.Fatalf("add ActorTemplate: %v", err)
+	}
+	s := &Service{
+		persistence:         &createActorErrorStore{err: store.ErrFailedPrecondition},
+		actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer),
+	}
+
+	_, err := s.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "racing-create"},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
 	}})
