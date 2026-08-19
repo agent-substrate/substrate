@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,61 @@ func TestActorEgressHTTPS(t *testing.T) {
 	t.Logf("Actor HTTPS egress fetch succeeded; body: %s", body)
 
 	assertEgressGatewayConnect(t, ctx, since, actorName, "443")
+}
+
+// httpTarget is the origin TestActorEgressNonStandardPort dials: a plain HTTP
+// server on a port that is neither 80 nor 443.
+//
+// It runs the egressprobe binary rather than one of its own. egressprobe's main
+// only parses flags and serves /healthz, and the credential bundles it reads
+// are read lazily inside /handshake, which this target never calls -- so it
+// starts with nothing mounted and needs no fixture of its own.
+var httpTarget = e2e.ServerPod{
+	Name:       "httptarget",
+	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe",
+	Port:       8080,
+}
+
+// TestActorEgressNonStandardPort covers plaintext HTTP/1.1 egress to a port
+// that is neither 80 nor 443, the shape most in-cluster services actually take.
+//
+// The port is worth its own test because nothing in the egress path holds it as
+// a constant or derives it from the scheme: it is the Actor's own TCP
+// destination port, recovered from SO_ORIGINAL_DST by TCPOriginalDestination
+// after the prerouting REDIRECT that InstallActorNftablesRules adds inside the
+// worker pod's netns, and then written verbatim into the CONNECT authority by
+// atunnel's Client.DialContext. The other two tests would still pass if that
+// port were defaulted from the scheme, because 80 and 443 are exactly what such
+// a default would produce.
+func TestActorEgressNonStandardPort(t *testing.T) {
+	ctx := context.Background()
+
+	// Stand the target up first: a fixture failure here should not leave a
+	// resumed Actor idling in the cluster waiting for a destination.
+	target := e2e.DeployServerPod(t, ctx, httpTarget)
+
+	actorName, _ := createAndResumeActor(t, ctx, "egress-port", e2e.EgressFixture())
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+
+	// Address() is the ClusterIP literal, not the Service's DNS name: the
+	// authority atunnel sends is always an address, so the name would add
+	// nothing but a dependency on the sandbox's DNS-over-UDP masquerade path --
+	// turning a DNS failure into something that reads as an egress-port
+	// failure. kube-proxy's service DNAT happens later, in the host netns, so
+	// <ClusterIP>:8080 is what SO_ORIGINAL_DST returns and what has to reach
+	// the gateway.
+	url := fmt.Sprintf("http://%s/healthz", target.Address())
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
+	if status != http.StatusOK {
+		t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+	}
+	t.Logf("Actor egress fetch of %s succeeded", url)
+
+	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(httpTarget.Port))
 }
 
 // fetchThroughEgressActor asks the egress demo Actor to fetch url and returns
