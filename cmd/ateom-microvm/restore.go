@@ -463,13 +463,21 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 	if vsock, ok := cfg["vsock"].(map[string]any); ok {
 		vsock["socket"] = kata.VsockSocketPath(id)
 	}
-	// ateom captures the guest serial console to a file under the source actor's
-	// VMDir (Serial{Mode:"File"}). On restore that path is stale
-	// (points at the golden/source pod's VMDir), so CH's CreateConsoleDevice fails
-	// (No such file or directory). Repoint it at this actor's VMDir.
-	if serial, ok := cfg["serial"].(map[string]any); ok {
-		if mode, _ := serial["mode"].(string); mode == "File" {
-			serial["file"] = filepath.Join(kata.VMDir(id), "serial.log")
+	// ateom captures the guest console to a file under the source actor's VMDir
+	// (virtio-console normally, plus the UART in debug mode). On restore those paths
+	// are stale (they point at the golden/source pod's VMDir), so CH's
+	// CreateConsoleDevice fails (No such file or directory). Repoint them at this
+	// actor's VMDir.
+	for key, path := range map[string]string{
+		"console": kata.ConsoleLogPath(id),
+		"serial":  kata.SerialLogPath(id),
+	} {
+		dev, ok := cfg[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if mode, _ := dev["mode"].(string); mode == "File" {
+			dev["file"] = path
 		}
 	}
 	// The virtio-fs share is served by its per-VMDir virtiofsd socket; the

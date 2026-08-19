@@ -504,11 +504,11 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/vda +
 	// the virtio-fs device; no actor virtio-blk disks — rootfs writes land in the
-	// host-side overlay upper through the shared mount). serialLog is also read on a
-	// failed agent dial below, so keep it here.
-	serialLog := filepath.Join(kata.VMDir(actorUID), "serial.log")
-	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, serialLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()))
+	// host-side overlay upper through the shared mount). The console log is also read
+	// on a failed agent dial below, so keep it here.
+	consoleLog := kata.ConsoleLogPath(actorUID)
+	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
+		agentInit(ctx, client.Info()), s.kataDebug)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -550,7 +550,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	tVsock := time.Now()
 	ac, err := dialAgentRetry(ctx, vsockPath, 60*time.Second)
 	if err != nil {
-		logGuestBootDiagnostics(ctx, actorUID, serialLog)
+		logGuestBootDiagnostics(ctx, actorUID, consoleLog)
 		return fmt.Errorf("while dialing kata-agent: %w", err)
 	}
 	tDialed := time.Now()
@@ -823,16 +823,26 @@ func initParams(agentInit bool) string {
 // stays frozen at the instant it was snapshotted.
 //
 // The disk-backed rootfs upper share (see rootfsupper.go) is always present.
-func buildVMConfig(id, kernel, image, kparams, serialLog string, memMiB, vcpus int, agentInit bool) ch.VmConfig {
-	console := "ttyS0"
-	if runtime.GOARCH == "arm64" {
-		console = "ttyAMA0"
-	}
+//
+// The guest console is a virtio-console (hvc0), not the emulated UART. Every byte
+// written to an 8250/pl011 traps to the VMM, and a kata guest prints ~340 lines
+// before the agent listens, so the UART — not the kernel's work — dominated cold
+// boot: measured host-launch to the agent's ttrpc accept, 1.24s -> 0.39s on a GKE
+// amd64 node and 21.6s -> 1.9s on a nested-virt arm64 kind node. What that costs is
+// the earliest messages: hvc0 only exists once virtio-console probes, so the memory
+// map, CPU features and ACPI lines never reach the log. kataDebug adds the UART back
+// with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
+func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
 	cmdline := "root=/dev/vda1 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 " +
-		"panic=1 no_timer_check noreplace-smp console=" + console + ",115200n8 " +
+		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
 		initParams(agentInit)
 	if kparams != "" {
 		cmdline += " " + kparams
+	}
+	serial := &ch.ConsoleConfig{Mode: "Off"}
+	if debug {
+		cmdline += " " + earlyconParam()
+		serial = &ch.ConsoleConfig{Mode: "File", File: kata.SerialLogPath(id)}
 	}
 	return ch.VmConfig{
 		Cpus:    ch.CpusConfig{BootVcpus: int32(vcpus), MaxVcpus: int32(vcpus)},
@@ -844,9 +854,19 @@ func buildVMConfig(id, kernel, image, kparams, serialLog string, memMiB, vcpus i
 		Fs:       buildFsConfigs(id),
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
 		Rng:      &ch.RngConfig{Src: "/dev/urandom"},
-		Serial:   &ch.ConsoleConfig{Mode: "File", File: serialLog},
+		Console:  &ch.ConsoleConfig{Mode: "File", File: consoleLog},
+		Serial:   serial,
 		Vsock:    &ch.VsockConfig{Cid: 3, Socket: kata.VsockSocketPath(id)},
 	}
+}
+
+// earlyconParam points the kernel's early console at the UART cloud-hypervisor
+// emulates before virtio-console exists: an ISA port on x86, MMIO on arm64.
+func earlyconParam() string {
+	if runtime.GOARCH == "arm64" {
+		return "earlycon=pl011,mmio,0x09000000"
+	}
+	return "earlycon=uart,io,0x3f8,115200"
 }
 
 // buildFsConfigs returns the VM's virtio-fs device: the unified share hosting
@@ -1015,9 +1035,10 @@ func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration
 // reached the kata-agent: the console tail, where a guest-side panic or an early
 // power-off shows up, and each virtiofsd's log — cloud-hypervisor stops the VM
 // when a vhost-user backend dies, and that leaves the console silent.
-func logGuestBootDiagnostics(ctx context.Context, actorUID, serialLog string) {
+func logGuestBootDiagnostics(ctx context.Context, actorUID, consoleLog string) {
 	for _, l := range []struct{ name, path string }{
-		{"serial", serialLog},
+		{"console", consoleLog},
+		{"serial", kata.SerialLogPath(actorUID)},
 		{"virtiofsd", virtiofsdLogPath(actorUID)},
 	} {
 		b, err := os.ReadFile(l.path)

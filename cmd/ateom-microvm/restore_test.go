@@ -26,14 +26,17 @@ import (
 )
 
 // writeSnapshotConfig writes a config.json holding the given fs devices (plus the
-// vsock and serial entries every snapshot has) into a fresh snapshot dir.
+// vsock and console entries every snapshot has) into a fresh snapshot dir. The
+// serial device is the debug-mode one, present here so the rewrite is exercised
+// against a snapshot that has both.
 func writeSnapshotConfig(t *testing.T, fsDevices []map[string]any) string {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := map[string]any{
-		"vsock":  map[string]any{"cid": 3, "socket": "/run/vc/vm/golden/clh.sock"},
-		"serial": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
-		"fs":     fsDevices,
+		"vsock":   map[string]any{"cid": 3, "socket": "/run/vc/vm/golden/clh.sock"},
+		"console": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/console.log"},
+		"serial":  map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
+		"fs":      fsDevices,
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -121,7 +124,7 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("vsock and serial are repointed", func(t *testing.T) {
+	t.Run("vsock and console devices are repointed", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
@@ -133,8 +136,9 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			t.Fatalf("reading config.json: %v", err)
 		}
 		var cfg struct {
-			Vsock  struct{ Socket string } `json:"vsock"`
-			Serial struct{ File string }   `json:"serial"`
+			Vsock   struct{ Socket string } `json:"vsock"`
+			Console struct{ File string }   `json:"console"`
+			Serial  struct{ File string }   `json:"serial"`
 		}
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			t.Fatalf("parsing rewritten config: %v", err)
@@ -142,7 +146,10 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		if want := kata.VsockSocketPath(id); cfg.Vsock.Socket != want {
 			t.Errorf("vsock socket = %q, want %q", cfg.Vsock.Socket, want)
 		}
-		if want := filepath.Join(kata.VMDir(id), "serial.log"); cfg.Serial.File != want {
+		if want := kata.ConsoleLogPath(id); cfg.Console.File != want {
+			t.Errorf("console file = %q, want %q", cfg.Console.File, want)
+		}
+		if want := kata.SerialLogPath(id); cfg.Serial.File != want {
 			t.Errorf("serial file = %q, want %q", cfg.Serial.File, want)
 		}
 	})
