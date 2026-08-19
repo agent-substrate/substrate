@@ -162,7 +162,12 @@ func TestConnect_DedicatedWatchPool(t *testing.T) {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 	defer watch.Close()
-	worker := &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "watchpool-pod"}
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "watchpool-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "watchpool-pod",
+	}
 	if err := p.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
@@ -463,20 +468,25 @@ func TestWorkerEvents_OneRowPerTransaction(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 
-	worker := &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "one-row-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 	for i := 0; i < 10; i++ {
-		stored, err := s.GetWorker(ctx, "ns", "pool", "pod")
+		stored, err := s.GetWorker(ctx, "one-row-worker")
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if err := s.UpdateWorker(ctx, stored, stored.GetVersion()); err != nil {
+		if err := s.UpdateWorker(ctx, stored, stored.GetMetadata().GetVersion()); err != nil {
 			t.Fatalf("UpdateWorker %d failed: %v", i, err)
 		}
 	}
-	if err := s.DeleteWorker(ctx, "ns", "pool", "pod"); err != nil {
+	if err := s.DeleteWorker(ctx, "one-row-worker"); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
 
@@ -512,7 +522,12 @@ func TestWatchWorkers_DeliveryFencedByOldestTransaction(t *testing.T) {
 		t.Fatalf("assigning blocker xid failed: %v", err)
 	}
 
-	worker := &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "fenced"}
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "fenced-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "fenced",
+	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
@@ -713,7 +728,12 @@ func TestWatchWorkers_ClosesWhenTrimmedPastCursor(t *testing.T) {
 	defer watch.Close()
 
 	// Deliver one event normally so the cursor is established.
-	worker := &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "trim-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	}
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}

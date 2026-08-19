@@ -193,7 +193,7 @@ func TestMintCertReadsThroughStaleWorkerCache(t *testing.T) {
 
 			// Phase 1: worker exists, unassigned; the cache seeds this view and
 			// (via the inert watch) never learns anything newer.
-			seedActor(t, ctx, st, actorFixture{status: ateapipb.Actor_STATUS_RUNNING, workerNode: testNode, unassigned: true})
+			seedActor(t, ctx, st, actorFixture{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, workerNode: testNode, unassigned: true})
 			workers := workercache.New(staleWatchStore{st}, time.Hour)
 			cacheCtx, cancel := context.WithCancel(ctx)
 			t.Cleanup(cancel)
@@ -208,15 +208,18 @@ func TestMintCertReadsThroughStaleWorkerCache(t *testing.T) {
 			if assignInStore {
 				// Phase 2: commit the assignment to the store only, as
 				// AssignWorker does (possibly on another replica).
-				worker, err := st.GetWorker(ctx, testPodNS, testPool, testWorkerPod)
+				worker, err := st.GetWorker(ctx, testWorkerName)
 				if err != nil {
 					t.Fatalf("read seeded worker: %v", err)
 				}
-				worker.Assignment = &ateapipb.Assignment{
+				if worker.Status == nil {
+					worker.Status = &ateapipb.WorkerStatus{}
+				}
+				worker.Status.Assignment = &ateapipb.ActorAssignment{
 					Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
 					ActorUid: actor.GetMetadata().GetUid(),
 				}
-				if err := st.UpdateWorker(ctx, worker, worker.GetVersion()); err != nil {
+				if err := st.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
 					t.Fatalf("assign worker in store: %v", err)
 				}
 			}

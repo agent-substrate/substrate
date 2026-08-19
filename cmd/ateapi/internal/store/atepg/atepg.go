@@ -56,9 +56,8 @@ type Persistence struct {
 	// and the partition-maintenance loop. Connect gives it a small dedicated
 	// pool; NewPersistence (tests, callers owning a single pool) aliases it
 	// to pool.
-	watchPool        *pgxpool.Pool
-	ownsWatchPool    bool
-	ownsWatchPool    bool
+	watchPool       *pgxpool.Pool
+	ownsWatchPool   bool
 	lockTTL         time.Duration
 	stopMaintenance context.CancelFunc
 	maintenanceDone chan struct{}
@@ -1329,7 +1328,7 @@ const (
 	// Bound worker-event delivery latency in the absence of an xmin stall.
 	changeFeedPollInterval = 100 * time.Millisecond
 
-	// Cap rows fetched per poll; a burst beyond it carries over to the next poll 
+	// Cap rows fetched per poll; a burst beyond it carries over to the next poll
 	// (events are delayed, never dropped).
 	changeFeedBatch = 1024
 
@@ -1342,7 +1341,7 @@ const (
 	// The feed partition range width.
 	changeFeedPartitionInterval = 15 * time.Minute
 
-	// How many intervals ahead partitions are pre-created: creation must stall past 
+	// How many intervals ahead partitions are pre-created: creation must stall past
 	// lead-1 intervals before any write detours into the DEFAULT partition backstop.
 	changeFeedPartitionLead = 2
 )
@@ -1630,7 +1629,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 					if watchCtx.Err() != nil {
 						return
 					}
-					// Transient poll failure: keep the cursor, try again on the next tick. 
+					// Transient poll failure: keep the cursor, try again on the next tick.
 					// If the outage was a restart, the next successful safety check catches it.
 					slog.WarnContext(watchCtx, "worker change feed poll failed", slog.Any("err", err))
 					break
