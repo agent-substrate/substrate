@@ -522,7 +522,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.GetMetadata().GetVersion()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			w.workerCache.Forget(assignedWorker.GetWorkerNamespace(), assignedWorker.GetWorkerPod())
+			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
 			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
 		}
 		return nil, nil, err

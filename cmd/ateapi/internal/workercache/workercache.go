@@ -114,10 +114,10 @@ func (c *Cache) Worker(name string) (*ateapipb.Worker, error) {
 // normal delete watch remains authoritative, but this closes the short race in
 // which scheduling selected a worker just after its row was deleted and before
 // the watch event reached the cache.
-func (c *Cache) Forget(namespace, pod string) {
+func (c *Cache) Forget(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.workers, namespace+":"+pod)
+	delete(c.workers, name)
 }
 
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
