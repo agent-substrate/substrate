@@ -24,10 +24,11 @@ import (
 const ProbeName = "probe"
 
 // DeployProbe builds the probe fixture image and applies its manifest for the
-// sandbox class under test, removing it when the test ends. It returns the
-// fixture's namespace. A suite that needs the probe calls this rather than
-// assuming a previous run left it behind.
-func DeployProbe(t *testing.T, bucket string) string {
+// sandbox class under test, removing it when the test ends. name distinguishes
+// the caller (by convention its suite name): each suite gets its own copy of
+// the fixture, so no suite's cleanup can delete the fixture out from under
+// another running concurrently. It returns the fixture's namespace.
+func DeployProbe(t *testing.T, bucket, name string) string {
 	t.Helper()
 
 	root, err := FindRepoRoot()
@@ -37,7 +38,7 @@ func DeployProbe(t *testing.T, bucket string) string {
 
 	// One manifest, rendered for the sandbox class under test, so both apply
 	// and delete consume the same file without any shell involved.
-	manifest := RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe.yaml.tmpl", bucket)
+	manifest := RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe.yaml.tmpl", bucket, name)
 
 	// Build/push the probe image and apply through the repo's pinned ko; CI
 	// does not install ko on PATH. The trailing `-- --context=...` mirrors
@@ -63,5 +64,5 @@ func DeployProbe(t *testing.T, bucket string) string {
 		RunCmd(t, "kubectl", delArgs...)
 	})
 
-	return FixtureName("ate-e2e-probe")
+	return FixtureName("ate-e2e-probe") + "-" + name
 }

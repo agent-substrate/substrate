@@ -31,11 +31,9 @@ import (
 
 const probeTemplate = "probe"
 
-// probeNamespace is where deployProbe applies the fixture, and the atespace its
-// actors live in. Suffixed per sandbox class (see e2e.FixtureName) so the two
-// lanes' fixtures never collide: they run one after the other, and this
-// namespace is deleted by the test that created it.
-var probeNamespace = e2e.FixtureName("ate-e2e-probe")
+// probeNamespace is the suite's own probe fixture namespace, and the atespace
+// its actors live in.
+var probeNamespace string
 
 type whoamiResponse struct {
 	File     string `json:"file"`
@@ -71,7 +69,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	e2e.DeployProbe(t, env["BUCKET_NAME"])
+	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity")
 	golden := waitForGolden(t, ctx, clients)
 
 	// Two distinct actors from the same golden snapshot.

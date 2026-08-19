@@ -137,7 +137,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	}
 
 	// The probe supplies this suite's container image and resolved runtime.
-	probeNamespace := e2e.DeployProbe(t, env["BUCKET_NAME"])
+	probeNamespace := e2e.DeployProbe(t, env["BUCKET_NAME"], "imagevolume")
 
 	srcPool, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(probeNamespace).Get(ctx, probeName, metav1.GetOptions{})
 	if err != nil {
