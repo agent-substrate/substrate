@@ -195,18 +195,18 @@ func newKubeClient() (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(cfg)
 }
 
-// actorStatusString maps the proto Status enum to the human-readable
+// actorStateString maps the proto State enum to the human-readable
 // phase string the UI's badge logic understands (running / suspended
 // / etc).
-func actorStatusString(s ateapipb.Actor_Status) string {
+func actorStateString(s ateapipb.ActorState) string {
 	switch s {
-	case ateapipb.Actor_STATUS_RESUMING:
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
 		return "Resuming"
-	case ateapipb.Actor_STATUS_RUNNING:
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
 		return "Running"
-	case ateapipb.Actor_STATUS_SUSPENDING:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 		return "Suspending"
-	case ateapipb.Actor_STATUS_SUSPENDED:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 		return "Suspended"
 	default:
 		return "?"
@@ -426,7 +426,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 		actors = append(actors, actorSummary{
 			Kind:    "Actor",
 			Name:    a.GetMetadata().GetName(),
-			Phase:   actorStatusString(a.GetStatus()),
+			Phase:   actorStateString(a.GetStatus().GetState()),
 			Message: msg,
 		})
 	}

@@ -152,6 +152,15 @@ message Container {
   // durable_dir_volume_mounts are the durable-dir volumes this container
   // mounts, if any.
   repeated DurableDirVolumeMount durable_dir_volume_mounts = 4;
+
+  // csi_volume_mounts are the CSI volumes this container mounts, if any.
+  repeated VolumeMount csi_volume_mounts = 5;
+}
+
+// VolumeMount is one volume mounted into a container.
+message VolumeMount {
+  string volume_name = 1;
+  string mount_path = 2;
 }
 
 // DurableDirVolumeMount is one durable-dir volume mounted into a container.

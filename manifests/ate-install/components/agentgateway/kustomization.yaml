@@ -19,7 +19,12 @@ resources:
   - configmap.yaml
 
 patches:
-  - patch: |-
+  - target:
+      version: v1
+      kind: ConfigMap
+      name: atenet-router-envoy-config
+      namespace: ate-system
+    patch: |-
       apiVersion: v1
       kind: ConfigMap
       metadata:
@@ -82,7 +87,13 @@ patches:
             mountPath: /run/servicedns.podcert.ate.dev
           - name: podidentity
             mountPath: /run/podidentity.podcert.ate.dev
-  - patch: |-
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-router
+      namespace: ate-system
+    patch: |-
       apiVersion: apps/v1
       kind: Deployment
       metadata:
@@ -95,3 +106,52 @@ patches:
             - name: envoy-config
               configMap:
                 name: atenet-router-agentgateway-config
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0
+        value:
+          name: agentgateway
+          image: cr.agentgateway.dev/agentgateway:v1.4.1
+          args:
+          - -f
+          - /etc/agentgateway/config.yaml
+          ports:
+          - name: https
+            containerPort: 8443
+          - name: readiness
+            containerPort: 15021
+          - name: stats
+            containerPort: 15020
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: readiness
+            periodSeconds: 10
+          startupProbe:
+            failureThreshold: 60
+            httpGet:
+              path: /healthz/ready
+              port: readiness
+            periodSeconds: 1
+          volumeMounts:
+          - name: config
+            mountPath: /etc/agentgateway
+            readOnly: true
+          - name: servicedns
+            mountPath: /run/servicedns.podcert.ate.dev
+            readOnly: true
+          - name: actor-id-ca-certs
+            mountPath: /run/actor-id-ca-certs
+            readOnly: true
+      - op: add
+        path: /spec/template/spec/containers/1/args/-
+        value: --atenet-router=agentgateway
+      - op: replace
+        path: /spec/template/spec/volumes/0/configMap/name
+        value: atenet-egress-agentgateway-config

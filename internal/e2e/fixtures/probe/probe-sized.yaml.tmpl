@@ -17,11 +17,16 @@
 # sandbox is shaped to those limits. Reuses the probe image (it serves the
 # /resources endpoint). Kept in its own namespace so it never collides with
 # the plain probe fixture.
+#
+# Rendered by e2e.RenderFixtureManifest, which fills the ${...} placeholders for
+# the sandbox class under test. Unlike probe.yaml.tmpl this declares its own
+# resources (they are the thing under test), so it carries no
+# ${TEMPLATE_RESOURCES} placeholder.
 
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ate-e2e-sizing
+  name: ate-e2e-sizing${FIXTURE_SUFFIX}
 
 ---
 
@@ -29,12 +34,13 @@ apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
   name: probe-sized
-  namespace: ate-e2e-sizing
+  namespace: ate-e2e-sizing${FIXTURE_SUFFIX}
   labels:
     workload: probe-sized
 spec:
   replicas: 3
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  ateomImage: ${ATEOM_IMAGE}
+${WORKERPOOL_RUNTIME}
 
 ---
 
@@ -42,8 +48,9 @@ apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
   name: probe-sized
-  namespace: ate-e2e-sizing
+  namespace: ate-e2e-sizing${FIXTURE_SUFFIX}
 spec:
+${TEMPLATE_SANDBOX_CLASS}
   containers:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
@@ -57,7 +64,8 @@ spec:
         port: 80
   # The feature under test: these limits size the sandbox (and, when the worker
   # advertises capacity, gate scheduling). CPU=2 makes NumCPU() inside the
-  # gVisor sandbox a distinct, assertable value.
+  # sandbox a distinct, assertable value — the vCPU count of the micro-VM guest,
+  # or what runsc --cpu-num-from-quota provisions the gVisor sentry with.
   resources:
     limits:
       cpu: "2"
@@ -66,4 +74,4 @@ spec:
     matchLabels:
       workload: probe-sized
   snapshotsConfig:
-    location: gs://${BUCKET_NAME}/ate-e2e-sizing/
+    location: gs://${BUCKET_NAME}/ate-e2e-sizing${FIXTURE_SUFFIX}/

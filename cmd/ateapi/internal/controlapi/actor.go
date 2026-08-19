@@ -61,9 +61,9 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 
-	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
-	if src := in.GetSourceSnapshot(); src != nil {
-		sourceSnapshotInfo, err = s.resolveSnapshotSource(ctx, in.GetMetadata().GetAtespace(), src, template)
+	var sourceSnapshotStatus *ateapipb.ActorSourceSnapshotStatus
+	if tag := in.GetSourceSnapshotTag(); tag != nil {
+		sourceSnapshotStatus, err = s.resolveSnapshotSource(ctx, in.GetMetadata().GetAtespace(), tag, template)
 		if err != nil {
 			return nil, err
 		}
@@ -92,13 +92,16 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 			Atespace: atespace,
 			Name:     name,
 		},
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 		ActorTemplateNamespace: templateNamespace,
 		ActorTemplateName:      templateName,
 		WorkerSelector:         in.GetWorkerSelector(),
-		ActorVolumes:           initVols,
-		LatestSnapshot:         sourceSnapshotInfo.GetSnapshot(),
-		SourceSnapshot:         sourceSnapshotInfo,
+		SourceSnapshotTag:      in.GetSourceSnapshotTag(),
+		Status: &ateapipb.ActorStatus{
+			State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ActorVolumes:   initVols,
+			LatestSnapshot: sourceSnapshotStatus.GetSnapshot(),
+			SourceSnapshot: sourceSnapshotStatus,
+		},
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
@@ -115,8 +118,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
-func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace string, src *ateapipb.ActorSnapshotSource, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSnapshotSource, error) {
-	tagRef := src.GetTag()
+func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
 	tag, err := s.persistence.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
@@ -142,7 +144,7 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 		return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
-	if snapshot.GetActorTemplateUid() != string(template.GetUID()) {
+	if snapshot.GetStatus().GetActorTemplateUid() != string(template.GetUID()) {
 		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
 	}
 	for _, volume := range template.Spec.Volumes {
@@ -151,8 +153,7 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot cloning does not support external volumes")
 		}
 	}
-	return &ateapipb.ActorSnapshotSource{
-		Tag: tagRef,
+	return &ateapipb.ActorSourceSnapshotStatus{
 		Snapshot: &ateapipb.ObjectRef{
 			Atespace: snapshot.GetMetadata().GetAtespace(),
 			Name:     snapshot.GetMetadata().GetName(),
@@ -202,8 +203,8 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorLis
 	if val := actor.GetWorkerSelector(); val != nil {
 		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
 	}
-	if src := actor.GetSourceSnapshot(); src != nil {
-		errs = append(errs, resources.ValidateObjectRef(src.GetTag(), actorPath.Child("source_snapshot").Child("tag"))...)
+	if tag := actor.GetSourceSnapshotTag(); tag != nil {
+		errs = append(errs, resources.ValidateObjectRef(tag, actorPath.Child("source_snapshot_tag"))...)
 	}
 
 	return errs

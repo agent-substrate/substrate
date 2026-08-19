@@ -264,16 +264,18 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	actorName := "actor-orphan"
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorName, Atespace: "team-orphan"}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-		Status: ateapipb.Actor_STATUS_RUNNING,
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			Worker:          &ateapipb.ObjectRef{Name: testPodUID},
-			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodUid: testPodUID, WorkerPodIp: ip,
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: testPodUID},
+				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodUid: testPodUID, WorkerPodIp: ip,
+			},
+			// Both in-progress checkpoints are set so the assertion below covers the
+			// shared crash path, which cannot know which workflow was in flight.
+			InProgressSnapshotName:      "partial-snapshot",
+			InProgressLocalSnapshotName: "partial-local-snapshot",
+			LatestSnapshot:              &ateapipb.ObjectRef{Atespace: "team-orphan", Name: "last"},
 		},
-		// Both in-progress checkpoints are set so the assertion below covers the
-		// shared crash path, which cannot know which workflow was in flight.
-		InProgressSnapshotName:      "partial-snapshot",
-		InProgressLocalSnapshotName: "partial-local-snapshot",
-		LatestSnapshot:              &ateapipb.ObjectRef{Atespace: "team-orphan", Name: "last"},
 	})
 	if err != nil {
 		t.Fatalf("create actor: %v", err)
@@ -294,8 +296,8 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	if err := fakeK8s.CoreV1().Pods(ns).Delete(ctx, pod, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("delete pod: %v", err)
 	}
-	// The actor was STATUS_RUNNING when its pod vanished (it never suspended
-	// cleanly), so cleanup marks it STATUS_CRASHED.
+	// The actor was ACTOR_STATE_RUNNING when its pod vanished (it never suspended
+	// cleanly), so cleanup marks it ACTOR_STATE_CRASHED.
 	var got *ateapipb.Actor
 	if err := wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 2*time.Second, true, func(c context.Context) (bool, error) {
 		a, gerr := persistence.GetActor(c, resources.ActorRef{Atespace: "team-orphan", Name: actorName})
@@ -303,14 +305,14 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 			return false, gerr
 		}
 		got = a
-		return a.GetStatus() == ateapipb.Actor_STATUS_CRASHED, nil
+		return a.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED, nil
 	}); err != nil {
 		t.Fatalf("actor not reset to CRASHED: %v", err)
 	}
-	if got.GetWorkerAssignment() != nil || got.InProgressSnapshotName != "" || got.InProgressLocalSnapshotName != "" {
+	if got.GetStatus().GetWorkerAssignment() != nil || got.GetStatus().GetInProgressSnapshotName() != "" || got.GetStatus().GetInProgressLocalSnapshotName() != "" {
 		t.Errorf("bind fields not cleared: %+v", got)
 	}
-	if got.GetLatestSnapshot().GetName() == "" {
+	if got.GetStatus().GetLatestSnapshot().GetName() == "" {
 		t.Errorf("LatestSnapshot must be preserved")
 	}
 }
@@ -576,10 +578,12 @@ func TestReconcileDeadWorker(t *testing.T) {
 	atespace, actorID := "team-rdw", "actor-rdw"
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-		Status: ateapipb.Actor_STATUS_RUNNING,
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			Worker:          &ateapipb.ObjectRef{Name: testPodUID},
-			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodUid: testPodUID, WorkerPodIp: "10.0.0.5",
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: testPodUID},
+				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodUid: testPodUID, WorkerPodIp: "10.0.0.5",
+			},
 		},
 	})
 	if err != nil {
@@ -609,8 +613,8 @@ func TestReconcileDeadWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get actor: %v", err)
 	}
-	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
-		t.Errorf("actor status = %v, want CRASHED", got.GetStatus())
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("actor state = %v, want CRASHED", got.GetStatus().GetState())
 	}
 }
 
@@ -627,10 +631,12 @@ func TestReconcileDeadWorker_IgnoresStaleIncarnationAssignment(t *testing.T) {
 	atespace, actorID := "team-rdw", "actor-rdw"
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-		Status: ateapipb.Actor_STATUS_RUNNING,
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			Worker:          &ateapipb.ObjectRef{Name: uid},
-			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodUid: uid, WorkerPodIp: "10.0.0.5",
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: uid},
+				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodUid: uid, WorkerPodIp: "10.0.0.5",
+			},
 		},
 	})
 	if err != nil {
@@ -662,8 +668,8 @@ func TestReconcileDeadWorker_IgnoresStaleIncarnationAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get actor: %v", err)
 	}
-	if got.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("actor status = %v, want RUNNING (should ignore dead worker assigned to stale incarnation)", got.GetStatus())
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("actor state = %v, want RUNNING (should ignore dead worker assigned to stale incarnation)", got.GetStatus().GetState())
 	}
 }
 
@@ -715,10 +721,12 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	atespace, actorID := "team-recon", "actor-recon"
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-		Status: ateapipb.Actor_STATUS_RUNNING,
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			Worker:          &ateapipb.ObjectRef{Name: orphanUID},
-			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-orphan", WorkerPodUid: orphanUID, WorkerPodIp: "10.0.0.10",
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: orphanUID},
+				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-orphan", WorkerPodUid: orphanUID, WorkerPodIp: "10.0.0.10",
+			},
 		},
 	})
 	if err != nil {
@@ -755,10 +763,10 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get actor: %v", err)
 	}
-	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
-		t.Errorf("orphaned actor status = %v, want CRASHED", got.GetStatus())
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("orphaned actor state = %v, want CRASHED", got.GetStatus().GetState())
 	}
-	if got.GetWorkerAssignment() != nil {
+	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("orphaned actor pod pointer not cleared: %+v", got)
 	}
 }
@@ -902,23 +910,23 @@ func TestSyncer_EnqueueStoredWorkers_StreamsPagesAndRetriesLatePage(t *testing.T
 	}
 }
 
-// TestReleaseActorOnDeadWorker_StatusTransitions verifies that a running actor on
+// TestReleaseActorOnDeadWorker_StateTransitions verifies that a running actor on
 // a deleted worker becomes CRASHED, while an actor that had already suspended
 // cleanly stays SUSPENDED (resumable).
-func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
+func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 	ns, pool, pod, ip := "ns-status", "pool1", "worker-status", "10.0.0.3"
 	tests := []struct {
 		name       string
-		start      ateapipb.Actor_Status
-		wantStatus ateapipb.Actor_Status
+		start      ateapipb.ActorState
+		wantState  ateapipb.ActorState
 		wantOp     string
 		wantMetric bool
 	}{
-		{name: "running becomes crashed", start: ateapipb.Actor_STATUS_RUNNING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationUnknown, wantMetric: true},
-		{name: "resuming becomes crashed", start: ateapipb.Actor_STATUS_RESUMING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
-		{name: "suspending becomes crashed", start: ateapipb.Actor_STATUS_SUSPENDING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
-		{name: "pausing becomes crashed", start: ateapipb.Actor_STATUS_PAUSING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationPause, wantMetric: true},
-		{name: "suspended stays suspended", start: ateapipb.Actor_STATUS_SUSPENDED, wantStatus: ateapipb.Actor_STATUS_SUSPENDED, wantMetric: false},
+		{name: "running becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationUnknown, wantMetric: true},
+		{name: "resuming becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
+		{name: "suspending becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
+		{name: "pausing becomes crashed", start: ateapipb.ActorState_ACTOR_STATE_PAUSING, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantOp: ateattr.OperationPause, wantMetric: true},
+		{name: "suspended stays suspended", start: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantMetric: false},
 	}
 
 	for _, tc := range tests {
@@ -939,10 +947,12 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 				Metadata:               &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace},
 				ActorTemplateNamespace: ns,
 				ActorTemplateName:      "tmpl",
-				Status:                 tc.start,
-				WorkerAssignment: &ateapipb.WorkerAssignment{
-					Worker:          &ateapipb.ObjectRef{Name: testPodUID},
-					WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodIp: ip, WorkerPodUid: testPodUID,
+				Status: &ateapipb.ActorStatus{
+					State: tc.start,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						Worker:          &ateapipb.ObjectRef{Name: testPodUID},
+						WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodIp: ip, WorkerPodUid: testPodUID,
+					},
 				},
 			})
 			if err != nil {
@@ -971,11 +981,11 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get actor: %v", err)
 			}
-			if got.GetStatus() != tc.wantStatus {
-				t.Errorf("actor status = %v, want %v", got.GetStatus(), tc.wantStatus)
+			if got.GetStatus().GetState() != tc.wantState {
+				t.Errorf("actor state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
 			}
-			if tc.wantStatus == ateapipb.Actor_STATUS_CRASHED && got.GetWorkerAssignment() != nil {
-				t.Errorf("crashed actor WorkerAssignment = %v, want cleared", got.GetWorkerAssignment())
+			if tc.wantState == ateapipb.ActorState_ACTOR_STATE_CRASHED && got.GetStatus().GetWorkerAssignment() != nil {
+				t.Errorf("crashed actor WorkerAssignment = %v, want cleared", got.GetStatus().GetWorkerAssignment())
 			}
 
 			if tc.wantMetric {

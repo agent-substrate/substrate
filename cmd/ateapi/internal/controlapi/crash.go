@@ -59,7 +59,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
 
-	wasAlreadyCrashed := actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
+	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 	opName = ateattr.NormalizeOperationName(opName)
 	if reason == "" {
 		reason = ateattr.ReasonUnknown
@@ -83,12 +83,12 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName, reason)
 
 	_, err = st.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_CRASHED
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 
 		// InProgressSnapshotName and InProgressLocalSnapshotName are kept for
 		// debugging; failed workflow steps must never promote either of them to an
 		// ActorSnapshot or to LocalSnapshotInfo.
-		toUpdate.WorkerAssignment = nil
+		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	}))
 	if err != nil {
@@ -116,7 +116,7 @@ type crashActorStore interface {
 // actor. A missing worker or an already-cleared assignment is not an error.
 // It returns the worker's sandboxClass if found.
 func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) (string, error) {
-	assignment := actor.GetWorkerAssignment()
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
 		return "", nil

@@ -1,0 +1,85 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Micro-VM (kata + cloud-hypervisor) variant of the egress demo, so the
+# networking suite's egress tests run against both sandbox classes. The actor's
+# outbound TCP is redirected into atunnel by nftables in the ateom
+# (prepareActorEgress), which the micro-VM ateom implements the same way the
+# gVisor one does — this fixture is what proves it end to end.
+#
+# Kept in step with egress.yaml.tmpl; the deltas are the runtime fields and the
+# sandbox size. The cluster-wide `microvm` SandboxConfig referenced below by
+# name is installed by hack/install-microvm-deps.sh.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-egress-microvm
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: egress-microvm
+  namespace: ate-demo-egress-microvm
+  labels:
+    workload: egress-microvm
+spec:
+  replicas: 2
+  sandboxClass: microvm
+  sandboxConfigName: microvm
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  # No template.resources, unlike counter-microvm: an unlimited ateom container
+  # reports no capacity, which the scheduler reads as unconstrained, and the pod
+  # requests nothing so it stays placeable next to the counter-microvm pool's
+  # reservation on CI's single kind node. What actually bounds the memory here
+  # is the ActorTemplate's resources below, which size the guest.
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: egress-microvm
+  namespace: ate-demo-egress-microvm
+spec:
+  # Must match the WorkerPool's sandboxClass: a snapshot is not portable across
+  # sandbox classes, so only pools of the same class are eligible to run this
+  # template's actors.
+  sandboxClass: microvm
+  containers:
+  - name: egress
+    image: ko://github.com/agent-substrate/substrate/demos/egress
+    command: ["/ko-app/egress"]
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+      # See counter-microvm.yaml.tmpl: a micro-VM guest needs more than
+      # readyz's 30s default once CI's single kind node is under load.
+      timeoutSeconds: 120
+  # Sandbox size: without these the guest boots at the kata config's default
+  # (2GiB). ateom applies them to the VM (see internal/sizing).
+  resources:
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  workerSelector:
+    matchLabels:
+      workload: egress-microvm
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Full
+    location: gs://${BUCKET_NAME}/ate-demo-egress-microvm/

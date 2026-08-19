@@ -693,7 +693,10 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 			{Name: "without-probe"},
 		},
 	}
-	got := buildAteomWorkloadSpec(in)
+	got, err := buildAteomWorkloadSpec(in)
+	if err != nil {
+		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
+	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
@@ -736,6 +739,9 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 					{VolumeName: "data", MountPath: "/home/counter"},
 					{VolumeName: "cache", MountPath: "/var/cache"},
 				},
+				CsiVolumeMounts: []*ateompb.VolumeMount{
+					{VolumeName: "scratch", MountPath: "/scratch"},
+				},
 			},
 			{
 				Name: "sidecar",
@@ -746,9 +752,85 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{Name: "no-volumes"},
 		},
 	}
-	got := buildAteomWorkloadSpec(in)
+	got, err := buildAteomWorkloadSpec(in)
+	if err != nil {
+		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
+	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      *ateletpb.WorkloadSpec
+		wantErr string
+	}{
+		{
+			name: "missing volume definition",
+			in: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name: "ctr",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "missing-vol", MountPath: "/data"},
+						},
+					},
+				},
+			},
+			wantErr: `container "ctr" mounts volume "missing-vol" which is not defined in workload volumes`,
+		},
+		{
+			name: "unsupported volume type",
+			in: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_UNSPECIFIED},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name: "ctr",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "data", MountPath: "/data"},
+						},
+					},
+				},
+			},
+			wantErr: `container "ctr" mounts volume "data" with unsupported type VOLUME_TYPE_UNSPECIFIED`,
+		},
+		{
+			name: "duplicate volume names",
+			in: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name: "ctr",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "data", MountPath: "/data"},
+						},
+					},
+				},
+			},
+			wantErr: `duplicate volume name "data" in workload spec`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildAteomWorkloadSpec(tc.in)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if got, want := err.Error(), tc.wantErr; !strings.Contains(got, want) {
+				t.Errorf("error mismatch:\nwant: %s\ngot:  %s", want, got)
+			}
+		})
 	}
 }
 
@@ -1576,6 +1658,75 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 			tc.mutate(req)
 			if err := validateUploadPausedCheckpointRequest(req); (err != nil) != tc.wantErr {
 				t.Errorf("validateUploadPausedCheckpointRequest err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestShouldHaveSnapshots(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateletpb.CheckpointRequest
+		want bool
+	}{
+		{
+			name: "full scope always expects snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			},
+			want: true,
+		},
+		{
+			name: "data scope with durable volumes expects snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec: &ateletpb.WorkloadSpec{
+					Volumes: []*ateletpb.Volume{
+						{Name: "durable", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "data scope with only CSI volumes does not expect snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec: &ateletpb.WorkloadSpec{
+					Volumes: []*ateletpb.Volume{
+						{Name: "csi", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "data scope with both durable and CSI volumes expects snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec: &ateletpb.WorkloadSpec{
+					Volumes: []*ateletpb.Volume{
+						{Name: "durable", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+						{Name: "csi", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "data scope with no volumes does not expect snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec:  &ateletpb.WorkloadSpec{},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldHaveSnapshots(tc.req); got != tc.want {
+				t.Errorf("shouldHaveSnapshots() = %v, want %v", got, tc.want)
 			}
 		})
 	}

@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Rendered by e2e.RenderFixtureManifest, which fills the ${...} placeholders for
+# the sandbox class under test: one manifest serves both runtimes so the gVisor
+# and micro-VM variants cannot drift apart. A placeholder that has no value for
+# the selected class takes its whole line with it.
+
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ate-e2e-probe
+  name: ate-e2e-probe${FIXTURE_SUFFIX}
 
 ---
 
@@ -23,12 +28,13 @@ apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
   name: probe
-  namespace: ate-e2e-probe
+  namespace: ate-e2e-probe${FIXTURE_SUFFIX}
   labels:
     workload: probe
 spec:
   replicas: 3
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  ateomImage: ${ATEOM_IMAGE}
+${WORKERPOOL_RUNTIME}
 
 ---
 
@@ -36,8 +42,9 @@ apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
   name: probe
-  namespace: ate-e2e-probe
+  namespace: ate-e2e-probe${FIXTURE_SUFFIX}
 spec:
+${TEMPLATE_SANDBOX_CLASS}
   containers:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
@@ -51,8 +58,9 @@ spec:
         path: /healthz
         port: 80
       timeoutSeconds: 60
+${TEMPLATE_RESOURCES}
   workerSelector:
     matchLabels:
       workload: probe
   snapshotsConfig:
-    location: gs://${BUCKET_NAME}/ate-e2e-probe/
+    location: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

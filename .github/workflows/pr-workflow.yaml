@@ -85,10 +85,13 @@ jobs:
       run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=cert
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
-    - name: Deploy egress demo
-      # TestActorEgress in the networking suite builds its Actor from the
-      # ate-demo-egress/egress ActorTemplate, so the fixture has to exist before.
-      run: hack/install-ate-kind.sh --deploy-demo-egress
+    - name: Deploy egress demos
+      # TestActorEgress in the networking suite builds its Actor from the egress
+      # ActorTemplate for the class under test, so both fixtures have to exist
+      # before their respective lane runs.
+      run: |
+        hack/install-ate-kind.sh --deploy-demo-egress
+        hack/install-ate-kind.sh --deploy-demo-egress-microvm
     - name: Wait for micro-VM golden snapshot
       run: |
         kubectl --context kind-kind wait --for=condition=Ready \
@@ -96,13 +99,14 @@ jobs:
     - name: Run E2E tests (gVisor)
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Run E2E tests (micro-VM)
-      # Same demo lifecycle suite (create -> suspend -> resume -> in-RAM continuity),
-      # pointed at the micro-VM counter via env (see createActorTemplate in demo_test.go).
+      # The same suites again, with every fixture repointed at its micro-VM
+      # variant by the single E2E_SANDBOX_CLASS knob (see internal/e2e/sandbox.go).
+      # Sequential with the gVisor lane above, not concurrent: a suite releases
+      # its namespace — and with it its worker pods — as each test passes, so the
+      # two runs do not contend for the one kind node.
       env:
-        E2E_TEMPLATE_NAMESPACE: ate-demo-counter-microvm
-        E2E_TEMPLATE_NAME: counter-microvm
-        E2E_TEMPLATE_READY_TIMEOUT: 600s
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color
+        E2E_SANDBOX_CLASS: microvm
+      run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
       run: |

@@ -329,6 +329,8 @@ spec:
                       OnCommit specifies what to include in the snapshot when a commit is requested.
                       If not provided, the "Full" behavior is used by default.
                       onCommit must be a subset of the onPause content.
+                      Note: Data scope only captures DurableDir-typed volumes; external/CSI
+                      volumes are not snapshotted as they persist independently.
 
                       For example:
                         - if onPause is "Full", then onCommit can be "Full" or "Data".
@@ -342,6 +344,8 @@ spec:
                     description: |-
                       OnPause specifies what to include in the snapshot when the actor is paused.
                       If not provided, the "Full" behavior is used by default.
+                      Note: Data scope only captures DurableDir-typed volumes; external/CSI
+                      volumes are not snapshotted as they persist independently.
                     enum:
                     - Full
                     - Data
@@ -422,6 +426,9 @@ spec:
                       == 1'
                 maxItems: 32
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               workerSelector:
                 description: |-
                   WorkerSelector restricts which worker pools actors from this template may
@@ -484,9 +491,6 @@ spec:
               rule: '!has(self.volumes) || self.volumes.all(v, has(self.containers)
                 && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm,
                 vm.name == v.name)))'
-            - message: ExternalVolumes are not supported when sandboxClass is 'microvm'
-              rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
-                !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))'
             - message: 'onResume.fromData: Golden is not supported when sandboxClass
                 is ''gvisor'''
               rule: '(has(self.sandboxClass) && self.sandboxClass == ''microvm'')
@@ -503,6 +507,10 @@ spec:
               rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
                 !has(self.resources) || !has(self.resources.limits) || !(''memory''
                 in self.resources.limits) || !quantity(self.resources.limits[''memory'']).isLessThan(quantity(''256Mi''))'
+            - message: All volume mounts must refer to a volume defined in spec.volumes
+              rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
+                || c.volumeMounts.all(vm, has(self.volumes) && self.volumes.exists(v,
+                v.name == vm.name)))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

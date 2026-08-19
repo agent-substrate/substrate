@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -48,7 +49,7 @@ const counterExtraPort = 9090
 // resolution and atunnel's dial to the actor's pod actually happen.
 func TestActorArbitraryPortAccess(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "arbitraryport", counterTemplate)
+	actorName, _ := createAndResumeActor(t, ctx, "arbitraryport", e2e.CounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
@@ -77,11 +78,12 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		}
 
 		// Cross-check against the default port's own response, both self-reported
-		// by the same counter binary via getCurrentIP() -- gVisor virtualizes the
-		// sandbox's network stack, so this address is not the pod's Kubernetes IP,
-		// but it is consistent between the two ports on one actor. Asserting they
-		// match proves the tunnel reached the same actor's extra port rather than
-		// some other, unrelated open port.
+		// by the same counter binary via getCurrentIP() -- either sandbox has its
+		// own network stack (the gVisor sentry's, or the micro-VM guest's), so
+		// this address is not the pod's Kubernetes IP, but it is consistent
+		// between the two ports on one actor. Asserting they match proves the
+		// tunnel reached the same actor's extra port rather than some other,
+		// unrelated open port.
 		defaultResp, err := router.Get(ctx, actorRef, "/")
 		if err != nil {
 			t.Fatalf("GET the actor's default port through ingress: %v", err)

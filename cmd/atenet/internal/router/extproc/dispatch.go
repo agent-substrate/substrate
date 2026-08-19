@@ -31,6 +31,9 @@ const (
 )
 
 const (
+	// directionAttribute is set from a dataplane expression, not a client
+	// header, by dataplanes without Envoy filter chains.
+	directionAttribute = "ate.extproc.direction"
 	// EgressFilterChainName is the Envoy filter chain that terminates actor
 	// egress CONNECTs, and so the one that selects the egress handler. It must
 	// stay in sync with the filter chain name in
@@ -63,6 +66,9 @@ const (
 // an egress request misrouted to the ingress handler fails to parse as an actor
 // DNS name and 404s, whereas the reverse leaks control-plane state.
 func directionOf(req *extprocv3.ProcessingRequest) Direction {
+	if requestAttribute(req, directionAttribute) == string(DirectionEgress) {
+		return DirectionEgress
+	}
 	if filterChainName(req) == EgressFilterChainName {
 		return DirectionEgress
 	}
@@ -74,8 +80,12 @@ func directionOf(req *extprocv3.ProcessingRequest) Direction {
 // attributes map is keyed by the ext_proc filter's name within the HCM chain,
 // which we do not want to hardcode here, so scan every entry.
 func filterChainName(req *extprocv3.ProcessingRequest) string {
+	return requestAttribute(req, FilterChainNameAttribute)
+}
+
+func requestAttribute(req *extprocv3.ProcessingRequest, name string) string {
 	for _, attrs := range req.GetAttributes() {
-		if v, ok := attrs.GetFields()[FilterChainNameAttribute]; ok {
+		if v, ok := attrs.GetFields()[name]; ok {
 			return v.GetStringValue()
 		}
 	}

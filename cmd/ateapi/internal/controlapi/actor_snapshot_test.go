@@ -361,8 +361,8 @@ func serviceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag) (
 
 	atespace, name := tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName()
 	snapshot, err := persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: atespace, Name: "snapshot-" + name},
-		SnapshotUri: "gs://my-bucket/snapshots/" + atespace + "/snapshot-" + name,
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "snapshot-" + name},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + atespace + "/snapshot-" + name},
 	})
 	if err != nil {
 		t.Fatalf("Failed to CreateActorSnapshot: %v", err)
@@ -384,8 +384,8 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 
 	for _, name := range []string{"snapshot-1", "snapshot-2"} {
 		if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-			SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + name,
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + name},
 		}); err != nil {
 			t.Fatalf("Failed to CreateActorSnapshot(%s): %v", name, err)
 		}
@@ -462,8 +462,8 @@ func TestUpdateActorSnapshotTag_ConcurrentUnguardedUpdate(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
-		SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1"},
 	}); err != nil {
 		t.Fatalf("Failed to CreateActorSnapshot: %v", err)
 	}

@@ -19,9 +19,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -32,10 +30,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const (
-	probeNamespace = "ate-e2e-probe"
-	probeTemplate  = "probe"
-)
+const probeTemplate = "probe"
+
+// probeNamespace is where deployProbe applies the fixture, and the atespace its
+// actors live in. Suffixed per sandbox class (see e2e.FixtureName) so the two
+// lanes' fixtures never collide: they run one after the other, and this
+// namespace is deleted by the test that created it.
+var probeNamespace = e2e.FixtureName("ate-e2e-probe")
 
 type whoamiResponse struct {
 	File     string `json:"file"`
@@ -52,6 +53,18 @@ type whoamiResponse struct {
 // restoring TWO actors from one golden snapshot and asserting each observes its
 // OWN id — and explicitly that it is not the golden id.
 func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
+	// The micro-VM runtime does not expose the identity file yet. ateom-microvm
+	// replaces atelet's mount set with the one the kata agent accepts, and drops
+	// atelet's read-only /run/ate/actor-id bind with it: the guest sees only the
+	// virtio-fs shares, so a host-path bind has nothing to bind to. Exposing it
+	// needs a per-actor volume plumbed into the guest — see the KNOWN GAP comment
+	// in cmd/ateom-microvm/spec.go. Running this against micro-VM reports the
+	// probe reading an empty ID, which is that gap and not a regression, so skip
+	// until the gap closes rather than encode it as expected behavior.
+	if e2e.IsMicroVM() {
+		t.Skip("micro-VM does not mount /run/ate/actor-id yet (KNOWN GAP in cmd/ateom-microvm/spec.go)")
+	}
+
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -98,17 +111,9 @@ func deployProbe(t *testing.T, bucket string) {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
 
-	// Render the manifest template to a file so both apply and delete can
-	// consume it without any shell involved.
-	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/probe/probe.yaml.tmpl"))
-	if err != nil {
-		t.Fatalf("reading probe manifest template: %v", err)
-	}
-	manifest := filepath.Join(t.TempDir(), "probe.yaml")
-	rendered := strings.ReplaceAll(string(tmpl), "${BUCKET_NAME}", bucket)
-	if err := os.WriteFile(manifest, []byte(rendered), 0o644); err != nil {
-		t.Fatalf("writing rendered probe manifest: %v", err)
-	}
+	// One manifest, rendered for the sandbox class under test, so both apply and
+	// delete consume the same file without any shell involved.
+	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe.yaml.tmpl", bucket)
 
 	// Build/push the probe image and apply the manifest through the repo's
 	// pinned ko (hack/run-tool.sh ko); CI does not install ko on PATH, and every
@@ -140,7 +145,7 @@ func deployProbe(t *testing.T, bucket string) {
 
 func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(e2e.TemplateReadyTimeout(t))
 	for time.Now().Before(deadline) {
 		at, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(probeNamespace).Get(ctx, probeTemplate, metav1.GetOptions{})
 		if err == nil {

@@ -965,3 +965,36 @@ func TestXdsServer_BuildTracingRandomSamplingFromPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotVersionsUniqueAcrossRestarts(t *testing.T) {
+	deployAndGetVersion := func(t *testing.T, x *XdsServer) string {
+		t.Helper()
+		if err := x.UpdateSnapshot(); err != nil {
+			t.Fatalf("UpdateSnapshot: %v", err)
+		}
+		snap, err := x.snapshot.GetSnapshot(NodeID)
+		if err != nil {
+			t.Fatalf("GetSnapshot: %v", err)
+		}
+		return snap.GetVersion(resourcev3.ClusterType)
+	}
+
+	seen := map[string]bool{}
+	first := NewXdsServer(0)
+	for range 3 {
+		v := deployAndGetVersion(t, first)
+		if seen[v] {
+			t.Fatalf("version %q minted twice by the same server", v)
+		}
+		seen[v] = true
+	}
+
+	restarted := NewXdsServer(0)
+	for range 3 {
+		v := deployAndGetVersion(t, restarted)
+		if seen[v] {
+			t.Fatalf("version %q reused after restart; Envoy holding that version would not receive the new config", v)
+		}
+		seen[v] = true
+	}
+}
