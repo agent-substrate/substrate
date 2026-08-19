@@ -19,6 +19,7 @@ package ateomnet
 import (
 	"context"
 	"errors"
+	"os"
 	"runtime"
 	"testing"
 
@@ -234,6 +235,104 @@ func TestSetupActorNetworkFinalState(t *testing.T) {
 			var haveDefault bool
 			for _, route := range routes {
 				if isDefault(route) && route.Gw.Equal(ActorVethGwIP) {
+					haveDefault = true
+				}
+			}
+			if !haveDefault {
+				t.Errorf("interior netns has no default route via %s, got %v", ActorVethGateway, routes)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("inspecting interior netns: %v", err)
+		}
+	})
+}
+
+// disableIPv6 turns IPv6 off in the current netns the way an IPv4-only cluster
+// does, so a link created afterwards rejects every IPv6 address.
+func disableIPv6(t *testing.T) {
+	t.Helper()
+	for _, knob := range []string{"all", "default"} {
+		path := "/proc/sys/net/ipv6/conf/" + knob + "/disable_ipv6"
+		if err := os.WriteFile(path, []byte("1\n"), 0o644); err != nil {
+			t.Skipf("cannot disable IPv6 in this netns (%s): %v", path, err)
+		}
+	}
+}
+
+// assertNoIPv6Addr requires link to carry no IPv6 address at all.
+func assertNoIPv6Addr(t *testing.T, link netlink.Link) {
+	t.Helper()
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V6)
+	if err != nil {
+		t.Fatalf("listing IPv6 addresses of %q: %v", link.Attrs().Name, err)
+	}
+	if len(addrs) != 0 {
+		t.Errorf("%q carries IPv6 addresses %v in an IPv4-only netns, want none", link.Attrs().Name, addrs)
+	}
+}
+
+// TestSetupActorNetworkIPv4OnlyNetNS covers a worker pod whose netns has IPv6
+// disabled, which is the default on an IPv4-only GKE cluster. Assigning the veth
+// its IPv6 address there fails with EPERM, and because that happens on the path
+// of every SetupActorNetwork call site an ungated attempt takes actor startup
+// from working to totally broken — the actor never leaves ResumeGoldenActor.
+// The IPv4 half must come up exactly as it does with IPv6 available.
+func TestSetupActorNetworkIPv4OnlyNetNS(t *testing.T) {
+	roottest.Require(t, "creating network namespaces, veth pairs, and nftables rules")
+	ctx := context.Background()
+
+	withTestNetNS(t, func(interior netns.NsHandle) {
+		requireNftables(t)
+
+		disableIPv6(t)
+		if err := NetNSDo(ctx, interior, func(context.Context) error {
+			disableIPv6(t)
+			return nil
+		}); err != nil {
+			t.Fatalf("disabling IPv6 in the interior netns: %v", err)
+		}
+
+		if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
+			t.Fatalf("SetupActorNetwork on an IPv4-only netns: %v", err)
+		}
+
+		host := linkByName(t, HostVethName)
+		if host == nil {
+			t.Fatalf("host veth %q missing from the pod netns", HostVethName)
+		}
+		if !hasAddr(t, host, HostVethCIDR) {
+			t.Errorf("host veth %q does not carry %s", HostVethName, HostVethCIDR)
+		}
+		if host.Attrs().Flags&1 == 0 { // net.FlagUp
+			t.Errorf("host veth %q is not up", HostVethName)
+		}
+		assertNoIPv6Addr(t, host)
+
+		if err := NetNSDo(ctx, interior, func(context.Context) error {
+			actor := linkByName(t, ActorVethName)
+			if actor == nil {
+				t.Fatalf("actor veth %q missing from the interior netns", ActorVethName)
+			}
+			if !hasAddr(t, actor, ActorVethCIDR) {
+				t.Errorf("actor veth %q does not carry %s", ActorVethName, ActorVethCIDR)
+			}
+			if actor.Attrs().Flags&1 == 0 {
+				t.Errorf("actor veth %q is not up", ActorVethName)
+			}
+			assertNoIPv6Addr(t, actor)
+
+			routes, err := netlink.RouteList(actor, netlink.FAMILY_V4)
+			if err != nil {
+				t.Fatalf("listing interior routes: %v", err)
+			}
+			var haveDefault bool
+			for _, route := range routes {
+				ones := 0
+				if route.Dst != nil {
+					ones, _ = route.Dst.Mask.Size()
+				}
+				if (route.Dst == nil || ones == 0) && route.Gw.Equal(ActorVethGwIP) {
 					haveDefault = true
 				}
 			}

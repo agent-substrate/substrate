@@ -137,8 +137,11 @@ func ConfigureActorVeth(ctx context.Context) error {
 	if err := netlink.AddrReplace(actorLink, ActorVethAddr); err != nil {
 		return fmt.Errorf("while assigning actor veth address: %w", err)
 	}
-	if err := netlink.AddrReplace(actorLink, ActorVethIPv6Addr); err != nil {
-		return fmt.Errorf("while assigning actor veth ipv6 address: %w", err)
+	actorIPv6 := LinkIPv6Enabled(ActorVethName)
+	if actorIPv6 {
+		if err := netlink.AddrReplace(actorLink, ActorVethIPv6Addr); err != nil {
+			return fmt.Errorf("while assigning actor veth ipv6 address: %w", err)
+		}
 	}
 
 	if err := netlink.LinkSetUp(actorLink); err != nil {
@@ -151,12 +154,14 @@ func ConfigureActorVeth(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("while installing actor default route: %w", err)
 	}
-	if err := netlink.RouteReplace(&netlink.Route{
-		LinkIndex: actorLink.Attrs().Index,
-		Gw:        ActorVethIPv6GwIP,
-		Dst:       &net.IPNet{IP: net.ParseIP("::"), Mask: net.CIDRMask(0, 128)},
-	}); err != nil {
-		return fmt.Errorf("while installing actor default ipv6 route: %w", err)
+	if actorIPv6 {
+		if err := netlink.RouteReplace(&netlink.Route{
+			LinkIndex: actorLink.Attrs().Index,
+			Gw:        ActorVethIPv6GwIP,
+			Dst:       &net.IPNet{IP: net.ParseIP("::"), Mask: net.CIDRMask(0, 128)},
+		}); err != nil {
+			return fmt.Errorf("while installing actor default ipv6 route: %w", err)
+		}
 	}
 
 	return nil
@@ -261,6 +266,20 @@ func EnableIPv4Forwarding() error {
 		return fmt.Errorf("while enabling IPv6 forwarding in worker pod netns: %w", err)
 	}
 	return nil
+}
+
+// LinkIPv6Enabled reports whether IPv6 addresses can be assigned to the named
+// link in the current netns. An IPv4-only cluster leaves disable_ipv6=1 in the
+// worker pod netns — the default on IPv4-only GKE — and netlink then rejects
+// every IPv6 address with EPERM; a kernel built without IPv6 has no sysctl at
+// all. Either way the actor interior stays IPv4-only rather than failing to
+// start.
+func LinkIPv6Enabled(name string) bool {
+	b, err := os.ReadFile("/proc/sys/net/ipv6/conf/" + name + "/disable_ipv6")
+	if err != nil {
+		return false
+	}
+	return len(b) > 0 && b[0] == '0'
 }
 
 // writeSysctlIfUnset writes "1\n" to a sysctl path unless it already reads "1".
@@ -683,8 +702,12 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	if err := netlink.AddrReplace(hostLink, HostVethAddr); err != nil {
 		return fmt.Errorf("while assigning host veth address: %w", err)
 	}
-	if err := netlink.AddrReplace(hostLink, HostVethIPv6Addr); err != nil {
-		return fmt.Errorf("while assigning host veth ipv6 address: %w", err)
+	if LinkIPv6Enabled(HostVethName) {
+		if err := netlink.AddrReplace(hostLink, HostVethIPv6Addr); err != nil {
+			return fmt.Errorf("while assigning host veth ipv6 address: %w", err)
+		}
+	} else {
+		slog.Info("IPv6 disabled in the worker pod netns; actor networking is IPv4-only", "link", HostVethName)
 	}
 	if err := netlink.LinkSetUp(hostLink); err != nil {
 		return fmt.Errorf("while bringing up host veth: %w", err)
