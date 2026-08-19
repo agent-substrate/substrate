@@ -314,6 +314,10 @@ func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi
 }
 
 func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning actor template update: %w", err)
@@ -527,6 +531,9 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 }
 
 func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	atespace, name := actorRef.Atespace, actorRef.Name
 
 	tx, err := p.pool.Begin(ctx)
@@ -982,6 +989,10 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 }
 
 func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning actor snapshot tag update: %w", err)

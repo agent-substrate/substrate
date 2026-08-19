@@ -90,7 +90,7 @@ func TestValidateObjectRef(t *testing.T) {
 	}
 }
 
-func TestValidateResourceMetadataRef(t *testing.T) {
+func TestValidateUpdateMetadataRef(t *testing.T) {
 	const uid = "8bf5b1a2-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
 	tests := []struct {
 		name      string
@@ -98,12 +98,7 @@ func TestValidateResourceMetadataRef(t *testing.T) {
 		wantError field.ErrorList
 	}{
 		{
-			name:      "valid without preconditions",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-			wantError: nil,
-		},
-		{
-			name:      "valid with preconditions",
+			name:      "valid",
 			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid, Version: 7},
 			wantError: nil,
 		},
@@ -113,42 +108,62 @@ func TestValidateResourceMetadataRef(t *testing.T) {
 			wantError: field.ErrorList{
 				field.Required(field.NewPath("path", "atespace"), ""),
 				field.Required(field.NewPath("path", "name"), ""),
+				field.Required(field.NewPath("path", "uid"), ""),
+				field.Required(field.NewPath("path", "version"), ""),
+			},
+		},
+		{
+			name:  "no preconditions",
+			input: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
+			wantError: field.ErrorList{
+				field.Required(field.NewPath("path", "uid"), ""),
+				field.Required(field.NewPath("path", "version"), ""),
 			},
 		},
 		{
 			name:      "missing atespace",
-			input:     &ateapipb.ResourceMetadata{Name: "id1"},
+			input:     &ateapipb.ResourceMetadata{Name: "id1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Required(field.NewPath("path", "atespace"), "")},
 		},
 		{
 			name:      "invalid atespace",
-			input:     &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "atespace"), "NS1", "")},
 		},
 		{
 			name:      "missing name",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Required(field.NewPath("path", "name"), "")},
 		},
 		{
 			name:      "invalid name",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "name"), "ID1", "")},
 		},
 		{
+			name:      "missing uid",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Version: 7},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "uid"), "")},
+		},
+		{
 			name:      "invalid uid",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: "not-a-uuid"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: "not-a-uuid", Version: 7},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "uid"), "not-a-uuid", "")},
 		},
 		{
+			name:      "missing version",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "version"), "")},
+		},
+		{
 			name:      "negative version",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Version: -1},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid, Version: -1},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "version"), int64(-1), "")},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ValidateResourceMetadataRef(tt.input, field.NewPath("path"))
+			got := ValidateUpdateMetadataRef(tt.input, field.NewPath("path"))
 			field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, tt.wantError, got)
 		})
 	}

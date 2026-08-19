@@ -413,9 +413,9 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 					t.Errorf("inject GetActor: %v", err)
 					return
 				}
-				// Pins the version just read, waiving the incarnation.
-				pinVersion := store.Precondition{Version: fresh.GetMetadata().GetVersion()}
-				injected, err = persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, pinVersion, func(toUpdate *ateapipb.Actor) error {
+				// Pins the uid and version just read, so the racing
+				// write lands and the attempt under test is the one that loses.
+				injected, err = persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.PreconditionFrom(fresh), func(toUpdate *ateapipb.Actor) error {
 					tc.mutate(toUpdate)
 					return nil
 				})

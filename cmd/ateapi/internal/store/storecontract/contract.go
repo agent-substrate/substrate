@@ -239,7 +239,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 
 		actorRef := resources.ActorRefFromActor(created)
-		updated, err := s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(dbActor *ateapipb.Actor) error {
+		updated, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(dbActor *ateapipb.Actor) error {
 			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			// Server-owned metadata must be derived from the stored resource, not
 			// accepted from the mutation.
@@ -340,7 +340,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 		actorRef := resources.ActorRefFromActor(original)
 
-		if _, err := s.UpdateActor(ctx, actorRef, store.NoPrecondition, func(dbActor *ateapipb.Actor) error {
+		if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(dbActor *ateapipb.Actor) error {
 			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 			return nil
 		}); err != nil {
@@ -357,8 +357,8 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			t.Fatalf("recreated actor reused uid %s, want a fresh one", recreated.GetMetadata().GetUid())
 		}
 
-		// Pins the original UID
-		_, err = s.UpdateActor(ctx, actorRef, store.Precondition{UID: original.GetMetadata().GetUid()}, func(dbActor *ateapipb.Actor) error {
+		// original and recreated have different UIDs, so the mutation must never run
+		_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(dbActor *ateapipb.Actor) error {
 			t.Error("mutate ran past its precondition once the pinned incarnation was gone")
 			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			return nil
@@ -392,7 +392,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 
-		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.NoPrecondition, func(dbActor *ateapipb.Actor) error {
+		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(dbActor *ateapipb.Actor) error {
 			dbActor.ActorTemplateName = "other-template"
 			return nil
 		}); err == nil {
@@ -418,7 +418,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 
 		mutateErr := errors.New("mutation rejected")
-		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.NoPrecondition, func(dbActor *ateapipb.Actor) error {
+		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(dbActor *ateapipb.Actor) error {
 			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			return fmt.Errorf("checking mutation: %w", mutateErr)
 		}); !errors.Is(err, mutateErr) {
@@ -431,6 +431,57 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
 			t.Errorf("rejected mutation changed stored actor (-created +got):\n%s", diff)
+		}
+	})
+
+	t.Run("UpdateActor_MissingPrecondition", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		created, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplateNamespace: "default",
+			ActorTemplateName:      "test-template",
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		})
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		actorRef := resources.ActorRefFromActor(created)
+
+		tests := []struct {
+			name         string
+			actorRef     resources.ActorRef
+			precondition store.Precondition
+		}{
+			{
+				name:         "no precondition",
+				actorRef:     actorRef,
+				precondition: store.Precondition{},
+			},
+			{
+				name:         "pinning only a uid",
+				actorRef:     actorRef,
+				precondition: store.Precondition{UID: created.GetMetadata().GetUid()},
+			},
+			{
+				name:         "pinning only a version",
+				actorRef:     actorRef,
+				precondition: store.Precondition{Version: created.GetMetadata().GetVersion()},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.UpdateActor(ctx, tt.actorRef, tt.precondition, func(dbActor *ateapipb.Actor) error {
+					t.Fatal("mutate ran for a blind write")
+					return nil
+				})
+				if !errors.Is(err, store.ErrPreconditionRequired) {
+					t.Errorf("UpdateActor error = %v, want one matching store.ErrPreconditionRequired", err)
+				}
+			})
 		}
 	})
 
@@ -690,6 +741,48 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 		}
 	})
 
+	t.Run("UpdateActorTemplate_MissingPrecondition", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+
+		created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a"))
+		if err != nil {
+			t.Fatalf("CreateActorTemplate failed: %v", err)
+		}
+		templateRef := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
+
+		tests := []struct {
+			name         string
+			precondition store.Precondition
+		}{
+			{
+				name:         "no precondition",
+				precondition: store.Precondition{},
+			},
+			{
+				name:         "pinning only a uid",
+				precondition: store.Precondition{UID: created.GetMetadata().GetUid()},
+			},
+			{
+				name:         "pinning only a version",
+				precondition: store.Precondition{Version: created.GetMetadata().GetVersion()},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.UpdateActorTemplate(ctx, templateRef, tt.precondition, func(dbTemplate *ateapipb.ActorTemplate) error {
+					t.Fatal("mutate ran for a blind write")
+					return nil
+				})
+				if !errors.Is(err, store.ErrPreconditionRequired) {
+					t.Errorf("UpdateActorTemplate error = %v, want one matching store.ErrPreconditionRequired", err)
+				}
+			})
+		}
+	})
+
 	t.Run("ActorTemplateResources_BlockAtespaceDeletion", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -817,6 +910,59 @@ func runActorSnapshotContractTests(t *testing.T, setup func(t *testing.T) store.
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
 			t.Errorf("DeleteAtespace after tag deletion = %v, want nil", err)
+		}
+	})
+
+	t.Run("UpdateActorSnapshotTag_MissingPrecondition", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+
+		if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
+			Status: &ateapipb.ActorSnapshotStatus{
+				SourceActor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+				SnapshotUri: "gs://private/snapshot-1",
+			},
+		}); err != nil {
+			t.Fatalf("CreateActorSnapshot failed: %v", err)
+		}
+		created, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "production"},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		})
+		if err != nil {
+			t.Fatalf("CreateActorSnapshotTag failed: %v", err)
+		}
+
+		tests := []struct {
+			name         string
+			precondition store.Precondition
+		}{
+			{
+				name:         "no precondition",
+				precondition: store.Precondition{},
+			},
+			{
+				name:         "pinning only a uid",
+				precondition: store.Precondition{UID: created.GetMetadata().GetUid()},
+			},
+			{
+				name:         "pinning only a version",
+				precondition: store.Precondition{Version: created.GetMetadata().GetVersion()},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", tt.precondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+					t.Fatal("mutate ran for a blind write")
+					return nil
+				})
+				if !errors.Is(err, store.ErrPreconditionRequired) {
+					t.Errorf("UpdateActorSnapshotTag error = %v, want one matching store.ErrPreconditionRequired", err)
+				}
+			})
 		}
 	})
 

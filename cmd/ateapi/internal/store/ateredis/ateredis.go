@@ -344,6 +344,9 @@ func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi
 }
 
 func (s *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	dbKey := actorTemplateDBKey(templateRef)
 	for range updateMaxAttempts {
 		var dbTemplate *ateapipb.ActorTemplate
@@ -756,6 +759,9 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 const updateActorSnapshotTagMaxAttempts = 5
 
 func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	tagKey := actorSnapshotTagDBKey(atespace, name)
 	for range updateActorSnapshotTagMaxAttempts {
 		var dbTag *ateapipb.ActorSnapshotTag
@@ -1033,6 +1039,9 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 const updateMaxAttempts = 5
 
 func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	dbKey := actorDBKey(actorRef)
 	for range updateMaxAttempts {
 		var dbActor *ateapipb.Actor

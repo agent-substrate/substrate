@@ -49,21 +49,6 @@ func TestPreconditionCheck(t *testing.T) {
 			wantErr:      nil,
 		},
 		{
-			name:         "NoPrecondition pins nothing",
-			precondition: NoPrecondition,
-			wantErr:      nil,
-		},
-		{
-			name:         "uid pinned, version waived, tolerates the moved version",
-			precondition: Precondition{UID: storedUID},
-			wantErr:      nil,
-		},
-		{
-			name:         "version pinned, uid waived, tolerates the new incarnation",
-			precondition: Precondition{Version: storedVer},
-			wantErr:      nil,
-		},
-		{
 			name:         "the name now addresses a different incarnation",
 			precondition: Precondition{UID: staleUID, Version: storedVer},
 			wantErr:      ErrUIDConflict,
@@ -71,16 +56,6 @@ func TestPreconditionCheck(t *testing.T) {
 		{
 			name:         "the version moved under the caller",
 			precondition: Precondition{UID: storedUID, Version: staleVer},
-			wantErr:      ErrVersionConflict,
-		},
-		{
-			name:         "uid pinned, version waived, still catches the new incarnation",
-			precondition: Precondition{UID: staleUID},
-			wantErr:      ErrUIDConflict,
-		},
-		{
-			name:         "version pinned, uid waived, still catches the moved version",
-			precondition: Precondition{Version: staleVer},
 			wantErr:      ErrVersionConflict,
 		},
 		{
@@ -101,38 +76,84 @@ func TestPreconditionCheck(t *testing.T) {
 	}
 }
 
-func TestPreconditionFrom(t *testing.T) {
+func TestPreconditionValidate(t *testing.T) {
 	tests := []struct {
-		name     string
-		observed *ateapipb.Actor
-		want     Precondition
+		name         string
+		precondition Precondition
+		wantErr      error
 	}{
 		{
-			name:     "the observed object pins its uid and version",
-			observed: &ateapipb.Actor{Metadata: storedMetadata},
-			want:     Precondition{UID: storedUID, Version: storedVer},
+			name:         "pinning both uid and version is what an update requires",
+			precondition: Precondition{UID: storedUID, Version: storedVer},
+			wantErr:      nil,
 		},
 		{
-			name:     "an unguarded observed object pins nothing",
-			observed: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "test-atespace", Name: "actor-1"}},
-			want:     NoPrecondition,
+			name:         "pinning nothing is a blind write",
+			precondition: Precondition{},
+			wantErr:      ErrPreconditionRequired,
 		},
 		{
-			name:     "an observed object carrying only a uid waives the version",
-			observed: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Uid: storedUID}},
-			want:     Precondition{UID: storedUID},
+			name:         "a uid alone does not pin a revision",
+			precondition: Precondition{UID: storedUID},
+			wantErr:      ErrPreconditionRequired,
 		},
 		{
-			name:     "an observed object carrying only a version waives the uid",
-			observed: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Version: storedVer}},
-			want:     Precondition{Version: storedVer},
+			name:         "a version alone does not pin an incarnation",
+			precondition: Precondition{Version: storedVer},
+			wantErr:      ErrPreconditionRequired,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := PreconditionFrom(tt.observed); got != tt.want {
+			if err := tt.precondition.Validate(); !errors.Is(err, tt.wantErr) {
+				t.Errorf("Validate() = %v, want one matching %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestPreconditionFrom(t *testing.T) {
+	tests := []struct {
+		name            string
+		observed        *ateapipb.Actor
+		want            Precondition
+		wantValidateErr error
+	}{
+		{
+			name:            "the observed object pins its uid and version",
+			observed:        &ateapipb.Actor{Metadata: storedMetadata},
+			want:            Precondition{UID: storedUID, Version: storedVer},
+			wantValidateErr: nil,
+		},
+		{
+			name:            "an unguarded object with no uid or version is rejected",
+			observed:        &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "test-atespace", Name: "actor-1"}},
+			want:            Precondition{},
+			wantValidateErr: ErrPreconditionRequired,
+		},
+		{
+			name:            "an object carrying only a uid is rejected",
+			observed:        &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Uid: storedUID}},
+			want:            Precondition{UID: storedUID},
+			wantValidateErr: ErrPreconditionRequired,
+		},
+		{
+			name:            "an object carrying only a version is rejected",
+			observed:        &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Version: storedVer}},
+			want:            Precondition{Version: storedVer},
+			wantValidateErr: ErrPreconditionRequired,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := PreconditionFrom(tt.observed)
+			if got != tt.want {
 				t.Errorf("PreconditionFrom(observed) = %+v, want %+v", got, tt.want)
+			}
+			if err := got.Validate(); !errors.Is(err, tt.wantValidateErr) {
+				t.Errorf("PreconditionFrom(observed).Validate() = %v, want one matching %v", err, tt.wantValidateErr)
 			}
 		})
 	}

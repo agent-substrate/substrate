@@ -235,23 +235,31 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ID1" })),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), "ID1", "")},
 	}, {
-		"valid actor.metadata.uid precondition",
-		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) {
-			m.Uid = "2a5f8c1e-9b3d-4f7a-8e6c-1d0b4a7f2e93"
-		})),
-		nil,
+		"missing actor.metadata.uid precondition",
+		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Uid = "" })),
+		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "uid"), "")},
 	}, {
 		"invalid actor.metadata.uid precondition",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Uid = "not-a-uuid" })),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "uid"), "not-a-uuid", "")},
 	}, {
-		"valid actor.metadata.version precondition",
-		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Version = 7 })),
-		nil,
+		"missing actor.metadata.version precondition",
+		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Version = 0 })),
+		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "version"), "")},
 	}, {
 		"negative actor.metadata.version precondition",
 		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Version = -1 })),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "version"), int64(-1), "")},
+	}, {
+		"missing actor.metadata.version and actor.metadata.uid",
+		updateActorReq(withMetadata(func(m *ateapipb.ResourceMetadata) {
+			m.Uid = ""
+			m.Version = 0
+		})),
+		field.ErrorList{
+			field.Required(field.NewPath("actor", "metadata", "uid"), ""),
+			field.Required(field.NewPath("actor", "metadata", "version"), ""),
+		},
 	}, {
 		"missing update_mask",
 		updateActorReq(func(req *ateapipb.UpdateActorRequest) { req.UpdateMask = nil }),
@@ -353,9 +361,9 @@ func TestUpdateActor_FieldMasks(t *testing.T) {
 			tt.stored.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
 			tt.stored.ActorTemplateNamespace = "ns1"
 			tt.stored.ActorTemplateName = "tmpl1"
-			svc, _ := serviceWithActor(t, tt.stored)
+			svc, created := serviceWithActor(t, tt.stored)
 
-			tt.req.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
+			tt.req.Metadata = created.GetMetadata()
 			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
 				Actor:      tt.req,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: tt.maskPaths},
@@ -405,7 +413,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
+			if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(toUpdate *ateapipb.Actor) error {
 				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 				return nil
 			}); err != nil {
@@ -430,11 +438,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	// The client asserts "only update the actor with uid A".
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{
-				Atespace: testAtespace,
-				Name:     testActorID,
-				Uid:      original.GetMetadata().GetUid(),
-			},
+			Metadata:       original.GetMetadata(),
 			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 		},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
@@ -465,8 +469,10 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	}
 }
 
-// TestUpdateActor_ConcurrentDisjointUpdates checks that concurrent write
-// to a disjoint field is resolved by the store and both fields survive the update.
+// TestUpdateActor_ConcurrentDisjointUpdates checks that a concurrent write is
+// reported even when it touched a field the update does not. The version is
+// pinned on the whole actor, not per field, so the server cannot know the two
+// writes commute: it reports the conflict and leaves reconciling to the client.
 func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
@@ -474,12 +480,13 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
 
-	if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
 		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed CreateActor: %v", err)
 	}
 
@@ -488,7 +495,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, store.NoPrecondition, func(toUpdate *ateapipb.Actor) error {
+			if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(toUpdate *ateapipb.Actor) error {
 				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 				return nil
 			}); err != nil {
@@ -499,23 +506,25 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	svc := &Service{persistence: racing}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
-	if _, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+	// This update must fail: the racing update bumped the version.
+	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+			Metadata:       original.GetMetadata(),
 			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
 		},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
-	}); err != nil {
-		t.Fatalf("UpdateActor error = %v, want success: no version precondition was set, so the conflict is the server's to resolve", err)
+	})
+	if code := status.Code(err); code != codes.Aborted {
+		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the pinned version moved under the update", err, code)
 	}
 
 	stored, err := persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
-	// Both worker selector and state updates survive
-	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
-		t.Errorf("stored worker_selector[tier] = %q, want %q", got, "paid")
+	// The concurrent writer's field survives; the rejected update wrote nothing.
+	if got := stored.GetWorkerSelector(); got != nil {
+		t.Errorf("stored worker_selector = %v, want nil: the rejected update was applied anyway", got)
 	}
 	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
 		t.Errorf("stored state = %v, want %v: the concurrent writer's field must survive", got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
@@ -523,10 +532,17 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 }
 
 // updateActorReq builds a minimal valid UpdateActorRequest, then applies the
-// given mutations.
+// given mutations. The metadata pins a uid and version because an update that
+// pins neither is rejected as a blind write.
 func updateActorReq(mutate ...func(*ateapipb.UpdateActorRequest)) *ateapipb.UpdateActorRequest {
 	req := &ateapipb.UpdateActorRequest{
-		Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"}},
+		Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{
+			Atespace: "ns1",
+			Name:     "id1",
+			// Well-formed uid and version to pass validation.
+			Uid:     "2a5f8c1e-9b3d-4f7a-8e6c-1d0b4a7f2e93",
+			Version: 7,
+		}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	}
 	for _, m := range mutate {

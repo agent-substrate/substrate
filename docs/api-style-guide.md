@@ -221,6 +221,8 @@ rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
 message UpdateActorRequest {
   // The actor to update.
   // actor.metadata.atespace and actor.metadata.name identify which resource to update.
+  // actor.metadata.uid and actor.metadata.version are the preconditions the
+  // update is written against, and are required.
   Actor actor = 1;
 
   // The set of fields to update. Required.
@@ -241,7 +243,7 @@ Rules:
 - The special value `*` is **not supported**. Clients must enumerate the exact fields to update.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
-- The `version` and `uid` fields in the embedded resource's `metadata` are honored as optional preconditions (see section #7). They are control fields, not updatable fields, and **must not** be listed in `update_mask`.
+- The `version` and `uid` fields in the embedded resource's `metadata` are **required** preconditions (see section #7). A request that leaves either unset is a blind write and **must** return `INVALID_ARGUMENT`. They are control fields, not updatable fields, and **must not** be listed in `update_mask`.
 
 **Divergence from AIP-134:** AIP-134 makes `update_mask` optional (omission implies updating all populated fields) and requires support for `*`. Substrate requires an explicit mask.
 
@@ -409,12 +411,14 @@ message ResourceMetadata {
 - A server-assigned [UUID4](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)).
 - Useful for correlation across logs, events, and audit trails where the resource `name` may not be available. Also useful
 for controllers that need to do bookkeeping and track state associated with a resource.
+- Required on Update requests, where it pins the lifecycle the write is for. See section #7.
 
 ### 6.4 `version`
 
 - Type: `int64`.
 - Increased on every mutation; the increment amount is not part of the contract. Allows clients to do optimistic locking
 on resource updates. Also establishes a total order on "snapshots" of a given resource. See section #7.
+- Required on Update requests, where it pins the revision the write is against.
 
 ### 6.5 `create_time`
 
@@ -461,14 +465,14 @@ message ResourceMetadata {
 
 ### 7.2 Using `version` and `uid` to guard writes
 
-A client that wants to guard a mutation against acting on unexpected state echoes back the `version` and/or `uid` it last observed. The server rejects the request if either value no longer matches.
+A client guards a mutation against acting on unexpected state by echoing back the `version` and `uid` it last observed. The server rejects the request if either value no longer matches.
 
-The two guards protect against different things:
+The two guards protect against different things, and neither substitutes for the other:
 
 - **`version`** guards against *concurrent modification*. It changes on every write, so echoing it back detects that someone else wrote in between (the lost-update problem). A `version` guard can legitimately reject an otherwise-valid read-modify-write — that is the point.
-- **`uid`** guards against *name reuse across lifecycles*. `(atespace, name)` is unique only at a point in time; `uid` is unique across time. Because `uid` is immutable within a lifecycle, it never causes a spurious rejection within that lifecycle — it only fires when the name has been deleted and recreated as a different resource. This catches the ABA case that `version` alone cannot: a stale write whose `version` happens to match the *new* resource.
+- **`uid`** guards against *name reuse across lifecycles*. `(atespace, name)` is unique only at a point in time; `uid` is unique across time. Because `uid` is immutable within a lifecycle, it never causes a spurious rejection within that lifecycle — it only fires when the name has been deleted and recreated as a different resource. This catches the ABA case that `version` alone cannot: `version` restarts at `1` for each new lifecycle, so a stale write's `version` can happen to match the *new* resource.
 
-**Update:** both guards are specified in the embedded resource's `metadata`:
+**Update: both guards are required.** They are specified in the embedded resource's `metadata`:
 
 ```proto
 // Client read actor at version 5 (uid "a1b2..."), now updating:
@@ -477,8 +481,8 @@ UpdateActorRequest {
     metadata: ResourceMetadata {
       atespace: "my-space"
       name:     "my-actor"
-      version:  5            // guard: fail unless server is at version 5
-      uid:      "a1b2..."    // guard: fail unless server uid matches
+      version:  5            // required: fail unless server is at version 5
+      uid:      "a1b2..."    // required: fail unless server uid matches
     }
     worker_selector: ...
   }
@@ -487,7 +491,8 @@ UpdateActorRequest {
 ```
 
 - `version` and `uid` are control fields managed by the server, not mutable fields. They **must not** be listed in `update_mask`.
-- A client that wants a blind by-name update must leave both `version` (0) and `uid` ("") unset.
+- Both are **required**: an update that leaves `version` (0) or `uid` ("") unset is rejected with `INVALID_ARGUMENT`. There is no blind by-name update. A client that has not read the resource cannot update it; a client that has read it already holds both values.
+- The requirement is on Update only. Delete's guards stay optional (below), and Create assigns both fields rather than checking them.
 
 **Delete:** the guards are specified in a `DeleteOptions` message, reused across every `Delete<Type>Request`:
 
@@ -504,10 +509,11 @@ message DeleteOptions {
 ```
 
 **Server behavior (applies to `version` and `uid` alike):**
-- If the client provides a non-zero `version` or a non-empty `uid` that does not match the server's current value: return `ABORTED`.
-- If the client omits a guard (the proto3 zero value): skip that check.
+- If the client provides a `version` or `uid` that does not match the server's current value: return `ABORTED`.
+- On Update, if the client omits either guard: return `INVALID_ARGUMENT`. The request is malformed, so this is decided before the resource is read.
+- On Delete, if the client omits a guard: skip that check.
 
-Both guards are always **optional** from the client's perspective: a client that omits `version` and `uid` gets last-writer-wins, and the server does not require either.
+So Update never gives last-writer-wins, while Delete still does by default.
 
 ---
 
