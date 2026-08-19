@@ -374,16 +374,14 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	}
 	if raw, exists := listenersMap["connect_terminate"]; !exists {
 		t.Error("connect_terminate listener missing")
-	} else if sa := raw.(*listenerv3.Listener).GetAddress().GetSocketAddress(); sa.GetPortValue() != 8081 {
-		t.Errorf("Expected connect_terminate port 8081, got %d", sa.GetPortValue())
+	} else {
+		assertDualStackIngress(t, raw.(*listenerv3.Listener), 8081)
 	}
 	if raw, exists := listenersMap["connect_terminate_tls"]; !exists {
 		t.Error("connect_terminate_tls listener missing")
 	} else {
 		l := raw.(*listenerv3.Listener)
-		if sa := l.GetAddress().GetSocketAddress(); sa.GetPortValue() != 8444 {
-			t.Errorf("Expected connect_terminate_tls port 8444, got %d", sa.GetPortValue())
-		}
+		assertDualStackIngress(t, l, 8444)
 		ts := l.GetFilterChains()[0].GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected connect_terminate_tls to be TLS-wrapped, got transport socket %q", ts.GetName())

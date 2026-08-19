@@ -1236,6 +1236,7 @@ func (x *XdsServer) buildConnectTerminateListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(uint32(x.connectPlainTextPort)),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1269,6 +1270,7 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(uint32(x.connectTLSPort)),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
