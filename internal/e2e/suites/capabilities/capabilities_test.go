@@ -19,10 +19,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -54,8 +52,8 @@ type capabilitiesResponse struct {
 // does not spawn containers, so the spec being right and the sandbox applying
 // it are separate claims; only this test covers the second.
 //
-// It runs against whichever sandbox class the source template names, so CI
-// covers both gvisor and micro-VM from one suite (see sourceRuntime).
+// It runs against whichever sandbox class E2E_SANDBOX_CLASS selects, so CI
+// covers both gvisor and micro-VM from one suite.
 func TestActorCapabilities(t *testing.T) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
@@ -64,10 +62,7 @@ func TestActorCapabilities(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	rt := sourceRuntime(t, ctx, clients)
-	t.Logf("running against sandboxClass=%q ateomImage=%q", rt.sandboxClass, rt.ateomImage)
-
-	namespace := deployFixture(t, env["BUCKET_NAME"], rt)
+	namespace := deployFixture(t, env["BUCKET_NAME"])
 
 	tests := []struct {
 		name     string
@@ -136,81 +131,21 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 	}
 }
 
-// runtime is the sandbox-class-specific configuration copied from an existing
-// WorkerPool so this suite runs unchanged on gvisor and micro-VM.
-type runtime struct {
-	sandboxClass      string
-	sandboxConfigName string
-	ateomImage        string
-}
-
-// sourceRuntime reads the WorkerPool this suite should imitate. It defaults to
-// the gVisor counter demo; CI overrides the env to point the same suite at the
-// micro-VM demo, mirroring how the demo suite covers both classes.
-func sourceRuntime(t *testing.T, ctx context.Context, clients *e2e.Clients) runtime {
-	t.Helper()
-	ns := "ate-demo-counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
-		ns = v
-	}
-	name := "counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
-		name = v
-	}
-
-	wp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(ns).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting source WorkerPool %s/%s: %v", ns, name, err)
-	}
-
-	sandboxClass := string(wp.Spec.SandboxClass)
-	if sandboxClass == "" {
-		sandboxClass = string(v1alpha1.SandboxClassGvisor)
-	}
-	return runtime{
-		sandboxClass:      sandboxClass,
-		sandboxConfigName: wp.Spec.SandboxConfigName,
-		ateomImage:        wp.Spec.AteomImage,
-	}
-}
-
-// deployFixture renders and applies the fixture for the given runtime and
-// returns the namespace it created. The namespace is suffixed with the sandbox
-// class so a gvisor run and a micro-VM run against the same cluster do not
-// collide.
-func deployFixture(t *testing.T, bucket string, rt runtime) string {
+// deployFixture renders and applies the fixture for the sandbox class under
+// test and returns the namespace it created. The namespace carries the class
+// suffix so the gVisor and micro-VM lanes never share one.
+func deployFixture(t *testing.T, bucket string) string {
 	t.Helper()
 	root, err := e2e.FindRepoRoot()
 	if err != nil {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
 
-	namespace := "ate-e2e-caps-" + rt.sandboxClass
+	namespace := e2e.FixtureName("ate-e2e-caps")
 
-	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl"))
-	if err != nil {
-		t.Fatalf("reading capabilities manifest template: %v", err)
-	}
-
-	// Only a micro-VM pool names a SandboxConfig; for gvisor the line is
-	// omitted entirely so the pool falls back to the cluster default.
-	sandboxConfigLine := ""
-	if rt.sandboxConfigName != "" {
-		sandboxConfigLine = "  sandboxConfigName: " + rt.sandboxConfigName
-	}
-
-	rendered := strings.NewReplacer(
-		"${BUCKET_NAME}", bucket,
-		"${NAMESPACE}", namespace,
-		"${SANDBOX_CLASS}", rt.sandboxClass,
-		"${SANDBOX_CONFIG_LINE}", sandboxConfigLine,
-		"${ATEOM_IMAGE}", rt.ateomImage,
-	).Replace(string(tmpl))
-
-	manifest := filepath.Join(t.TempDir(), "capabilities.yaml")
-	if err := os.WriteFile(manifest, []byte(rendered), 0o644); err != nil {
-		t.Fatalf("writing rendered capabilities manifest: %v", err)
-	}
+	// One manifest, rendered for the sandbox class under test (mirrors the
+	// sizing suite).
+	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl", bucket)
 
 	// Build/push the probe image and apply through the repo's pinned ko, as the
 	// identity suite does; CI does not install ko on PATH, and KO_CONFIG_PATH is
