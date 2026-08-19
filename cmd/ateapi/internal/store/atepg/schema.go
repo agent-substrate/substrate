@@ -52,20 +52,6 @@ CREATE TABLE IF NOT EXISTS actor_templates (
     PRIMARY KEY (atespace, name)
 );
 
-CREATE TABLE IF NOT EXISTS actor_template_versions (
-    atespace                  text NOT NULL
-        REFERENCES atespaces(name) ON DELETE RESTRICT,
-    name                      text NOT NULL,
-    actor_template_atespace   text NOT NULL,
-    actor_template_name       text NOT NULL,
-    uid                       text NOT NULL UNIQUE,
-    proto                     bytea NOT NULL,
-    PRIMARY KEY (atespace, name)
-);
-
-CREATE INDEX IF NOT EXISTS actor_template_versions_parent_idx
-    ON actor_template_versions (actor_template_atespace, actor_template_name);
-
 CREATE TABLE IF NOT EXISTS actor_snapshots (
     atespace  text NOT NULL,
     name      text NOT NULL,

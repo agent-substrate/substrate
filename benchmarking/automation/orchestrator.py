@@ -314,17 +314,22 @@ def teardown_microvm_deps() -> None:
     run_no_check(["hack/install-microvm-deps.sh", "--delete"])
 
 
-def deploy_workloads(worker_count: int = 1, sandbox_class: str = "gvisor") -> None:
-    run(
-        [
-            "benchmarking/workloads/deploy.sh",
-            "--deploy",
-            "--worker-count",
-            str(worker_count),
-            "--sandbox-class",
-            sandbox_class,
-        ]
-    )
+def deploy_workloads(
+    worker_count: int = 1, sandbox_class: str = "gvisor", actor_memory: str = ""
+) -> None:
+    cmd = [
+        "benchmarking/workloads/deploy.sh",
+        "--deploy",
+        "--worker-count",
+        str(worker_count),
+        "--sandbox-class",
+        sandbox_class,
+    ]
+    # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm
+    # minimum); RAM-consuming suites set actorMemory in tests.yaml.
+    if actor_memory:
+        cmd += ["--actor-memory", actor_memory]
+    run(cmd)
     # Block until ActorTemplates are Ready
     run(
         [
@@ -508,7 +513,11 @@ def main() -> None:
                 # deploy_workloads needs the microvm SandboxConfig.
                 if sandbox_class == "microvm":
                     install_microvm_deps()
-                deploy_workloads(test.get("workerCount", 1), sandbox_class)
+                deploy_workloads(
+                    test.get("workerCount", 1),
+                    sandbox_class,
+                    test.get("actorMemory", ""),
+                )
                 try:
                     status = run_test(
                         test,

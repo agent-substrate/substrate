@@ -17,11 +17,27 @@
 # This is sourced as part of install-ate.sh. Do not run directly.
 
 ATE_DEMOS+=(demo-egress) # register demo-egress
+# The micro-VM variant is its own demo rather than a flag on demo-egress: that
+# gets it into --help and into delete_all's teardown sweep for free, and the two
+# can be installed side by side (the networking suite runs against whichever the
+# sandbox class under test selects).
+ATE_DEMOS+=(demo-egress-microvm) # register demo-egress-microvm
 
 demo-egress_cmdline() {
   case "${1}" in
     --deploy-demo-egress) demo-egress_deploy ;;
     --delete-demo-egress) demo-egress_delete ;;
+    *)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+demo-egress-microvm_cmdline() {
+  case "${1}" in
+    --deploy-demo-egress-microvm) demo-egress-microvm_deploy ;;
+    --delete-demo-egress-microvm) demo-egress-microvm_delete ;;
     *)
       return 1
       ;;
@@ -47,5 +63,30 @@ demo-egress_delete() {
   log_step "demo-egress_delete"
   delete_demo_actors ate-demo-egress egress
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress.yaml.tmpl \
+    | run_kubectl delete --ignore-not-found -f -
+}
+
+demo-egress-microvm_usage() {
+  echo "  Needs hack/install-microvm-deps.sh --install to have run (cluster-wide microvm SandboxConfig)."
+}
+
+demo-egress-microvm_deploy() {
+  log_step "demo-egress-microvm_deploy"
+  ensure_crds
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm.yaml.tmpl \
+    | run_ko apply -f -
+
+  log_step "Waiting for micro-VM egress demo to be ready..."
+  run_kubectl rollout status deployment/egress-microvm -n ate-demo-egress-microvm --timeout=300s
+  # A micro-VM golden is a cloud-hypervisor cold boot plus a checkpoint, on
+  # nested KVM in CI, so it needs a longer budget than the gVisor one above.
+  run_kubectl wait --for=condition=Ready actortemplate/egress-microvm \
+    -n ate-demo-egress-microvm --timeout=600s
+}
+
+demo-egress-microvm_delete() {
+  log_step "demo-egress-microvm_delete"
+  delete_demo_actors ate-demo-egress-microvm egress-microvm
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

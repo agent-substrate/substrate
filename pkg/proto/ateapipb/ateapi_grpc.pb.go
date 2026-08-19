@@ -33,34 +33,29 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName                   = "/ateapi.Control/GetActor"
-	Control_CreateActor_FullMethodName                = "/ateapi.Control/CreateActor"
-	Control_UpdateActor_FullMethodName                = "/ateapi.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName               = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName                 = "/ateapi.Control/PauseActor"
-	Control_ResumeActor_FullMethodName                = "/ateapi.Control/ResumeActor"
-	Control_DeleteActor_FullMethodName                = "/ateapi.Control/DeleteActor"
-	Control_GetActorSnapshot_FullMethodName           = "/ateapi.Control/GetActorSnapshot"
-	Control_GetActorSnapshotTag_FullMethodName        = "/ateapi.Control/GetActorSnapshotTag"
-	Control_ListActorSnapshots_FullMethodName         = "/ateapi.Control/ListActorSnapshots"
-	Control_CreateActorSnapshotTag_FullMethodName     = "/ateapi.Control/CreateActorSnapshotTag"
-	Control_UpdateActorSnapshotTag_FullMethodName     = "/ateapi.Control/UpdateActorSnapshotTag"
-	Control_DeleteActorSnapshotTag_FullMethodName     = "/ateapi.Control/DeleteActorSnapshotTag"
-	Control_ListWorkers_FullMethodName                = "/ateapi.Control/ListWorkers"
-	Control_ListActors_FullMethodName                 = "/ateapi.Control/ListActors"
-	Control_CreateAtespace_FullMethodName             = "/ateapi.Control/CreateAtespace"
-	Control_GetAtespace_FullMethodName                = "/ateapi.Control/GetAtespace"
-	Control_ListAtespaces_FullMethodName              = "/ateapi.Control/ListAtespaces"
-	Control_DeleteAtespace_FullMethodName             = "/ateapi.Control/DeleteAtespace"
-	Control_CreateActorTemplate_FullMethodName        = "/ateapi.Control/CreateActorTemplate"
-	Control_GetActorTemplate_FullMethodName           = "/ateapi.Control/GetActorTemplate"
-	Control_UpdateActorTemplate_FullMethodName        = "/ateapi.Control/UpdateActorTemplate"
-	Control_ListActorTemplates_FullMethodName         = "/ateapi.Control/ListActorTemplates"
-	Control_DeleteActorTemplate_FullMethodName        = "/ateapi.Control/DeleteActorTemplate"
-	Control_CreateActorTemplateVersion_FullMethodName = "/ateapi.Control/CreateActorTemplateVersion"
-	Control_GetActorTemplateVersion_FullMethodName    = "/ateapi.Control/GetActorTemplateVersion"
-	Control_ListActorTemplateVersions_FullMethodName  = "/ateapi.Control/ListActorTemplateVersions"
-	Control_DeleteActorTemplateVersion_FullMethodName = "/ateapi.Control/DeleteActorTemplateVersion"
+	Control_GetActor_FullMethodName               = "/ateapi.Control/GetActor"
+	Control_CreateActor_FullMethodName            = "/ateapi.Control/CreateActor"
+	Control_UpdateActor_FullMethodName            = "/ateapi.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName           = "/ateapi.Control/SuspendActor"
+	Control_PauseActor_FullMethodName             = "/ateapi.Control/PauseActor"
+	Control_ResumeActor_FullMethodName            = "/ateapi.Control/ResumeActor"
+	Control_DeleteActor_FullMethodName            = "/ateapi.Control/DeleteActor"
+	Control_GetActorSnapshot_FullMethodName       = "/ateapi.Control/GetActorSnapshot"
+	Control_GetActorSnapshotTag_FullMethodName    = "/ateapi.Control/GetActorSnapshotTag"
+	Control_ListActorSnapshots_FullMethodName     = "/ateapi.Control/ListActorSnapshots"
+	Control_CreateActorSnapshotTag_FullMethodName = "/ateapi.Control/CreateActorSnapshotTag"
+	Control_UpdateActorSnapshotTag_FullMethodName = "/ateapi.Control/UpdateActorSnapshotTag"
+	Control_DeleteActorSnapshotTag_FullMethodName = "/ateapi.Control/DeleteActorSnapshotTag"
+	Control_ListWorkers_FullMethodName            = "/ateapi.Control/ListWorkers"
+	Control_ListActors_FullMethodName             = "/ateapi.Control/ListActors"
+	Control_CreateAtespace_FullMethodName         = "/ateapi.Control/CreateAtespace"
+	Control_GetAtespace_FullMethodName            = "/ateapi.Control/GetAtespace"
+	Control_ListAtespaces_FullMethodName          = "/ateapi.Control/ListAtespaces"
+	Control_DeleteAtespace_FullMethodName         = "/ateapi.Control/DeleteAtespace"
+	Control_CreateActorTemplate_FullMethodName    = "/ateapi.Control/CreateActorTemplate"
+	Control_GetActorTemplate_FullMethodName       = "/ateapi.Control/GetActorTemplate"
+	Control_ListActorTemplates_FullMethodName     = "/ateapi.Control/ListActorTemplates"
+	Control_DeleteActorTemplate_FullMethodName    = "/ateapi.Control/DeleteActorTemplate"
 )
 
 // ControlClient is the client API for Control service.
@@ -112,26 +107,11 @@ type ControlClient interface {
 	// ActorSnapshotTags remain.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	CreateActorTemplate(ctx context.Context, in *CreateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
-	// Get an ActorTemplate by name.
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
-	// Update mutable fields on an existing ActorTemplate.
-	UpdateActorTemplate(ctx context.Context, in *UpdateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
-	// Delete an ActorTemplate. Rejects (FailedPrecondition) while any of its
-	// ActorTemplateVersions exist.
+	// Delete an ActorTemplate together with its golden actor and golden
+	// snapshot in the ActorTemplate's namespace.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
-	// Create a new ActorTemplateVersion under an existing ActorTemplate
-	// (FailedPrecondition if the parent does not exist).
-	CreateActorTemplateVersion(ctx context.Context, in *CreateActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error)
-	// Get an ActorTemplateVersion by name.
-	GetActorTemplateVersion(ctx context.Context, in *GetActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error)
-	// List ActorTemplateVersions, optionally filtered to one ActorTemplate.
-	ListActorTemplateVersions(ctx context.Context, in *ListActorTemplateVersionsRequest, opts ...grpc.CallOption) (*ListActorTemplateVersionsResponse, error)
-	// Delete an ActorTemplateVersion together with its golden actor and golden
-	// snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
-	// while the version is its parent's default_version_on_create or while any
-	// Actor pins it.
-	DeleteActorTemplateVersion(ctx context.Context, in *DeleteActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error)
 }
 
 type controlClient struct {
@@ -352,16 +332,6 @@ func (c *controlClient) GetActorTemplate(ctx context.Context, in *GetActorTempla
 	return out, nil
 }
 
-func (c *controlClient) UpdateActorTemplate(ctx context.Context, in *UpdateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ActorTemplate)
-	err := c.cc.Invoke(ctx, Control_UpdateActorTemplate_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *controlClient) ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorTemplatesResponse)
@@ -376,46 +346,6 @@ func (c *controlClient) DeleteActorTemplate(ctx context.Context, in *DeleteActor
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ActorTemplate)
 	err := c.cc.Invoke(ctx, Control_DeleteActorTemplate_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *controlClient) CreateActorTemplateVersion(ctx context.Context, in *CreateActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ActorTemplateVersion)
-	err := c.cc.Invoke(ctx, Control_CreateActorTemplateVersion_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *controlClient) GetActorTemplateVersion(ctx context.Context, in *GetActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ActorTemplateVersion)
-	err := c.cc.Invoke(ctx, Control_GetActorTemplateVersion_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *controlClient) ListActorTemplateVersions(ctx context.Context, in *ListActorTemplateVersionsRequest, opts ...grpc.CallOption) (*ListActorTemplateVersionsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListActorTemplateVersionsResponse)
-	err := c.cc.Invoke(ctx, Control_ListActorTemplateVersions_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *controlClient) DeleteActorTemplateVersion(ctx context.Context, in *DeleteActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ActorTemplateVersion)
-	err := c.cc.Invoke(ctx, Control_DeleteActorTemplateVersion_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -471,26 +401,11 @@ type ControlServer interface {
 	// ActorSnapshotTags remain.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
 	CreateActorTemplate(context.Context, *CreateActorTemplateRequest) (*ActorTemplate, error)
-	// Get an ActorTemplate by name.
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
-	// Update mutable fields on an existing ActorTemplate.
-	UpdateActorTemplate(context.Context, *UpdateActorTemplateRequest) (*ActorTemplate, error)
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
-	// Delete an ActorTemplate. Rejects (FailedPrecondition) while any of its
-	// ActorTemplateVersions exist.
+	// Delete an ActorTemplate together with its golden actor and golden
+	// snapshot in the ActorTemplate's namespace.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
-	// Create a new ActorTemplateVersion under an existing ActorTemplate
-	// (FailedPrecondition if the parent does not exist).
-	CreateActorTemplateVersion(context.Context, *CreateActorTemplateVersionRequest) (*ActorTemplateVersion, error)
-	// Get an ActorTemplateVersion by name.
-	GetActorTemplateVersion(context.Context, *GetActorTemplateVersionRequest) (*ActorTemplateVersion, error)
-	// List ActorTemplateVersions, optionally filtered to one ActorTemplate.
-	ListActorTemplateVersions(context.Context, *ListActorTemplateVersionsRequest) (*ListActorTemplateVersionsResponse, error)
-	// Delete an ActorTemplateVersion together with its golden actor and golden
-	// snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
-	// while the version is its parent's default_version_on_create or while any
-	// Actor pins it.
-	DeleteActorTemplateVersion(context.Context, *DeleteActorTemplateVersionRequest) (*ActorTemplateVersion, error)
 	mustEmbedUnimplementedControlServer()
 }
 
@@ -564,26 +479,11 @@ func (UnimplementedControlServer) CreateActorTemplate(context.Context, *CreateAc
 func (UnimplementedControlServer) GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorTemplate not implemented")
 }
-func (UnimplementedControlServer) UpdateActorTemplate(context.Context, *UpdateActorTemplateRequest) (*ActorTemplate, error) {
-	return nil, status.Error(codes.Unimplemented, "method UpdateActorTemplate not implemented")
-}
 func (UnimplementedControlServer) ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActorTemplates not implemented")
 }
 func (UnimplementedControlServer) DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActorTemplate not implemented")
-}
-func (UnimplementedControlServer) CreateActorTemplateVersion(context.Context, *CreateActorTemplateVersionRequest) (*ActorTemplateVersion, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateActorTemplateVersion not implemented")
-}
-func (UnimplementedControlServer) GetActorTemplateVersion(context.Context, *GetActorTemplateVersionRequest) (*ActorTemplateVersion, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetActorTemplateVersion not implemented")
-}
-func (UnimplementedControlServer) ListActorTemplateVersions(context.Context, *ListActorTemplateVersionsRequest) (*ListActorTemplateVersionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListActorTemplateVersions not implemented")
-}
-func (UnimplementedControlServer) DeleteActorTemplateVersion(context.Context, *DeleteActorTemplateVersionRequest) (*ActorTemplateVersion, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeleteActorTemplateVersion not implemented")
 }
 func (UnimplementedControlServer) mustEmbedUnimplementedControlServer() {}
 func (UnimplementedControlServer) testEmbeddedByValue()                 {}
@@ -984,24 +884,6 @@ func _Control_GetActorTemplate_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_UpdateActorTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UpdateActorTemplateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).UpdateActorTemplate(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_UpdateActorTemplate_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).UpdateActorTemplate(ctx, req.(*UpdateActorTemplateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Control_ListActorTemplates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorTemplatesRequest)
 	if err := dec(in); err != nil {
@@ -1034,78 +916,6 @@ func _Control_DeleteActorTemplate_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).DeleteActorTemplate(ctx, req.(*DeleteActorTemplateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_CreateActorTemplateVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateActorTemplateVersionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).CreateActorTemplateVersion(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_CreateActorTemplateVersion_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).CreateActorTemplateVersion(ctx, req.(*CreateActorTemplateVersionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_GetActorTemplateVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetActorTemplateVersionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).GetActorTemplateVersion(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_GetActorTemplateVersion_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).GetActorTemplateVersion(ctx, req.(*GetActorTemplateVersionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_ListActorTemplateVersions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListActorTemplateVersionsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).ListActorTemplateVersions(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_ListActorTemplateVersions_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).ListActorTemplateVersions(ctx, req.(*ListActorTemplateVersionsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Control_DeleteActorTemplateVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteActorTemplateVersionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).DeleteActorTemplateVersion(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_DeleteActorTemplateVersion_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).DeleteActorTemplateVersion(ctx, req.(*DeleteActorTemplateVersionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1202,32 +1012,12 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_GetActorTemplate_Handler,
 		},
 		{
-			MethodName: "UpdateActorTemplate",
-			Handler:    _Control_UpdateActorTemplate_Handler,
-		},
-		{
 			MethodName: "ListActorTemplates",
 			Handler:    _Control_ListActorTemplates_Handler,
 		},
 		{
 			MethodName: "DeleteActorTemplate",
 			Handler:    _Control_DeleteActorTemplate_Handler,
-		},
-		{
-			MethodName: "CreateActorTemplateVersion",
-			Handler:    _Control_CreateActorTemplateVersion_Handler,
-		},
-		{
-			MethodName: "GetActorTemplateVersion",
-			Handler:    _Control_GetActorTemplateVersion_Handler,
-		},
-		{
-			MethodName: "ListActorTemplateVersions",
-			Handler:    _Control_ListActorTemplateVersions_Handler,
-		},
-		{
-			MethodName: "DeleteActorTemplateVersion",
-			Handler:    _Control_DeleteActorTemplateVersion_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

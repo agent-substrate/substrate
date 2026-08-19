@@ -225,11 +225,13 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 			}
 			return &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				WorkerAssignment: &ateapipb.WorkerAssignment{
-					WorkerPod:       podName,
-					WorkerNamespace: namespace,
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       podName,
+						WorkerNamespace: namespace,
+					},
 				},
-				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -280,7 +282,7 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 			return &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status:   ateapipb.Actor_STATUS_SUSPENDED, // not running
+				Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}, // not running
 			}, nil
 		},
 	}
@@ -334,18 +336,20 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 				// First call: suspended
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   ateapipb.Actor_STATUS_SUSPENDED,
+					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
 			// Subsequent calls: running
 			return &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				WorkerAssignment: &ateapipb.WorkerAssignment{
-					WorkerPod:       podName,
-					WorkerNamespace: namespace,
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       podName,
+						WorkerNamespace: namespace,
+					},
 				},
-				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -470,11 +474,13 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 				// 1. Initial call for stream 1: pod-1
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						WorkerPod:       "pod-1",
-						WorkerNamespace: "ns",
+					Status: &ateapipb.ActorStatus{
+						State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapipb.WorkerAssignment{
+							WorkerPod:       "pod-1",
+							WorkerNamespace: "ns",
+						},
 					},
-					Status: ateapipb.Actor_STATUS_RUNNING,
 				}, nil
 			}
 
@@ -488,11 +494,13 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 
 			return &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				WorkerAssignment: &ateapipb.WorkerAssignment{
-					WorkerPod:       "pod-2",
-					WorkerNamespace: "ns",
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       "pod-2",
+						WorkerNamespace: "ns",
+					},
 				},
-				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -584,11 +592,13 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 			if getActorCalls == 1 {
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						WorkerPod:       "pod-1",
-						WorkerNamespace: "ns",
+					Status: &ateapipb.ActorStatus{
+						State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapipb.WorkerAssignment{
+							WorkerPod:       "pod-1",
+							WorkerNamespace: "ns",
+						},
 					},
-					Status: ateapipb.Actor_STATUS_RUNNING,
 				}, nil
 			}
 
@@ -602,7 +612,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 				}
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   ateapipb.Actor_STATUS_SUSPENDED,
+					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
@@ -610,18 +620,20 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 			if getActorCalls == 3 {
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   ateapipb.Actor_STATUS_SUSPENDED,
+					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
 			// 4. Subsequent loop reconnection call: running again on pod-1
 			return &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				WorkerAssignment: &ateapipb.WorkerAssignment{
-					WorkerPod:       "pod-1",
-					WorkerNamespace: "ns",
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       "pod-1",
+						WorkerNamespace: "ns",
+					},
 				},
-				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}

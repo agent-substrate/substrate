@@ -73,10 +73,26 @@ spec:
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
+    command:
+    - /ko-app/counter
+    # Exercises atenet-router's arbitrary-port ingress support: a second
+    # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
+    # from the primary port 80 every other assertion in this demo uses. Kept in
+    # step with counter.yaml.tmpl — the networking suite runs against whichever
+    # of the two the sandbox class under test selects.
+    - --extra-port=9090
     readyz:
       httpGet:
         path: /readyz
         port: 80
+      # Well above readyz.DefaultOverallTimeout (30s), which the gVisor counter
+      # is happy with. A micro-VM actor answers in a few seconds on an idle
+      # node, but CI runs every suite against this one pool on a single kind
+      # node and a guest boot stretches badly under that contention — 30s was
+      # marginal enough to fail several suites intermittently. Raising it here
+      # rather than the default is what internal/readyz asks for: "a workload
+      # that needs longer says so on its ActorTemplate".
+      timeoutSeconds: 120
     # The counter writes its file counter here. With the durableDir volume below
     # it lands on a host-backed virtio-fs share instead of the guest-RAM rootfs
     # upper, so it survives a Data-scope snapshot (which keeps no guest memory).

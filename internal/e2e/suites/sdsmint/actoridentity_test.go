@@ -24,7 +24,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/url"
-	"os"
 	"path"
 	"sync"
 	"testing"
@@ -73,20 +72,6 @@ const (
 	podIdentityCredentialPath = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 )
 
-// templateRef is the ActorTemplate the suite's actor is created from. The
-// default is the one every other suite uses; the environment overrides exist
-// for clusters that install the fixtures elsewhere.
-func templateRef() (namespace, name string) {
-	namespace, name = "ate-demo-counter", "counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
-		namespace = v
-	}
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
-		name = v
-	}
-	return namespace, name
-}
-
 // probeActor is the identity the probe authenticates to the gateway as.
 type probeActor struct {
 	atespace string
@@ -111,7 +96,7 @@ func createLiveActor() (*probeActor, error) {
 	defer cancel()
 
 	clients := e2e.GetClients()
-	tmplNS, tmplName := templateRef()
+	tmpl := e2e.CounterFixture()
 	name := fmt.Sprintf("sdsmint-probe-%d", time.Now().UnixNano())
 	ref := &ateapipb.ObjectRef{Atespace: probeAtespace, Name: name}
 
@@ -122,11 +107,11 @@ func createLiveActor() (*probeActor, error) {
 	})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: probeAtespace, Name: name},
-		ActorTemplateNamespace: tmplNS,
-		ActorTemplateName:      tmplName,
+		ActorTemplateNamespace: tmpl.Namespace,
+		ActorTemplateName:      tmpl.Name,
 	}}); err != nil {
-		return nil, fmt.Errorf("creating actor %s/%s from template %s/%s: %w (install the fixture with hack/install-demo-counter.sh, or point E2E_TEMPLATE_NAMESPACE/E2E_TEMPLATE_NAME at another one)",
-			probeAtespace, name, tmplNS, tmplName, err)
+		return nil, fmt.Errorf("creating actor %s/%s from template %s/%s: %w (deploy the fixture with %s)",
+			probeAtespace, name, tmpl.Namespace, tmpl.Name, err, tmpl.DeployWith)
 	}
 	e2e.RegisterSuiteCleanup(func() {
 		// DeleteActor requires the actor to be suspended first. Both are
@@ -143,12 +128,12 @@ func createLiveActor() (*probeActor, error) {
 	}
 
 	deadline := time.Now().Add(4 * time.Minute)
-	var lastStatus ateapipb.Actor_Status
+	var lastState ateapipb.ActorState
 	for time.Now().Before(deadline) {
 		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
 		if err == nil {
-			lastStatus = actor.GetStatus()
-			if lastStatus == ateapipb.Actor_STATUS_RUNNING {
+			lastState = actor.GetStatus().GetState()
+			if lastState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
 				uid := actor.GetMetadata().GetUid()
 				if uid == "" {
 					return nil, fmt.Errorf("actor %s/%s is running but has no UID", probeAtespace, name)
@@ -162,8 +147,8 @@ func createLiveActor() (*probeActor, error) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return nil, fmt.Errorf("actor %s/%s never reached STATUS_RUNNING (last status %v); a saturated worker pool is the usual cause",
-		probeAtespace, name, lastStatus)
+	return nil, fmt.Errorf("actor %s/%s never reached ACTOR_STATE_RUNNING (last state %v); a saturated worker pool is the usual cause",
+		probeAtespace, name, lastState)
 }
 
 // actorIdentityCA returns the CA that signs actor certificates, straight from

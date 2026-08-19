@@ -343,7 +343,7 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 	// Deletion is only entered from SUSPENDED or CRASHED, both of which
 	// have already released the worker, so the assignment check below would
 	// reject this too. It is kept for better visibility and logging.
-	if actor.GetStatus() == ateapipb.Actor_STATUS_DELETING {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
 		slog.WarnContext(ctx, "ActorIdentity refused: actor is being deleted", slog.Any("actor", actorRef))
 		return nil, resources.ActorRef{}, status.Error(codes.FailedPrecondition, "actor is being deleted")
 	}
@@ -351,7 +351,7 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 	// An actor placed on a worker always carries its placement fields. Missing
 	// placement is a control-plane bug rather than a client error, so it is not
 	// folded into deny().
-	assignment := actor.GetWorkerAssignment()
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.ErrorContext(ctx, "ActorIdentity: running actor has no worker assignment", slog.Any("actor", actorRef))
 		return nil, resources.ActorRef{}, status.Error(codes.FailedPrecondition, "actor has no worker assigned")

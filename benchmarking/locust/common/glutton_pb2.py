@@ -38,7 +38,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rglutton.proto\x12\x07glutton\"T\n\x0fWriteRAMRequest\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x0c\n\x04size\x18\x02 \x01(\x05\x12&\n\nwrite_mode\x18\x03 \x01(\x0e\x32\x12.glutton.WriteMode\"\x12\n\x10WriteRAMResponse\"U\n\x10WriteDiskRequest\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x0c\n\x04size\x18\x02 \x01(\x05\x12&\n\nwrite_mode\x18\x03 \x01(\x0e\x32\x12.glutton.WriteMode\"\x13\n\x11WriteDiskResponse\"\x1e\n\rOpenFDRequest\x12\r\n\x05\x63ount\x18\x01 \x01(\x05\"\x10\n\x0eOpenFDResponse\"\x1e\n\x0bPingRequest\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x1f\n\x0cPingResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"-\n\rGossipRequest\x12\x1c\n\x05peers\x18\x01 \x03(\x0b\x32\r.glutton.Peer\"\x10\n\x0eGossipResponse\"&\n\x04Peer\x12\x0c\n\x04host\x18\x01 \x01(\t\x12\x10\n\x08\x64\x65lay_ms\x18\x02 \x01(\x05*>\n\tWriteMode\x12\x17\n\x13WRITE_MODE_TRUNCATE\x10\x00\x12\x18\n\x14WRITE_MODE_OVERWRITE\x10\x01\x32\xc3\x02\n\x07Glutton\x12\x41\n\x08WriteRAM\x12\x18.glutton.WriteRAMRequest\x1a\x19.glutton.WriteRAMResponse\"\x00\x12\x44\n\tWriteDisk\x12\x19.glutton.WriteDiskRequest\x1a\x1a.glutton.WriteDiskResponse\"\x00\x12;\n\x06OpenFD\x12\x16.glutton.OpenFDRequest\x1a\x17.glutton.OpenFDResponse\"\x00\x12\x35\n\x04Ping\x12\x14.glutton.PingRequest\x1a\x15.glutton.PingResponse\"\x00\x12;\n\x06Gossip\x12\x16.glutton.GossipRequest\x1a\x17.glutton.GossipResponse\"\x00\x42=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rglutton.proto\x12\x07glutton\"T\n\x0fWriteRAMRequest\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x0c\n\x04size\x18\x02 \x01(\x05\x12&\n\nwrite_mode\x18\x03 \x01(\x0e\x32\x12.glutton.WriteMode\"\x12\n\x10WriteRAMResponse\"U\n\x10WriteDiskRequest\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\x0c\n\x04size\x18\x02 \x01(\x05\x12&\n\nwrite_mode\x18\x03 \x01(\x0e\x32\x12.glutton.WriteMode\"1\n\x11WriteDiskResponse\x12\x0c\n\x04size\x18\x01 \x01(\x03\x12\x0e\n\x06sha256\x18\x02 \x01(\x0c\"D\n\x0fReadDiskRequest\x12\x0b\n\x03key\x18\x01 \x01(\t\x12$\n\tread_mode\x18\x02 \x01(\x0e\x32\x11.glutton.ReadMode\">\n\x10ReadDiskResponse\x12\x0c\n\x04size\x18\x01 \x01(\x03\x12\x0e\n\x06sha256\x18\x02 \x01(\x0c\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\"\x1e\n\rOpenFDRequest\x12\r\n\x05\x63ount\x18\x01 \x01(\x05\"\x10\n\x0eOpenFDResponse\"\x1e\n\x0bPingRequest\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x1f\n\x0cPingResponse\x12\x0f\n\x07message\x18\x01 \x01(\t\"-\n\rGossipRequest\x12\x1c\n\x05peers\x18\x01 \x03(\x0b\x32\r.glutton.Peer\"\x10\n\x0eGossipResponse\"&\n\x04Peer\x12\x0c\n\x04host\x18\x01 \x01(\t\x12\x10\n\x08\x64\x65lay_ms\x18\x02 \x01(\x05*>\n\tWriteMode\x12\x17\n\x13WRITE_MODE_TRUNCATE\x10\x00\x12\x18\n\x14WRITE_MODE_OVERWRITE\x10\x01*9\n\x08ReadMode\x12\x12\n\x0eREAD_MODE_DATA\x10\x00\x12\x19\n\x15READ_MODE_DIGEST_ONLY\x10\x01\x32\x86\x03\n\x07Glutton\x12\x41\n\x08WriteRAM\x12\x18.glutton.WriteRAMRequest\x1a\x19.glutton.WriteRAMResponse\"\x00\x12\x44\n\tWriteDisk\x12\x19.glutton.WriteDiskRequest\x1a\x1a.glutton.WriteDiskResponse\"\x00\x12\x41\n\x08ReadDisk\x12\x18.glutton.ReadDiskRequest\x1a\x19.glutton.ReadDiskResponse\"\x00\x12;\n\x06OpenFD\x12\x16.glutton.OpenFDRequest\x1a\x17.glutton.OpenFDResponse\"\x00\x12\x35\n\x04Ping\x12\x14.glutton.PingRequest\x1a\x15.glutton.PingResponse\"\x00\x12;\n\x06Gossip\x12\x16.glutton.GossipRequest\x1a\x17.glutton.GossipResponse\"\x00\x42=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -46,8 +46,10 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'glutton_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z;github.com/agent-substrate/substrate/internal/proto/glutton'
-  _globals['_WRITEMODE']._serialized_start=460
-  _globals['_WRITEMODE']._serialized_end=522
+  _globals['_WRITEMODE']._serialized_start=624
+  _globals['_WRITEMODE']._serialized_end=686
+  _globals['_READMODE']._serialized_start=688
+  _globals['_READMODE']._serialized_end=745
   _globals['_WRITERAMREQUEST']._serialized_start=26
   _globals['_WRITERAMREQUEST']._serialized_end=110
   _globals['_WRITERAMRESPONSE']._serialized_start=112
@@ -55,21 +57,25 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_WRITEDISKREQUEST']._serialized_start=132
   _globals['_WRITEDISKREQUEST']._serialized_end=217
   _globals['_WRITEDISKRESPONSE']._serialized_start=219
-  _globals['_WRITEDISKRESPONSE']._serialized_end=238
-  _globals['_OPENFDREQUEST']._serialized_start=240
-  _globals['_OPENFDREQUEST']._serialized_end=270
-  _globals['_OPENFDRESPONSE']._serialized_start=272
-  _globals['_OPENFDRESPONSE']._serialized_end=288
-  _globals['_PINGREQUEST']._serialized_start=290
-  _globals['_PINGREQUEST']._serialized_end=320
-  _globals['_PINGRESPONSE']._serialized_start=322
-  _globals['_PINGRESPONSE']._serialized_end=353
-  _globals['_GOSSIPREQUEST']._serialized_start=355
-  _globals['_GOSSIPREQUEST']._serialized_end=400
-  _globals['_GOSSIPRESPONSE']._serialized_start=402
-  _globals['_GOSSIPRESPONSE']._serialized_end=418
-  _globals['_PEER']._serialized_start=420
-  _globals['_PEER']._serialized_end=458
-  _globals['_GLUTTON']._serialized_start=525
-  _globals['_GLUTTON']._serialized_end=848
+  _globals['_WRITEDISKRESPONSE']._serialized_end=268
+  _globals['_READDISKREQUEST']._serialized_start=270
+  _globals['_READDISKREQUEST']._serialized_end=338
+  _globals['_READDISKRESPONSE']._serialized_start=340
+  _globals['_READDISKRESPONSE']._serialized_end=402
+  _globals['_OPENFDREQUEST']._serialized_start=404
+  _globals['_OPENFDREQUEST']._serialized_end=434
+  _globals['_OPENFDRESPONSE']._serialized_start=436
+  _globals['_OPENFDRESPONSE']._serialized_end=452
+  _globals['_PINGREQUEST']._serialized_start=454
+  _globals['_PINGREQUEST']._serialized_end=484
+  _globals['_PINGRESPONSE']._serialized_start=486
+  _globals['_PINGRESPONSE']._serialized_end=517
+  _globals['_GOSSIPREQUEST']._serialized_start=519
+  _globals['_GOSSIPREQUEST']._serialized_end=564
+  _globals['_GOSSIPRESPONSE']._serialized_start=566
+  _globals['_GOSSIPRESPONSE']._serialized_end=582
+  _globals['_PEER']._serialized_start=584
+  _globals['_PEER']._serialized_end=622
+  _globals['_GLUTTON']._serialized_start=748
+  _globals['_GLUTTON']._serialized_end=1138
 # @@protoc_insertion_point(module_scope)

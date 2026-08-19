@@ -30,6 +30,9 @@ service Glutton {
   // written will be random bytes.
   rpc WriteDisk(WriteDiskRequest) returns (WriteDiskResponse) {}
 
+  // Tells glutton to read from disk using the specified mode.
+  rpc ReadDisk(ReadDiskRequest) returns (ReadDiskResponse) {}
+
   // Tells glutton to make sure it has the specified number of file
   // descriptors open. It will open or close file descriptors to
   // hit the desired count (note this count is in addition to the other
@@ -50,6 +53,16 @@ enum WriteMode {
 
   // Write on top of the existing data
   WRITE_MODE_OVERWRITE = 1;
+}
+
+// ReadMode selects how much of the file ReadDisk sends back.
+enum ReadMode {
+  // Return the file's bytes in ReadDiskResponse.data alongside its digest.
+  READ_MODE_DATA = 0;
+
+  // Return only size and sha256; ReadDiskResponse.data is empty. The digest
+  // is the same one READ_MODE_DATA returns, so either mode can verify.
+  READ_MODE_DIGEST_ONLY = 1;
 }
 
 message WriteRAMRequest {
@@ -76,6 +89,29 @@ message WriteDiskRequest {
 }
 
 message WriteDiskResponse {
+  // size of the file after the write
+  int64 size = 1;
+
+  // sha256 of the whole file after the write
+  bytes sha256 = 2;
+}
+
+message ReadDiskRequest {
+  // name of the file to be read from
+  string key = 1;
+
+  ReadMode read_mode = 2;
+}
+
+message ReadDiskResponse {
+  // total size of bytes read
+  int64 size = 1;
+
+  // sha256 of bytes read
+  bytes sha256 = 2;
+
+  // data read from the file. Empty under READ_MODE_DIGEST_ONLY.
+  bytes data = 3;
 }
 
 message OpenFDRequest {

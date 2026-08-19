@@ -154,11 +154,6 @@ class ControlStub:
                 request_serializer=ateapi__pb2.GetActorTemplateRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.ActorTemplate.FromString,
                 _registered_method=True)
-        self.UpdateActorTemplate = channel.unary_unary(
-                '/ateapi.Control/UpdateActorTemplate',
-                request_serializer=ateapi__pb2.UpdateActorTemplateRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ActorTemplate.FromString,
-                _registered_method=True)
         self.ListActorTemplates = channel.unary_unary(
                 '/ateapi.Control/ListActorTemplates',
                 request_serializer=ateapi__pb2.ListActorTemplatesRequest.SerializeToString,
@@ -168,26 +163,6 @@ class ControlStub:
                 '/ateapi.Control/DeleteActorTemplate',
                 request_serializer=ateapi__pb2.DeleteActorTemplateRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.ActorTemplate.FromString,
-                _registered_method=True)
-        self.CreateActorTemplateVersion = channel.unary_unary(
-                '/ateapi.Control/CreateActorTemplateVersion',
-                request_serializer=ateapi__pb2.CreateActorTemplateVersionRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ActorTemplateVersion.FromString,
-                _registered_method=True)
-        self.GetActorTemplateVersion = channel.unary_unary(
-                '/ateapi.Control/GetActorTemplateVersion',
-                request_serializer=ateapi__pb2.GetActorTemplateVersionRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ActorTemplateVersion.FromString,
-                _registered_method=True)
-        self.ListActorTemplateVersions = channel.unary_unary(
-                '/ateapi.Control/ListActorTemplateVersions',
-                request_serializer=ateapi__pb2.ListActorTemplateVersionsRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ListActorTemplateVersionsResponse.FromString,
-                _registered_method=True)
-        self.DeleteActorTemplateVersion = channel.unary_unary(
-                '/ateapi.Control/DeleteActorTemplateVersion',
-                request_serializer=ateapi__pb2.DeleteActorTemplateVersionRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ActorTemplateVersion.FromString,
                 _registered_method=True)
 
 
@@ -339,15 +314,7 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def GetActorTemplate(self, request, context):
-        """Get an ActorTemplate by name.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def UpdateActorTemplate(self, request, context):
-        """Update mutable fields on an existing ActorTemplate.
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -359,40 +326,8 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def DeleteActorTemplate(self, request, context):
-        """Delete an ActorTemplate. Rejects (FailedPrecondition) while any of its
-        ActorTemplateVersions exist.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def CreateActorTemplateVersion(self, request, context):
-        """Create a new ActorTemplateVersion under an existing ActorTemplate
-        (FailedPrecondition if the parent does not exist).
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetActorTemplateVersion(self, request, context):
-        """Get an ActorTemplateVersion by name.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ListActorTemplateVersions(self, request, context):
-        """List ActorTemplateVersions, optionally filtered to one ActorTemplate.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def DeleteActorTemplateVersion(self, request, context):
-        """Delete an ActorTemplateVersion together with its golden actor and golden
-        snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
-        while the version is its parent's default_version_on_create or while any
-        Actor pins it.
+        """Delete an ActorTemplate together with its golden actor and golden
+        snapshot in the ActorTemplate's namespace.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -506,11 +441,6 @@ def add_ControlServicer_to_server(servicer, server):
                     request_deserializer=ateapi__pb2.GetActorTemplateRequest.FromString,
                     response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
             ),
-            'UpdateActorTemplate': grpc.unary_unary_rpc_method_handler(
-                    servicer.UpdateActorTemplate,
-                    request_deserializer=ateapi__pb2.UpdateActorTemplateRequest.FromString,
-                    response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
-            ),
             'ListActorTemplates': grpc.unary_unary_rpc_method_handler(
                     servicer.ListActorTemplates,
                     request_deserializer=ateapi__pb2.ListActorTemplatesRequest.FromString,
@@ -520,26 +450,6 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.DeleteActorTemplate,
                     request_deserializer=ateapi__pb2.DeleteActorTemplateRequest.FromString,
                     response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
-            ),
-            'CreateActorTemplateVersion': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateActorTemplateVersion,
-                    request_deserializer=ateapi__pb2.CreateActorTemplateVersionRequest.FromString,
-                    response_serializer=ateapi__pb2.ActorTemplateVersion.SerializeToString,
-            ),
-            'GetActorTemplateVersion': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetActorTemplateVersion,
-                    request_deserializer=ateapi__pb2.GetActorTemplateVersionRequest.FromString,
-                    response_serializer=ateapi__pb2.ActorTemplateVersion.SerializeToString,
-            ),
-            'ListActorTemplateVersions': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListActorTemplateVersions,
-                    request_deserializer=ateapi__pb2.ListActorTemplateVersionsRequest.FromString,
-                    response_serializer=ateapi__pb2.ListActorTemplateVersionsResponse.SerializeToString,
-            ),
-            'DeleteActorTemplateVersion': grpc.unary_unary_rpc_method_handler(
-                    servicer.DeleteActorTemplateVersion,
-                    request_deserializer=ateapi__pb2.DeleteActorTemplateVersionRequest.FromString,
-                    response_serializer=ateapi__pb2.ActorTemplateVersion.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1121,33 +1031,6 @@ class Control:
             _registered_method=True)
 
     @staticmethod
-    def UpdateActorTemplate(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.Control/UpdateActorTemplate',
-            ateapi__pb2.UpdateActorTemplateRequest.SerializeToString,
-            ateapi__pb2.ActorTemplate.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
     def ListActorTemplates(request,
             target,
             options=(),
@@ -1191,114 +1074,6 @@ class Control:
             '/ateapi.Control/DeleteActorTemplate',
             ateapi__pb2.DeleteActorTemplateRequest.SerializeToString,
             ateapi__pb2.ActorTemplate.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def CreateActorTemplateVersion(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.Control/CreateActorTemplateVersion',
-            ateapi__pb2.CreateActorTemplateVersionRequest.SerializeToString,
-            ateapi__pb2.ActorTemplateVersion.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetActorTemplateVersion(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.Control/GetActorTemplateVersion',
-            ateapi__pb2.GetActorTemplateVersionRequest.SerializeToString,
-            ateapi__pb2.ActorTemplateVersion.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ListActorTemplateVersions(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.Control/ListActorTemplateVersions',
-            ateapi__pb2.ListActorTemplateVersionsRequest.SerializeToString,
-            ateapi__pb2.ListActorTemplateVersionsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def DeleteActorTemplateVersion(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.Control/DeleteActorTemplateVersion',
-            ateapi__pb2.DeleteActorTemplateVersionRequest.SerializeToString,
-            ateapi__pb2.ActorTemplateVersion.FromString,
             options,
             channel_credentials,
             insecure,

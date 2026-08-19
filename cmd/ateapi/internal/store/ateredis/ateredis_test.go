@@ -82,7 +82,7 @@ func TestCreateActor_Success(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 
 	created, err := s.CreateActor(ctx, actor)
@@ -130,7 +130,7 @@ func TestCreateActor_AlreadyExists(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 
 	_, err := s.CreateActor(ctx, actor)
@@ -150,7 +150,7 @@ func newTestActor(name string) *ateapipb.Actor {
 		Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 }
 
@@ -164,7 +164,7 @@ func TestUpdateActor_Success(t *testing.T) {
 
 	actorRef := resources.ActorRefFromActor(actor)
 	updated, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if err != nil {
@@ -173,8 +173,8 @@ func TestUpdateActor_Success(t *testing.T) {
 
 	// UpdateActor returns the stored resource: the mutation applied and version
 	// advanced, with uid and create_time preserved from creation.
-	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("UpdateActor returned status %v, want RUNNING", updated.GetStatus())
+	if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("UpdateActor returned state %v, want RUNNING", updated.GetStatus().GetState())
 	}
 	if updated.GetMetadata().GetVersion() != 2 {
 		t.Errorf("UpdateActor returned version %d, want 2", updated.GetMetadata().GetVersion())
@@ -210,7 +210,7 @@ func TestUpdateActor_MutateErrorAreNotRetried(t *testing.T) {
 	callsToMutateFn := 0
 	_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
 		callsToMutateFn++
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return fmt.Errorf("actor %s: %w", actorRef, mutationError)
 	})
 	// The error must arrive intact
@@ -247,7 +247,7 @@ func TestUpdateActor_DiscardsServerOwnedFieldsEdits(t *testing.T) {
 		toUpdate.Metadata.Version = 99
 		toUpdate.Metadata.CreateTime = nil
 		toUpdate.Metadata.UpdateTime = nil
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if err != nil {
@@ -263,8 +263,8 @@ func TestUpdateActor_DiscardsServerOwnedFieldsEdits(t *testing.T) {
 	if got := updated.GetMetadata().GetCreateTime(); got == nil || !got.AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) {
 		t.Errorf("create_time = %v, want the creation value %v", got, created.GetMetadata().GetCreateTime())
 	}
-	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("status = %v, want RUNNING: discarding metadata edits must not discard the mutation", updated.GetStatus())
+	if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING: discarding metadata edits must not discard the mutation", updated.GetStatus().GetState())
 	}
 }
 
@@ -312,7 +312,7 @@ func TestUpdateActor_RejectsImmutableFieldChange(t *testing.T) {
 			_, err = s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
 				// Paired with a legitimate edit, so the rejection cannot be
 				// mistaken for a no-op mutation.
-				toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 				tt.mutate(toUpdate)
 				return nil
 			})
@@ -386,7 +386,7 @@ func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
 
 	updated, err := racing.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
 		attempts++
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
 	if err != nil {
@@ -395,8 +395,8 @@ func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
 	if attempts < 2 {
 		t.Errorf("mutate ran %d times, want at least 2: the firts write is racey and must be rejected", attempts)
 	}
-	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("status = %v, want RUNNING", updated.GetStatus())
+	if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", updated.GetStatus().GetState())
 	}
 	// 1. The concurrent tx wrote "tier: paid" worker selector. This change should survive instead of
 	// being reverted by a mutation computed against the older state.
@@ -425,7 +425,7 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 	}
 	actorRef := resources.ActorRefFromActor(original)
 	if _, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_DELETING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 		return nil
 	}); err != nil {
 		t.Fatalf("marking actor deleting failed: %v", err)
@@ -448,7 +448,7 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 	}
 	_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(pinUID, func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate ran past its precondition once the pinned incarnation was gone")
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	}))
 	if !errors.Is(err, store.ErrUIDConflict) {
@@ -479,7 +479,7 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 	actorRef := resources.ActorRefFromActor(created)
 
 	if _, err := s.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
@@ -488,7 +488,7 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 	// The write above moved the version, so created is now a stale observation.
 	_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(created, func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate ran past its precondition once the pinned version had moved")
-		toUpdate.Status = ateapipb.Actor_STATUS_SUSPENDED
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		return nil
 	}))
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -666,14 +666,14 @@ func TestDeleteWorker(t *testing.T) {
 func TestDeleteActor(t *testing.T) {
 	tests := []struct {
 		name    string
-		status  ateapipb.Actor_Status
+		state   ateapipb.ActorState
 		wantErr error
 	}{
-		{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED, wantErr: store.ErrFailedPrecondition},
-		{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED, wantErr: store.ErrFailedPrecondition},
-		{name: "deleting", status: ateapipb.Actor_STATUS_DELETING},
-		{name: "running", status: ateapipb.Actor_STATUS_RUNNING, wantErr: store.ErrFailedPrecondition},
-		{name: "paused", status: ateapipb.Actor_STATUS_PAUSED, wantErr: store.ErrFailedPrecondition},
+		{name: "suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, wantErr: store.ErrFailedPrecondition},
+		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, wantErr: store.ErrFailedPrecondition},
+		{name: "deleting", state: ateapipb.ActorState_ACTOR_STATE_DELETING},
+		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantErr: store.ErrFailedPrecondition},
+		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, wantErr: store.ErrFailedPrecondition},
 	}
 
 	for _, tt := range tests {
@@ -684,7 +684,7 @@ func TestDeleteActor(t *testing.T) {
 				Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "test-template",
-				Status:                 tt.status,
+				Status:                 &ateapipb.ActorStatus{State: tt.state},
 			}
 
 			if _, err := s.CreateActor(ctx, actor); err != nil {
@@ -775,15 +775,19 @@ func TestListActors(t *testing.T) {
 		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
+		Status: &ateapipb.ActorStatus{
+			State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
+		},
 	}
 	actor2 := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
+		Status: &ateapipb.ActorStatus{
+			State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
+		},
 	}
 
 	if _, err := s.CreateActor(ctx, actor1); err != nil {
@@ -821,12 +825,14 @@ func TestListActors(t *testing.T) {
 func TestActorSnapshotLifecycle(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	snapshot := &ateapipb.ActorSnapshot{
-		Metadata:           &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
-		SourceActor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
-		SourceActorUid:     "actor-uid",
-		SourceActorVersion: 7,
-		ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-		SnapshotUri:        "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			SourceActor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
+			SourceActorUid:     "actor-uid",
+			SourceActorVersion: 7,
+			ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:        "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+		},
 	}
 	created, err := s.CreateActorSnapshot(ctx, snapshot)
 	if err != nil {
@@ -858,8 +864,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("GetActorSnapshot(resolved tag target) = (%v, %v), want tagged snapshot", byTag, err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
-		SnapshotUri: "gs://bucket/root/snapshots/other/snapshot-2",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/other/snapshot-2"},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot second snapshot: %v", err)
 	}
@@ -910,8 +916,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 func seedTaggedSnapshot(t *testing.T, s *Persistence, ctx context.Context, snapshotName, tagName string) *ateapipb.ActorSnapshotTag {
 	t.Helper()
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
-		SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + snapshotName,
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/" + snapshotName},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(%s) failed: %v", snapshotName, err)
 	}
@@ -1376,7 +1382,7 @@ func TestListActors_Pagination(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 		if _, err := s.CreateActor(ctx, actor); err != nil {
 			t.Fatalf("failed to create actor %d: %v", i, err)
@@ -1775,7 +1781,7 @@ func TestListActors_ScopedByAtespace(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 	}
 	for _, a := range []*ateapipb.Actor{
@@ -1969,8 +1975,8 @@ func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
 		t.Fatalf("CreateAtespace: %v", err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
-		SnapshotUri: "gs://bucket/root/snapshots/team-a/snapshot-1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/root/snapshots/team-a/snapshot-1"},
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
@@ -2012,27 +2018,6 @@ func TestDeleteAtespace_WithActorTemplates_Rejected(t *testing.T) {
 	}
 }
 
-func TestDeleteAtespace_WithActorTemplateVersions_Rejected(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
-		t.Fatalf("CreateAtespace: %v", err)
-	}
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion: %v", err)
-	}
-	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
-		t.Fatalf("DeleteAtespace with versions = %v, want ErrFailedPrecondition", err)
-	}
-
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-		t.Fatalf("DeleteActorTemplateVersion: %v", err)
-	}
-	if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
-		t.Errorf("DeleteAtespace after version removed = %v, want nil", err)
-	}
-}
-
 func TestDeleteAtespace_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
@@ -2047,7 +2032,7 @@ func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
+	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
@@ -2065,7 +2050,7 @@ func TestDeleteAtespace_EmptyAfterActorsRemoved(t *testing.T) {
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_DELETING}); err != nil {
+	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
@@ -2089,7 +2074,7 @@ func TestDeleteAtespace_EmptyWhileOtherAtespaceNonEmpty(t *testing.T) {
 		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 	}
 	// Actor lives ONLY in team-b.
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-b"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
+	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-b"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
@@ -2215,7 +2200,7 @@ func TestListActors_MultiMaster_Pagination(t *testing.T) {
 				},
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "test-template",
-				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			}
 			if _, err := tempS.CreateActor(ctx, actor); err != nil {
 				t.Fatalf("failed to seed actor: %v", err)
@@ -2487,15 +2472,6 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 	return &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name}}
 }
 
-func newTestActorTemplateVersion(atespace, name, template string) *ateapipb.ActorTemplateVersion {
-	return &ateapipb.ActorTemplateVersion{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: template},
-		SandboxConfig: &ateapipb.SandboxConfig{PauseImage: "pause@sha256:abc"},
-		Phase:         &ateapipb.ActorTemplateVersionPhase{Phase: ateapipb.ActorTemplateVersionPhase_PHASE_INITIAL},
-	}
-}
-
 func TestActorTemplateLifecycle(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
@@ -2580,223 +2556,6 @@ func TestActorTemplateExists(t *testing.T) {
 	}
 }
 
-func TestUpdateActorTemplate_Success(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a"))
-	if err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-
-	updated, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("UpdateActorTemplate failed: %v", err)
-	}
-
-	// UpdateActorTemplate returns the stored resource: the mutation applied and
-	// version advanced, with uid and create_time preserved from creation.
-	if got := updated.GetDefaultVersionOnCreate().GetName(); got != "tmpl-a-v1" {
-		t.Errorf("default_version_on_create = %q, want %q", got, "tmpl-a-v1")
-	}
-	if updated.GetMetadata().GetVersion() != 2 {
-		t.Errorf("UpdateActorTemplate returned version %d, want 2", updated.GetMetadata().GetVersion())
-	}
-	if updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
-		t.Errorf("uid changed on update: got %q, want %q", updated.GetMetadata().GetUid(), created.GetMetadata().GetUid())
-	}
-	if !updated.GetMetadata().GetCreateTime().AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) {
-		t.Errorf("create_time changed on update: got %v, want %v", updated.GetMetadata().GetCreateTime().AsTime(), created.GetMetadata().GetCreateTime().AsTime())
-	}
-
-	// The returned resource is exactly what GetActorTemplate reads back.
-	got, err := s.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"})
-	if err != nil {
-		t.Fatalf("GetActorTemplate failed: %v", err)
-	}
-	if diff := cmp.Diff(updated, got, protocmp.Transform()); diff != "" {
-		t.Errorf("UpdateActorTemplate return does not match stored state (-updated +got):\n%s", diff)
-	}
-}
-
-func TestUpdateActorTemplate_MutateErrorsAreNotRetried(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a"))
-	if err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-
-	var mutationError = errors.New("mutation error")
-
-	callsToMutateFn := 0
-	_, err = s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		callsToMutateFn++
-		dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		return fmt.Errorf("template tmpl-a: %w", mutationError)
-	})
-	// The error must arrive intact
-	if !errors.Is(err, mutationError) {
-		t.Errorf("UpdateActorTemplate error = %v, want one wrapping mutationError", err)
-	}
-	// Mutation errors are non-retriable
-	if callsToMutateFn != 1 {
-		t.Errorf("mutate ran %d times, want exactly 1 (a rejected precondition must not be retried)", callsToMutateFn)
-	}
-
-	got, err := s.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"})
-	if err != nil {
-		t.Fatalf("GetActorTemplate failed: %v", err)
-	}
-	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
-		t.Errorf("aborted mutation was persisted (-created +got):\n%s", diff)
-	}
-}
-
-func TestUpdateActorTemplate_DiscardsServerOwnedFieldsEdits(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a"))
-	if err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-
-	updated, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		// Metadata is server-owned: a closure must not be able to change it.
-		dbTemplate.Metadata.Uid = "forged-uid"
-		dbTemplate.Metadata.Version = 99
-		dbTemplate.Metadata.CreateTime = nil
-		dbTemplate.Metadata.UpdateTime = nil
-		dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("UpdateActorTemplate failed: %v", err)
-	}
-
-	if got := updated.GetMetadata().GetUid(); got != created.GetMetadata().GetUid() {
-		t.Errorf("uid = %q, want the server-assigned %q", got, created.GetMetadata().GetUid())
-	}
-	if got := updated.GetMetadata().GetVersion(); got != created.GetMetadata().GetVersion()+1 {
-		t.Errorf("version = %d, want %d (one past the stored version, not the forged value)", got, created.GetMetadata().GetVersion()+1)
-	}
-	if got := updated.GetMetadata().GetCreateTime(); got == nil || !got.AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) {
-		t.Errorf("create_time = %v, want the creation value %v", got, created.GetMetadata().GetCreateTime())
-	}
-	if got := updated.GetDefaultVersionOnCreate().GetName(); got != "tmpl-a-v1" {
-		t.Errorf("default_version_on_create = %q, want %q: discarding metadata edits must not discard the mutation", got, "tmpl-a-v1")
-	}
-}
-
-// TestUpdateActorTemplate_RejectsImmutableFieldChange covers the fields a
-// mutation may not touch. Unlike the server-owned metadata, which is silently
-// restored, these fail the call: a caller that renamed a template asked for
-// something the store cannot do, and must hear about it.
-func TestUpdateActorTemplate_RejectsImmutableFieldChange(t *testing.T) {
-	tests := []struct {
-		name      string
-		mutate    func(dbTemplate *ateapipb.ActorTemplate)
-		wantField string
-	}{
-		{
-			name:      "atespace",
-			mutate:    func(dbTemplate *ateapipb.ActorTemplate) { dbTemplate.Metadata.Atespace = "other-atespace" },
-			wantField: "metadata.atespace",
-		},
-		{
-			name:      "name",
-			mutate:    func(dbTemplate *ateapipb.ActorTemplate) { dbTemplate.Metadata.Name = "other-name" },
-			wantField: "metadata.name",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, s, ctx := setupTest(t)
-			created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a"))
-			if err != nil {
-				t.Fatalf("CreateActorTemplate failed: %v", err)
-			}
-
-			_, err = s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-				// Paired with a legitimate edit, so the rejection cannot be
-				// mistaken for a no-op mutation.
-				dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-				tt.mutate(dbTemplate)
-				return nil
-			})
-			// The message must name the offending field: the closure is buggy,
-			// and whoever has to fix it only has this error to go on.
-			if want := tt.wantField + " is immutable"; err == nil || !strings.Contains(err.Error(), want) {
-				t.Errorf("UpdateActorTemplate changing %s = %v, want an error containing %q", tt.name, err, want)
-			}
-
-			got, err := s.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"})
-			if err != nil {
-				t.Fatalf("GetActorTemplate failed: %v", err)
-			}
-			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
-				t.Errorf("rejected mutation was persisted anyway (-created +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestUpdateActorTemplate_RetriesOnConcurrentWrite(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-
-	// A separate client, so its write lands outside the transaction's connection.
-	otherClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
-	t.Cleanup(func() { otherClient.Close() })
-
-	attempts := 0
-	interceptor := &watchInterceptor{redisClient: s.rdb, before: func() {
-		// Only the first attempt races. We do this to make sure the second retry
-		// will succeed.
-		if attempts > 0 {
-			return
-		}
-		concurrent, err := s.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"})
-		if err != nil {
-			t.Errorf("GetActorTemplate for concurrent write failed: %v", err)
-			return
-		}
-		concurrent.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		val, err := protojson.Marshal(concurrent)
-		if err != nil {
-			t.Errorf("protojson.Marshal failed: %v", err)
-			return
-		}
-		if err := otherClient.Set(ctx, actorTemplateDBKey(resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}), val, 0).Err(); err != nil {
-			t.Errorf("concurrent Set failed: %v", err)
-		}
-	}}
-	racing := &Persistence{rdb: interceptor, lockTTL: defaultLockTTL}
-
-	updated, err := racing.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		attempts++
-		// The template's only mutable field belongs to the concurrent writer
-		// in this test; an empty mutation still exercises the retry path.
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("UpdateActorTemplate failed: %v", err)
-	}
-	if attempts < 2 {
-		t.Errorf("mutate ran %d times, want at least 2: the first write is racey and must be rejected", attempts)
-	}
-	// The concurrent tx wrote default_version_on_create. This change should
-	// survive instead of being reverted by a mutation computed against the
-	// older state.
-	if got := updated.GetDefaultVersionOnCreate().GetName(); got != "tmpl-a-v1" {
-		t.Errorf("default_version_on_create = %q, want %q: the retry clobbered the concurrent write", got, "tmpl-a-v1")
-	}
-}
-
 func TestUpdateActorTemplate_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	_, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "non-existent"}, func(dbTemplate *ateapipb.ActorTemplate) error {
@@ -2808,204 +2567,11 @@ func TestUpdateActorTemplate_NotFound(t *testing.T) {
 	}
 }
 
-func TestUpdateActorTemplate_RejectsStaleVersion(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a"))
-	if err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-	if _, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateActorTemplate failed: %v", err)
-	}
-
-	// created still carries the pre-update version, so the pin is stale.
-	_, err = s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, store.WithPrecondition(created, func(dbTemplate *ateapipb.ActorTemplate) error {
-		t.Error("mutate ran past its precondition once the pinned version had moved")
-		dbTemplate.DefaultVersionOnCreate = nil
-		return nil
-	}))
-	if !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("UpdateActorTemplate error = %v, want one matching store.ErrVersionConflict", err)
-	}
-	// The uid still matches, so this is not the incarnation failure: callers key
-	// their retry decision off the difference.
-	if errors.Is(err, store.ErrUIDConflict) {
-		t.Errorf("UpdateActorTemplate error = %v, want no store.ErrUIDConflict match: the incarnation is unchanged", err)
-	}
-}
-
 func TestDeleteActorTemplate_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	if _, err := s.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "nope"}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestDeleteActorTemplate_HasVersions_Rejected(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-	// A version parented to a DIFFERENT template must not block the delete.
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "tmpl-b-v1", "tmpl-b")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-
-	if _, err := s.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); !errors.Is(err, store.ErrFailedPrecondition) {
-		t.Fatalf("DeleteActorTemplate with versions = %v, want ErrFailedPrecondition", err)
-	}
-	// The template must survive a rejected delete.
-	if _, err := s.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); err != nil {
-		t.Fatalf("template should still exist after rejected delete, got %v", err)
-	}
-
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); err != nil {
-		t.Errorf("DeleteActorTemplate after versions removed = %v, want nil", err)
-	}
-}
-
-func TestActorTemplateVersionLifecycle(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	want := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-	created, err := s.CreateActorTemplateVersion(ctx, want)
-	if err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-	if created.GetMetadata().GetUid() == "" {
-		t.Errorf("CreateActorTemplateVersion returned empty uid; want server-assigned uid")
-	}
-	if created.GetMetadata().GetVersion() != 1 {
-		t.Errorf("CreateActorTemplateVersion returned version %d, want 1", created.GetMetadata().GetVersion())
-	}
-	// The caller-built spec and status are persisted verbatim.
-	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
-		t.Errorf("CreateActorTemplateVersion returned unexpected resource (-want +got):\n%s", diff)
-	}
-
-	got, err := s.GetActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"})
-	if err != nil {
-		t.Fatalf("GetActorTemplateVersion failed: %v", err)
-	}
-	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
-		t.Errorf("CreateActorTemplateVersion return does not match stored state (-created +got):\n%s", diff)
-	}
-
-	deleted, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"})
-	if err != nil {
-		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
-	}
-	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
-		t.Errorf("DeleteActorTemplateVersion returned unexpected resource (-created +deleted):\n%s", diff)
-	}
-	if _, err := s.GetActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("after delete, GetActorTemplateVersion = %v, want ErrNotFound", err)
-	}
-}
-
-func TestCreateActorTemplateVersion_AlreadyExists(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "v1", "tmpl-a")); err != nil {
-		t.Fatalf("first CreateActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "v1", "tmpl-a")); !errors.Is(err, store.ErrAlreadyExists) {
-		t.Errorf("expected ErrAlreadyExists, got %v", err)
-	}
-}
-
-func TestDeleteActorTemplateVersion_IsParentDefault_Rejected(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateActorTemplate failed: %v", err)
-	}
-
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); !errors.Is(err, store.ErrFailedPrecondition) {
-		t.Fatalf("DeleteActorTemplateVersion while default = %v, want ErrFailedPrecondition", err)
-	}
-	// The version must survive a rejected delete.
-	if _, err := s.GetActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-		t.Fatalf("version should still exist after rejected delete, got %v", err)
-	}
-
-	// Clearing the default unblocks the delete.
-	if _, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		dbTemplate.DefaultVersionOnCreate = nil
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateActorTemplate (clear default) failed: %v", err)
-	}
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-		t.Errorf("DeleteActorTemplateVersion after clearing default = %v, want nil", err)
-	}
-}
-
-func TestDeleteActorTemplateVersion_MissingParent_Allowed(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "orphan-v1", "gone")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "orphan-v1"}); err != nil {
-		t.Errorf("DeleteActorTemplateVersion with missing parent = %v, want nil", err)
-	}
-}
-
-func TestDeleteActorTemplateVersion_DeletesGoldenSnapshot(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata:    &ateapipb.ResourceMetadata{Atespace: "ate-golden", Name: "golden-1"},
-		SnapshotUri: "gs://bucket/root/snapshots/ate-golden/golden-1",
-	}); err != nil {
-		t.Fatalf("CreateActorSnapshot failed: %v", err)
-	}
-	version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-	version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}
-	if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.GetActorSnapshot(ctx, "ate-golden", "golden-1"); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("golden snapshot after delete = %v, want ErrNotFound", err)
-	}
-}
-
-func TestDeleteActorTemplateVersion_GoldenSnapshotAlreadyGone(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-	version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "never-created"}
-	if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-		t.Errorf("DeleteActorTemplateVersion with missing golden snapshot = %v, want nil", err)
 	}
 }
 
@@ -3041,74 +2607,6 @@ func TestListActorTemplates_Pagination(t *testing.T) {
 			t.Errorf("duplicate template found in paginated results: %s", tmpl.GetMetadata().GetName())
 		}
 		seen[tmpl.GetMetadata().GetName()] = true
-	}
-}
-
-func TestListActorTemplateVersions_ParentFilter(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	// Interleave versions of two templates.
-	for i := 0; i < 3; i++ {
-		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", fmt.Sprintf("tmpl-a-v%d", i), "tmpl-a")); err != nil {
-			t.Fatalf("failed to create tmpl-a version %d: %v", i, err)
-		}
-	}
-	for i := 0; i < 2; i++ {
-		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", fmt.Sprintf("tmpl-b-v%d", i), "tmpl-b")); err != nil {
-			t.Fatalf("failed to create tmpl-b version %d: %v", i, err)
-		}
-	}
-
-	unfiltered, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{}, store.ListOptions{PageSize: 1000})
-	if err != nil {
-		t.Fatalf("ListActorTemplateVersions(all) failed: %v", err)
-	}
-	if len(unfiltered.Items) != 5 {
-		t.Fatalf("unfiltered list returned %d versions, want 5", len(unfiltered.Items))
-	}
-
-	// Filtered list, paged with a small page size to exercise the
-	// matched-count pagination semantics.
-	var filtered []*ateapipb.ActorTemplateVersion
-	pageToken := ""
-	for {
-		page, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, store.ListOptions{PageSize: 2, PageToken: pageToken})
-		if err != nil {
-			t.Fatalf("ListActorTemplateVersions(tmpl-a) failed: %v", err)
-		}
-		filtered = append(filtered, page.Items...)
-		pageToken = page.NextPageToken
-		if pageToken == "" {
-			break
-		}
-	}
-
-	if len(filtered) != 3 {
-		t.Fatalf("filtered list returned %d versions, want 3", len(filtered))
-	}
-	seen := make(map[string]bool)
-	for _, v := range filtered {
-		if v.GetActorTemplate().GetName() != "tmpl-a" {
-			t.Errorf("filtered list returned version %q of template %q", v.GetMetadata().GetName(), v.GetActorTemplate().GetName())
-		}
-		if seen[v.GetMetadata().GetName()] {
-			t.Errorf("duplicate version found in paginated results: %s", v.GetMetadata().GetName())
-		}
-		seen[v.GetMetadata().GetName()] = true
-	}
-
-	// The filter matches the parent's atespace too: scanning all atespaces
-	// with team-a's tmpl-a must not pick up team-b versions whose parent
-	// merely shares the name.
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-b", "tmpl-a-v0", "tmpl-a")); err != nil {
-		t.Fatalf("failed to create team-b version: %v", err)
-	}
-	crossAtespace, err := s.ListActorTemplateVersions(ctx, "", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, store.ListOptions{PageSize: 1000})
-	if err != nil {
-		t.Fatalf("ListActorTemplateVersions(all atespaces, team-a/tmpl-a) failed: %v", err)
-	}
-	if len(crossAtespace.Items) != 3 {
-		t.Errorf("cross-atespace filtered list returned %d versions, want 3: team-b/tmpl-a versions must not match", len(crossAtespace.Items))
 	}
 }
 
@@ -3184,55 +2682,5 @@ func TestListActorTemplates_AtespaceFilter(t *testing.T) {
 	}
 	if len(allResp.Items) != 3 {
 		t.Errorf("ListActorTemplates(all) returned %d templates, want 3", len(allResp.Items))
-	}
-}
-
-func TestActorTemplateVersions_AtespaceIsolation(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "tmpl-v1", "tmpl")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion in team-a failed: %v", err)
-	}
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-b", "tmpl-v1", "tmpl")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion in team-b = %v, want nil: the name is only taken in team-a", err)
-	}
-
-	// The wrong atespace is a clean NotFound, not an internal error.
-	if _, err := s.GetActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-c", Name: "tmpl-v1"}); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetActorTemplateVersion(team-c) = %v, want ErrNotFound", err)
-	}
-
-	// Versions of the same-named parent list per atespace.
-	scopedResp, err := s.ListActorTemplateVersions(ctx, "team-a", resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl"}, store.ListOptions{PageSize: 1000})
-	if err != nil {
-		t.Fatalf("ListActorTemplateVersions(team-a, tmpl) failed: %v", err)
-	}
-	scoped := scopedResp.Items
-	if len(scoped) != 1 || scoped[0].GetMetadata().GetAtespace() != "team-a" {
-		t.Errorf("ListActorTemplateVersions(team-a, tmpl) = %v, want team-a's tmpl-v1 only", scoped)
-	}
-
-	// Deleting in one atespace leaves the other's untouched.
-	if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-v1"}); err != nil {
-		t.Fatalf("DeleteActorTemplateVersion(team-a) failed: %v", err)
-	}
-	if _, err := s.GetActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-b", Name: "tmpl-v1"}); err != nil {
-		t.Errorf("GetActorTemplateVersion(team-b) after deleting team-a's = %v, want nil", err)
-	}
-}
-
-func TestDeleteActorTemplate_VersionInOtherAtespace_NotBlocking(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplate failed: %v", err)
-	}
-	// A version of a same-named template in ANOTHER atespace must not block
-	// the delete.
-	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-b", "tmpl-a-v1", "tmpl-a")); err != nil {
-		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-	}
-	if _, err := s.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); err != nil {
-		t.Errorf("DeleteActorTemplate = %v, want nil: the only version lives in team-b", err)
 	}
 }

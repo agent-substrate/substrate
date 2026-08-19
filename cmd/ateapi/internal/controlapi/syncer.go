@@ -424,9 +424,9 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 }
 
 // releaseActorOnDeadWorker resets the actor bound to a vanishing worker pod. An
-// actor that already reached STATUS_SUSPENDED (it saved its state cleanly during
+// actor that already reached ACTOR_STATE_SUSPENDED (it saved its state cleanly during
 // graceful termination) is left untouched and remains resumable. An actor that
-// was still running when the pod disappeared is moved to STATUS_CRASHED and its
+// was still running when the pod disappeared is moved to ACTOR_STATE_CRASHED and its
 // pod pointers are cleared.
 //
 // UpdateActor uses optimistic version checking. A concurrent SuspendActor
@@ -455,36 +455,36 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 		return nil
 	}
 	// Skip if a concurrent SuspendActor already cleared the pointer.
-	assignment := actor.GetWorkerAssignment()
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment.GetWorkerNamespace() != namespace || assignment.GetWorkerPod() != podName {
 		return nil
 	}
 	// If the actor is suspended, it's already been released.
-	if actor.Status == ateapipb.Actor_STATUS_SUSPENDED {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		return nil
 	}
 	opName := ateattr.OperationUnknown
-	switch actor.GetStatus() {
-	case ateapipb.Actor_STATUS_RESUMING:
+	switch actor.GetStatus().GetState() {
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
 		opName = ateattr.OperationResume
-	case ateapipb.Actor_STATUS_SUSPENDING:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 		opName = ateattr.OperationSuspend
-	case ateapipb.Actor_STATUS_PAUSING:
+	case ateapipb.ActorState_ACTOR_STATE_PAUSING:
 		opName = ateattr.OperationPause
 	}
 
-	wasAlreadyCrashed := actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
+	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
 	_, err = s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_CRASHED
-		toUpdate.WorkerAssignment = nil
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		toUpdate.Status.WorkerAssignment = nil
 		// Both in-progress checkpoints die with the worker: the durable one was
 		// never uploaded, the local one lived on the node that went away.
-		toUpdate.InProgressSnapshotName = ""
-		toUpdate.InProgressLocalSnapshotName = ""
+		toUpdate.Status.InProgressSnapshotName = ""
+		toUpdate.Status.InProgressLocalSnapshotName = ""
 		return nil
 	}))
 

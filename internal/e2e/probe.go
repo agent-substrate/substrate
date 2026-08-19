@@ -15,23 +15,19 @@
 package e2e
 
 import (
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-const (
-	// ProbeNamespace and ProbeName identify the shared probe fixture's
-	// WorkerPool and ActorTemplate.
-	ProbeNamespace = "ate-e2e-probe"
-	ProbeName      = "probe"
-)
+// ProbeName is the name of the probe fixture's WorkerPool and ActorTemplate,
+// inside the namespace DeployProbe returns.
+const ProbeName = "probe"
 
-// DeployProbe builds the probe fixture image and applies its manifests,
-// removing them when the test ends. A suite that needs the probe calls this
-// rather than assuming a previous run left it behind.
-func DeployProbe(t *testing.T, bucket string) {
+// DeployProbe builds the probe fixture image and applies its manifest for the
+// sandbox class under test, removing it when the test ends. It returns the
+// fixture's namespace. A suite that needs the probe calls this rather than
+// assuming a previous run left it behind.
+func DeployProbe(t *testing.T, bucket string) string {
 	t.Helper()
 
 	root, err := FindRepoRoot()
@@ -39,24 +35,9 @@ func DeployProbe(t *testing.T, bucket string) {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
 
-	// E2E_SANDBOX_CLASS selects the probe manifest variant; suites copy the
-	// probe's runtime, so this is what runs a suite on gVisor or micro-VM.
-	tmplName := "probe.yaml.tmpl"
-	if os.Getenv("E2E_SANDBOX_CLASS") == "microvm" {
-		tmplName = "probe-microvm.yaml.tmpl"
-	}
-
-	// Render the manifest to a file so both apply and delete can consume it
-	// without any shell involved.
-	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/probe", tmplName))
-	if err != nil {
-		t.Fatalf("reading probe manifest template: %v", err)
-	}
-	manifest := filepath.Join(t.TempDir(), "probe.yaml")
-	rendered := strings.ReplaceAll(string(tmpl), "${BUCKET_NAME}", bucket)
-	if err := os.WriteFile(manifest, []byte(rendered), 0o644); err != nil {
-		t.Fatalf("writing rendered probe manifest: %v", err)
-	}
+	// One manifest, rendered for the sandbox class under test, so both apply
+	// and delete consume the same file without any shell involved.
+	manifest := RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe.yaml.tmpl", bucket)
 
 	// Build/push the probe image and apply through the repo's pinned ko; CI
 	// does not install ko on PATH. The trailing `-- --context=...` mirrors
@@ -81,4 +62,6 @@ func DeployProbe(t *testing.T, bucket string) {
 		}
 		RunCmd(t, "kubectl", delArgs...)
 	})
+
+	return FixtureName("ate-e2e-probe")
 }

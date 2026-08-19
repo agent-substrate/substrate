@@ -79,9 +79,8 @@ Ingress and egress are deployed separately today — `atenet-router` fronts the
 ingress dataplane, `atenet-egress` the egress gateway — because the two scale
 independently, not because they need separate binaries.
 
-The `--atenet-router` choice only applies to the ingress dataplane. The egress
-gateway is its own Deployment with a statically configured Envoy, so
-`--atenet-router=agentgateway` leaves it untouched.
+`--atenet-router` selects the dataplane for both Deployments. Each gateway has
+its own static configuration because ingress and egress scale independently.
 
 ## status page
 

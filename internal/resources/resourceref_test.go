@@ -26,9 +26,8 @@ import (
 // is expected.
 func TestRefAliasesAreDistinctTypes(t *testing.T) {
 	types := map[string]reflect.Type{
-		"ActorRef":                reflect.TypeFor[ActorRef](),
-		"ActorTemplateRef":        reflect.TypeFor[ActorTemplateRef](),
-		"ActorTemplateVersionRef": reflect.TypeFor[ActorTemplateVersionRef](),
+		"ActorRef":         reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef": reflect.TypeFor[ActorTemplateRef](),
 	}
 	seen := make(map[reflect.Type]string)
 	for name, typ := range types {
@@ -171,51 +170,6 @@ func TestActorTemplateRefFromActorTemplate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ActorTemplateRefFromActorTemplate(tt.template); got != tt.want {
 				t.Errorf("ActorTemplateRefFromActorTemplate() = %+v, want %+v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestActorTemplateVersionRefString(t *testing.T) {
-	got := ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-1-v1"}.String()
-	if want := "team-a/tmpl-1-v1"; got != want {
-		t.Errorf("String() = %q, want %q", got, want)
-	}
-}
-
-func TestActorTemplateVersionRefObjectRefRoundTrip(t *testing.T) {
-	versionRef := ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-1-v1"}
-
-	obj := versionRef.ToObjectRef()
-	if obj.GetAtespace() != "team-a" || obj.GetName() != "tmpl-1-v1" {
-		t.Errorf("ToObjectRef() = (%q, %q), want (team-a, tmpl-1-v1)", obj.GetAtespace(), obj.GetName())
-	}
-	if got := ActorTemplateVersionRefFromObjectRef(obj); got != versionRef {
-		t.Errorf("round-trip = %+v, want %+v", got, versionRef)
-	}
-}
-
-func TestActorTemplateVersionRefFromActorTemplateVersion(t *testing.T) {
-	tests := []struct {
-		name    string
-		version *ateapipb.ActorTemplateVersion
-		want    ActorTemplateVersionRef
-	}{
-		{
-			name: "populated",
-			version: &ateapipb.ActorTemplateVersion{Metadata: &ateapipb.ResourceMetadata{
-				Atespace: "team-a",
-				Name:     "tmpl-1-v1",
-			}},
-			want: ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-1-v1"},
-		},
-		{"nil version", nil, ActorTemplateVersionRef{}},
-		{"nil metadata", &ateapipb.ActorTemplateVersion{}, ActorTemplateVersionRef{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ActorTemplateVersionRefFromActorTemplateVersion(tt.version); got != tt.want {
-				t.Errorf("ActorTemplateVersionRefFromActorTemplateVersion() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

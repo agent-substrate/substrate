@@ -56,10 +56,7 @@ const (
 	deletedName = "deleted.txt"
 )
 
-const (
-	probeNamespace = e2e.ProbeNamespace
-	probeName      = e2e.ProbeName
-)
+const probeName = e2e.ProbeName
 
 // tarLayer builds a layer from a set of paths to contents. A path whose base
 // name starts with ".wh." is an OCI whiteout for the same-named lower path.
@@ -140,7 +137,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	}
 
 	// The probe supplies this suite's container image and resolved runtime.
-	e2e.DeployProbe(t, env["BUCKET_NAME"])
+	probeNamespace := e2e.DeployProbe(t, env["BUCKET_NAME"])
 
 	srcPool, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(probeNamespace).Get(ctx, probeName, metav1.GetOptions{})
 	if err != nil {

@@ -230,7 +230,7 @@ store (currently ValKey/Redis) to support real-time operations.
 
   * **Actor**: A specific instance of an ActorTemplate. An Actor record tracks
     its globally unique identifier, physical location (Worker IP), current
-    status (RUNNING or SUSPENDED), and version-specific state metadata.
+    state (RUNNING or SUSPENDED), and version-specific state metadata.
 
   * **Worker**: A representation of a worker pod in the WorkerPool. It tracks
     the worker's unique identifier, current status (IDLE or BUSY), and the
@@ -395,7 +395,7 @@ sequenceDiagram
     Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
 ```
 
-An Actor's `status` moves through these states (UML state machine diagram):
+An Actor's `state` moves through these states (UML state machine diagram):
 
 ```mermaid
 stateDiagram-v2
@@ -416,8 +416,8 @@ stateDiagram-v2
 A user or framework calls `CreateActor` with a unique ID and a reference to an
 `ActorTemplate`.
 
-  * **Status**: The actor is registered in the database with status
-    `STATUS_SUSPENDED`.
+  * **State**: The actor is registered in the database with state
+    `ACTOR_STATE_SUSPENDED`.
 
   * **State**: The record is initialized in the database with the metadata and
     **Golden Snapshot** (Version 0) reference derived from the associated
@@ -436,7 +436,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
 
   3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden `ActorSnapshot` (for first-run) or the Actor's latest `ActorSnapshot` (for recurring runs) into the sandbox.
 
-  4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
+  4. **State**: State transitions to `ACTOR_STATE_RUNNING`. The actor now has an
      active Worker IP.
 
   5. **Response**: The Control Plane returns the worker assignment to the
@@ -453,7 +453,7 @@ Triggered by an explicit `SuspendActor` call.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
-  4. **Status**: Status transitions back to `STATUS_SUSPENDED`, now pointing to
+  4. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, now pointing to
      an immutable `ActorSnapshot` resource and references it for future resumptions.
 
 Snapshots may be given tags owned and addressed by an Atespace. The same tag
@@ -464,7 +464,7 @@ including published tags, but leaves snapshot cleanup to garbage collection.
 
 ### Phase 4: Deletion
 
-Actors in `STATUS_SUSPENDED` status can be deleted from the Control Plane.
+Actors in `ACTOR_STATE_SUSPENDED` state can be deleted from the Control Plane.
 After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage
 collected. The garbage collection process is not implemented yet.
 

@@ -20,7 +20,7 @@
 #     LOCUST_NO_GLUTTON_USER=1 prevents tests/glutton.py from declaring the
 #     stub User on this worker so GluttonUser spawns are owned exclusively
 #     by the boomer container.
-#   * boomer-glutton: Go re-implementation of GluttonUser. Connects to the
+#   * boomer-glutton: Go re-implementation of GluttonUser and DurdirUser. Connects to the
 #     master at localhost:5557 via the locust worker ZMQ protocol; exposes
 #     its own per-worker diagnostics at /metrics on :8001 (aggregate stats
 #     flow through the master via boomer.RecordSuccess).
@@ -52,7 +52,7 @@ spec:
         - "-m"
         - "locust"
         - "-f"
-        - "/app/tests/glutton.py"
+        - "/app/tests/${BENCHMARK_USER_CLASS}.py"
         - "--master"
         - "--master-bind-host=0.0.0.0"
         env:
@@ -134,6 +134,7 @@ spec:
         # are honored. The endpoint is served by
         # benchmarking/locust/common/boomer_config.py on the master.
         - "--master-web-port=8089"
+        - "--user-class=${BENCHMARK_USER_CLASS}"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317

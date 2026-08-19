@@ -38,15 +38,17 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:   ateapipb.Actor_STATUS_RUNNING,
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			WorkerNamespace: "ns",
-			WorkerPool:      "pool",
-			WorkerPod:       "pod",
-			WorkerPodUid:    "uid",
-			WorkerPodIp:     "1.2.3.4",
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "ns",
+				WorkerPool:      "pool",
+				WorkerPod:       "pod",
+				WorkerPodUid:    "uid",
+				WorkerPodIp:     "1.2.3.4",
+			},
+			InProgressSnapshotName: "reserved-snapshot",
 		},
-		InProgressSnapshotName: "reserved-snapshot",
 	}); err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}
@@ -85,9 +87,11 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:                 ateapipb.Actor_STATUS_RUNNING,
-		InProgressSnapshotName: "reserved-snapshot",
+		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			InProgressSnapshotName: "reserved-snapshot",
+		},
 	}); err != nil {
 		t.Fatalf("seed unbound actor: %v", err)
 	}
@@ -101,15 +105,15 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 	if err != nil {
 		t.Fatalf("GetActor(%v) = %v, want nil", actorRef, err)
 	}
-	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
-		t.Errorf("status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if got.GetInProgressSnapshotName() == "" {
+	if got.GetStatus().GetInProgressSnapshotName() == "" {
 		t.Error(`InProgressSnapshotName = "", want preserved`)
 	}
-	if got.GetWorkerAssignment() != nil {
-		t.Errorf("WorkerAssignment = %v, want cleared", got.GetWorkerAssignment())
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want cleared", got.GetStatus().GetWorkerAssignment())
 	}
 }
 
@@ -349,7 +353,7 @@ func TestMaybeCrashActor(t *testing.T) {
 				if gerr != nil {
 					t.Fatalf("GetActor() = %v, want nil", gerr)
 				}
-				if got.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
+				if got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					t.Errorf("status = CRASHED, want it unchanged")
 				}
 			},
@@ -373,7 +377,7 @@ func TestMaybeCrashActor(t *testing.T) {
 				if gerr != nil {
 					t.Fatalf("GetActor() = %v, want nil", gerr)
 				}
-				if got.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
+				if got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					t.Errorf("status = CRASHED, want it unchanged")
 				}
 			},
@@ -431,13 +435,15 @@ func TestCrashActor_Metrics(t *testing.T) {
 		},
 		ActorTemplateNamespace: "demo-ns",
 		ActorTemplateName:      "counter-template",
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			WorkerNamespace: "demo-ns",
-			WorkerPool:      "pool-1",
-			WorkerPod:       "pod-1",
-			WorkerPodUid:    "pod-uid-1",
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "demo-ns",
+				WorkerPool:      "pool-1",
+				WorkerPod:       "pod-1",
+				WorkerPodUid:    "pod-uid-1",
+			},
 		},
-		Status: ateapipb.Actor_STATUS_RUNNING,
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
@@ -533,10 +539,10 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	if gerr != nil {
 		t.Fatalf("GetActor() = %v, want nil", gerr)
 	}
-	if got.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
-	if got.GetWorkerAssignment() == nil {
+	if got.GetStatus().GetWorkerAssignment() == nil {
 		t.Error("WorkerAssignment cleared, want preserved so the release can be retried")
 	}
 

@@ -508,3 +508,45 @@ message DeleteOptions {
 - If the client omits a guard (the proto3 zero value): skip that check.
 
 Both guards are always **optional** from the client's perspective: a client that omits `version` and `uid` gets last-writer-wins, and the server does not require either.
+
+---
+
+## 8. Resource Status: Output-Only Fields
+
+Every resource separates **user-controlled** fields from **server-managed (output-only)** fields at the top level. User-controlled fields are set by the caller at `Create` and/or `Update` time and stay directly on the resource message, alongside `metadata`.
+Output-only fields **must** be grouped into a single nested message field named `status`.
+
+```proto
+message Actor {
+  // Common resource metadata: atespace, name, and other standard fields (see section #6).
+  ResourceMetadata metadata = 1;
+
+  // worker_selector is caller-specified: user-controlled, stays top-level.
+  Selector worker_selector = 5;
+
+  // Server-managed state. Absent from Create/Update request payloads.
+  ActorStatus status = 7;
+}
+
+enum ActorState {
+  ACTOR_STATE_UNSPECIFIED = 0;
+  ACTOR_STATE_RUNNING = 1;
+  ACTOR_STATE_SUSPENDED = 2;
+  // ...
+}
+
+message ActorStatus {
+  ActorState state = 1;
+
+  // worker_assignment points at the worker currently hosting this Actor.
+  WorkerAssignment worker_assignment = 2;
+
+  // ... other server-managed fields
+}
+```
+
+Rules:
+- Output-only fields **must not** appear as top-level fields on the resource. They **must** be grouped under a single `status` field of type `{Resource}Status`.
+- A resource with no output-only fields needs no `status` field.
+- Fields inside `status` follow the same naming rules as any other field (section #5).
+- `ResourceMetadata` (section #6) is exempt from this split. It mixes caller-specified identity (`atespace`, `name`) with server-managed fields (`uid`, `version`, timestamps).

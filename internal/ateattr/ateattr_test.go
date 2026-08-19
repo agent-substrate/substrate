@@ -243,9 +243,11 @@ func TestActorMetricAttributes(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "counter-template",
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			WorkerNamespace: "ate-workers",
-			WorkerPool:      "default-pool",
+		Status: &ateapipb.ActorStatus{
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "ate-workers",
+				WorkerPool:      "default-pool",
+			},
 		},
 	}
 
