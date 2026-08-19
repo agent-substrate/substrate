@@ -145,7 +145,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    dns_lookup_family: AUTO
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -182,7 +182,7 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: AUTO
 ---
 apiVersion: apps/v1
 kind: Deployment

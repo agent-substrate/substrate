@@ -236,7 +236,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    dns_lookup_family: AUTO
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -323,7 +323,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    dns_lookup_family: AUTO
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -410,7 +410,7 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: AUTO
         # The MITM must not weaken upstream authentication. Envoy decrypted the
         # actor's TLS with a leaf of its own; it still sends the real SNI here
         # and still validates the real origin's certificate against the public
@@ -453,7 +453,7 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: AUTO
             # Envoy refuses to build a dynamic forward proxy cluster without
             # auto_sni and auto_san_validation unless this is set, because for
             # the usual TLS case resolving the host from a header and then not
