@@ -28,7 +28,7 @@ import (
 // These tests therefore need no actor fixture — they are asserting the zone's
 // behavior, not an actor's.
 func probeActorDNSName() string {
-	return resources.ActorRef{Atespace: networkingAtespace, Name: "dns-probe"}.DNSName()
+	return resources.ActorDNSName(resources.ActorRef{Atespace: networkingAtespace, Name: "dns-probe"})
 }
 
 func mustDNSClient(t *testing.T, ctx context.Context) *e2e.DNSClient {
