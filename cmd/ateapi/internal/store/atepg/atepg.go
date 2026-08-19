@@ -462,13 +462,6 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 		WHERE t.atespace = $1 AND t.name = $2
 		RETURNING t.proto`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		exists, existsErr := p.ActorTemplateExists(ctx, templateRef)
-		if existsErr != nil {
-			return nil, existsErr
-		}
-		if exists {
-			return nil, store.ErrFailedPrecondition
-		}
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
