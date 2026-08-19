@@ -42,11 +42,28 @@ func buildTemplate() string {
 	// Construct match pattern for <ActorName>.<atespace>.<dnsDomain>. Both the
 	// actor name and the atespace are DNS-1123 labels (same regex).
 	directives = append(directives, fmt.Sprintf("template IN A %s {", resources.ActorDNSSuffix))
-	// Escape the suffix's dots so they match literally; the final \. matches the FQDN's trailing dot.
+	// Escape the suffix's dots so they match literally; the final \\. matches the FQDN's trailing dot.
 	escapedSuffix := strings.ReplaceAll(resources.ActorDNSSuffix, ".", `\.`)
 	directives = append(directives, fmt.Sprintf(`  match "^%s\.%s\.%s\.$"`, resources.ResourceNameRegexPattern, resources.ResourceNameRegexPattern, escapedSuffix))
 	// Note the %s -- this will be filled with the router IP.
 	directives = append(directives, `  answer "{{ .Name }} 60 IN A %s"`)
+	directives = append(directives, "}")
+
+	// Non-A queries for valid actor names must return NODATA (NOERROR with an
+	// empty answer section), not SERVFAIL. CoreDNS's template plugin returns
+	// SERVFAIL when a template's zone matches a query name but no template
+	// block matches the query type (see plugin/template README: "Without
+	// fallthrough, when the template's ZONE matches a query but no regex match
+	// then a SERVFAIL response is returned"). Strict POSIX resolvers query A
+	// and AAAA in parallel and treat SERVFAIL as a hard failure, breaking
+	// intra-cluster resolution for actor images that don't have AAAA records.
+	//
+	// template IN ANY matches every type, and specifying no answer results in
+	// a response with an empty answer section and the default rcode NOERROR —
+	// exactly the NODATA response RFC 8020 expects for a name that exists but
+	// has no records of the requested type.
+	directives = append(directives, fmt.Sprintf("template IN ANY %s {", resources.ActorDNSSuffix))
+	directives = append(directives, fmt.Sprintf(`  match "^%s\.%s\.%s\.$"`, resources.ResourceNameRegexPattern, resources.ResourceNameRegexPattern, escapedSuffix))
 	directives = append(directives, "}")
 
 	// Generate the template.

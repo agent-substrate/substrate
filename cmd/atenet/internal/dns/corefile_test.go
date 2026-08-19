@@ -40,6 +40,8 @@ func TestMakeCoreFile(t *testing.T) {
 				"template IN A actors.resources.substrate.ate.dev {",
 				`match "^` + resources.ResourceNameRegexPattern + `\.` + resources.ResourceNameRegexPattern + `\.actors\.resources\.substrate\.ate\.dev\.$"`,
 				`answer "{{ .Name }} 60 IN A 10.240.0.10"`,
+				// Non-A queries must return NODATA, not SERVFAIL.
+				"template IN ANY actors.resources.substrate.ate.dev {",
 			},
 		},
 		{
