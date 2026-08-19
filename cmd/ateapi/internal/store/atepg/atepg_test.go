@@ -40,6 +40,7 @@ import (
 var (
 	containerOnce sync.Once
 	containerPool *pgxpool.Pool
+	containerDSN  string
 	containerPG   *postgres.PostgresContainer
 	containerErr  error
 )
@@ -79,6 +80,7 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 			containerErr = err
 			return
 		}
+		containerDSN = dsn
 		pool, err := pgxpool.New(ctx, dsn)
 		if err != nil {
 			containerErr = err
@@ -125,6 +127,53 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 func setupPostgresStore(t *testing.T) store.Interface {
 	t.Helper()
 	return setupPostgresPersistence(t)
+}
+
+// TestConnect_DedicatedWatchPool covers the dual-pool path only Connect
+// takes (the rest of the suite uses NewPersistence, where feed traffic
+// shares the caller's pool): the watch pool must be distinct and owned, and
+// the watch must deliver through it end to end.
+func TestConnect_DedicatedWatchPool(t *testing.T) {
+	requirePool(t) // ensures the container is up and containerDSN is set
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+
+	if p.watchPool == p.pool {
+		t.Fatal("Connect did not create a dedicated watch pool")
+	}
+	if !p.ownsWatchPool {
+		t.Fatal("Connect must own the watch pool so Close releases it")
+	}
+	if got := p.watchPool.Config().MaxConns; got != watchPoolMaxConns {
+		t.Fatalf("watch pool MaxConns = %d, want %d", got, watchPoolMaxConns)
+	}
+
+	if err := p.DebugClearAll(ctx); err != nil {
+		t.Fatalf("DebugClearAll failed: %v", err)
+	}
+	watch, err := p.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+	defer watch.Close()
+	worker := &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "watchpool-pod"}
+	if err := p.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	select {
+	case event := <-watch.Events:
+		if event.Type != store.WorkerEventCreated || event.Worker.GetWorkerPod() != "watchpool-pod" {
+			t.Fatalf("unexpected event %v %s", event.Type, event.Worker.GetWorkerPod())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for event through the watch pool")
+	}
 }
 
 func newTestAtespace(name string) *ateapipb.Atespace {

@@ -41,8 +41,24 @@ import (
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
+// watchPoolMaxConns sizes the dedicated change-feed watch pool: one connection
+// for the WatchWorkers poller, and one for the maintenance loop. It is kept
+// separate so background polling never starves the main pool of connections
+// needed for foreground writes. MinConns keeps the poller's connection warm.
+const (
+	watchPoolMaxConns = 2
+	watchPoolMinConns = 1
+)
+
 type Persistence struct {
-	pool            *pgxpool.Pool
+	pool *pgxpool.Pool
+	// watchPool serves the change-feed side only: the WatchWorkers pollers
+	// and the partition-maintenance loop. Connect gives it a small dedicated
+	// pool; NewPersistence (tests, callers owning a single pool) aliases it
+	// to pool.
+	watchPool        *pgxpool.Pool
+	ownsWatchPool    bool
+	ownsWatchPool    bool
 	lockTTL         time.Duration
 	stopMaintenance context.CancelFunc
 	maintenanceDone chan struct{}
@@ -51,7 +67,13 @@ type Persistence struct {
 var _ store.Interface = (*Persistence)(nil)
 
 // Connect opens a pgxpool against dsn, verifies connectivity, and applies the
-// embedded schema. Startup fails if the database cannot be reached.
+// embedded schema. Startup fails if the database cannot be reached. A second,
+// two-connection watch pool (owned by the Persistence, closed by Close) isolates
+// change-feed polling and maintenance from write traffic.
+// Connect opens a pgxpool against dsn, verifies connectivity, and applies the
+// embedded schema. Startup fails if the database cannot be reached. A second,
+// two-connection watch pool (owned by the Persistence, closed by Close) isolates
+// change-feed polling and maintenance from write traffic.
 func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -61,23 +83,43 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
 	}
-	p, err := NewPersistence(ctx, pool)
+
+	watchCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("parsing watch pool config: %w", err)
+	}
+	watchCfg.MaxConns = watchPoolMaxConns
+	watchCfg.MinConns = watchPoolMinConns
+	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
+	}
+
+	p, err := newPersistence(ctx, pool, watchPool)
+	if err != nil {
+		watchPool.Close()
 		pool.Close()
 		return nil, err
 	}
+	p.ownsWatchPool = true
 	return p, nil
 }
 
 // NewPersistence wraps an already-open pool, applying the idempotent schema.
-// Callers that already hold a pool (e.g. tests using
-// testcontainers) use this directly instead of Connect.
+// Callers that already hold a pool (e.g. tests using testcontainers) use
+// this directly instead of Connect; feed traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
+	return newPersistence(ctx, pool, pool)
+}
+
+func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
 	if err := applySchema(ctx, pool); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
-	p := &Persistence{pool: pool, lockTTL: defaultLockTTL, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	p := &Persistence{pool: pool, watchPool: watchPool, lockTTL: defaultLockTTL, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
 	// Cover the partition lead before accepting writes; from then on the
 	// maintenance loop keeps partitions ahead of the clock (and the
 	// DEFAULT partition catches writes if it ever falls behind).
@@ -92,11 +134,15 @@ func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, erro
 	return p, nil
 }
 
-// Close stops the change-feed maintenance loop and waits for it to exit.
-// It does not close the pool, which the caller owns.
+// Close stops the change-feed maintenance loop and waits for it to exit,
+// then closes the watch pool if Connect created one. It does not close the
+// main pool, which the caller owns.
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
+	if p.ownsWatchPool {
+		p.watchPool.Close()
+	}
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
@@ -1346,7 +1392,7 @@ func (p *Persistence) maintainWorkerChangesPartitions(ctx context.Context) error
 		return err
 	}
 
-	tx, err := p.pool.Begin(ctx)
+	tx, err := p.watchPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning feed retention transaction: %w", err)
 	}
@@ -1398,7 +1444,7 @@ func changeFeedPartitionLeadTimes(now time.Time) []time.Time {
 
 // createWorkerChangesPartitions idempotently creates the feed partitions covering the given instants.
 func (p *Persistence) createWorkerChangesPartitions(ctx context.Context, instants ...time.Time) error {
-	tx, err := p.pool.Begin(ctx)
+	tx, err := p.watchPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning feed partition transaction: %w", err)
 	}
@@ -1524,7 +1570,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	// past garbage collection isn't mistaken for events lost during this watch.
 	// Xids are passed as decimal strings end-to-end; all ordering happens in SQL.
 	var cursorXid, baselineXid, baselineStart string
-	if err := p.pool.QueryRow(watchCtx, `
+	if err := p.watchPool.QueryRow(watchCtx, `
 		SELECT (pg_snapshot_xmin(pg_current_snapshot())::text::numeric - 1)::text,
 		       GREATEST(
 		           COALESCE((SELECT xid FROM worker_changes ORDER BY xid DESC LIMIT 1), '0'::xid8),
@@ -1553,7 +1599,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 				b := &pgx.Batch{}
 				b.Queue(pollWorkerChangesSQL, cursorXid, changeFeedBatch)
 				b.Queue(pollSafetySQL, cursorXid, baselineXid)
-				br := p.pool.SendBatch(watchCtx, b)
+				br := p.watchPool.SendBatch(watchCtx, b)
 
 				type feedRow struct {
 					xid     string
