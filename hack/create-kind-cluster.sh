@@ -248,11 +248,32 @@ if [[ "${IP_FAMILY}" == "ipv6" ]]; then
   echo "Verifying DNS from a pod..."
   # Markers, not the exit status: --attach returns only the last leg's.
   # PROBE_RAN separates a failed leg from a pod that never ran -- a different fix.
-  probe="$(kubectl --context="${KUBECTL_CONTEXT}" run "coredns-probe-$$" \
-    --rm --attach --quiet --restart=Never --image=busybox:1.36 --command -- \
-    sh -c "echo PROBE_RAN
-           nslookup storage.googleapis.com >/dev/null && echo RESOLVE_OK
-           wget -q -T10 -O/dev/null http://${reg_name}:5000/v2/ && echo REGISTRY_OK")" || true
+  # Retry the whole pod, not just the query. Asking once right after the rollout
+  # fails on a brand-new cluster, and retrying inside the pod does not rescue it:
+  # measured here, a pod that fails keeps failing for 36s while a fresh pod 10s
+  # later resolves first try. So the outer loop is the one that matters; the
+  # inner ones only absorb a slow answer. busybox nslookup has no timeout flag,
+  # so every budget below is attempts, not seconds.
+  probe=""
+  for probe_attempt in 1 2 3 4; do
+    probe="$(kubectl --context="${KUBECTL_CONTEXT}" run "coredns-probe-$$-${probe_attempt}" \
+      --rm --attach --quiet --restart=Never --image=busybox:1.36 --command -- \
+      sh -c "echo PROBE_RAN
+             for i in 1 2 3; do
+               out=\$(nslookup storage.googleapis.com 2>&1) && { echo RESOLVE_OK; break; }
+               echo \"resolve attempt failed: \$(echo \"\$out\" | tail -2 | tr '\n' ' ')\"
+               sleep 3
+             done
+             for i in 1 2 3; do
+               wget -q -T10 -O/dev/null http://${reg_name}:5000/v2/ && { echo REGISTRY_OK; break; }
+               sleep 3
+             done")" || true
+    [[ "${probe}" == *RESOLVE_OK* && "${probe}" == *REGISTRY_OK* ]] && break
+    if [[ "${probe_attempt}" != 4 ]]; then
+      echo "  the cluster is not resolving yet; re-probing (${probe_attempt}/4)..."
+      sleep 10
+    fi
+  done
   if [[ "${probe}" != *PROBE_RAN* ]]; then
     echo "error: the probe pod never ran, so CoreDNS is unverified" >&2
     echo "       check that it scheduled and that 'busybox:1.36' pulled" >&2
@@ -261,6 +282,8 @@ if [[ "${IP_FAMILY}" == "ipv6" ]]; then
   if [[ "${probe}" != *RESOLVE_OK* ]]; then
     echo "error: a pod cannot resolve an external name" >&2
     echo "       IPV6_DNS_UPSTREAM is '${IPV6_DNS_UPSTREAM}'; set it to a reachable resolver" >&2
+    echo "       probe output was:" >&2
+    while IFS= read -r line; do echo "         ${line}" >&2; done <<<"${probe}"
     exit 1
   fi
   if [[ "${probe}" != *REGISTRY_OK* ]]; then
