@@ -214,6 +214,8 @@ func ValidateSnapshotLocation(location string) error {
 func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
 
+	errs = append(errs, validateWorkerMetadata(worker, fldPath.Child("metadata"))...)
+
 	if val, fldPath := worker.WorkerNamespace, fldPath.Child("worker_namespace"); val == "" {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
@@ -238,8 +240,8 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 		}
 	}
 
-	if val := worker.Assignment; val != nil {
-		errs = append(errs, ValidateAssignment(val, fldPath.Child("assignment"))...)
+	if val := worker.GetStatus().GetAssignment(); val != nil {
+		errs = append(errs, ValidateAssignment(val, fldPath.Child("status", "assignment"))...)
 	}
 
 	if val, fldPath := worker.Ip, fldPath.Child("ip"); val == "" {
@@ -263,18 +265,50 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 	}
 
 	// state is server-managed; accept any defined enum value (the unset/zero
-	// STATE_UNSPECIFIED is tolerated for backward compatibility), reject unknowns.
-	if val, fldPath := worker.State, fldPath.Child("state"); ateapipb.Worker_State_name[int32(val)] == "" {
+	// WORKER_STATE_UNSPECIFIED is tolerated for backward compatibility), reject
+	// unknowns.
+	if val, fldPath := worker.GetStatus().GetState(), fldPath.Child("status", "state"); ateapipb.WorkerState_name[int32(val)] == "" {
 		errs = append(errs, field.NotSupported(fldPath, val, []string{
-			ateapipb.Worker_STATE_ACTIVE.String(),
-			ateapipb.Worker_STATE_DRAINING.String(),
+			ateapipb.WorkerState_WORKER_STATE_ACTIVE.String(),
+			ateapipb.WorkerState_WORKER_STATE_DRAINING.String(),
 		}))
 	}
 
 	return errs
 }
 
-func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) field.ErrorList {
+// validateWorkerMetadata checks the Worker's identity. Workers are
+// global-scoped, so atespace must be empty.
+func validateWorkerMetadata(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	meta := worker.GetMetadata()
+	if meta == nil {
+		return append(errs, field.Required(fldPath, ""))
+	}
+
+	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val != "" {
+		errs = append(errs, field.Invalid(fldPath, val, "must be empty; Workers are global-scoped"))
+	}
+
+	if val, fldPath := meta.GetName(), fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val != "" {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
+	}
+
+	return errs
+}
+
+func ValidateAssignment(assignment *ateapipb.ActorAssignment, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
 
 	if val, fldPath := assignment.ActorTemplate, fldPath.Child("actor_template"); val == nil {

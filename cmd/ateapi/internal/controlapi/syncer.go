@@ -38,13 +38,38 @@ import (
 // ordering is preserved.
 const syncerWorkerCount = 2
 
-// workerKey identifies a worker row in the store. pool is captured at enqueue
-// time because once the pod is gone from the informer cache, the
-// ate.dev/worker-pool label cannot be recovered from a namespace/name key.
+// workerKey identifies the pod incarnation a queued event concerns. namespace
+// and name locate the pod in the informer, which is indexed by namespace/name
+// rather than by UID.
+//
+// uid belongs in the key because the workqueue dedupes by key equality. A pod
+// and its same-named replacement are different Workers, and including the UID
+// is what makes the queue treat them that way: without it, the delete of
+// worker-1(uid-A) and the add of worker-1(uid-B) would collapse into a single
+// item, and the reconcile — which reads current informer state — would see
+// only uid-B and leave uid-A's row orphaned in the store.
 type workerKey struct {
 	namespace string
-	pool      string
 	name      string
+	uid       string
+}
+
+// workerName is the resource name of the Worker this key identifies.
+//
+// The syncer mints Workers from Pods, so it is what gives them their names, and
+// it names them after the pod UID. This method and createOrUpdateWorker are the
+// only places that choice is expressed: everywhere else a Worker name is opaque
+// and must be carried rather than rebuilt from pod identity.
+func (k workerKey) workerName() string { return k.uid }
+
+// logAttrs identifies the Worker in a log line, along with the pod it is
+// derived from. The pod is the useful handle for an operator reaching for
+// kubectl; the name is what identifies the row the syncer is acting on.
+func (k workerKey) logAttrs() []any {
+	return []any{
+		slog.String("worker", k.workerName()),
+		slog.String("pod", k.namespace+"/"+k.name),
+	}
 }
 
 // WorkerPoolSyncer reconciles the state of worker pods from Kubernetes Informer
@@ -65,10 +90,10 @@ type WorkerPoolSyncer struct {
 type workerPoolSyncerStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
-	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
-	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
+	DeleteWorker(ctx context.Context, name string) error
 	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
 }
 
@@ -94,9 +119,11 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			oldPod := oldObj.(*corev1.Pod)
 			newPod := newObj.(*corev1.Pod)
-			// If the pool label changed, enqueue the old key too so its
-			// now-stale store row gets cleaned up.
-			if oldPod.Labels[workerPodLabel] != newPod.Labels[workerPodLabel] {
+			// A pod's UID never changes, but a coalesced Delete+Create of the
+			// same pod name surfaces here as an update. The two incarnations
+			// have distinct keys, so enqueue the old one too to clean up its
+			// now-orphaned store row.
+			if oldPod.UID != newPod.UID {
 				s.enqueuePod(oldPod)
 			}
 			s.enqueuePod(newPod)
@@ -144,7 +171,7 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 }
 
 func (s *WorkerPoolSyncer) enqueuePod(pod *corev1.Pod) {
-	s.queue.Add(workerKey{namespace: pod.Namespace, pool: pod.Labels[workerPodLabel], name: pod.Name})
+	s.queue.Add(workerKey{namespace: pod.Namespace, name: pod.Name, uid: string(pod.UID)})
 }
 
 func (s *WorkerPoolSyncer) runWorker(ctx context.Context) {
@@ -161,9 +188,7 @@ func (s *WorkerPoolSyncer) processNextWorkItem(ctx context.Context) bool {
 
 	if err := s.reconcile(ctx, key); err != nil {
 		slog.ErrorContext(ctx, "Syncer: reconcile failed, requeueing",
-			slog.String("worker", key.namespace+"/"+key.name),
-			slog.String("pool", key.pool),
-			slog.Any("err", err))
+			append(key.logAttrs(), slog.Any("err", err))...)
 		s.queue.AddRateLimited(key)
 		return true
 	}
@@ -179,13 +204,15 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		return err
 	}
 	if !exists {
-		slog.InfoContext(ctx, "Syncer: removing worker from store (pod deleted)", slog.String("worker", key.namespace+"/"+key.name))
-		return s.reconcileDeadWorker(ctx, key.namespace, key.pool, key.name)
+		slog.InfoContext(ctx, "Syncer: removing worker from store (pod deleted)", key.logAttrs()...)
+		return s.reconcileDeadWorker(ctx, key.workerName())
 	}
 	pod := obj.(*corev1.Pod)
-	if pod.Labels[workerPodLabel] != key.pool {
-		// The pod moved to a different pool; this key's store row is stale.
-		return s.reconcileDeadWorker(ctx, key.namespace, key.pool, key.name)
+	if string(pod.UID) != key.uid {
+		// The pod was deleted and a new one took its name. This key names the
+		// dead incarnation; the live pod was enqueued under its own key.
+		slog.InfoContext(ctx, "Syncer: removing worker from store (pod replaced)", key.logAttrs()...)
+		return s.reconcileDeadWorker(ctx, key.workerName())
 	}
 	// Checked before eligibility: draining works off the stored record by name and
 	// never reads the pod IP, while a Terminating pod can legitimately report no
@@ -197,7 +224,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// the bound actor here — inside the pod ateom has received SIGTERM and is
 		// gracefully shutting the actor down. Actor cleanup happens on the Pod
 		// Deleted event.
-		return s.markWorkerDraining(ctx, key.namespace, key.pool, key.name)
+		return s.markWorkerDraining(ctx, key)
 	}
 	if !isWorkerEligible(pod) {
 		// No IP yet; a later update event re-enqueues the pod.
@@ -207,28 +234,34 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 }
 
 func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
-	pool, err := s.workerPoolLister.WorkerPools(key.namespace).Get(key.pool)
+	poolName := pod.Labels[workerPodLabel]
+	pool, err := s.workerPoolLister.WorkerPools(key.namespace).Get(poolName)
 	if err != nil {
-		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, key.pool, err)
+		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
 	}
 
-	w, err := s.persistence.GetWorker(ctx, key.namespace, key.pool, key.name)
+	w, err := s.persistence.GetWorker(ctx, key.workerName())
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			return fmt.Errorf("getting worker from store: %w", err)
 		}
-		slog.InfoContext(ctx, "Syncer: creating worker in store", slog.String("worker", key.namespace+"/"+key.name))
+		slog.InfoContext(ctx, "Syncer: creating worker in store", key.logAttrs()...)
 		worker := &ateapipb.Worker{
+			// Workers are global-scoped, so the name carries no atespace. See
+			// workerKey.workerName for where the name comes from.
+			Metadata:        &ateapipb.ResourceMetadata{Name: key.workerName()},
 			WorkerNamespace: pod.Namespace,
-			WorkerPool:      key.pool,
+			WorkerPool:      poolName,
 			WorkerPod:       pod.Name,
 			Ip:              pod.Status.PodIP,
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
-			State:           ateapipb.Worker_STATE_ACTIVE,
 			Capacity:        workerCapacity(pod),
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			},
 		}
 		// TODO(thockin): for now this is the only place Workers are
 		// created.  If/when this becomes a regular API, validation should
@@ -236,7 +269,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		if errs := resources.ValidateWorker(worker, nil); len(errs) > 0 {
 			// Terminal: the inputs are deterministic, retrying cannot help. A
 			// future pod event re-enqueues the key.
-			slog.ErrorContext(ctx, "Invalid worker", slog.Any("err", errs.ToAggregate()))
+			slog.ErrorContext(ctx, "Invalid worker", append(key.logAttrs(), slog.Any("err", errs.ToAggregate()))...)
 			return nil
 		}
 		// ErrAlreadyExists means we lost a create race; requeue and converge
@@ -244,32 +277,20 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		return s.persistence.CreateWorker(ctx, worker)
 	}
 
-	if w.WorkerPodUid != string(pod.UID) {
-		// The pod was deleted and recreated under the same name, and the queue
-		// coalesced the two events. The store row belongs to the dead pod:
-		// clean it up (releasing any actor bound to the old incarnation) and
-		// requeue to create a fresh row.
-		slog.InfoContext(ctx, "Syncer: worker in store belongs to a replaced pod, deleting", slog.String("worker", key.namespace+"/"+key.name))
-		if err := s.reconcileDeadWorker(ctx, key.namespace, key.pool, key.name); err != nil {
-			return err
-		}
-		return fmt.Errorf("worker %s/%s/%s belonged to replaced pod UID %s; requeueing to recreate", key.namespace, key.pool, key.name, w.WorkerPodUid)
-	}
-
 	changed := false
 	if w.Ip != pod.Status.PodIP {
 		// TODO: I don't think this is possible, but handling this case so we can log it just in case we can reproduce it.
-		slog.InfoContext(ctx, "Syncer: updating worker in store (IP changed)", slog.String("worker", key.namespace+"/"+key.name))
+		slog.InfoContext(ctx, "Syncer: updating worker in store (IP changed)", key.logAttrs()...)
 		w.Ip = pod.Status.PodIP
 		changed = true
 	}
 	if w.SandboxClass != string(pool.Spec.SandboxClass) {
-		slog.InfoContext(ctx, "Syncer: updating worker in store (SandboxClass changed)", slog.String("worker", key.namespace+"/"+key.name))
+		slog.InfoContext(ctx, "Syncer: updating worker in store (SandboxClass changed)", key.logAttrs()...)
 		w.SandboxClass = string(pool.Spec.SandboxClass)
 		changed = true
 	}
 	if !maps.Equal(w.Labels, pool.GetLabels()) {
-		slog.InfoContext(ctx, "Syncer: updating worker in store (labels changed)", slog.String("worker", key.namespace+"/"+key.name))
+		slog.InfoContext(ctx, "Syncer: updating worker in store (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()
 		changed = true
 	}
@@ -279,7 +300,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 
 	// ErrVersionConflict requeues the key; the retry re-fetches the worker at
 	// its new version.
-	return s.persistence.UpdateWorker(ctx, w, w.Version)
+	return s.persistence.UpdateWorker(ctx, w, w.GetMetadata().GetVersion())
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
@@ -323,20 +344,20 @@ func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
 // already gone or already draining there is nothing more to do — the Pod
 // Deleted event will clean up the record. A version conflict is returned so the
 // caller requeues and retries against the updated record.
-func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, namespace, pool, podName string) error {
-	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
+func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, key workerKey) error {
+	worker, err := s.persistence.GetWorker(ctx, key.workerName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
 		return err
 	}
-	if worker.GetState() == ateapipb.Worker_STATE_DRAINING {
+	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		return nil
 	}
-	slog.InfoContext(ctx, "Syncer: marking worker draining (pod deleting)", slog.String("worker", namespace+"/"+podName))
-	worker.State = ateapipb.Worker_STATE_DRAINING
-	return s.persistence.UpdateWorker(ctx, worker, worker.GetVersion())
+	slog.InfoContext(ctx, "Syncer: marking worker draining (pod deleting)", key.logAttrs()...)
+	worker.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+	return s.persistence.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion())
 }
 
 // reconcileDeadWorker cleans up a worker whose pod is gone. It releases the
@@ -345,11 +366,11 @@ func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, namespace, po
 // failure we intentionally leave the record in place (and return the error) so a
 // later reconcile can retry. Returns nil once the actor is released and the
 // worker record deleted.
-func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, namespace, pool, podName string) error {
-	if err := s.releaseActorOnDeadWorker(ctx, namespace, pool, podName); err != nil {
+func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, name string) error {
+	if err := s.releaseActorOnDeadWorker(ctx, name); err != nil {
 		return err
 	}
-	return s.persistence.DeleteWorker(ctx, namespace, pool, podName)
+	return s.persistence.DeleteWorker(ctx, name)
 }
 
 // storedWorkerListBackoff and storedWorkerListCap are the exponential backoff
@@ -382,7 +403,13 @@ func (s *WorkerPoolSyncer) enqueueStoredWorkers(ctx context.Context) {
 			return
 		}
 		for _, w := range page.Items {
-			s.queue.Add(workerKey{namespace: w.GetWorkerNamespace(), pool: w.GetWorkerPool(), name: w.GetWorkerPod()})
+			// The key is a pod identity, so it is rebuilt from the stored pod
+			// fields rather than from the Worker's name.
+			s.queue.Add(workerKey{
+				namespace: w.GetWorkerNamespace(),
+				name:      w.GetWorkerPod(),
+				uid:       w.GetWorkerPodUid(),
+			})
 		}
 		if !page.HasNextPage() {
 			return
@@ -432,18 +459,18 @@ func (s *WorkerPoolSyncer) listWorkersPageWithRetry(ctx context.Context, pageTok
 // UpdateActor uses optimistic version checking. A concurrent SuspendActor
 // or ResumeActor wins; we fail this attempt so it can be retried with the
 // updated state.
-func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespace, pool, podName string) error {
-	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
+func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, name string) error {
+	worker, err := s.persistence.GetWorker(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
 		return err
 	}
-	if worker.Assignment == nil || worker.Assignment.GetActor() == nil {
+	if worker.GetStatus().GetAssignment().GetActor() == nil {
 		return nil
 	}
-	actorRef := resources.ActorRefFromObjectRef(worker.Assignment.GetActor())
+	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
 	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -451,12 +478,12 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 		}
 		return err
 	}
-	if actor.GetMetadata().GetUid() != worker.Assignment.GetActorUid() {
+	if actor.GetMetadata().GetUid() != worker.GetStatus().GetAssignment().GetActorUid() {
 		return nil
 	}
-	// Skip if a concurrent SuspendActor already cleared the pointer.
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment.GetWorkerNamespace() != namespace || assignment.GetWorkerPod() != podName {
+	// Skip if a concurrent SuspendActor already cleared the pointer, or if the
+	// actor has since been placed on a different worker.
+	if actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != name {
 		return nil
 	}
 	// If the actor is suspended, it's already been released.

@@ -213,14 +213,16 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "gvisor",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Namespace: "default",
-					Name:      "template-1",
-				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "space-1",
-					Name:     "id-1",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Namespace: "default",
+						Name:      "template-1",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "space-1",
+						Name:     "id-1",
+					},
 				},
 			},
 		},

@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // Server implements ateapipb.ActorIdentityServer
@@ -153,8 +154,11 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		return nil, status.Error(codes.InvalidArgument, "unsupported actor certificate purpose")
 	}
 
-	if req.GetWorkerNamespace() == "" || req.GetWorkerPod() == "" || req.GetWorkerPodUid() == "" || req.GetExpectedActorUid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "worker_namespace, worker_pod, worker_pod_uid, and expected_actor_uid are required")
+	if err := validateWorkerRef(req.GetWorker()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid worker: %v", err)
+	}
+	if req.GetExpectedActorUid() == "" {
+		return nil, status.Error(codes.InvalidArgument, "expected_actor_uid is required")
 	}
 	actor, actorRef, err := s.authorizeActor(ctx, caller, req)
 	if err != nil {
@@ -300,6 +304,16 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 	return &ateletCaller{podName: identity.PodName, nodeName: identity.NodeName}, nil
 }
 
+// validateWorkerRef checks the reference to the Worker the certificate is
+// minted for. Workers are global-scoped, so the reference carries no atespace.
+func validateWorkerRef(worker *ateapipb.ObjectRef) error {
+	fldPath := field.NewPath("worker")
+	if worker == nil {
+		return field.Required(fldPath, "")
+	}
+	return resources.ValidateGlobalObjectRef(worker, fldPath).ToAggregate()
+}
+
 // authorizeActor resolves the actor from the authenticated worker and verifies
 // that the worker and actor still point at one another. Actor identity supplied
 // by the requester never participates in this authorization decision.
@@ -308,11 +322,11 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 	// is not entitled to a worker should not learn its assignment.
 	deny := func(reason string, args ...any) error {
 		slog.WarnContext(ctx, "ActorIdentity denied: "+reason,
-			append([]any{slog.String("workerPod", req.GetWorkerNamespace()+"/"+req.GetWorkerPod()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
+			append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
 		return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
 	}
 
-	worker, err := s.workers.Worker(req.GetWorkerNamespace(), req.GetWorkerPod())
+	worker, err := s.workers.Worker(req.GetWorker().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, resources.ActorRef{}, deny("worker not found")
@@ -323,11 +337,8 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 	if worker.GetNodeName() != caller.nodeName {
 		return nil, resources.ActorRef{}, deny("worker is hosted on a different node", slog.String("workerNode", worker.GetNodeName()))
 	}
-	if worker.GetWorkerPodUid() != req.GetWorkerPodUid() {
-		return nil, resources.ActorRef{}, deny("worker Pod UID does not match", slog.String("workerPodUID", req.GetWorkerPodUid()))
-	}
 
-	actorRef := resources.ActorRefFromObjectRef(worker.GetAssignment().GetActor())
+	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
 	if actorRef == (resources.ActorRef{}) {
 		return nil, resources.ActorRef{}, deny("worker has no actor assignment")
 	}
@@ -356,13 +367,10 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 		slog.ErrorContext(ctx, "ActorIdentity: running actor has no worker assignment", slog.Any("actor", actorRef))
 		return nil, resources.ActorRef{}, status.Error(codes.FailedPrecondition, "actor has no worker assigned")
 	}
-	if worker.GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
+	if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
 		return nil, resources.ActorRef{}, deny("worker is no longer assigned to this actor incarnation", slog.Any("actor", actorRef))
 	}
-	if assignment.GetWorkerNamespace() != worker.GetWorkerNamespace() ||
-		assignment.GetWorkerPool() != worker.GetWorkerPool() ||
-		assignment.GetWorkerPod() != worker.GetWorkerPod() ||
-		assignment.GetWorkerPodUid() != worker.GetWorkerPodUid() {
+	if assignment.GetWorker().GetName() != worker.GetMetadata().GetName() {
 		return nil, resources.ActorRef{}, deny("actor no longer points to the requesting worker", slog.Any("actor", actorRef))
 	}
 	return actor, actorRef, nil

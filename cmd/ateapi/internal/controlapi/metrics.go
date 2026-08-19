@@ -97,7 +97,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := ateattr.WorkerStateIdle
-			if w.GetAssignment() != nil {
+			if w.GetStatus().GetAssignment() != nil {
 				state = ateattr.WorkerStateAssigned
 			}
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, w.GetSandboxClass()}]++

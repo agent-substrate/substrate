@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -49,9 +50,50 @@ const (
 	// ActorIDFileName is the file inside IdentityMountPath holding the
 	// actor's own ID, raw with no trailing newline.
 	ActorIDFileName = "actor-id"
+
+	// capabilityAll is the sentinel a template may put in drop to clear the
+	// whole default set. It is rejected in add (see v1alpha1.Capabilities).
+	capabilityAll = "ALL"
 )
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) error {
+// defaultCapabilities is what an actor container gets when its template asks
+// for no adjustment. Names are unprefixed; resolveCapabilities adds the OCI
+// "CAP_" prefix.
+var defaultCapabilities = []string{
+	"AUDIT_WRITE",
+	"KILL",
+	"NET_BIND_SERVICE",
+}
+
+// resolveCapabilities computes a container's effective capability set as
+// default - drop + add. Drop applies first, so a capability named in both is
+// granted. The result is CAP_-prefixed and sorted for a stable OCI spec: the
+// spec is written on every run and a reordered set would churn the bundle.
+func resolveCapabilities(caps *ateletpb.Capabilities) []string {
+	effective := make(map[string]struct{}, len(defaultCapabilities))
+	for _, c := range defaultCapabilities {
+		effective[c] = struct{}{}
+	}
+	for _, d := range caps.GetDrop() {
+		if d == capabilityAll {
+			clear(effective)
+			break
+		}
+		delete(effective, d)
+	}
+	for _, a := range caps.GetAdd() {
+		effective[a] = struct{}{}
+	}
+
+	out := make([]string, 0, len(effective))
+	for c := range effective {
+		out = append(out, "CAP_"+c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -127,7 +169,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	ociSpec := buildActorOCISpec(actorUID, containerName, resolvedArgs, resolvedEnv, annotations, netns, identityDir, volumes, volumeMounts)
+	ociSpec := buildActorOCISpec(actorUID, containerName, resolvedArgs, resolvedEnv, annotations, netns, identityDir, volumes, volumeMounts, capabilities)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -240,11 +282,13 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 }
 
 // buildActorOCISpec assembles the OCI runtime spec for an actor container from
-// already-resolved args and env (see resolveProcessArgs and resolveActorEnv).
+// already-resolved args, env and capabilities (see resolveProcessArgs,
+// resolveActorEnv and resolveCapabilities). An empty capabilities set means the
+// process runs with none, which is what the pause container gets.
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(actorUID, containerName string, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+func buildActorOCISpec(actorUID, containerName string, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string) *specs.Spec {
 	mounts := []specs.Mount{
 		{
 			Destination: "/proc",
@@ -293,26 +337,15 @@ func buildActorOCISpec(actorUID, containerName string, args []string, env []stri
 			Env:  env,
 			Cwd:  "/",
 			Capabilities: &specs.LinuxCapabilities{
-				Bounding: []string{
-					"CAP_AUDIT_WRITE",
-					"CAP_KILL",
-					"CAP_NET_BIND_SERVICE",
-				},
-				Effective: []string{
-					"CAP_AUDIT_WRITE",
-					"CAP_KILL",
-					"CAP_NET_BIND_SERVICE",
-				},
-				Inheritable: []string{
-					"CAP_AUDIT_WRITE",
-					"CAP_KILL",
-					"CAP_NET_BIND_SERVICE",
-				},
-				Permitted: []string{
-					"CAP_AUDIT_WRITE",
-					"CAP_KILL",
-					"CAP_NET_BIND_SERVICE",
-				},
+				Bounding:  capabilities,
+				Effective: capabilities,
+				Permitted: capabilities,
+				// Inheritable stays empty, as in containerd/CRI-O/Docker: it only
+				// applies on execve, ANDed with the file's own inheritable set, so
+				// a non-empty one lets a container that drops to an unprivileged
+				// uid regain a capability (CVE-2022-24769). Children inherit via
+				// Bounding.
+				//
 				// TODO(gvisor.dev/issue/3166): support ambient capabilities
 			},
 			Rlimits: []specs.POSIXRlimit{

@@ -24,11 +24,18 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
+
+// testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
+// straight into the store.
+func testWorkerUID(podName string) string {
+	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(podName)).String()
+}
 
 // newTestActorWorkflow builds an ActorWorkflow backed by the given store and a
 // lister serving one minimal ActorTemplate. Dependencies the unit tests never

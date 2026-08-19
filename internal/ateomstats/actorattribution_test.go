@@ -27,7 +27,7 @@ import (
 // five values are deliberately distinct strings: the failure this test exists to
 // catch is a field being wired to the wrong source, which same-looking
 // placeholders would hide.
-var fullAttribution = ActorAttribution{
+var fullAttribution = resources.ActorAttribution{
 	Ref:               resources.ActorRef{Atespace: "atespace-a", Name: "actor-b"},
 	UID:               "uid-c",
 	TemplateNamespace: "template-ns-d",
@@ -38,7 +38,7 @@ func TestActorAttributionFromRequest(t *testing.T) {
 	tests := []struct {
 		name string
 		req  attributionSource
-		want ActorAttribution
+		want resources.ActorAttribution
 	}{
 		{
 			name: "run request",
@@ -68,7 +68,7 @@ func TestActorAttributionFromRequest(t *testing.T) {
 		{
 			name: "empty run request",
 			req:  &ateompb.RunWorkloadRequest{},
-			want: ActorAttribution{},
+			want: resources.ActorAttribution{},
 		},
 		{
 			// The callers hold s.lock and are not defensive about the request
@@ -77,12 +77,12 @@ func TestActorAttributionFromRequest(t *testing.T) {
 			// to direct field access does not turn this into a panic.
 			name: "nil run request",
 			req:  (*ateompb.RunWorkloadRequest)(nil),
-			want: ActorAttribution{},
+			want: resources.ActorAttribution{},
 		},
 		{
 			name: "nil restore request",
 			req:  (*ateompb.RestoreWorkloadRequest)(nil),
-			want: ActorAttribution{},
+			want: resources.ActorAttribution{},
 		},
 	}
 

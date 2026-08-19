@@ -346,7 +346,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
 		workerPod := assignment.GetWorkerPod()
 
-		worker, err := w.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), workerPod)
+		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
 				return nil, fmt.Errorf("while getting worker for release: %w", err)
@@ -354,10 +354,10 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			slog.WarnContext(ctx, "Worker already gone during finalize suspend, skipping release", "worker", workerPod)
 		} else {
 			// Only free it if it still belongs to us
-			if wass := worker.Assignment; wass != nil {
+			if wass := worker.GetStatus().GetAssignment(); wass != nil {
 				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
-					worker.Assignment = nil
-					if err := w.store.UpdateWorker(ctx, worker, worker.Version); err != nil {
+					worker.Status.Assignment = nil
+					if err := w.store.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
 						if errors.Is(err, store.ErrVersionConflict) {
 							return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 						}

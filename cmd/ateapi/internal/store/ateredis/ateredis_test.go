@@ -502,25 +502,10 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 
 }
 
-func TestUpdateWorker_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
-
-	worker := &ateapipb.Worker{
-		WorkerNamespace: "default",
-		WorkerPool:      "pool-1",
-		WorkerPod:       "non-existent",
-	}
-	err := s.UpdateWorker(ctx, worker, 1)
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("expected store.ErrNotFound, got %v", err)
-	}
-}
-
 func TestGetWorker_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
-	_, err := s.GetWorker(ctx, "default", "pool-1", "non-existent")
+	_, err := s.GetWorker(ctx, "non-existent")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -535,27 +520,24 @@ func TestCreateWorker_Success(t *testing.T) {
 	}
 
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
-
-	err = s.CreateWorker(ctx, worker)
-	if err != nil {
+	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 
-	got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+	got, err := s.GetWorker(ctx, "worker-1")
 	if err != nil {
 		t.Fatalf("GetWorker failed: %v", err)
 	}
-
-	if got.Version != 1 {
-		t.Errorf("expected version 1, got %d", got.Version)
+	if v := got.GetMetadata().GetVersion(); v != 1 {
+		t.Errorf("expected version 1, got %d", v)
 	}
-
-	worker.Version = 1
-	if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(worker, got, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("GetWorker returned unexpected worker (-want +got):\n%s", diff)
 	}
 
@@ -563,7 +545,7 @@ func TestCreateWorker_Success(t *testing.T) {
 	if event.Type != store.WorkerEventCreated {
 		t.Errorf("expected WorkerEventCreated, got %v", event.Type)
 	}
-	if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(worker, event.Worker, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("created event worker mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -572,11 +554,12 @@ func TestUpdateWorker_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
-
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
@@ -587,32 +570,23 @@ func TestUpdateWorker_Success(t *testing.T) {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 
-	worker.Assignment = &ateapipb.Assignment{
-		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-			Namespace: "default",
-			Name:      "test-template",
-		},
-		Actor: &ateapipb.ObjectRef{
-			Name: "actor-1",
-		},
-		ActorUid: "actor-1-uid",
+	worker.Status.Assignment = &ateapipb.ActorAssignment{
+		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "default", Name: "test-template"},
+		Actor:         &ateapipb.ObjectRef{Name: "actor-1"},
+		ActorUid:      "actor-1-uid",
 	}
-
 	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
-	got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+	got, err := s.GetWorker(ctx, "worker-1")
 	if err != nil {
 		t.Fatalf("GetWorker failed: %v", err)
 	}
-
-	if got.Version != 2 {
-		t.Errorf("expected version 2, got %d", got.Version)
+	if v := got.GetMetadata().GetVersion(); v != 2 {
+		t.Errorf("expected version 2, got %d", v)
 	}
-
-	worker.Version = 2
-	if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(worker, got, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("UpdateWorker yielded unexpected state in DB (-want +got):\n%s", diff)
 	}
 
@@ -620,8 +594,90 @@ func TestUpdateWorker_Success(t *testing.T) {
 	if event.Type != store.WorkerEventUpdated {
 		t.Errorf("expected WorkerEventUpdated, got %v", event.Type)
 	}
-	if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(worker, event.Worker, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("updated event worker mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestUpdateWorker_NotFound(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "non-existent"},
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
+	}
+	err := s.UpdateWorker(ctx, worker, 1)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected store.ErrNotFound, got %v", err)
+	}
+}
+
+func TestUpdateWorker_Conflict(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
+	}
+	if err := s.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	// Fetch instance 1
+	worker1, err := s.GetWorker(ctx, "worker-1")
+	if err != nil {
+		t.Fatalf("GetWorker failed: %v", err)
+	}
+	// Fetch instance 2
+	worker2, err := s.GetWorker(ctx, "worker-1")
+	if err != nil {
+		t.Fatalf("GetWorker failed: %v", err)
+	}
+
+	// Update instance 1
+	worker1.Status.Assignment = &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "actor-1-uid",
+	}
+	if err := s.UpdateWorker(ctx, worker1, worker1.GetMetadata().GetVersion()); err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+
+	// Try to update instance 2
+	worker2.Status.Assignment = &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-2"},
+		ActorUid: "actor-2-uid",
+	}
+	err = s.UpdateWorker(ctx, worker2, worker2.GetMetadata().GetVersion())
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("expected ErrVersionConflict, got %v", err)
+	}
+}
+
+func TestCreateWorker_AlreadyExists(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
+	}
+	if err := s.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	err := s.CreateWorker(ctx, worker)
+	if !errors.Is(err, store.ErrAlreadyExists) {
+		t.Errorf("expected ErrAlreadyExists, got %v", err)
 	}
 }
 
@@ -629,11 +685,12 @@ func TestDeleteWorker(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		Status:          &ateapipb.WorkerStatus{},
 	}
-
 	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
@@ -644,12 +701,10 @@ func TestDeleteWorker(t *testing.T) {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 
-	if err := s.DeleteWorker(ctx, "default", "pool-1", "pod-1"); err != nil {
+	if err := s.DeleteWorker(ctx, "worker-1"); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
-
-	_, err = s.GetWorker(ctx, "default", "pool-1", "pod-1")
-	if !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.GetWorker(ctx, "worker-1"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
 
@@ -657,9 +712,110 @@ func TestDeleteWorker(t *testing.T) {
 	if event.Type != store.WorkerEventDeleted {
 		t.Errorf("expected WorkerEventDeleted, got %v", event.Type)
 	}
-	want := &ateapipb.Worker{WorkerNamespace: "default", WorkerPod: "pod-1"}
+	// The delete event carries only the name: the row is gone, so there is
+	// nothing else to report.
+	want := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"}}
 	if diff := cmp.Diff(want, event.Worker, protocmp.Transform()); diff != "" {
 		t.Errorf("deleted event worker mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestListWorkers(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	worker1 := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
+		WorkerNamespace: "ns1",
+		WorkerPool:      "pool1",
+		WorkerPod:       "pod1",
+	}
+	worker2 := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2"},
+		WorkerNamespace: "ns1",
+		WorkerPool:      "pool1",
+		WorkerPod:       "pod2",
+	}
+	if err := s.CreateWorker(ctx, worker1); err != nil {
+		t.Fatalf("failed to create worker1: %v", err)
+	}
+	if err := s.CreateWorker(ctx, worker2); err != nil {
+		t.Fatalf("failed to create worker2: %v", err)
+	}
+
+	resp, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000})
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Errorf("expected 2 workers, got %d", len(resp.Items))
+	}
+
+	found1 := false
+	found2 := false
+	for _, w := range resp.Items {
+		if w.GetMetadata().GetName() == "worker-1" {
+			found1 = true
+		}
+		if w.GetMetadata().GetName() == "worker-2" {
+			found2 = true
+		}
+	}
+	if !found1 || !found2 {
+		t.Errorf("did not find all workers: found1=%t, found2=%t", found1, found2)
+	}
+}
+
+func TestListWorkers_Empty(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	resp, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000})
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	if len(resp.Items) != 0 {
+		t.Errorf("expected 0 workers, got %d", len(resp.Items))
+	}
+}
+
+func TestListWorkers_Pagination(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	for i := 0; i < 5; i++ {
+		worker := &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: fmt.Sprintf("worker-%d", i)},
+			WorkerNamespace: "ns1",
+			WorkerPool:      "pool1",
+			WorkerPod:       fmt.Sprintf("pod%d", i),
+		}
+		if err := s.CreateWorker(ctx, worker); err != nil {
+			t.Fatalf("failed to create worker %d: %v", i, err)
+		}
+	}
+
+	var allWorkers []*ateapipb.Worker
+	pageToken := ""
+	for {
+		page, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 2, PageToken: pageToken})
+		if err != nil {
+			t.Fatalf("ListWorkers failed: %v", err)
+		}
+		allWorkers = append(allWorkers, page.Items...)
+		pageToken = page.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	if len(allWorkers) != 5 {
+		t.Fatalf("expected 5 workers total, got %d", len(allWorkers))
+	}
+
+	seen := make(map[string]bool)
+	for _, w := range allWorkers {
+		name := w.GetMetadata().GetName()
+		if seen[name] {
+			t.Errorf("duplicate worker found in paginated results: %s", name)
+		}
+		seen[name] = true
 	}
 }
 
@@ -719,51 +875,6 @@ func TestDeleteActor_NotFound(t *testing.T) {
 	_, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"})
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound deleting non-existent actor, got %v", err)
-	}
-}
-
-func TestListWorkers(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	worker1 := &ateapipb.Worker{
-		WorkerNamespace: "ns1",
-		WorkerPool:      "pool1",
-		WorkerPod:       "pod1",
-	}
-	worker2 := &ateapipb.Worker{
-		WorkerNamespace: "ns1",
-		WorkerPool:      "pool1",
-		WorkerPod:       "pod2",
-	}
-	if err := s.CreateWorker(ctx, worker1); err != nil {
-		t.Fatalf("failed to create worker1: %v", err)
-	}
-	if err := s.CreateWorker(ctx, worker2); err != nil {
-		t.Fatalf("failed to create worker2: %v", err)
-	}
-
-	workersResp, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000})
-	if err != nil {
-		t.Fatalf("ListWorkers failed: %v", err)
-	}
-	workers := workersResp.Items
-
-	if len(workers) != 2 {
-		t.Errorf("expected 2 workers, got %d", len(workers))
-	}
-
-	found1 := false
-	found2 := false
-	for _, w := range workers {
-		if w.GetWorkerPod() == "pod1" {
-			found1 = true
-		}
-		if w.GetWorkerPod() == "pod2" {
-			found2 = true
-		}
-	}
-	if !found1 || !found2 {
-		t.Errorf("did not find all workers: found1=%t, found2=%t", found1, found2)
 	}
 }
 
@@ -1197,129 +1308,6 @@ func TestUpdateActorSnapshotTag_RejectsStaleVersion(t *testing.T) {
 	// their retry decision off the difference.
 	if errors.Is(err, store.ErrUIDConflict) {
 		t.Errorf("UpdateActorSnapshotTag error = %v, want no store.ErrUIDConflict match: the incarnation is unchanged", err)
-	}
-}
-
-func TestUpdateWorker_Conflict(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	worker := &ateapipb.Worker{
-		WorkerNamespace: "default",
-		WorkerPool:      "pool-1",
-		WorkerPod:       "pod-1",
-	}
-
-	err := s.CreateWorker(ctx, worker)
-	if err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-
-	// Fetch instance 1
-	worker1, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
-	if err != nil {
-		t.Fatalf("GetWorker failed: %v", err)
-	}
-
-	// Fetch instance 2
-	worker2, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
-	if err != nil {
-		t.Fatalf("GetWorker failed: %v", err)
-	}
-
-	// Update instance 1
-	worker1.Assignment = &ateapipb.Assignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid: "actor-1-uid",
-	}
-	err = s.UpdateWorker(ctx, worker1, worker1.Version)
-	if err != nil {
-		t.Fatalf("UpdateWorker failed: %v", err)
-	}
-
-	// Try to update instance 2
-	worker2.Assignment = &ateapipb.Assignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-2"},
-		ActorUid: "actor-2-uid",
-	}
-	err = s.UpdateWorker(ctx, worker2, worker2.Version)
-	if !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("expected ErrVersionConflict, got %v", err)
-	}
-}
-
-func TestCreateWorker_AlreadyExists(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	worker := &ateapipb.Worker{
-		WorkerNamespace: "default",
-		WorkerPool:      "pool-1",
-		WorkerPod:       "pod-1",
-	}
-
-	err := s.CreateWorker(ctx, worker)
-	if err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-
-	err = s.CreateWorker(ctx, worker)
-	if !errors.Is(err, store.ErrAlreadyExists) {
-		t.Errorf("expected ErrAlreadyExists, got %v", err)
-	}
-}
-
-func TestListWorkers_Empty(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	workers, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000})
-	if err != nil {
-		t.Fatalf("ListWorkers failed: %v", err)
-	}
-
-	if len(workers.Items) != 0 {
-		t.Errorf("expected 0 workers, got %d", len(workers.Items))
-	}
-}
-
-func TestListWorkers_Pagination(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	for i := 0; i < 5; i++ {
-		worker := &ateapipb.Worker{
-			WorkerNamespace: "ns1",
-			WorkerPool:      "pool1",
-			WorkerPod:       fmt.Sprintf("pod%d", i),
-		}
-		if err := s.CreateWorker(ctx, worker); err != nil {
-			t.Fatalf("failed to create worker %d: %v", i, err)
-		}
-	}
-
-	var allWorkers []*ateapipb.Worker
-	pageToken := ""
-
-	for {
-		page, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 2, PageToken: pageToken})
-		if err != nil {
-			t.Fatalf("ListWorkers failed: %v", err)
-		}
-
-		allWorkers = append(allWorkers, page.Items...)
-		pageToken = page.NextPageToken
-		if pageToken == "" {
-			break
-		}
-	}
-
-	if len(allWorkers) != 5 {
-		t.Fatalf("expected 5 workers total, got %d", len(allWorkers))
-	}
-
-	seen := make(map[string]bool)
-	for _, w := range allWorkers {
-		if seen[w.GetWorkerPod()] {
-			t.Errorf("duplicate worker found in paginated results: %s", w.GetWorkerPod())
-		}
-		seen[w.GetWorkerPod()] = true
 	}
 }
 
@@ -2288,10 +2276,12 @@ func TestListWorkers_MultiMaster_Pagination(t *testing.T) {
 			s, perShard := newMultiMasterStore(t, numShards)
 			for shardIdx, ps := range perShard {
 				for itemIdx := 0; itemIdx < 3; itemIdx++ {
+					pod := fmt.Sprintf("pod-shard%d-item%d", shardIdx, itemIdx)
 					worker := &ateapipb.Worker{
+						Metadata:        &ateapipb.ResourceMetadata{Name: "uid-" + pod},
 						WorkerNamespace: "ns",
 						WorkerPool:      "pool",
-						WorkerPod:       fmt.Sprintf("pod-shard%d-item%d", shardIdx, itemIdx),
+						WorkerPod:       pod,
 					}
 					if err := ps.CreateWorker(ctx, worker); err != nil {
 						t.Fatalf("failed to seed worker: %v", err)

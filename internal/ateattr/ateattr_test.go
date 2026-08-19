@@ -154,6 +154,7 @@ func TestKeySpellings(t *testing.T) {
 		{AtespaceKey, "ate.atespace"},
 		{ActorNameKey, "ate.actor.name"},
 		{ActorUIDKey, "ate.actor.uid"},
+		{ActorContainerNameKey, "ate.actor.container.name"},
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateNamespaceKey, "ate.template.namespace"},
 		{ActorVersionKey, "ate.actor.version"},
@@ -169,11 +170,105 @@ func TestKeySpellings(t *testing.T) {
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
 		{ErrorTypeKey, "error.type"},
 		{FailureReasonKey, "ate.failure.reason"},
+		{OTLPRelayKey, "ate.otlp.relay"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			if string(tt.key) != tt.want {
 				t.Errorf("key = %q, want %q", string(tt.key), tt.want)
+			}
+		})
+	}
+}
+
+// TestLogFieldSpellings pins the trace-context field names. These are fixed by
+// the OTel spec for non-OTLP log formats, not ours to choose: a collector only
+// recognizes them at these exact spellings.
+func TestLogFieldSpellings(t *testing.T) {
+	tests := []struct {
+		got  string
+		want string
+	}{
+		{LogTraceIDField, "trace_id"},
+		{LogSpanIDField, "span_id"},
+		{LogTraceFlagsField, "trace_flags"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("field = %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActorLogLabels(t *testing.T) {
+	const containerName = "counter"
+
+	attribution := resources.ActorAttribution{
+		Ref:               resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
+		UID:               "uid-abc",
+		TemplateNamespace: "ate-agents",
+		TemplateName:      "support-agent",
+	}
+
+	tests := []struct {
+		name          string
+		attribution   resources.ActorAttribution
+		containerName string
+		want          map[string]string
+	}{
+		{
+			name:          "container output carries the container name",
+			attribution:   attribution,
+			containerName: containerName,
+			want: map[string]string{
+				"ate.atespace":             "team-a",
+				"ate.actor.name":           "support-agent-42",
+				"ate.actor.uid":            "uid-abc",
+				"ate.actor.container.name": containerName,
+				"ate.template.namespace":   "ate-agents",
+				"ate.template.name":        "support-agent",
+			},
+		},
+		{
+			name:          "no container name omits the key rather than emitting it empty",
+			attribution:   attribution,
+			containerName: "",
+			want: map[string]string{
+				"ate.atespace":           "team-a",
+				"ate.actor.name":         "support-agent-42",
+				"ate.actor.uid":          "uid-abc",
+				"ate.template.namespace": "ate-agents",
+				"ate.template.name":      "support-agent",
+			},
+		},
+		{
+			name:          "zero attribution still produces the five identity keys",
+			attribution:   resources.ActorAttribution{},
+			containerName: "",
+			want: map[string]string{
+				"ate.atespace":           "",
+				"ate.actor.name":         "",
+				"ate.actor.uid":          "",
+				"ate.template.namespace": "",
+				"ate.template.name":      "",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ActorLogLabels(tt.attribution, tt.containerName)
+			if len(got) != len(tt.want) {
+				t.Errorf("got %d labels, want %d: %v", len(got), len(tt.want), got)
+			}
+			for k, want := range tt.want {
+				if v, ok := got[k]; !ok {
+					t.Errorf("missing label %s", k)
+				} else if v != want {
+					t.Errorf("%s = %q, want %q", k, v, want)
+				}
 			}
 		})
 	}

@@ -162,17 +162,19 @@ type Interface interface {
 	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
 
-	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
-	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	// Fetches worker state by name. Returns ErrNotFound if missing.
+	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 
 	// Lists workers.
 	ListWorkers(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Worker], error)
 
-	// Updates worker state with optimistic concurrency check. Returns ErrNotFound if missing, or ErrVersionConflict on version mismatch.
+	// Updates worker state with optimistic concurrency check, keyed by
+	// worker.metadata.name. Returns ErrNotFound if missing, or
+	// ErrVersionConflict on version mismatch.
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
 
-	// Removes a worker. Idempotent: does nothing if worker is not found.
-	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
+	// Removes a worker by name. Idempotent: does nothing if worker is not found.
+	DeleteWorker(ctx context.Context, name string) error
 
 	// WatchWorkers returns an active subscription to track worker state changes.
 	// The watch's Events channel is closed when the caller calls Close, the

@@ -37,6 +37,7 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 		"/host/actors/actor_uid/identity",
 		nil,
 		nil,
+		nil,
 	)
 	found := false
 	for _, m := range spec.Mounts {
@@ -195,7 +196,7 @@ func TestResolveProcessArgs(t *testing.T) {
 
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("actor_uid", "app", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil)
+	bare := buildActorOCISpec("actor_uid", "app", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil, nil)
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
@@ -222,6 +223,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		"",
 		volumes,
 		durableDirs,
+		nil,
 	)
 
 	for _, vm := range durableDirs {
@@ -262,6 +264,7 @@ func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
 		"",
 		volumes,
 		mounts,
+		nil,
 	)
 
 	var got *specs.Mount
@@ -281,5 +284,141 @@ func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
 	}
 	if want := []string{"bind", "ro"}; !slices.Equal(got.Options, want) {
 		t.Errorf("image volume options = %v, want %v", got.Options, want)
+	}
+}
+
+// wantDefaultCapabilities is the set a container gets when it asks for no
+// adjustment. It is spelled out rather than derived from defaultCapabilities so
+// that widening or narrowing the default is a deliberate test change.
+var wantDefaultCapabilities = []string{
+	"CAP_AUDIT_WRITE",
+	"CAP_KILL",
+	"CAP_NET_BIND_SERVICE",
+}
+
+func withoutCaps(in []string, drop ...string) []string {
+	out := slices.Clone(in)
+	for _, d := range drop {
+		out = slices.DeleteFunc(out, func(c string) bool { return c == d })
+	}
+	return out
+}
+
+func withCaps(in []string, add ...string) []string {
+	out := append(slices.Clone(in), add...)
+	slices.Sort(out)
+	return out
+}
+
+func TestResolveCapabilities(t *testing.T) {
+	tests := []struct {
+		name string
+		caps *ateletpb.Capabilities
+		want []string
+	}{{
+		name: "unset keeps the default set",
+		caps: nil,
+		want: wantDefaultCapabilities,
+	}, {
+		name: "empty keeps the default set",
+		caps: &ateletpb.Capabilities{},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "drop removes from the default set",
+		caps: &ateletpb.Capabilities{Drop: []string{"NET_BIND_SERVICE", "AUDIT_WRITE"}},
+		want: withoutCaps(wantDefaultCapabilities, "CAP_NET_BIND_SERVICE", "CAP_AUDIT_WRITE"),
+	}, {
+		name: "add grants on top of the default set",
+		caps: &ateletpb.Capabilities{Add: []string{"SYS_ADMIN"}},
+		want: withCaps(wantDefaultCapabilities, "CAP_SYS_ADMIN"),
+	}, {
+		name: "drop ALL clears the default set",
+		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}},
+		want: nil,
+	}, {
+		name: "drop ALL with add gives an exact set",
+		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}, Add: []string{"NET_ADMIN", "CHOWN"}},
+		want: []string{"CAP_CHOWN", "CAP_NET_ADMIN"},
+	}, {
+		// Drop applies first, so naming a capability in both grants it.
+		name: "add wins over drop",
+		caps: &ateletpb.Capabilities{Drop: []string{"KILL"}, Add: []string{"KILL"}},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "adding a default capability does not duplicate it",
+		caps: &ateletpb.Capabilities{Add: []string{"KILL"}},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "dropping a capability outside the default set is a no-op",
+		caps: &ateletpb.Capabilities{Drop: []string{"SYS_ADMIN"}},
+		want: wantDefaultCapabilities,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveCapabilities(tt.caps)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("resolveCapabilities() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The resolved set lands in bounding, effective and permitted. Inheritable and
+// ambient stay empty — see the comment in buildActorOCISpec.
+func TestBuildActorOCISpec_Capabilities(t *testing.T) {
+	want := []string{"CAP_CHOWN", "CAP_KILL"}
+	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", "", nil, nil, want)
+
+	caps := spec.Process.Capabilities
+	if caps == nil {
+		t.Fatal("spec.Process.Capabilities is nil")
+	}
+	for _, set := range []struct {
+		name string
+		got  []string
+	}{
+		{"Bounding", caps.Bounding},
+		{"Effective", caps.Effective},
+		{"Permitted", caps.Permitted},
+	} {
+		if !slices.Equal(set.got, want) {
+			t.Errorf("%s = %v, want %v", set.name, set.got, want)
+		}
+	}
+	for _, set := range []struct {
+		name string
+		got  []string
+	}{
+		{"Inheritable", caps.Inheritable},
+		{"Ambient", caps.Ambient},
+	} {
+		if len(set.got) != 0 {
+			t.Errorf("%s = %v, want empty", set.name, set.got)
+		}
+	}
+}
+
+// The pause container only reaps, so it is built with no capabilities at all.
+func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
+	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil, nil)
+
+	caps := spec.Process.Capabilities
+	if caps == nil {
+		t.Fatal("spec.Process.Capabilities is nil")
+	}
+	for _, set := range []struct {
+		name string
+		got  []string
+	}{
+		{"Bounding", caps.Bounding},
+		{"Effective", caps.Effective},
+		{"Inheritable", caps.Inheritable},
+		{"Permitted", caps.Permitted},
+		{"Ambient", caps.Ambient},
+	} {
+		if len(set.got) != 0 {
+			t.Errorf("%s = %v, want empty", set.name, set.got)
+		}
 	}
 }

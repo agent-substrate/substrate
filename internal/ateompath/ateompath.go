@@ -80,12 +80,15 @@ func AteletOTLPSocketPath() string {
 	)
 }
 
+// AteomsDir is the parent of every per-ateom directory. Each ateom creates
+// AteomPath(podUID) under it when it boots, so listing this directory is how a
+// scraper with no prior knowledge discovers the node's ateoms.
+func AteomsDir() string {
+	return filepath.Join(BasePath, "ateoms")
+}
+
 func AteomPath(podUID string) string {
-	return filepath.Join(
-		BasePath,
-		"ateoms",
-		podUID,
-	)
+	return filepath.Join(AteomsDir(), podUID)
 }
 
 func AteomSocketPath(podUID string) string {

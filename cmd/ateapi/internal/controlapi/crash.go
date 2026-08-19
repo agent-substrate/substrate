@@ -108,7 +108,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 type crashActorStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
-	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
 }
 
@@ -121,12 +121,12 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
 		return "", nil
 	}
-	podUid := assignment.GetWorkerPodUid()
+	workerName := assignment.GetWorker().GetName()
 
-	worker, err := st.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
+	worker, err := st.GetWorker(ctx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
 		// No need to release if the worker is not found.
-		slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", podUid))
+		slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", workerName))
 		return "", nil
 	}
 	if err != nil {
@@ -134,19 +134,19 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 	}
 
 	sandboxClass := worker.GetSandboxClass()
-	wass := worker.GetAssignment()
+	wass := worker.GetStatus().GetAssignment()
 	if wass == nil {
-		slog.WarnContext(ctx, "Worker's assignment is already nil, skipping release", slog.String("worker", podUid))
+		slog.WarnContext(ctx, "Worker's assignment is already nil, skipping release", slog.String("worker", workerName))
 		return sandboxClass, nil
 	}
 	// Only free it if it still belongs to us
 	if wass.GetActorUid() != actor.GetMetadata().GetUid() {
-		slog.WarnContext(ctx, "Worker already assigned to another Actor", slog.String("worker", podUid))
+		slog.WarnContext(ctx, "Worker already assigned to another Actor", slog.String("worker", workerName))
 		return sandboxClass, nil
 	}
 
-	worker.Assignment = nil
-	if err := st.UpdateWorker(ctx, worker, worker.GetVersion()); err != nil {
+	worker.Status.Assignment = nil
+	if err := st.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
 		return sandboxClass, fmt.Errorf("while releasing worker: %w", err)
 	}
 	return sandboxClass, nil

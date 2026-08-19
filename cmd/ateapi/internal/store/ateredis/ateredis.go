@@ -458,8 +458,10 @@ func (s *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 	return deleted, nil
 }
 
-func workerDBKey(namespace, poolName, podName string) string {
-	return "worker:" + namespace + ":" + poolName + ":" + podName
+// workerDBKey keys a Worker by its name, which is the Kubernetes pod UID.
+// Workers are global-scoped, so there is no atespace component.
+func workerDBKey(name string) string {
+	return "worker:" + name
 }
 
 func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) (string, error) {
@@ -833,12 +835,13 @@ func (s *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 }
 
 func (s *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
-	dbKey := workerDBKey(worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod())
+	dbKey := workerDBKey(worker.GetMetadata().GetName())
 
-	// Clone because we will update the version field, and we don't want to
-	// stomp the caller's copy.
+	// Clone so we don't stomp the caller's copy, then attach fresh server-owned
+	// metadata carrying the caller-specified name. Workers are global-scoped,
+	// so the atespace is always empty.
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	dbWorker.Version = 1
+	dbWorker.Metadata = newCreateMetadata("", worker.GetMetadata().GetName())
 
 	dbWorkerBytes, err := protojson.Marshal(dbWorker)
 	if err != nil {
@@ -857,8 +860,8 @@ func (s *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 	return nil
 }
 
-func (s *Persistence) GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error) {
-	dbKey := workerDBKey(namespace, pool, pod)
+func (s *Persistence) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
+	dbKey := workerDBKey(name)
 
 	dbWorkerBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
 	if err != nil {
@@ -873,18 +876,18 @@ func (s *Persistence) GetWorker(ctx context.Context, namespace, pool, pod string
 		return nil, fmt.Errorf("in protojson.Unmarshal: %w", err)
 	}
 
-	if worker.GetWorkerNamespace() != namespace || worker.GetWorkerPool() != pool || worker.GetWorkerPod() != pod {
-		return nil, fmt.Errorf("(impossible) mismatch between stored namespace/pool/pod and key")
+	if worker.GetMetadata().GetName() != name {
+		return nil, fmt.Errorf("(impossible) mismatch between stored name and key")
 	}
 
 	return worker, nil
 }
 
 func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	dbKey := workerDBKey(worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod())
+	dbKey := workerDBKey(worker.GetMetadata().GetName())
 
-	// Clone because we will update the version field, and we don't want to
-	// stomp the caller's copy.
+	// Clone because we will update the metadata, and we don't want to stomp
+	// the caller's copy.
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
 
 	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
@@ -901,10 +904,10 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 			return fmt.Errorf("in protojson.Unmarshal: %w", err)
 		}
 
-		if currentWorker.GetVersion() != expectedVersion {
+		if currentWorker.GetMetadata().GetVersion() != expectedVersion {
 			return store.ErrVersionConflict
 		}
-		dbWorker.Version = currentWorker.GetVersion() + 1
+		dbWorker.Metadata = newUpdateMetadata(currentWorker.GetMetadata())
 		if currentWorker.GetWorkerNamespace() != dbWorker.GetWorkerNamespace() {
 			return fmt.Errorf("worker_namespace is immutable")
 		}
@@ -942,15 +945,14 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 	return nil
 }
 
-func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod string) error {
-	dbKey := workerDBKey(namespace, pool, pod)
+func (s *Persistence) DeleteWorker(ctx context.Context, name string) error {
+	dbKey := workerDBKey(name)
 	err := s.rdb.Del(ctx, dbKey).Err()
 	if err != nil {
 		return fmt.Errorf("while deleting worker key %q: %w", dbKey, err)
 	}
 	s.publishWorkerEvent(ctx, store.WorkerEventDeleted, &ateapipb.Worker{
-		WorkerNamespace: namespace,
-		WorkerPod:       pod,
+		Metadata: &ateapipb.ResourceMetadata{Name: name},
 	})
 	return nil
 }

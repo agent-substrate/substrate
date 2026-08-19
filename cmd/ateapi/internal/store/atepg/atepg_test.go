@@ -161,7 +161,14 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 	}
 	defer watch.Close()
 
-	worker := &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}
+	const workerName = "6e4d2f81-b3a9-4c05-8e72-1f9d4a0c7b63"
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+		WorkerPodUid:    workerName,
+	}
 	protoBytes, err := proto.Marshal(worker)
 	if err != nil {
 		t.Fatalf("marshaling worker: %v", err)
@@ -175,9 +182,9 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 		t.Fatalf("Begin failed: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO workers (worker_namespace, worker_pool, worker_pod, version, proto)
-		VALUES ($1, $2, $3, $4, $5)`,
-		worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod(), int64(1), protoBytes); err != nil {
+		INSERT INTO workers (name, uid, version, proto)
+		VALUES ($1, $2, $3, $4)`,
+		workerName, "rolled-back-uid", int64(1), protoBytes); err != nil {
 		t.Fatalf("insert failed: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, "rolled-back-payload"); err != nil {
@@ -203,8 +210,11 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 		if event.Type != store.WorkerEventCreated {
 			t.Errorf("expected WorkerEventCreated, got %v", event.Type)
 		}
-		worker.Version = 1 // CreateWorker assigns version 1 server-side.
-		if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+		// CreateWorker assigns the uid, version and timestamps server-side.
+		want := proto.Clone(worker).(*ateapipb.Worker)
+		want.Metadata.Version = 1
+		if diff := cmp.Diff(want, event.Worker, protocmp.Transform(),
+			protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid", "create_time", "update_time")); diff != "" {
 			t.Errorf("event worker mismatch (-want +got):\n%s", diff)
 		}
 	case <-time.After(2 * time.Second):

@@ -72,13 +72,13 @@ CREATE TABLE IF NOT EXISTS actor_snapshot_tags (
         REFERENCES actor_snapshots(atespace, name) ON DELETE RESTRICT
 );
 
+-- Workers are global-scoped and named by their Kubernetes pod UID, so name
+-- alone is the primary key.
 CREATE TABLE IF NOT EXISTS workers (
-    worker_namespace  text NOT NULL,
-    worker_pool       text NOT NULL,
-    worker_pod        text NOT NULL,
-    version           bigint NOT NULL,
-    proto             bytea NOT NULL,
-    PRIMARY KEY (worker_namespace, worker_pool, worker_pod)
+    name     text PRIMARY KEY,
+    uid      text NOT NULL UNIQUE,
+    version  bigint NOT NULL,
+    proto    bytea NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS leases (

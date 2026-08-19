@@ -37,7 +37,7 @@ func TestListWorkers(t *testing.T) {
 	defer tc.cleanup()
 
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{"foo": "bar"})
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
 	if err != nil {
@@ -53,19 +53,25 @@ func TestListWorkers(t *testing.T) {
 
 	want := []*ateapipb.Worker{
 		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Name:    podUID,
+				Version: 1,
+			},
 			WorkerNamespace: ns,
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-1",
+			WorkerPodUid:    podUID,
 			NodeName:        "node1",
 			Ip:              "127.0.0.1",
-			Version:         1,
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
-			State:           ateapipb.Worker_STATE_ACTIVE,
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			},
 		},
 	}
 
-	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
+	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("ListWorkers response mismatch (-want +got):\n%s", diff)
 	}
 }

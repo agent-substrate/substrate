@@ -6,21 +6,23 @@ This guide explains how Agent Substrate achieves observability across these susp
 
 ## The Observability Model
 
-To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
-* `ate.dev/actor_name`: The name of the actor (e.g., `my-counter-1` or `test`).
-* `ate.dev/actor_atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
-* `ate.dev/actor_uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
-* `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
-* `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
-* `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
+To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods. These are the same `ate.*` keys the spans and metrics below use, defined once in [`internal/ateattr`](../internal/ateattr):
+* `ate.actor.name`: The name of the actor (e.g., `my-counter-1` or `test`).
+* `ate.atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
+* `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
+* `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
+* `ate.template.namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
+
+`ate.*` is reserved for Substrate. An actor's own log lines pass through untouched except for keys in that namespace, which are dropped before the record is written, so nothing a workload emits can be read as platform-issued attribution.
 
 ---
 
 ## 1. Logging
 
-Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.dev` metadata labels.
+Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
 
 ### Active Actor Inspection via CLI
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
@@ -77,21 +79,21 @@ Because the logging pipeline indexes the core metadata labels, you can query you
 To track the unified, continuous lifecycle of a single actor regardless of how many times it migrated across worker pods or was suspended/resumed:
 
 ```text
-labels."ate.dev/actor_name"="test"
+labels."ate.actor.name"="test"
 ```
 
 #### 2. Atespace-Centric View
 To monitor or debug all actor instances in a specific atespace (e.g., analyzing the collective behavior or error rates of all actors belonging to one tenant):
 
 ```text
-labels."ate.dev/actor_atespace"="ate-demo-counter"
+labels."ate.atespace"="ate-demo-counter"
 ```
 
 #### 3. Template-Centric View
 To monitor or debug all actor instances created from a specific ActorTemplate (e.g., analyzing the collective behavior or error rates of all counter actors). One atespace can run actors from many templates, so this is a distinct dimension from the atespace view above:
 
 ```text
-labels."ate.dev/actor_template_name"="counter"
+labels."ate.template.name"="counter"
 ```
 
 #### 4. Pod-Centric View
@@ -100,6 +102,14 @@ To inspect the physical worker pod's aggregate stream and see all co-located act
 ```text
 resource.labels.pod_name="counter-c995fdf4c-m7d96"
 ```
+
+---
+
+### Joining Logs to Traces
+
+Substrate-emitted records carry top-level `trace_id`, `span_id`, and `trace_flags` in lowercase hex, the names the [OpenTelemetry spec](https://opentelemetry.io/docs/specs/otel/compatibility/logging_trace_context/) fixes for non-OTLP log formats. That covers component logs (every `slog.*Context` call, via [`internal/contextlogging`](../internal/contextlogging)) and the synthetic actor lifecycle records, so a suspend or resume log line joins the RPC that drove it.
+
+An actor's **own** lines carry trace context only if the actor emits these fields itself, in which case they pass through unchanged. Substrate cannot supply them: one forwarder goroutine covers a container's whole output stream and cannot tell which request produced a given line. Per-line correlation for actor logs arrives with the actor telemetry relay ([#853](https://github.com/agent-substrate/substrate/issues/853)), where the actor's own SDK carries the context.
 
 ---
 

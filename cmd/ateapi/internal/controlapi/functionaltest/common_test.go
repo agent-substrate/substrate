@@ -70,6 +70,9 @@ var (
 	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
 	ignoreVersion    = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "version")
 	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time")
+
+	// ignoreServerMetadata skips the ResourceMetadata fields the store assigns.
+	ignoreServerMetadata = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid", "create_time", "update_time")
 )
 
 type testContext struct {
@@ -505,13 +508,15 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name s
 	}
 }
 
-func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) {
+// createWorkerPod creates a worker pod and waits for the syncer to mirror it
+// into the store and the worker cache. It returns the name of the resulting
+// Worker, which is the key to look it up by.
+func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) string {
 	t.Helper()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
-			UID:       "08675309-4a65-6e6e-7973-6e756d626572",
 			Labels: map[string]string{
 				"ate.dev/worker-pool": poolName,
 			},
@@ -523,23 +528,6 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			},
 		},
 	}
-	/*
-			   pod := &corev1.Pod{
-		          ObjectMeta: metav1.ObjectMeta{
-		              Name:      podName,
-		              Namespace: ns,
-		              UID:       "08675309-4a65-6e6e-7973-6e756d626572",
-		              Labels: map[string]string{
-		                  workerPodLabel: poolName,
-		              },
-		          },
-		          Spec: corev1.PodSpec{
-		              NodeName:   "node1",
-		              Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
-		          },
-		      }
-
-	*/
 	createdPod, err := tc.k8sClient.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create worker pod: %v", err)
@@ -584,6 +572,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	if err != nil {
 		t.Fatalf("failed to wait for worker to appear in worker cache: %v", err)
 	}
+	return string(createdPod.UID)
 }
 
 // createAteletPod creates an atelet pod on nodeName and marks it Running with

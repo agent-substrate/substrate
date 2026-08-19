@@ -47,6 +47,11 @@ const (
 	Control_UpdateActorSnapshotTag_FullMethodName = "/ateapi.Control/UpdateActorSnapshotTag"
 	Control_DeleteActorSnapshotTag_FullMethodName = "/ateapi.Control/DeleteActorSnapshotTag"
 	Control_ListWorkers_FullMethodName            = "/ateapi.Control/ListWorkers"
+	Control_GetWorker_FullMethodName              = "/ateapi.Control/GetWorker"
+	Control_CreateWorker_FullMethodName           = "/ateapi.Control/CreateWorker"
+	Control_UpdateWorker_FullMethodName           = "/ateapi.Control/UpdateWorker"
+	Control_DeleteWorker_FullMethodName           = "/ateapi.Control/DeleteWorker"
+	Control_DrainWorker_FullMethodName            = "/ateapi.Control/DrainWorker"
 	Control_ListActors_FullMethodName             = "/ateapi.Control/ListActors"
 	Control_CreateAtespace_FullMethodName         = "/ateapi.Control/CreateAtespace"
 	Control_GetAtespace_FullMethodName            = "/ateapi.Control/GetAtespace"
@@ -95,6 +100,18 @@ type ControlClient interface {
 	DeleteActorSnapshotTag(ctx context.Context, in *DeleteActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
+	// Get a Worker.
+	GetWorker(ctx context.Context, in *GetWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// Register a Worker. Called once its Pod is Ready and has an IP.
+	CreateWorker(ctx context.Context, in *CreateWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// Update observed pool state on a Worker.
+	UpdateWorker(ctx context.Context, in *UpdateWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// Deregister a Worker. Does not cascade: the caller is responsible for
+	// cleaning up related resources first.
+	DeleteWorker(ctx context.Context, in *DeleteWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// Mark a Worker as terminating so the scheduler stops routing new Actors to
+	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	// List Actors.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
@@ -262,6 +279,56 @@ func (c *controlClient) ListWorkers(ctx context.Context, in *ListWorkersRequest,
 	return out, nil
 }
 
+func (c *controlClient) GetWorker(ctx context.Context, in *GetWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Worker)
+	err := c.cc.Invoke(ctx, Control_GetWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) CreateWorker(ctx context.Context, in *CreateWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Worker)
+	err := c.cc.Invoke(ctx, Control_CreateWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateWorker(ctx context.Context, in *UpdateWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Worker)
+	err := c.cc.Invoke(ctx, Control_UpdateWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DeleteWorker(ctx context.Context, in *DeleteWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Worker)
+	err := c.cc.Invoke(ctx, Control_DeleteWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Worker)
+	err := c.cc.Invoke(ctx, Control_DrainWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorsResponse)
@@ -389,6 +456,18 @@ type ControlServer interface {
 	DeleteActorSnapshotTag(context.Context, *DeleteActorSnapshotTagRequest) (*ActorSnapshotTag, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
+	// Get a Worker.
+	GetWorker(context.Context, *GetWorkerRequest) (*Worker, error)
+	// Register a Worker. Called once its Pod is Ready and has an IP.
+	CreateWorker(context.Context, *CreateWorkerRequest) (*Worker, error)
+	// Update observed pool state on a Worker.
+	UpdateWorker(context.Context, *UpdateWorkerRequest) (*Worker, error)
+	// Deregister a Worker. Does not cascade: the caller is responsible for
+	// cleaning up related resources first.
+	DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error)
+	// Mark a Worker as terminating so the scheduler stops routing new Actors to
+	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
+	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
 	// List Actors.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
@@ -457,6 +536,21 @@ func (UnimplementedControlServer) DeleteActorSnapshotTag(context.Context, *Delet
 }
 func (UnimplementedControlServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWorkers not implemented")
+}
+func (UnimplementedControlServer) GetWorker(context.Context, *GetWorkerRequest) (*Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorker not implemented")
+}
+func (UnimplementedControlServer) CreateWorker(context.Context, *CreateWorkerRequest) (*Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateWorker not implemented")
+}
+func (UnimplementedControlServer) UpdateWorker(context.Context, *UpdateWorkerRequest) (*Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateWorker not implemented")
+}
+func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteWorker not implemented")
+}
+func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
 }
 func (UnimplementedControlServer) ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActors not implemented")
@@ -758,6 +852,96 @@ func _Control_ListWorkers_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_GetWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetWorker(ctx, req.(*GetWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CreateWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateWorker(ctx, req.(*CreateWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateWorker(ctx, req.(*UpdateWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteWorker(ctx, req.(*DeleteWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DrainWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DrainWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DrainWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DrainWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DrainWorker(ctx, req.(*DrainWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListActors_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorsRequest)
 	if err := dec(in); err != nil {
@@ -982,6 +1166,26 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListWorkers",
 			Handler:    _Control_ListWorkers_Handler,
+		},
+		{
+			MethodName: "GetWorker",
+			Handler:    _Control_GetWorker_Handler,
+		},
+		{
+			MethodName: "CreateWorker",
+			Handler:    _Control_CreateWorker_Handler,
+		},
+		{
+			MethodName: "UpdateWorker",
+			Handler:    _Control_UpdateWorker_Handler,
+		},
+		{
+			MethodName: "DeleteWorker",
+			Handler:    _Control_DeleteWorker_Handler,
+		},
+		{
+			MethodName: "DrainWorker",
+			Handler:    _Control_DrainWorker_Handler,
 		},
 		{
 			MethodName: "ListActors",

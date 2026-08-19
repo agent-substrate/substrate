@@ -68,6 +68,23 @@ service Control {
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
 
+  // Get a Worker.
+  rpc GetWorker(GetWorkerRequest) returns (Worker) {}
+
+  // Register a Worker. Called once its Pod is Ready and has an IP.
+  rpc CreateWorker(CreateWorkerRequest) returns (Worker) {}
+
+  // Update observed pool state on a Worker.
+  rpc UpdateWorker(UpdateWorkerRequest) returns (Worker) {}
+
+  // Deregister a Worker. Does not cascade: the caller is responsible for
+  // cleaning up related resources first.
+  rpc DeleteWorker(DeleteWorkerRequest) returns (Worker) {}
+
+  // Mark a Worker as terminating so the scheduler stops routing new Actors to
+  // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
+  rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
+
   // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
@@ -257,8 +274,23 @@ message ActorSourceSnapshotStatus {
   string snapshot_uid = 2;
 }
 
-// WorkerAssignment identifies the Worker currently hosting an Actor.
+// WorkerAssignment points at the Worker currently hosting an Actor.
+//
+// This is a denormalized snapshot, not merely a reference: atenet reads
+// worker_pod_ip on the request-routing path and must not need a second lookup,
+// and kubectl-ate displays the pod name. The copies stay valid for the life of
+// the assignment because a Worker's identity fields are immutable.
+//
+// Pass `worker` to GetWorker; none of the denormalized fields identify the
+// Worker to the API.
 message WorkerAssignment {
+  // worker references the assigned Worker. This is the field to look the Worker
+  // up by; the worker_* fields below are a denormalized copy kept so that
+  // readers on a hot path do not have to fetch the Worker at all.
+  //
+  // Workers are global-scoped, so this carries no atespace.
+  ObjectRef worker = 6;
+
   // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
   string worker_namespace = 1;
 
@@ -736,6 +768,22 @@ message DeleteActorSnapshotTagRequest {
   ObjectRef tag = 1;
 }
 
+// DeleteOptions carries per-delete controls. Today it holds optional
+// preconditions that guard against acting on a resource that is not in the
+// state the caller expects. Future delete-specific controls (e.g. dry-run)
+// should be added here.
+//
+// Intended to be reused across every Delete<Type>Request; only
+// DeleteWorkerRequest carries it so far.
+message DeleteOptions {
+  // If non-zero, delete only if the server's current version matches.
+  int64 version = 1;
+
+  // If non-empty, delete only if the server's current uid matches. Guards
+  // against name reuse across lifecycles.
+  string uid = 2;
+}
+
 message ListWorkersRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
@@ -753,6 +801,49 @@ message ListWorkersResponse {
 
   // Pagination token for the next page. Empty if this is the last page.
   string next_page_token = 2;
+}
+
+// TODO: every method below returns UNIMPLEMENTED. Workers are still created,
+// updated, and deleted by writing directly to the store from the
+// WorkerPoolSyncer and the actor workflows; migrating those callers onto these
+// RPCs lands in a follow-up change.
+
+message GetWorkerRequest {
+  // The Worker to fetch. atespace is always empty; Workers are global-scoped.
+  ObjectRef worker = 1;
+}
+
+message CreateWorkerRequest {
+  // The Worker to register.
+  Worker worker = 1;
+}
+
+message UpdateWorkerRequest {
+  // The Worker to update.
+  // worker.metadata.name identifies which resource to update.
+  // worker.metadata.version and worker.metadata.uid are optional preconditions
+  // and zero values skip the check.
+  Worker worker = 1;
+
+  // The set of fields to update. Required.
+  //
+  // Only the following fields are supported:
+  //   - sandbox_class
+  //   - labels
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message DeleteWorkerRequest {
+  // The Worker to deregister.
+  ObjectRef worker = 1;
+
+  // Optional per-delete preconditions.
+  DeleteOptions options = 2;
+}
+
+message DrainWorkerRequest {
+  // The Worker to mark as terminating.
+  ObjectRef worker = 1;
 }
 
 // List actors with pagination. Provides "soft" guarantees: actors may be
@@ -779,28 +870,46 @@ message ListActorsResponse {
   string next_page_token = 2;
 }
 
+// Worker is a schedulable worker pod.
+//
+// Global-scoped: metadata.atespace is always empty. metadata.name is assigned
+// by the control plane and is opaque to clients — never parse it or derive it
+// from anything else; read pod identity from the named fields below.
 message Worker {
-  string worker_namespace = 1;
-  string worker_pool = 2;
-  string worker_pod = 3;
+  // Common resource metadata: name, uid, version, timestamps.
+  ResourceMetadata metadata = 1;
 
-  Assignment assignment = 4;
+  // Kubernetes coordinates. Immutable, set at creation.
+  string worker_namespace = 2;
+  string worker_pool = 3;
+  string worker_pod = 4;
+  string worker_pod_uid = 5;
+  string node_name = 6;
+  string ip = 7;
 
-  string ip = 5;
-  int64 version = 6;
-  string worker_pod_uid = 7;
-  string node_name = 8;
-  string sandbox_class = 9;
-  map<string, string> labels = 10;
-  enum State {
-    STATE_UNSPECIFIED = 0;
-    STATE_ACTIVE = 1;
-    STATE_DRAINING = 2;
-  }
-  State state = 11;
+  string sandbox_class = 8;
+  map<string, string> labels = 9;
 
   // The compute capacity this worker can give an actor sandbox.
-  WorkerCapacity capacity = 12;
+  WorkerCapacity capacity = 10;
+
+  // Server-managed state. Absent from Create/Update request payloads.
+  WorkerStatus status = 11;
+}
+
+enum WorkerState {
+  WORKER_STATE_UNSPECIFIED = 0;
+  // Ready; schedulable.
+  WORKER_STATE_ACTIVE = 1;
+  // Pod terminating. Not schedulable.
+  WORKER_STATE_DRAINING = 2;
+}
+
+message WorkerStatus {
+  WorkerState state = 1;
+
+  // The Actor currently bound to this Worker, if any.
+  ActorAssignment assignment = 2;
 }
 
 // WorkerCapacity is the worker pod's compute capacity available to host an
@@ -814,7 +923,11 @@ message WorkerCapacity {
   int64 memory_bytes = 2; // Memory capacity in bytes.
 }
 
-message Assignment {
+// ActorAssignment names the Actor currently bound to a Worker — the inverse of
+// WorkerAssignment.
+message ActorAssignment {
+  // ActorTemplates are Kubernetes CRDs rather than Substrate API resources, so
+  // this stays a kube reference.
   KubeNamespacedObjectRef actor_template = 1;
   ObjectRef actor = 2;
   string actor_uid = 3;
@@ -895,23 +1008,26 @@ message MintJWTResponse {
 }
 
 message MintCertRequest {
-  // Worker identity authenticated by the node-local atelet. Ateapi resolves
-  // the worker's current actor assignment rather than trusting actor metadata
-  // from the caller.
-  string worker_namespace = 1;
-  string worker_pod = 2;
-  string worker_pod_uid = 3;
+  // The Worker the certificate is minted for, as authenticated by the
+  // node-local atelet. Workers are global-scoped, so this carries no atespace.
+  // Ateapi resolves the worker's current actor assignment rather than trusting
+  // actor metadata from the caller.
+  //
+  // This is the one caller that recovers a Worker name from a pod certificate:
+  // the atelet has only the worker Pod's identity to go on. Everywhere else the
+  // name is opaque and must be carried, not reconstructed.
+  ObjectRef worker = 1;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
   // subject public key.
-  bytes certificate_signing_request = 4;
+  bytes certificate_signing_request = 2;
 
   // Actor incarnation expected by the activation. This is only a stale-request
   // guard: ateapi derives the actor and its identity from the worker assignment.
-  string expected_actor_uid = 5;
+  string expected_actor_uid = 3;
 
-  ActorCertificatePurpose purpose = 6;
+  ActorCertificatePurpose purpose = 4;
 }
 
 enum ActorCertificatePurpose {

@@ -72,9 +72,9 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 }
 
 func worker(namespace, pool, class string, assigned bool) *ateapipb.Worker {
-	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class}
+	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class, Status: &ateapipb.WorkerStatus{}}
 	if assigned {
-		w.Assignment = &ateapipb.Assignment{}
+		w.Status.Assignment = &ateapipb.ActorAssignment{}
 	}
 	return w
 }

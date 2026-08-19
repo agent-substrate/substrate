@@ -36,6 +36,17 @@ import (
 // testAtespace is the atespace used by tests that create a single actor.
 const testAtespace = "test-atespace"
 
+// Worker resource names. They are opaque to the store, which only ever uses
+// them as the row key.
+const (
+	testWorkerName      = "3f9a5c2e-1d47-4b8a-9f21-6c0e5a7d3b18"
+	otherTestWorkerName = "7c1b8d4a-92e6-4f30-a5c7-2b8f61d0e934"
+
+	// testWorkerPodUID is deliberately not equal to either worker name, so no
+	// contract test can come to depend on them matching.
+	testWorkerPodUID = "d41b6e97-5a02-4c8d-b3f7-90e2c1a86d54"
+)
+
 // Atomic cmp options to skip individual server-owned ResourceMetadata fields
 // in proto diffs.
 var (
@@ -65,6 +76,19 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
 			Type:       "DurableDir",
 		}},
+	}
+}
+
+// newTestWorker builds a global-scoped Worker. name is the resource name the
+// store keys the row by; it is unrelated to worker_pod_uid.
+func newTestWorker(name, pod string) *ateapipb.Worker {
+	return &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: name},
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       pod,
+		WorkerPodUid:    testWorkerPodUID,
+		Status:          &ateapipb.WorkerStatus{},
 	}
 }
 
@@ -796,7 +820,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		_, err := s.GetWorker(ctx, "default", "pool-1", "non-existent")
+		_, err := s.GetWorker(ctx, testWorkerName)
 		if !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
 		}
@@ -812,26 +836,31 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 		defer watch.Close()
 
-		worker := &ateapipb.Worker{
-			WorkerNamespace: "default",
-			WorkerPool:      "pool-1",
-			WorkerPod:       "pod-1",
-		}
-
+		worker := newTestWorker(testWorkerName, "pod-1")
 		if err := s.CreateWorker(ctx, worker); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
-		got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		got, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got.Version != 1 {
-			t.Errorf("expected version 1, got %d", got.Version)
+		if got.GetMetadata().GetUid() == "" {
+			t.Errorf("CreateWorker stored an empty uid; want server-assigned uid")
+		}
+		if got.GetMetadata().GetVersion() != 1 {
+			t.Errorf("expected version 1, got %d", got.GetMetadata().GetVersion())
+		}
+		if got.GetMetadata().GetAtespace() != "" {
+			t.Errorf("expected empty atespace, got %q", got.GetMetadata().GetAtespace())
+		}
+		if got.GetMetadata().GetCreateTime() == nil || got.GetMetadata().GetUpdateTime() == nil {
+			t.Errorf("CreateWorker stored unset create/update time")
 		}
 
-		worker.Version = 1
-		if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
+		want := proto.Clone(worker).(*ateapipb.Worker)
+		want.Metadata.Version = 1
+		if diff := cmp.Diff(want, got, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 			t.Errorf("GetWorker returned unexpected worker (-want +got):\n%s", diff)
 		}
 
@@ -839,7 +868,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if event.Type != store.WorkerEventCreated {
 			t.Errorf("expected WorkerEventCreated, got %v", event.Type)
 		}
-		if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(got, event.Worker, protocmp.Transform()); diff != "" {
 			t.Errorf("created event worker mismatch (-want +got):\n%s", diff)
 		}
 	})
@@ -848,7 +877,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
+		worker := newTestWorker(testWorkerName, "pod-1")
 		if err := s.CreateWorker(ctx, worker); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
@@ -861,7 +890,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
+		worker := newTestWorker(testWorkerName, "pod-1")
 		if err := s.CreateWorker(ctx, worker); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
@@ -873,7 +902,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 		defer watch.Close()
 
-		worker.Assignment = &ateapipb.Assignment{
+		worker.Status.Assignment = &ateapipb.ActorAssignment{
 			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "default", Name: "test-template"},
 			Actor:         &ateapipb.ObjectRef{Name: "session-1"},
 		}
@@ -881,16 +910,17 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 			t.Fatalf("UpdateWorker failed: %v", err)
 		}
 
-		got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		got, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got.Version != 2 {
-			t.Errorf("expected version 2, got %d", got.Version)
+		if got.GetMetadata().GetVersion() != 2 {
+			t.Errorf("expected version 2, got %d", got.GetMetadata().GetVersion())
 		}
 
-		worker.Version = 2
-		if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
+		want := proto.Clone(worker).(*ateapipb.Worker)
+		want.Metadata.Version = 2
+		if diff := cmp.Diff(want, got, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 			t.Errorf("UpdateWorker yielded unexpected state in DB (-want +got):\n%s", diff)
 		}
 
@@ -898,7 +928,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if event.Type != store.WorkerEventUpdated {
 			t.Errorf("expected WorkerEventUpdated, got %v", event.Type)
 		}
-		if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(got, event.Worker, protocmp.Transform()); diff != "" {
 			t.Errorf("updated event worker mismatch (-want +got):\n%s", diff)
 		}
 	})
@@ -907,27 +937,26 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
-		if err := s.CreateWorker(ctx, worker); err != nil {
+		if err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
-		worker1, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		worker1, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		worker2, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		worker2, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
 
-		worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
-		if err := s.UpdateWorker(ctx, worker1, worker1.Version); err != nil {
+		worker1.Status.Assignment = &ateapipb.ActorAssignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
+		if err := s.UpdateWorker(ctx, worker1, worker1.GetMetadata().GetVersion()); err != nil {
 			t.Fatalf("UpdateWorker failed: %v", err)
 		}
 
-		worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
-		err = s.UpdateWorker(ctx, worker2, worker2.Version)
+		worker2.Status.Assignment = &ateapipb.ActorAssignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
+		err = s.UpdateWorker(ctx, worker2, worker2.GetMetadata().GetVersion())
 		if !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("expected ErrVersionConflict, got %v", err)
 		}
@@ -937,8 +966,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
-		if err := s.CreateWorker(ctx, worker); err != nil {
+		if err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
@@ -948,10 +976,10 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 		defer watch.Close()
 
-		if err := s.DeleteWorker(ctx, "default", "pool-1", "pod-1"); err != nil {
+		if err := s.DeleteWorker(ctx, testWorkerName); err != nil {
 			t.Fatalf("DeleteWorker failed: %v", err)
 		}
-		if _, err := s.GetWorker(ctx, "default", "pool-1", "pod-1"); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.GetWorker(ctx, testWorkerName); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("expected ErrNotFound after delete, got %v", err)
 		}
 
@@ -959,13 +987,16 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if event.Type != store.WorkerEventDeleted {
 			t.Errorf("expected WorkerEventDeleted, got %v", event.Type)
 		}
+		if name := event.Worker.GetMetadata().GetName(); name != testWorkerName {
+			t.Errorf("deleted event named %q, want %q", name, testWorkerName)
+		}
 	})
 
 	t.Run("DeleteWorker_Idempotent", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
-		if err := s.DeleteWorker(ctx, "default", "pool-1", "non-existent"); err != nil {
+		if err := s.DeleteWorker(ctx, testWorkerName); err != nil {
 			t.Errorf("DeleteWorker of a missing worker should be a no-op, got %v", err)
 		}
 	})
@@ -994,12 +1025,10 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		worker1 := &ateapipb.Worker{WorkerNamespace: "ns1", WorkerPool: "pool1", WorkerPod: "pod1"}
-		worker2 := &ateapipb.Worker{WorkerNamespace: "ns1", WorkerPool: "pool1", WorkerPod: "pod2"}
-		if err := s.CreateWorker(ctx, worker1); err != nil {
+		if err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod1")); err != nil {
 			t.Fatalf("failed to create worker1: %v", err)
 		}
-		if err := s.CreateWorker(ctx, worker2); err != nil {
+		if err := s.CreateWorker(ctx, newTestWorker(otherTestWorkerName, "pod2")); err != nil {
 			t.Fatalf("failed to create worker2: %v", err)
 		}
 
@@ -1044,7 +1073,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		ctx := context.Background()
 
 		for i := 0; i < 5; i++ {
-			worker := &ateapipb.Worker{WorkerNamespace: "ns1", WorkerPool: "pool1", WorkerPod: fmt.Sprintf("pod%d", i)}
+			worker := newTestWorker(fmt.Sprintf("bb2e6a1c-0000-4000-8000-00000000000%d", i), fmt.Sprintf("pod%d", i))
 			if err := s.CreateWorker(ctx, worker); err != nil {
 				t.Fatalf("failed to create worker %d: %v", i, err)
 			}
