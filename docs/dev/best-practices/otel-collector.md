@@ -434,11 +434,26 @@ for a worked example.
 
 The collector configs here include a logs pipeline, but **Substrate does not
 currently export logs over OTLP.** `serverboot.InitLogger` writes structured
-JSON to stdout, and `atelet` wraps actor container output with the
-`ate.dev/*` metadata labels described in
+JSON to stdout, and `ateom` wraps actor container output with the `ate.*`
+metadata labels described in
 [Actor Observability](../../observability.md) — also on stdout. There is no
 `LoggerProvider` or OTLP log exporter in `internal/serverboot`, alongside
 `InitTracing` and `InitMetrics`.
+
+Those labels sit in a nested group (`labels`, or `logging.googleapis.com/labels`
+on GKE, where the key promotes the group into `LogEntry.labels`). A filelog
+receiver picking these lines up wants them as flat record attributes, which is
+one OTTL statement rather than a change to the producer:
+
+```yaml
+transform:
+  log_statements:
+    - merge_maps(attributes, attributes["labels"], "upsert") where attributes["labels"] != nil
+```
+
+The trace-context fields (`trace_id`, `span_id`, `trace_flags`) are already
+top-level and lowercase hex, so the filelog receiver's `trace_parser` maps them
+onto the log record's own trace fields with no transformation.
 
 Those logs are collected by whatever agent already reads container stdout on
 your nodes — Cloud Logging's agent on GKE, or your own. The collector is not

@@ -111,13 +111,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
 	tStart := time.Now()
 
-	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+	attribution := p.actorAttribution()
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
 	// Same as RunWorkload: retain before the restore, drop again if it fails. A
 	// Full-scope resume reaches "executing" in a different way than a cold boot
 	// does, but the window between accepting the actor and serving it is the same
 	// window, and a poll landing in it should name the actor either way.
-	attribution := p.actorAttribution()
 	s.activeActor.Store(&attribution)
 	defer func() {
 		if retErr != nil {
@@ -158,7 +158,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor restored", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
@@ -176,7 +176,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // caller from their tar.
 func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, restoreDir string, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
-	templateNS, templateName := p.templateNS, p.templateName
 
 	rr := s.resolveRuntime(p.assetPaths)
 	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
@@ -418,9 +417,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			slog.String("id", actorUID), slog.Any("err", dialErr))
 	} else {
 		ra.guestAgent = guestAC
+		attribution := p.actorAttribution()
 		for _, c := range containers {
-			streamID := c.GetName()
-			s.startActorLogForwarding(guestAC, p.actorRef, actorUID, templateNS, templateName, streamID, c.GetName())
+			s.startActorLogForwarding(guestAC, attribution, c.GetName(), c.GetName())
 		}
 	}
 

@@ -17,6 +17,7 @@ package networking
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -63,16 +64,7 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 	})
 
 	t.Run("arbitrary port reachable", func(t *testing.T) {
-		conn, err := router.Connect(ctx, actorRef, counterExtraPort)
-		if err != nil {
-			t.Fatalf("CONNECT to the actor's extra port: %v", err)
-		}
-		defer conn.Close()
-
-		resp, body := sendTunneledRequest(t, conn, resources.ActorDNSName(actorRef))
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("tunneled request returned HTTP %d, want 200; body: %s", resp.StatusCode, body)
-		}
+		body := waitForTunneledRouteReady(t, ctx, router, actorRef, counterExtraPort)
 		if !strings.Contains(body, "extra port 9090") {
 			t.Fatalf("tunneled response body = %q, want it to mention extra port 9090", body)
 		}
@@ -133,28 +125,70 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 	})
 }
 
-// sendTunneledRequest issues a plain GET / over conn (an established CONNECT
-// tunnel) and returns the parsed response with its body already read and the
-// connection's read side left consumed accordingly.
-func sendTunneledRequest(t *testing.T, conn interface {
+// waitForTunneledRouteReady retries an entire CONNECT exchange while the
+// resumed actor's route propagates through atenet-router. A CONNECT tunnel is
+// tied to one upstream connection, so each retry must establish a fresh tunnel
+// rather than reusing a response that Envoy has already closed.
+func waitForTunneledRouteReady(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, port int) string {
+	t.Helper()
+	const timeout = 30 * time.Second
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	var lastStatus int
+	var lastBody string
+
+	for {
+		conn, err := router.Connect(ctx, actorRef, port)
+		if err == nil {
+			resp, body, requestErr := requestTunneled(conn, resources.ActorDNSName(actorRef))
+			_ = conn.Close()
+			if requestErr == nil && resp.StatusCode == http.StatusOK {
+				return body
+			}
+			lastErr = requestErr
+			if resp != nil {
+				lastStatus = resp.StatusCode
+				lastBody = body
+			}
+		} else {
+			lastErr = err
+		}
+
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				t.Fatalf("tunneled request to port %d did not become ready within %s: %v", port, timeout, lastErr)
+			}
+			t.Fatalf("tunneled request to port %d returned HTTP %d after %s, want 200; body: %s", port, lastStatus, timeout, lastBody)
+		}
+		if lastErr != nil {
+			t.Logf("tunneled request to port %d failed: %v; retrying...", port, lastErr)
+		} else {
+			t.Logf("tunneled request to port %d returned HTTP %d; retrying...", port, lastStatus)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func requestTunneled(conn interface {
 	io.ReadWriter
 	SetDeadline(time.Time) error
-}, host string) (*http.Response, string) {
-	t.Helper()
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
+}, host string) (*http.Response, string, error) {
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return nil, "", fmt.Errorf("setting tunneled request deadline: %w", err)
+	}
 	if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n")); err != nil {
-		t.Fatalf("writing tunneled request: %v", err)
+		return nil, "", fmt.Errorf("writing tunneled request: %w", err)
 	}
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
-		t.Fatalf("reading tunneled response: %v", err)
+		return nil, "", fmt.Errorf("reading tunneled response: %w", err)
 	}
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		t.Fatalf("reading tunneled response body (HTTP %d): %v", resp.StatusCode, err)
+		return resp, "", fmt.Errorf("reading tunneled response body (HTTP %d): %w", resp.StatusCode, err)
 	}
-	return resp, string(body)
+	return resp, string(body), nil
 }
 
 // counterDefaultPortIPPattern matches the "hello from: <IP> | ..." response

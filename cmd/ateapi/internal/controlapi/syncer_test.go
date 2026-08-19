@@ -1015,11 +1015,12 @@ func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 type conflictStore struct {
 	store.Interface
 	conflictTriggered atomic.Bool
+	shouldInject      func(worker *ateapipb.Worker) bool
 	onUpdate          func(ctx context.Context, worker *ateapipb.Worker)
 }
 
 func (c *conflictStore) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	if c.onUpdate != nil && c.conflictTriggered.CompareAndSwap(false, true) {
+	if c.shouldInject != nil && c.shouldInject(worker) && c.conflictTriggered.CompareAndSwap(false, true) {
 		c.onUpdate(ctx, worker)
 	}
 	return c.Interface.UpdateWorker(ctx, worker, expectedVersion)
@@ -1045,7 +1046,20 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 
 	var cs *conflictStore
 	persistence, fakeK8s, fakeAte, syncer, cleanup := setupSyncerTestWithStore(t, ctx, func(s store.Interface) store.Interface {
-		cs = &conflictStore{Interface: s}
+		// Configure the injector before the syncer starts. It only fires for the
+		// update under test, so the initial worker creation cannot consume it.
+		cs = &conflictStore{
+			Interface: s,
+			shouldInject: func(w *ateapipb.Worker) bool {
+				return w.GetSandboxClass() == "microvm"
+			},
+			onUpdate: func(c context.Context, w *ateapipb.Worker) {
+				if cw, err := s.GetWorker(c, testPodUID); err == nil {
+					cw.NodeName = "node2"
+					_ = s.UpdateWorker(c, cw, cw.GetMetadata().GetVersion())
+				}
+			},
+		}
 		return cs
 	}, pool)
 	defer func() {
@@ -1113,14 +1127,6 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("pool informer cache failed to update: %v", err)
-	}
-
-	// Configure conflictStore to inject a concurrent version bump in Redis when the syncer calls UpdateWorker.
-	cs.onUpdate = func(c context.Context, w *ateapipb.Worker) {
-		if cw, err := cs.Interface.GetWorker(c, testPodUID); err == nil {
-			cw.NodeName = "node2"
-			_ = cs.Interface.UpdateWorker(c, cw, cw.GetMetadata().GetVersion())
-		}
 	}
 
 	// Touch the pod ONCE in K8s so the syncer reconciles it. The first reconcile's

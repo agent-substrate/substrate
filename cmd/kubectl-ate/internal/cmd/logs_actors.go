@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -326,9 +327,9 @@ func filterAndDisplayLogLine(line string, target resources.ActorRef, w io.Writer
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
-				if name, ok := labels["ate.dev/actor_name"].(string); ok && name != "" {
+				if name, ok := labels[string(ateattr.ActorNameKey)].(string); ok && name != "" {
 					emitter.Name = name
-					emitter.Atespace, _ = labels["ate.dev/actor_atespace"].(string)
+					emitter.Atespace, _ = labels[string(ateattr.AtespaceKey)].(string)
 					break
 				}
 			}
@@ -345,12 +346,14 @@ func filterAndDisplayLogLine(line string, target resources.ActorRef, w io.Writer
 		return logTime, false
 	}
 
-	// remove actor labels from CLI output
+	// Remove substrate's labels from CLI output. Stripping the whole reserved
+	// prefix rather than the known keys means an actor cannot get a plausible
+	// ate.*-namespaced label of its own printed as platform attribution.
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
 				for k := range labels {
-					if strings.HasPrefix(k, "ate.dev/") {
+					if strings.HasPrefix(k, ateattr.ReservedNamespace) {
 						delete(labels, k)
 					}
 				}
