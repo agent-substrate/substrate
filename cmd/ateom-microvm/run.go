@@ -321,8 +321,9 @@ type actorBootParams struct {
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
-	// the RunWorkload / RestoreWorkload RPC. It sizes the VM (vCPUs, memory) and
-	// the guest container cgroup. Zero fields keep the kata defaults.
+	// the RunWorkload / RestoreWorkload RPC. It sizes the VM itself (vCPUs,
+	// memory); a container's own cgroup limit comes from its declared resources.
+	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
 }
 

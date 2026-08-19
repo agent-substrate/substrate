@@ -24,10 +24,9 @@ import (
 )
 
 // toAteletResources resolves a container's declared limits into the scalars
-// atelet and the ateoms consume. This is the only place a resource.Quantity is
-// parsed; everything downstream compares numbers. Returns nil when the
-// container declares no limits, so the OCI spec stays untouched for templates
-// that do not use them.
+// atelet and the ateoms consume; everything downstream compares numbers.
+// Returns nil when the container declares no limits, so the OCI spec stays
+// untouched for templates that do not use them.
 func toAteletResources(r *atev1alpha1.ContainerResources) *ateletpb.ResourceLimits {
 	if r == nil || len(r.Limits) == 0 {
 		return nil

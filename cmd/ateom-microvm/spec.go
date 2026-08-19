@@ -192,9 +192,10 @@ func (e guestEnvelope) cpuRemedy() string {
 }
 
 // checkResourceEnvelope rejects limits the guest can never satisfy. The guest is
-// sized by the pool's SandboxConfig, not by the actor, so a limit above the
-// guest can never bind: the container would hit the guest's own ceiling
-// instead, with an error pointing nowhere useful.
+// sized from the actor's own declared limits, or from the pool's SandboxConfig
+// when the template declares none, so a limit above the guest can never bind:
+// the container would hit the guest's own ceiling instead, with an error
+// pointing nowhere useful.
 //
 // Limits are summed across the actor's containers rather than checked one at a
 // time, because they share one guest. Errors carry codes.InvalidArgument: the
