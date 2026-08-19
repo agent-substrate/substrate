@@ -23,9 +23,7 @@ import (
 )
 
 // The agent applies cgroup limits from the spec it is sent, so anything this
-// conversion drops is silently unenforced in the guest. Memory and the CPU
-// quota were both missing here, which is why a container's memory limit read
-// back as "max" inside the VM.
+// conversion drops is silently unenforced in the guest.
 func TestSpecToAgentPB_ResourceLimits(t *testing.T) {
 	memLimit := int64(67108864)
 	quota := int64(20000)
@@ -109,5 +107,58 @@ func TestSpecToAgentPB_QuotaWithoutPeriodGetsDefault(t *testing.T) {
 	}
 	if cpu.Period != DefaultCPUPeriodUS {
 		t.Errorf("CPU.Period = %d, want DefaultCPUPeriodUS (%d)", cpu.Period, DefaultCPUPeriodUS)
+	}
+}
+
+// Quota and period are plain integers on the wire, where zero is
+// indistinguishable from unset. A non-positive quota is "unlimited" in the OCI
+// spec, so it is dropped rather than sent as a zero the guest would apply as no
+// CPU at all; a zero period is dropped so a live quota keeps the CFS default it
+// is expressed against.
+func TestSpecToAgentPB_NonPositiveCPUValuesAreDropped(t *testing.T) {
+	quota := int64(20000)
+	zeroQuota := int64(0)
+	negQuota := int64(-1)
+	zeroPeriod := uint64(0)
+	livePeriod := uint64(50000)
+
+	tests := []struct {
+		name       string
+		cpu        *specs.LinuxCPU
+		wantQuota  int64
+		wantPeriod uint64
+	}{{
+		name:       "zero period keeps the CFS default",
+		cpu:        &specs.LinuxCPU{Quota: &quota, Period: &zeroPeriod},
+		wantQuota:  quota,
+		wantPeriod: DefaultCPUPeriodUS,
+	}, {
+		name:       "zero quota is unlimited",
+		cpu:        &specs.LinuxCPU{Quota: &zeroQuota, Period: &livePeriod},
+		wantQuota:  0,
+		wantPeriod: livePeriod,
+	}, {
+		name:       "negative quota is unlimited",
+		cpu:        &specs.LinuxCPU{Quota: &negQuota, Period: &livePeriod},
+		wantQuota:  0,
+		wantPeriod: livePeriod,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SpecToAgentPB(&specs.Spec{
+				Linux: &specs.Linux{Resources: &specs.LinuxResources{CPU: tt.cpu}},
+			})
+			cpu := got.Linux.Resources.CPU
+			if cpu == nil {
+				t.Fatal("CPU = nil, want a converted cpu block")
+			}
+			if cpu.Quota != tt.wantQuota {
+				t.Errorf("CPU.Quota = %d, want %d", cpu.Quota, tt.wantQuota)
+			}
+			if cpu.Period != tt.wantPeriod {
+				t.Errorf("CPU.Period = %d, want %d", cpu.Period, tt.wantPeriod)
+			}
+		})
 	}
 }

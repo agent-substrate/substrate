@@ -133,7 +133,10 @@ func SpecToAgentPB(s *specs.Spec) *agentpb.Spec {
 				if r.CPU.Shares != nil {
 					cpu.Shares = *r.CPU.Shares
 				}
-				if r.CPU.Quota != nil {
+				// A non-positive quota means "unlimited" in the OCI spec, so it is
+				// left unset rather than sent as a literal zero, which the guest
+				// would apply as no CPU at all. cpuLimitMillis reads it the same way.
+				if r.CPU.Quota != nil && *r.CPU.Quota > 0 {
 					cpu.Quota = *r.CPU.Quota
 					// period is optional in OCI but not on the wire, where it is a
 					// plain uint64 and an unset one is indistinguishable from zero.
@@ -141,7 +144,7 @@ func SpecToAgentPB(s *specs.Spec) *agentpb.Spec {
 					// so fall back to the CFS default the quota is expressed against.
 					cpu.Period = DefaultCPUPeriodUS
 				}
-				if r.CPU.Period != nil {
+				if r.CPU.Period != nil && *r.CPU.Period > 0 {
 					cpu.Period = *r.CPU.Period
 				}
 				res.CPU = cpu
