@@ -410,8 +410,8 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	// Well-formed precondition, so the call gets as far as the read it is
 	// meant to fail on.
-	pinned := store.Precondition{UID: "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d", Version: 1}
-	_, err := s.UpdateActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}, pinned, func(toUpdate *ateapipb.Actor) error {
+	guard := store.Precondition{UID: "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d", Version: 1}
+	_, err := s.UpdateActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}, guard, func(toUpdate *ateapipb.Actor) error {
 		t.Error("mutate must not run for a missing actor")
 		return nil
 	})
@@ -445,10 +445,10 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 		t.Fatalf("recreated actor reused uid %s, want a fresh one", recreated.GetMetadata().GetUid())
 	}
 
-	// original pins version 1, and the recreated actor is also at version 1, so
+	// original guards on version 1, and the recreated actor is also at version 1, so
 	// only the uid can tell the two incarnations apart.
 	_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(toUpdate *ateapipb.Actor) error {
-		t.Error("mutate ran past its precondition once the pinned incarnation was gone")
+		t.Error("mutate ran past its precondition once the guarded incarnation was gone")
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
 	})
@@ -456,9 +456,9 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 		t.Errorf("UpdateActor error = %v, want one matching store.ErrUIDConflict", err)
 	}
 
-	// The pinned version still matches, so this is the incarnation failure alone.
+	// The guarded version still matches, so this is the incarnation failure alone.
 	if errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("UpdateActor error = %v, want no store.ErrVersionConflict match: the pinned version is the stored one", err)
+		t.Errorf("UpdateActor error = %v, want no store.ErrVersionConflict match: the guarded version is the stored one", err)
 	}
 
 	stored, err := s.GetActor(ctx, actorRef)
@@ -488,7 +488,7 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 
 	// The write above moved the version, so created is now a stale observation.
 	_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
-		t.Error("mutate ran past its precondition once the pinned version had moved")
+		t.Error("mutate ran past its precondition once the guarded version had moved")
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		return nil
 	})
@@ -1226,8 +1226,8 @@ func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	// A well-formed precondition, so the call gets as far as the read it is
 	// meant to fail on.
-	pinned := store.Precondition{UID: "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d", Version: 1}
-	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "does-not-exist", pinned, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	guard := store.Precondition{UID: "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d", Version: 1}
+	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "does-not-exist", guard, func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		t.Error("mutate must not run for a missing tag")
 		return nil
 	})
@@ -1261,7 +1261,7 @@ func TestUpdateActorSnapshotTag_RejectsStaleUID(t *testing.T) {
 
 	// original and recreated have different UIDs, so the mutation must never run
 	_, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.PreconditionFrom(original), func(toUpdate *ateapipb.ActorSnapshotTag) error {
-		t.Error("mutate ran past its precondition once the pinned incarnation was gone")
+		t.Error("mutate ran past its precondition once the guarded incarnation was gone")
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 		return nil
 	})
@@ -1269,9 +1269,9 @@ func TestUpdateActorSnapshotTag_RejectsStaleUID(t *testing.T) {
 		t.Errorf("UpdateActorSnapshotTag error = %v, want one matching store.ErrUIDConflict", err)
 	}
 
-	// The pinned version still matches, so this is the incarnation failure alone.
+	// The guarded version still matches, so this is the incarnation failure alone.
 	if errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("UpdateActorSnapshotTag error = %v, want no store.ErrVersionConflict match: the pinned version is the stored one", err)
+		t.Errorf("UpdateActorSnapshotTag error = %v, want no store.ErrVersionConflict match: the guarded version is the stored one", err)
 	}
 
 	stored, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
@@ -1297,7 +1297,7 @@ func TestUpdateActorSnapshotTag_RejectsStaleVersion(t *testing.T) {
 
 	// The write above moved the version, so tagged is now a stale observation.
 	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", store.PreconditionFrom(tagged), func(toUpdate *ateapipb.ActorSnapshotTag) error {
-		t.Error("mutate ran past its precondition once the pinned version had moved")
+		t.Error("mutate ran past its precondition once the guarded version had moved")
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE
 		return nil
 	})
@@ -2550,8 +2550,8 @@ func TestUpdateActorTemplate_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	// A well-formed precondition, so the call gets as far as the read it is
 	// meant to fail on.
-	pinned := store.Precondition{UID: "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d", Version: 1}
-	_, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "non-existent"}, pinned, func(dbTemplate *ateapipb.ActorTemplate) error {
+	guard := store.Precondition{UID: "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d", Version: 1}
+	_, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "non-existent"}, guard, func(dbTemplate *ateapipb.ActorTemplate) error {
 		t.Error("mutate must not run for a missing template")
 		return nil
 	})

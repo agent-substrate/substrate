@@ -411,14 +411,14 @@ message ResourceMetadata {
 - A server-assigned [UUID4](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)).
 - Useful for correlation across logs, events, and audit trails where the resource `name` may not be available. Also useful
 for controllers that need to do bookkeeping and track state associated with a resource.
-- Required on Update requests, where it pins the lifecycle the write is for. See section #7.
+- Required on Update requests, where it guards the lifecycle the write is for. See section #7.
 
 ### 6.4 `version`
 
 - Type: `int64`.
 - Increased on every mutation; the increment amount is not part of the contract. Allows clients to do optimistic locking
 on resource updates. Also establishes a total order on "snapshots" of a given resource. See section #7.
-- Required on Update requests, where it pins the revision the write is against.
+- Required on Update requests, where it guards the revision the write is against.
 
 ### 6.5 `create_time`
 
@@ -474,27 +474,35 @@ The two guards protect against different things, and neither substitutes for the
 
 **Update: both guards are required.** They are specified in the embedded resource's `metadata`:
 
-```proto
-// Client read actor at version 5 (uid "a1b2..."), now updating:
-UpdateActorRequest {
-  actor: Actor {
-    metadata: ResourceMetadata {
-      atespace: "my-space"
-      name:     "my-actor"
-      version:  5            // required: fail unless server is at version 5
-      uid:      "a1b2..."    // required: fail unless server uid matches
-    }
-    worker_selector: ...
-  }
-  update_mask: "worker_selector"
-}
+Because only a prior read supplies the guards, **every update is a read-modify-write**:
+
+```go
+// 1. Read.
+actor, err := client.GetActor(ctx, &GetActorRequest{
+    Actor: &ObjectRef{Atespace: "my-space", Name: "my-actor"},
+})
+
+// 2. Modify the message you just read, in place (or clone it). 
+// But, do not build a fresh Actor.
+actor.WorkerSelector = &Selector{MatchLabels: map[string]string{"tier": "paid"}}
+
+// 3. Write it back. actor.metadata already carries the required fields.
+updated, err := client.UpdateActor(ctx, &UpdateActorRequest{
+    Actor:      actor,
+    UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+})
 ```
 
 - `version` and `uid` are control fields managed by the server, not mutable fields. They **must not** be listed in `update_mask`.
 - Both are **required**: an update that leaves `version` (0) or `uid` ("") unset is rejected with `INVALID_ARGUMENT`. There is no blind by-name update. A client that has not read the resource cannot update it; a client that has read it already holds both values.
 - The requirement is on Update only. Delete's guards stay optional (below), and Create assigns both fields rather than checking them.
 
-**Delete:** the guards are specified in a `DeleteOptions` message, reused across every `Delete<Type>Request`:
+- Modify what you read, do not reconstruct it: step 2 above mutates the message the server returned rather than assembling a new `Actor`. 
+   - This matters when the server is newer than the client: a reconstructed message does not contain fields it does not recognize, and any masked field it does not know to populate is silently cleared.
+- Do not round-trip a resource through JSON between read and write. `protojson` cannot represent unknown fields. Marshalling silently drops them.    
+- Do not retry `ABORTED` updates at the server side. `ABORTED` means someone else wrote something you have not seen. A blind retry reapplies your change on top of a concurrent change nobody reviewed. Surface the conflict instead.
+
+**Delete:** the guards are specified in a `DeleteOptions` message, reused across every `Delete<Type>Request`.:
 
 ```proto
 message DeleteActorRequest {

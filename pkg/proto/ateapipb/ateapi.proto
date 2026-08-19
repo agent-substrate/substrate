@@ -753,7 +753,6 @@ message UpdateActorSnapshotTagRequest {
   // tag.metadata.atespace and tag.metadata.name identify which resource to
   // update.
   // tag.metadata.version and tag.metadata.uid are required preconditions
-  // and zero values skip the check.
   ActorSnapshotTag tag = 1;
 
   // The set of fields to update. Required.
@@ -918,7 +917,7 @@ message WorkerStatus {
 // "unknown/unset" for that dimension: treated as unconstrained so placement is
 // not blocked (matching the pre-capacity behavior).
 message WorkerCapacity {
-  int64 cpu_milli = 1; // CPU capacity in millicores (1000 = one core).
+  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
   int64 memory_bytes = 2; // Memory capacity in bytes.
 }
 

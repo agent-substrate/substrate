@@ -3870,7 +3870,6 @@ type UpdateActorSnapshotTagRequest struct {
 	// tag.metadata.atespace and tag.metadata.name identify which resource to
 	// update.
 	// tag.metadata.version and tag.metadata.uid are required preconditions
-	// and zero values skip the check.
 	Tag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
 	// The set of fields to update. Required.
 	//

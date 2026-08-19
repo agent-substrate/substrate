@@ -32,8 +32,8 @@ var (
 	// ErrAlreadyExists indicates that the object already exists in the DB.
 	ErrAlreadyExists = errors.New("persistence: already exists")
 
-	// ErrVersionConflict indicates a write lost to a concurrent one: either a
-	// precondition pinned a version the stored object is no longer at, or the
+	// ErrVersionConflict indicates a write lost to a concurrent one: either the
+	// write was guarded on a version the stored object is no longer at, or the
 	// store's own retry budget was exhausted losing the same race.
 	ErrVersionConflict = errors.New("persistence: version conflict")
 
@@ -43,13 +43,13 @@ var (
 	// ErrLockConflict indicates that a distributed lock is already held by another client.
 	ErrLockConflict = errors.New("persistence: lock conflict")
 
-	// ErrUIDConflict indicates a precondition pinned a uid the stored object does
+	// ErrUIDConflict indicates a write was guarded on a uid the stored object does
 	// not carry, meaning the name now addresses a different incarnation. Retrying
 	// can never resolve it.
 	ErrUIDConflict = errors.New("persistence: uid conflict")
 
 	// ErrPreconditionRequired indicates an update was called with a precondition
-	// that does not pin both uid and version. Blind writes are not accepted.
+	// missing either guard (uid or version). Blind writes are not accepted.
 	ErrPreconditionRequired = errors.New("persistence: precondition required")
 )
 
@@ -70,9 +70,9 @@ type Interface interface {
 	// UpdateActor performs a transactional read-modify-write and returns the stored
 	// actor with advanced metadata (version, update_time).
 	//
-	// precondition pins the actor the write may land on, and is checked against
-	// the stored actor before mutate runs. Both uid and version preconditions are
-	// required.
+	// precondition guards the write against landing on unexpected state: it is
+	// checked against the stored actor before mutate runs. Both the uid and
+	// version guards are required.
 	//
 	// mutate receives the stored actor and edits it in place. The mutated actor is
 	// written iff mutate returns nil.
@@ -80,10 +80,10 @@ type Interface interface {
 	// mutate may run more than once, because the store retries when a concurrent
 	// write invalidates the transaction.
 	//
-	// Returns ErrPreconditionRequired if the precondition pins nothing, ErrNotFound
-	// if missing, ErrUIDConflict or ErrVersionConflict if the precondition no
-	// longer holds, ErrVersionConflict if the retry budget is exhausted, or the
-	// mutate's error verbatim otherwise.
+	// Returns ErrPreconditionRequired if the precondition omits either guard,
+	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
+	// precondition no longer holds, ErrVersionConflict if the retry budget is
+	// exhausted, or the mutate's error verbatim otherwise.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
@@ -112,9 +112,9 @@ type Interface interface {
 	// addressed by atespace and name, and returns the stored ActorSnapshotTag with
 	// advanced metadata (version, update_time).
 	//
-	// precondition pins the actor the write may land on, and is checked against
-	// the stored actor before mutate runs. Both uid and version preconditions are
-	// required.
+	// precondition guards the write against landing on unexpected state: it is
+	// checked against the stored tag before mutate runs. Both the uid and version
+	// guards are required.
 	//
 	// mutate receives the stored tag and edits it in place. The mutated tag is
 	// written iff mutate returns nil.
@@ -122,10 +122,10 @@ type Interface interface {
 	// mutate may run more than once, because the store retries when a concurrent
 	// write invalidates the transaction.
 	//
-	// Returns ErrPreconditionRequired if the precondition pins nothing, ErrNotFound
-	// if missing, ErrUIDConflict or ErrVersionConflict if the precondition no
-	// longer holds, ErrVersionConflict if the retry budget is exhausted, or the
-	// mutate's error verbatim otherwise.
+	// Returns ErrPreconditionRequired if the precondition omits either guard,
+	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
+	// precondition no longer holds, ErrVersionConflict if the retry budget is
+	// exhausted, or the mutate's error verbatim otherwise.
 	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
@@ -168,9 +168,9 @@ type Interface interface {
 	// UpdateActorTemplate performs a transactional read-modify-write and returns
 	// the updated template with advanced metadata (version, update_time).
 	//
-	// precondition pins the actor the write may land on, and is checked against
-	// the stored actor before mutate runs. Both uid and version preconditions are
-	// required.
+	// precondition guards the write against landing on unexpected state: it is
+	// checked against the stored template before mutate runs. Both the uid and
+	// version guards are required.
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
@@ -211,8 +211,9 @@ type Interface interface {
 	DebugClearAll(ctx context.Context) error
 }
 
-// Precondition pins the object an update is allowed to land on, on the uid and
-// version the caller observed. Both fields are required.
+// Precondition guards an update with the uid and version the caller observed:
+// the write lands only if the stored object still matches both. Both fields are
+// required.
 type Precondition struct {
 	// UID is the incarnation the write is for.
 	UID string
@@ -221,18 +222,19 @@ type Precondition struct {
 }
 
 // hasResourceMetadata is an object the store addresses by atespace and name,
-// and whose identity a caller can pin with a Precondition.
+// and whose identity a caller can guard with a Precondition.
 type hasResourceMetadata interface {
 	GetMetadata() *ateapipb.ResourceMetadata
 }
 
-// PreconditionFrom pins the object the caller observed, on its uid and version.
+// PreconditionFrom builds the guards from the object the caller observed: its
+// uid and version.
 func PreconditionFrom[T hasResourceMetadata](observed T) Precondition {
 	md := observed.GetMetadata()
 	return Precondition{UID: md.GetUid(), Version: md.GetVersion()}
 }
 
-// Validate reports whether the precondition pins the required fields (uid and version)
+// Validate reports whether the precondition carries both required guards (uid and version)
 //
 // Returns ErrPreconditionRequired, which the update surfaces verbatim.
 func (p Precondition) Validate() error {
@@ -245,7 +247,7 @@ func (p Precondition) Validate() error {
 	return nil
 }
 
-// Check reports whether md is still the object p pins. The uid is reported
+// Check reports whether md still matches the guards p carries. The uid is reported
 // first: a new incarnation makes the version meaningless.
 func (p Precondition) Check(md *ateapipb.ResourceMetadata) error {
 	if p.UID != md.GetUid() {

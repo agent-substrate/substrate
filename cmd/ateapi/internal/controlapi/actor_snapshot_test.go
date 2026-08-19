@@ -38,8 +38,8 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 		ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE.String(),
 		ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED.String(),
 	}
-	// Every case pins a uid and version, because an update that pins neither
-	// is rejected as a blind write before anything else is checked.
+	// Every case carries a uid and version guard, because an update that carries
+	// neither is rejected as a blind write before anything else is checked.
 	tests := []struct {
 		name      string
 		req       *ateapipb.UpdateActorSnapshotTagRequest
@@ -151,7 +151,7 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 		},
 		{
 			// A blind write: the caller never read the tag it is updating.
-			name: "pins neither uid nor version",
+			name: "guards on neither uid nor version",
 			req: &ateapipb.UpdateActorSnapshotTagRequest{
 				Tag: &ateapipb.ActorSnapshotTag{
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
@@ -327,10 +327,11 @@ func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 	})
 
+	// The guards are the ones the client read, so the rejection can only come
+	// from the masked-but-unset scope.
+	stored.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED
 	_, err := svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag1"},
-		},
+		Tag:        stored,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})
 	if code := status.Code(err); code != codes.InvalidArgument {
@@ -442,11 +443,9 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 	// The client asserts "only update the tag with uid A". Its version guard is
 	// satisfied by B as well, because re-tagging resets the version to 1: the
 	// uid is the only thing that can tell the two lifecycles apart.
+	originalTag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err = svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: originalTag.GetMetadata(),
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-		},
+		Tag:        originalTag,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})
 	if code := status.Code(err); code != codes.Aborted {
@@ -467,7 +466,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 
 // TestUpdateActorSnapshotTag_ConcurrentUpdate checks that a write landing in
 // the handler's read-modify-write window is reported as Aborted rather than
-// absorbed. Every update pins a version, so there is no unguarded update left
+// absorbed. Every update guards on a version, so there is no unguarded update left
 // for the server to resolve on the client's behalf.
 func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 	ctx := context.Background()
@@ -506,15 +505,13 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 	}
 	svc := &Service{persistence: racing}
 
+	originalTag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err = svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: originalTag.GetMetadata(),
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-		},
+		Tag:        originalTag,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})
 	if code := status.Code(err); code != codes.Aborted {
-		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code Aborted: the pinned version moved under the update", err, code)
+		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
 
 	storedTag, err := persistence.GetActorSnapshotTag(ctx, testAtespace, tagName)

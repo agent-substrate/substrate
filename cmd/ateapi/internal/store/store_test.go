@@ -44,7 +44,7 @@ func TestPreconditionCheck(t *testing.T) {
 		wantErr      error
 	}{
 		{
-			name:         "the pinned object is still the stored one",
+			name:         "the guarded object is still the stored one",
 			precondition: Precondition{UID: storedUID, Version: storedVer},
 			wantErr:      nil,
 		},
@@ -83,22 +83,22 @@ func TestPreconditionValidate(t *testing.T) {
 		wantErr      error
 	}{
 		{
-			name:         "pinning both uid and version is what an update requires",
+			name:         "guarding on both uid and version is what an update requires",
 			precondition: Precondition{UID: storedUID, Version: storedVer},
 			wantErr:      nil,
 		},
 		{
-			name:         "pinning nothing is a blind write",
+			name:         "guarding on nothing is a blind write",
 			precondition: Precondition{},
 			wantErr:      ErrPreconditionRequired,
 		},
 		{
-			name:         "a uid alone does not pin a revision",
+			name:         "a uid alone does not guard a revision",
 			precondition: Precondition{UID: storedUID},
 			wantErr:      ErrPreconditionRequired,
 		},
 		{
-			name:         "a version alone does not pin an incarnation",
+			name:         "a version alone does not guard an incarnation",
 			precondition: Precondition{Version: storedVer},
 			wantErr:      ErrPreconditionRequired,
 		},
@@ -121,7 +121,7 @@ func TestPreconditionFrom(t *testing.T) {
 		wantValidateErr error
 	}{
 		{
-			name:            "the observed object pins its uid and version",
+			name:            "the observed object supplies its uid and version as guards",
 			observed:        &ateapipb.Actor{Metadata: storedMetadata},
 			want:            Precondition{UID: storedUID, Version: storedVer},
 			wantValidateErr: nil,

@@ -24,6 +24,22 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
+// tagActorSnapshot points tagName at snapshotRef with atespace scope.
+func tagActorSnapshot(t *testing.T, tc *testContext, snapshotRef *ateapipb.ObjectRef, tagName string) *ateapipb.ActorSnapshotTag {
+	t.Helper()
+	tag, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Snapshot: snapshotRef,
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorSnapshotTag(%s) failed: %v", tagName, err)
+	}
+	return tag
+}
+
 // TestUpdateActorSnapshotTag_Preconditions verifies the required version and uid
 // guards carried in the tag's metadata.
 func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
@@ -35,12 +51,22 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 
 	ctx := context.Background()
 	const snapshotName, tagName = "snapshot-1", "before-upgrade"
-	snapshotRef := createActorSnapshot(t, tc, snapshotName)
+	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/" + snapshotName},
+	}); err != nil {
+		t.Fatalf("CreateActorSnapshot(%s) failed: %v", snapshotName, err)
+	}
+	snapshotRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: snapshotName}
 
 	// Each call to update() flips the scope, so every accepted update is an
 	// observable write that bumps the version.
 	update := func(meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
-		return updateActorSnapshotTagScope(tc, tagName, meta, scope)
+		meta.Atespace, meta.Name = testAtespace, tagName
+		return tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
+			Tag:        &ateapipb.ActorSnapshotTag{Metadata: meta, Scope: scope},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+		})
 	}
 
 	// Delete and recreate the same atespace/name tag, so the first lifecycle's
@@ -64,7 +90,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it
-	// pins matches the recreated tag's.
+	// guards on matches the recreated tag's.
 	_, err = update(&ateapipb.ResourceMetadata{Uid: staleUID, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
 	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("ActorSnapshot tag %s/%s not found with uid %s", testAtespace, tagName, staleUID))
 
@@ -87,7 +113,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 
-	// Re-pinning at the version the last write produced succeeds again.
+	// Guarding on the version the last write produced succeeds again.
 	updated, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
 	if err != nil {
 		t.Fatalf("UpdateActorSnapshotTag(matching guards) failed: %v", err)

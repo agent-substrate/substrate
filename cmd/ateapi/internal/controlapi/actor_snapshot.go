@@ -184,11 +184,11 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	inTag := req.GetTag()
-	atespace, name := inTag.GetMetadata().GetAtespace(), inTag.GetMetadata().GetName()
+	in := req.GetTag()
+	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
 
-	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(inTag), func(toUpdate *ateapipb.ActorSnapshotTag) error {
-		fieldmask.Apply(toUpdate, inTag, req.GetUpdateMask())
+	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
 		return nil
 	})
 	if err != nil {
@@ -196,7 +196,7 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "ActorSnapshot tag %s/%s not found with uid %s", atespace, name, inTag.GetMetadata().GetUid())
+			return nil, status.Errorf(codes.Aborted, "ActorSnapshot tag %s/%s not found with uid %s", atespace, name, in.GetMetadata().GetUid())
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)

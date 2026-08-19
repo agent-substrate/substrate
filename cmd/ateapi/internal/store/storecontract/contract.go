@@ -359,7 +359,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 
 		// original and recreated have different UIDs, so the mutation must never run
 		_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(original), func(dbActor *ateapipb.Actor) error {
-			t.Error("mutate ran past its precondition once the pinned incarnation was gone")
+			t.Error("mutate ran past its precondition once the guarded incarnation was gone")
 			dbActor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 			return nil
 		})
@@ -461,12 +461,12 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				precondition: store.Precondition{},
 			},
 			{
-				name:         "pinning only a uid",
+				name:         "guarding on only a uid",
 				actorRef:     actorRef,
 				precondition: store.Precondition{UID: created.GetMetadata().GetUid()},
 			},
 			{
-				name:         "pinning only a version",
+				name:         "guarding on only a version",
 				actorRef:     actorRef,
 				precondition: store.Precondition{Version: created.GetMetadata().GetVersion()},
 			},
@@ -761,11 +761,11 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 				precondition: store.Precondition{},
 			},
 			{
-				name:         "pinning only a uid",
+				name:         "guarding on only a uid",
 				precondition: store.Precondition{UID: created.GetMetadata().GetUid()},
 			},
 			{
-				name:         "pinning only a version",
+				name:         "guarding on only a version",
 				precondition: store.Precondition{Version: created.GetMetadata().GetVersion()},
 			},
 		}
@@ -944,11 +944,11 @@ func runActorSnapshotContractTests(t *testing.T, setup func(t *testing.T) store.
 				precondition: store.Precondition{},
 			},
 			{
-				name:         "pinning only a uid",
+				name:         "guarding on only a uid",
 				precondition: store.Precondition{UID: created.GetMetadata().GetUid()},
 			},
 			{
-				name:         "pinning only a version",
+				name:         "guarding on only a version",
 				precondition: store.Precondition{Version: created.GetMetadata().GetVersion()},
 			},
 		}

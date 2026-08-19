@@ -73,7 +73,7 @@ func ValidateObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.Error
 
 // ValidateUpdateMetadataRef checks the metadata an update request uses to name
 // the resource it acts on. All four fields are required: atespace and name
-// identify the resource, and uid and version pin the incarnation and revision
+// identify the resource, and uid and version guard the incarnation and revision
 // the update was written against.  It does not check the server-managed timestamps,
 // which clients may not set. Unlike ValidateObjectRef, nil metadata is an error
 // rather than a no-op: a request that names no resource cannot be served.

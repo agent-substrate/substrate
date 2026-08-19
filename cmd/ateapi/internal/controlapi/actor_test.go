@@ -436,11 +436,9 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	svc := &Service{persistence: racing}
 
 	// The client asserts "only update the actor with uid A".
+	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:       original.GetMetadata(),
-			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
-		},
+		Actor:      original,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	})
 	if code := status.Code(err); code != codes.Aborted {
@@ -470,8 +468,8 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 }
 
 // TestUpdateActor_ConcurrentDisjointUpdates checks that a concurrent write is
-// reported even when it touched a field the update does not. The version is
-// pinned on the whole actor, not per field, so the server cannot know the two
+// reported even when it touched a field the update does not. The version guards
+// the whole actor, not a single field, so the server cannot know the two
 // writes commute: it reports the conflict and leaves reconciling to the client.
 func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	ctx := context.Background()
@@ -507,15 +505,13 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
+	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:       original.GetMetadata(),
-			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
-		},
+		Actor:      original,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	})
 	if code := status.Code(err); code != codes.Aborted {
-		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the pinned version moved under the update", err, code)
+		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
 
 	stored, err := persistence.GetActor(ctx, actorRef)
@@ -532,8 +528,8 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 }
 
 // updateActorReq builds a minimal valid UpdateActorRequest, then applies the
-// given mutations. The metadata pins a uid and version because an update that
-// pins neither is rejected as a blind write.
+// given mutations. The metadata carries a uid and version guard because an
+// update that carries neither is rejected as a blind write.
 func updateActorReq(mutate ...func(*ateapipb.UpdateActorRequest)) *ateapipb.UpdateActorRequest {
 	req := &ateapipb.UpdateActorRequest{
 		Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{

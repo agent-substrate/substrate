@@ -45,7 +45,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -288,45 +287,6 @@ func createAtespace(t *testing.T, tc *testContext, name string) {
 	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: name}}}); err != nil {
 		t.Fatalf("CreateAtespace(%s) failed: %v", name, err)
 	}
-}
-
-// createActorSnapshot seeds an ActorSnapshot in testAtespace directly through
-// the store, so tag tests do not need a full resume/suspend lifecycle.
-func createActorSnapshot(t *testing.T, tc *testContext, name string) *ateapipb.ObjectRef {
-	t.Helper()
-	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/" + name},
-	}); err != nil {
-		t.Fatalf("CreateActorSnapshot(%s) failed: %v", name, err)
-	}
-	return &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
-}
-
-// tagActorSnapshot points tagName at snapshotRef with atespace scope.
-func tagActorSnapshot(t *testing.T, tc *testContext, snapshotRef *ateapipb.ObjectRef, tagName string) *ateapipb.ActorSnapshotTag {
-	t.Helper()
-	tag, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-			Snapshot: snapshotRef,
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateActorSnapshotTag(%s) failed: %v", tagName, err)
-	}
-	return tag
-}
-
-// updateActorSnapshotTagScope sets tagName's scope, carrying meta as the
-// optional uid/version preconditions.
-func updateActorSnapshotTagScope(tc *testContext, tagName string, meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
-	meta.Atespace, meta.Name = testAtespace, tagName
-	return tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        &ateapipb.ActorSnapshotTag{Metadata: meta, Scope: scope},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
-	})
 }
 
 const poolLabelKey = "pool"

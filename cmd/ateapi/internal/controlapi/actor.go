@@ -279,12 +279,12 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	inActor := req.GetActor()
-	actorRef := resources.ActorRefFromActor(inActor)
+	in := req.GetActor()
+	actorRef := resources.ActorRefFromActor(in)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapipb.Actor) error {
-		fieldmask.Apply(toUpdate, inActor, req.GetUpdateMask())
+	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
+		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
 		return nil
 	})
 	if err != nil {
@@ -292,7 +292,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "actor %s/%s not found with uid %s", inActor.GetMetadata().GetAtespace(), inActor.GetMetadata().GetName(), inActor.GetMetadata().GetUid())
+			return nil, status.Errorf(codes.Aborted, "actor %s/%s not found with uid %s", in.GetMetadata().GetAtespace(), in.GetMetadata().GetName(), in.GetMetadata().GetUid())
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "actor %s not found", actorRef)

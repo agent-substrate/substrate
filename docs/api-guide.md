@@ -410,7 +410,17 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); `actor_template_namespace` and `actor_template_name` select the `ActorTemplate`.
-*   **Response:** `CreateActorResponse` containing the initialized `Actor` object.
+*   **Response:** the initialized `Actor`.
+
+#### `UpdateActor`
+Changes mutable fields on an existing actor.
+*   **Request:** `UpdateActorRequest`
+    *   `actor`: `Actor` — `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions.
+    *   `update_mask`: **required**, and must list only mutable paths (currently just `worker_selector`). `*` is not accepted, and fields outside the mask are left untouched.
+*   **Response:** the updated `Actor`.
+*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the mask is missing/empty/names an immutable path; `ABORTED` if either guard no longer matches the stored resource.
+
+Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 
 #### `ResumeActor`
 Activates a suspended actor by restoring it onto a physical worker.
@@ -429,7 +439,8 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
 Removes an actor from the registry.
 *   **Constraints:** Only actors in `ACTOR_STATE_SUSPENDED` can be deleted.
 *   **Request:** `DeleteActorRequest`
-*   **Response:** `DeleteActorResponse` (empty).
+    *   `actor`: `ObjectRef` of the actor to delete. Delete takes no preconditions today, so it is last-writer-wins.
+*   **Response:** the deleted `Actor`, as it was immediately before removal.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.
