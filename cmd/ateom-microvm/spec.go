@@ -96,11 +96,11 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxS
 	// agent accepts. (Static shaper; pod DNS integration is future work.)
 	//
 	// Dropping atelet's volume bind mounts here is fine: host-path binds can't
-	// attach inside the guest anyway. Volumes reach micro-VM containers over
-	// per-actor virtio-fs shares instead — durable-dir volumes via the
-	// writable share (durable.go) and system-info volumes via the read-only
-	// share (systeminfo.go) — with the binds added to the workload specs ateom
-	// drives through the kata-agent (see workloadSpec).
+	// attach inside the guest anyway. Volumes reach micro-VM containers as
+	// subtrees of the single per-actor virtio-fs share instead — durable-dir
+	// volumes (writable, durable.go), CSI volumes (csi.go), and system-info
+	// volumes (read-only, systeminfo.go) — with the binds added to the
+	// workload specs ateom drives through the kata-agent (see workloadSpec).
 	spec.Mounts = defaultKataMounts()
 
 	out, err := json.MarshalIndent(&spec, "", "  ")
