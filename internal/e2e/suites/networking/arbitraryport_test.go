@@ -118,8 +118,10 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			t.Fatalf("tunneled request to an unlisted port unexpectedly returned HTTP 200; body: %s", body)
+		// 502 is atunnel's own ErrorHandler failing to dial. Any other code
+		// means the request never reached it, so nothing was rejected.
+		if resp.StatusCode != http.StatusBadGateway {
+			t.Fatalf("tunneled request to an unlisted port returned HTTP %d, want 502 from atunnel's failed dial; body: %s", resp.StatusCode, body)
 		}
 		t.Logf("tunneled request to an unlisted port correctly returned HTTP %d; body: %s", resp.StatusCode, body)
 	})
