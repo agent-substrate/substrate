@@ -68,6 +68,8 @@ function usage() {
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
   echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
+  echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
+  echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
   echo "Experiments:"
@@ -188,6 +190,24 @@ store_backend() {
       exit 1
       ;;
   esac
+}
+
+podcert_workers_per_signer() {
+  local workers="${ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER:-1}"
+  if ! [[ "${workers}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --podcert-workers-per-signer must be a positive integer, got '${workers}'" >&2
+    exit 1
+  fi
+  echo "${workers}"
+}
+
+rollout_timeout() {
+  local timeout="${ATE_INSTALL_ROLLOUT_TIMEOUT:-60s}"
+  if ! [[ "${timeout}" =~ ^(0|([0-9]+(h|m|s))+)$ ]]; then
+    echo "Error: --rollout-timeout must be a Go duration like 300s, 10m, or 1h30m (or 0 for no timeout), got '${timeout}'" >&2
+    exit 1
+  fi
+  echo "${timeout}"
 }
 
 default_postgres_connection_string() {
@@ -368,11 +388,12 @@ deploy_postgres() {
   # controller. Applying it here makes --deploy-postgres usable on a fresh
   # cluster as well as after --deploy-ate-system.
   run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+  apply_podcert_workers_override
   run_kubectl rollout status deployment/podcertificate-controller \
     -n podcertificate-controller-system --timeout=120s
   wait_for_podcertificate_trust_bundles
   apply_postgres
-  run_kubectl rollout status statefulset/postgres -n ate-system --timeout=120s
+  run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
 }
 
 create_jwt_authority_pool_secret() {
@@ -500,6 +521,26 @@ create_api_server_env_vars() {
     | run_kubectl apply -f -
 }
 
+apply_podcert_workers_override() {
+  if [[ -z "${ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER:-}" ]]; then
+    return 0
+  fi
+
+  local workers=""
+  workers="$(podcert_workers_per_signer)"
+
+  local current=""
+  current="$(run_kubectl -n podcertificate-controller-system get deployment/podcertificate-controller \
+    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WORKERS_PER_SIGNER")].value}' 2>/dev/null || true)"
+  if [[ "${current}" == "${workers}" ]]; then
+    return 0
+  fi
+
+  echo "Overriding WORKERS_PER_SIGNER with ${workers}"
+  run_kubectl -n podcertificate-controller-system set env deployment/podcertificate-controller \
+    WORKERS_PER_SIGNER="${workers}"
+}
+
 create_api_authentication_config() {
   log_step "create_api_authentication_config"
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
@@ -589,6 +630,7 @@ deploy_ate_system() {
 
   # Deploy podcertificate-controller first so it starts signing and creating trust bundles immediately
   run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+  apply_podcert_workers_override
   run_kubectl rollout status deployment/podcertificate-controller -n podcertificate-controller-system --timeout=120s
 
   wait_for_podcertificate_trust_bundles
@@ -617,17 +659,17 @@ deploy_ate_system() {
   log_step "Waiting for ATE system components to be ready..."
   case "$(store_backend)" in
     redis)
-      run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
+      run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout="$(rollout_timeout)"
       ;;
     postgres)
-      run_kubectl rollout status statefulset/postgres -n ate-system --timeout=120s
+      run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
       ;;
   esac
-  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
-  run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/ate-controller -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status daemonset/atelet -n ate-system --timeout="$(rollout_timeout)"
 
   # After the bundle, which carries its own copy of ate-otel-config.
   apply_otel_endpoint_override
@@ -668,7 +710,7 @@ deploy_ate_apiserver() {
   apply_otel_endpoint_override
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
-  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
 }
 
 deploy_atelet() {
@@ -691,7 +733,7 @@ deploy_atelet() {
     manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml)
   fi
   echo "${manifest}" | run_kubectl apply -f -
-  run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
+  run_kubectl rollout status daemonset/atelet -n ate-system --timeout="$(rollout_timeout)"
 }
 
 deploy_atenet() {
@@ -714,9 +756,9 @@ deploy_atenet() {
   egress_manifests="$(render_atenet_egress_manifest)"
   echo "${egress_manifests}" | run_kubectl apply -f -
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
-  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/dns -n ate-system --timeout="$(rollout_timeout)"
 }
 
 # get_actor_state echoes the actor's state enum (e.g. ACTOR_STATE_SUSPENDED).
@@ -929,6 +971,22 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_INSTALL_STORE_BACKEND="${prescan_args[$((i + 1))]}"
       ;;
+    --podcert-workers-per-signer=*) ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${prescan_args[i]#*=}" ;;
+    --podcert-workers-per-signer)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --podcert-workers-per-signer requires a positive integer" >&2
+        exit 1
+      fi
+      ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${prescan_args[$((i + 1))]}"
+      ;;
+    --rollout-timeout=*) ATE_INSTALL_ROLLOUT_TIMEOUT="${prescan_args[i]#*=}" ;;
+    --rollout-timeout)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --rollout-timeout requires a Go duration (e.g. 300s, 10m)" >&2
+        exit 1
+      fi
+      ATE_INSTALL_ROLLOUT_TIMEOUT="${prescan_args[$((i + 1))]}"
+      ;;
     --benchmark-worker-count)
       BENCHMARK_WORKER_COUNT="${prescan_args[i+1]:-1}"
       ;;
@@ -977,6 +1035,8 @@ case "${BENCHMARK_SANDBOX_CLASS}" in
     ;;
 esac
 store_backend >/dev/null
+podcert_workers_per_signer >/dev/null
+rollout_timeout >/dev/null
 
 while [[ "$#" -gt 0 ]]; do
   # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
@@ -1012,6 +1072,24 @@ while [[ "$#" -gt 0 ]]; do
         exit 1
       fi
       ATE_INSTALL_STORE_BACKEND="$1"
+      ;;
+    --podcert-workers-per-signer=*) ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${1#*=}" ;;
+    --podcert-workers-per-signer)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --podcert-workers-per-signer requires a positive integer" >&2
+        exit 1
+      fi
+      ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="$1"
+      ;;
+    --rollout-timeout=*) ATE_INSTALL_ROLLOUT_TIMEOUT="${1#*=}" ;;
+    --rollout-timeout)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --rollout-timeout requires a Go duration (e.g. 300s, 10m)" >&2
+        exit 1
+      fi
+      ATE_INSTALL_ROLLOUT_TIMEOUT="$1"
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;

@@ -101,14 +101,19 @@ func New(clock clock.PassiveClock, handler SignerImpl, kc kubernetes.Interface, 
 	return sc
 }
 
-func (c *Controller) Run(ctx context.Context) {
+func (c *Controller) Run(ctx context.Context, workers int) {
 	defer c.pcrQueue.ShutDown()
 	go c.pcrInformer.Run(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), c.pcrInformer.HasSynced) {
 		return
 	}
 
-	go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+	if workers < 1 {
+		workers = 1
+	}
+	for i := 0; i < workers; i++ {
+		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+	}
 	go wait.JitterUntilWithContext(ctx, c.ensureBundles, 5*time.Second, 1.0, true)
 	<-ctx.Done()
 }
