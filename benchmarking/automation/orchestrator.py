@@ -305,8 +305,8 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         TYPES[ttype].validate(t)
 
 
-def deploy_substrate() -> None:
-    run(["hack/install-ate.sh", "--deploy-ate-system"])
+def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
+    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)])
 
 
 def teardown_substrate() -> None:
@@ -518,7 +518,7 @@ def main() -> None:
             failure_msg = None
             start_time = time.time()
             try:
-                deploy_substrate()
+                deploy_substrate(test.get("ateArgs", []))
                 TYPES[ttype].pre_test(test)
                 # install-microvm-deps needs the CRDs from deploy_substrate;
                 # deploy_workloads needs the microvm SandboxConfig.

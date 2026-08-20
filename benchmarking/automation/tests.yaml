@@ -35,6 +35,10 @@
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
+#   ateArgs        Optional. List of strings appended verbatim to
+#                  `hack/install-ate.sh --deploy-ate-system` when this
+#                  test's substrate is deployed (e.g. ["--atenet-router=agentgateway"]
+#                  or ["--experimental-use-sdsmint"]).
 #
 # ---- type: locust -----------------------------------------------------------
 #
