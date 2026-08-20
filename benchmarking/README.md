@@ -13,6 +13,12 @@ scenario ladder, read [observability.md](observability.md).
 > [!IMPORTANT]
 > Source the environment configuration file (e.g., `source .ate-dev-env.sh`)
 > first so `PROJECT_ID`, `BUCKET_NAME`, etc. are set.
+>
+> **For Local Kind Clusters**: Set `KO_DOCKER_REPO` to the local registry so images are pulled without remote cloud credentials:
+> ```bash
+> export KO_DOCKER_REPO="localhost:5001"
+> export BUCKET_NAME="ate-snapshots"
+> ```
 
 Note that deploying the benchmarks does not run them. You must visit Locust's
 web UI to start a test.
@@ -108,6 +114,25 @@ and state restoration latency when a durable directory is attached to the actor.
 * `DurDirServeAfterResume`: First read after resume (measures page faults / lazy load overhead on restored volume).
 * `DurDirServeWarm`: Subsequent read within the same active cycle (cached state baseline).
 * `DurDirOverwrite`: In-place file overwrite with checksum verification.
+
+### External Volume Storage Benchmark (`glutton_storage`)
+
+The `glutton_storage` benchmark evaluates Substrate External Volume lifecycle performance (CSI volume dynamic provisioning, worker node attachment, sandbox mounting, and direct write I/O durability) under concurrent user load and oversubscription.
+
+#### Storage Configuration Knobs
+
+* `--storage-class-name`: Underlying CSI StorageClass name (default `csi-nfs-sc`, or e.g. `csi-hostpath-sc`, `standard-rwo`, `premium-rwo`). Can also be passed via `STORAGE_CLASS_NAME` env var to `deploy.sh` or `storageClassName` in `tests.yaml`.
+* `--template-name`: ActorTemplate name (default `glutton-storage`).
+
+#### Storage Reported Metrics
+
+* `CreateAtespace`: Latency to ensure the benchmark atespace exists.
+* `CreateActor`: Latency to create actor CRDs with external volume templates.
+* `ResumeActorColdStart`: First resume latency, including direct CSI volume dynamic provisioning (`CreateVolume`), worker node attachment (`ControllerPublishVolume`), and sandbox mounting.
+* `ResumeActor`: Warm volume re-attachment and sandbox mount latency.
+* `GluttonWriteDisk`: HTTP/1.1 write I/O latency to `/mnt/storage` with `f.Sync()` disk durability flush.
+* `SuspendActor`: Actor suspend latency including sandbox filesystem unmount and CSI volume detachment (`ControllerUnpublishVolume`).
+* `DeleteActor`: Actor deletion and CSI volume destruction (`DeleteVolume`).
 
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.

@@ -451,3 +451,42 @@ func TestHTTPRoutes(t *testing.T) {
 	}
 	res.Body.Close()
 }
+
+// TestReadyzDataDirCheck verifies that the readyz probe checks that dataDir is writable.
+func TestReadyzDataDirCheck(t *testing.T) {
+	dataDir := t.TempDir()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if dataDir != "" {
+			canary := filepath.Join(dataDir, ".readyz_canary")
+			if err := os.WriteFile(canary, []byte("ok"), 0o600); err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := newServer(mux)
+	go srv.Serve(lis)
+	defer srv.Close()
+
+	resp, err := http.Get("http://" + lis.Addr().String() + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /readyz = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Canary file must exist
+	if _, err := os.Stat(filepath.Join(dataDir, ".readyz_canary")); err != nil {
+		t.Errorf("expected canary file in dataDir: %v", err)
+	}
+}

@@ -174,6 +174,13 @@ func splitGRPC(grpcSrv, rest http.Handler) http.Handler {
 func readyzMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if *dataDir != "" {
+			canary := filepath.Join(*dataDir, ".readyz_canary")
+			if err := os.WriteFile(canary, []byte("ok"), 0o600); err != nil {
+				http.Error(w, fmt.Sprintf("data-dir not writable: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	return mux
@@ -450,6 +457,9 @@ func (s *gluttonService) WriteDisk(ctx context.Context, req *glutton.WriteDiskRe
 	size := int64(req.GetSize())
 	if err := streamRandomBytes(io.MultiWriter(f, h), size); err != nil {
 		return nil, status.Errorf(codes.Internal, "write %s: %v", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		return nil, status.Errorf(codes.Internal, "sync %s: %v", path, err)
 	}
 
 	// OVERWRITE has no O_TRUNC, bytes from a larger, earlier write will persist.

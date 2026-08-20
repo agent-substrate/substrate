@@ -17,24 +17,26 @@
 #
 # Fields shared by every entry:
 #
-#   type           Required. Selects the runner: "locust" | "nighthawk-ingress".
-#                  Each type's own fields are described in its section.
-#   targetCluster  Required. Names a config file under
-#                  /etc/orchestrator/target-clusters/ (e.g. `targetCluster:
-#                  dev` -> /etc/orchestrator/target-clusters/dev.sh). The
-#                  orchestrator copies that file into the cloned repo as
-#                  .ate-dev-env.sh before the test runs and deletes it
-#                  after, so different tests can target different clusters
-#                  / projects from one CronJob run.
-#   sandboxClass   Optional (default "gvisor"). Sandbox runtime for the
-#                  benchmark WorkerPool: "gvisor" | "microvm".
-#   workerCount    Optional (default 1). WorkerPool replica count for the
-#                  deploy that runs before this test. The orchestrator
-#                  redeploys workloads between tests, so each test can
-#                  pick its own scale.
-#   actorMemory    Optional (default "256Mi", the smallest size microvm
-#                  admits). Memory limit on the benchmark ActorTemplates;
-#                  raise it for suites that exercise glutton's WriteRAM path.
+#   type               Required. Selects the runner: "locust" | "nighthawk-ingress".
+#                      Each type's own fields are described in its section.
+#   targetCluster      Required. Names a config file under
+#                      /etc/orchestrator/target-clusters/ (e.g. `targetCluster:
+#                      dev` -> /etc/orchestrator/target-clusters/dev.sh). The
+#                      orchestrator copies that file into the cloned repo as
+#                      .ate-dev-env.sh before the test runs and deletes it
+#                      after, so different tests can target different clusters
+#                      / projects from one CronJob run.
+#   sandboxClass       Optional (default "gvisor"). Sandbox runtime for the
+#                      benchmark WorkerPool: "gvisor" | "microvm".
+#   workerCount        Optional (default 1). WorkerPool replica count for the
+#                      deploy that runs before this test. The orchestrator
+#                      redeploys workloads between tests, so each test can
+#                      pick its own scale.
+#   actorMemory        Optional (default "256Mi", the smallest size microvm
+#                      admits). Memory limit on the benchmark ActorTemplates;
+#                      raise it for suites that exercise glutton's WriteRAM path.
+#   storageClassName   Optional (default "csi-nfs-sc"). StorageClass name
+#                      for external volumes in storage benchmarks.
 #
 # ---- type: locust -----------------------------------------------------------
 #
@@ -49,8 +51,6 @@
 # Runs the Nighthawk adaptive router-capacity benchmark. `duration` is the
 # job-wait budget only; the test knobs live in a `nighthawk-ingress:` block — see
 # the "Configuration knobs" table in benchmarking/nighthawk-ingress/README.md.
-# `workerCount` is required: the benchmark warms one actor per worker, so
-# it is also the actor fleet size.
 
 tests:
   - name: glutton_baseline_1_user
@@ -261,3 +261,42 @@ tests:
     nighthawk-ingress:
       envoyCpu: 16
       tailLatencySloMs: 25
+  - name: glutton_storage_baseline_1_user
+    description: "GluttonStorage baseline: 1 concurrent user for 1 minute with CSI volume"
+    targetCluster: dev
+    file: /app/tests/glutton_storage.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    storageClassName: csi-nfs-sc
+    flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_storage_baseline_10_users
+    description: "GluttonStorage baseline: 10 concurrent users for 2 minutes (1:1 worker allocation)"
+    targetCluster: dev
+    file: /app/tests/glutton_storage.py
+    duration: 2m
+    users: 10
+    workerCount: 10
+    storageClassName: csi-nfs-sc
+    flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "2.0"
+  - name: glutton_storage_oversubscribe_15_users
+    description: "GluttonStorage oversubscribed: 15 users across 10 workers for 2 minutes (50% oversubscribed with volume attach churn)"
+    targetCluster: dev
+    file: /app/tests/glutton_storage.py
+    duration: 2m
+    users: 15
+    workerCount: 10
+    storageClassName: csi-nfs-sc
+    flags:
+      - "--min-wait-time"
+      - "0.5"
+      - "--max-wait-time"
+      - "1.0"
