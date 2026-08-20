@@ -114,16 +114,50 @@ func (c *RouterClient) PostJSON(ctx context.Context, actorRef resources.ActorRef
 }
 
 func (c *RouterClient) request(ctx context.Context, method string, actorRef resources.ActorRef, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
-	if err != nil {
-		return nil, err
+	var bodyBytes []byte
+	var err error
+	if body != nil {
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if method == http.MethodPost {
-		req.Header.Set("Content-Type", "application/json")
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Host = resources.ActorDNSName(actorRef)
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return resp, err
+		}
+
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			respBodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if strings.Contains(string(respBodyBytes), "upstream connect error") && time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(1 * time.Second):
+					continue
+				}
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
+		}
+		return resp, nil
 	}
-	// The router routes on the Host/:authority, not a header.
-	req.Host = resources.ActorDNSName(actorRef)
-	return c.http.Do(req)
 }
 
 // Connect opens a CONNECT tunnel through the router to port on actorRef,
