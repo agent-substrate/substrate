@@ -41,24 +41,44 @@ func TestActorNftablesRuleExprs(t *testing.T) {
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{169, 254, 17, 2}},
 	}
 
+	// meta nfproto ipv6; ip6 saddr fd00:169:254::2
+	actorSourceIsIPv6 := []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{10}},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 8, Len: 16},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{
+			0xfd, 0x00, 0x01, 0x69, 0x02, 0x54, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02,
+		}},
+	}
+
+	// meta l4proto tcp; redirect to :15001
+	tcpRedirectTo15001 := []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}},
+		&expr.Immediate{Register: 1, Data: []byte{0x3a, 0x99}},
+		&expr.Redir{RegisterProtoMin: 1},
+	}
+
 	tests := []struct {
 		name string
 		got  []expr.Any
 		want []expr.Any
 	}{{
-		name: "source match guards the payload load with nfproto",
+		name: "IPv4 source match guards the payload load with nfproto",
 		got:  ipv4SourceEqual(ActorVethIP),
 		want: actorSourceIsIPv4,
 	}, {
+		name: "IPv6 source match guards the payload load with nfproto",
+		got:  ipv6SourceEqual(ActorVethIPv6IP),
+		want: actorSourceIsIPv6,
+	}, {
 		name: "egress redirect matches actor IPv4 TCP and redirects to the port",
 		got:  ActorEgressRedirectRule(nil, nil, 15001).Exprs,
-		want: append(append([]expr.Any{}, actorSourceIsIPv4...),
-			// meta l4proto tcp; redirect to :15001
-			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}},
-			&expr.Immediate{Register: 1, Data: []byte{0x3a, 0x99}},
-			&expr.Redir{RegisterProtoMin: 1},
-		),
+		want: append(append([]expr.Any{}, actorSourceIsIPv4...), tcpRedirectTo15001...),
+	}, {
+		name: "egress redirect matches actor IPv6 TCP and redirects to the port",
+		got:  ActorIPv6EgressRedirectRule(nil, nil, 15001).Exprs,
+		want: append(append([]expr.Any{}, actorSourceIsIPv6...), tcpRedirectTo15001...),
 	}}
 
 	for _, test := range tests {
@@ -76,6 +96,9 @@ func TestActorNftablesRuleExprs(t *testing.T) {
 func TestActorEgressRedirectRuleDisabled(t *testing.T) {
 	if rule := ActorEgressRedirectRule(nil, nil, 0); rule != nil {
 		t.Errorf("ActorEgressRedirectRule(0) = %v, want nil", rule.Exprs)
+	}
+	if rule := ActorIPv6EgressRedirectRule(nil, nil, 0); rule != nil {
+		t.Errorf("ActorIPv6EgressRedirectRule(0) = %v, want nil", rule.Exprs)
 	}
 }
 
