@@ -188,3 +188,42 @@ spec:
     onPause: Full
     onCommit: Full
     location: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-full/
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: glutton-storage
+  namespace: benchmark-workloads
+spec:
+  sandboxClass: ${SANDBOX_CLASS}
+  volumes:
+  - name: external-storage
+    externalVolumeTemplate:
+      capacity: 1Gi
+      storageClassName: ${STORAGE_CLASS_NAME}
+  containers:
+  - name: glutton-storage
+    image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+    # Port 80 is the only inbound port nftables forwards from the worker pod
+    # into the actor sandbox. HTTP/1.1 mode lets the atenet router reach Ping and WriteDisk.
+    command:
+    - "/ko-app/glutton"
+    - "--grpc-listen-addr=:80"
+    - "--metrics-listen-addr=:9090"
+    - "--data-dir=/mnt/storage"
+    - "--mode=http"
+    volumeMounts:
+    - name: external-storage
+      mountPath: /mnt/storage
+    # Hold ResumeActor open until port 80 answers and /mnt/storage is writable.
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/benchmark-workloads/glutton-storage/

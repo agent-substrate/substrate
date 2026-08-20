@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
+	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/storage"
 	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"

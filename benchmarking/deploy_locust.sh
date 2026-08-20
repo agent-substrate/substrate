@@ -31,6 +31,7 @@ SKIP_BUILD=0
 OTLP_ENDPOINT=""
 # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
 ACTOR_MEMORY=""
+STORAGE_CLASS_NAME=""
 
 usage() {
   echo "Usage: $0 [options]"
@@ -45,6 +46,7 @@ usage() {
   echo "                          instrumented actor container sends telemetry."
   echo "  --actor-memory SIZE     Forwarded to workloads/deploy.sh. Memory limit for the"
   echo "                          benchmark ActorTemplates (default: 256Mi, the microvm minimum)."
+  echo "  --storage-class-name S  Forwarded to workloads/deploy.sh. StorageClass name for external volumes."
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -71,6 +73,8 @@ while [[ "$#" -gt 0 ]]; do
     --otlp-endpoint=*) OTLP_ENDPOINT="${1#*=}" ;;
     --actor-memory) shift; ACTOR_MEMORY="$1" ;;
     --actor-memory=*) ACTOR_MEMORY="${1#*=}" ;;
+    --storage-class-name) shift; STORAGE_CLASS_NAME="$1" ;;
+    --storage-class-name=*) STORAGE_CLASS_NAME="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -101,6 +105,9 @@ if [[ "${action}" == "deploy" ]]; then
   fi
   if [[ -n "${ACTOR_MEMORY}" ]]; then
     workload_args+=(--actor-memory "${ACTOR_MEMORY}")
+  fi
+  if [[ -n "${STORAGE_CLASS_NAME}" ]]; then
+    workload_args+=(--storage-class-name "${STORAGE_CLASS_NAME}")
   fi
   "${BENCHMARKING_DIR}/workloads/deploy.sh" "${workload_args[@]}"
 

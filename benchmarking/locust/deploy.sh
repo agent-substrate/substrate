@@ -24,10 +24,28 @@ if [[ -f .ate-dev-env.sh ]]; then
   source .ate-dev-env.sh
 fi
 
-if [ -z "${PROJECT_ID:-}" ]; then
-  echo "Error: PROJECT_ID environment variable must be set." >&2
+if [[ -z "${PROJECT_ID:-}" && -z "${KO_DOCKER_REPO:-}" && -z "${LOCUST_IMAGE:-}" ]]; then
+  echo "Error: PROJECT_ID or KO_DOCKER_REPO environment variable must be set." >&2
   exit 1
 fi
+
+if [[ -z "${LOCUST_IMAGE:-}" ]]; then
+  if [[ -n "${KO_DOCKER_REPO:-}" ]]; then
+    LOCUST_IMAGE="${KO_DOCKER_REPO}/locust-test:latest"
+  else
+    LOCUST_IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
+  fi
+fi
+
+if [[ -z "${LOCUST_IMAGE_PULL_POLICY:-}" ]]; then
+  if [[ "${LOCUST_IMAGE}" =~ ^localhost: ]]; then
+    LOCUST_IMAGE_PULL_POLICY="IfNotPresent"
+  else
+    LOCUST_IMAGE_PULL_POLICY="Always"
+  fi
+fi
+
+export LOCUST_IMAGE LOCUST_IMAGE_PULL_POLICY
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
@@ -51,7 +69,7 @@ deploy() {
   # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS})..."
+  echo "Deploying Locust load (image=${LOCUST_IMAGE}, pull_policy=${LOCUST_IMAGE_PULL_POLICY}, user_class=${BENCHMARK_USER_CLASS})..."
   envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
