@@ -43,6 +43,7 @@ demo-autoscaled-workerpool_deploy() {
 
   # Ensure namespace exists before deploying adapter/workload
   run_kubectl create namespace ate-demo-autoscaled-workerpool --dry-run=client -o yaml | run_kubectl apply -f -
+  maybe_install_docker_pull_secret_in_namespace ate-demo-autoscaled-workerpool default
 
   # Deploy common workload (Namespace, WorkerPool, ActorTemplate)
   log_step "Deploying autoscaled-workerpool workload..."
@@ -50,6 +51,7 @@ demo-autoscaled-workerpool_deploy() {
       -e "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d" \
       -e "/\${EXTERNAL_VOLUME_MOUNTS}/d" \
       -e "/\${EXTERNAL_VOLUMES}/d" \
+      -e "$(workerpool_pull_secret_sed_expr)" \
       demos/autoscaled-workerpool/autoscaled-workerpool.yaml.tmpl \
     | run_ko apply -f -
 
@@ -78,6 +80,7 @@ demo-autoscaled-workerpool_delete() {
       -e "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d" \
       -e "/\${EXTERNAL_VOLUME_MOUNTS}/d" \
       -e "/\${EXTERNAL_VOLUMES}/d" \
+      -e "$(workerpool_pull_secret_sed_expr)" \
       demos/autoscaled-workerpool/autoscaled-workerpool.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

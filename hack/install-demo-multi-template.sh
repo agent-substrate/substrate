@@ -32,7 +32,10 @@ demo-multi-template_cmdline() {
 demo-multi-template_deploy() {
   log_step "demo-multi-template_deploy"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/multi-template/multi-template.yaml.tmpl \
+  maybe_install_docker_pull_secret_in_namespace ate-demo-multi-template-pool default
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "$(workerpool_pull_secret_sed_expr)" \
+      demos/multi-template/multi-template.yaml.tmpl \
     | run_ko apply -f -
 
   # Wait for both ActorTemplates to be ready before returning.
@@ -47,6 +50,8 @@ demo-multi-template_delete() {
   delete_demo_actors \
     ate-demo-multi-template-counter counter \
     ate-demo-multi-template-fspersist fspersist
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/multi-template/multi-template.yaml.tmpl \
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "$(workerpool_pull_secret_sed_expr)" \
+      demos/multi-template/multi-template.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

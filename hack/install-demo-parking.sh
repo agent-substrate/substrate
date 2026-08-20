@@ -32,7 +32,10 @@ demo-parking_cmdline() {
 demo-parking_deploy() {
   log_step "demo-parking_deploy"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/parking/parking.yaml.tmpl \
+  maybe_install_docker_pull_secret_in_namespace ate-demo-parking default
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "$(workerpool_pull_secret_sed_expr)" \
+      demos/parking/parking.yaml.tmpl \
     | run_ko apply -f -
 
   # Wait for the demo to be fully ready before returning: the small WorkerPool
@@ -45,6 +48,8 @@ demo-parking_deploy() {
 demo-parking_delete() {
   log_step "demo-parking_delete"
   delete_demo_actors ate-demo-parking parking
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/parking/parking.yaml.tmpl \
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "$(workerpool_pull_secret_sed_expr)" \
+      demos/parking/parking.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

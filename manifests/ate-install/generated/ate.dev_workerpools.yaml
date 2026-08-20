@@ -103,6 +103,29 @@ spec:
                 description: Template holds optional pod scheduling and resource settings
                   for worker pods.
                 properties:
+                  imagePullSecrets:
+                    description: |-
+                      ImagePullSecrets references Secrets in the WorkerPool namespace to use when
+                      pulling the worker pod image.
+                    items:
+                      description: |-
+                        LocalObjectReference contains enough information to let you locate the
+                        referenced object inside the same namespace.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    maxItems: 16
+                    type: array
+                    x-kubernetes-list-type: atomic
                   nodeAffinity:
                     description: |-
                       NodeAffinity scheduling rules for the worker pods. Mapped to
