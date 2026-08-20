@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -167,16 +168,18 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	container := srcTemplate.Spec.Containers[0]
 	container.VolumeMounts = append(container.VolumeMounts, v1alpha1.VolumeMount{Name: "fixture", MountPath: mountPath})
 
+	volumes := append(slices.Clone(srcTemplate.Spec.Volumes), v1alpha1.Volume{
+		Name:         "fixture",
+		VolumeSource: v1alpha1.VolumeSource{Image: &v1alpha1.ImageVolumeSource{Reference: fixtureImage}},
+	})
+
 	at := &v1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: probeName, Namespace: ns.Name},
 		Spec: v1alpha1.ActorTemplateSpec{
 			Containers:     []v1alpha1.Container{container},
 			WorkerSelector: &metav1.LabelSelector{MatchLabels: poolLabels},
 			SandboxClass:   srcTemplate.Spec.SandboxClass,
-			Volumes: []v1alpha1.Volume{{
-				Name:         "fixture",
-				VolumeSource: v1alpha1.VolumeSource{Image: &v1alpha1.ImageVolumeSource{Reference: fixtureImage}},
-			}},
+			Volumes:        volumes,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
 			},
