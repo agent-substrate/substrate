@@ -1852,10 +1852,15 @@ type PrepareSandboxRequest struct {
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,6,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Runtime-specific preparation needs the workload shape: gVisor declares
 	// durable mount hints while microVM decides its early sandbox shape.
-	// Application image contents are consumed only by RunWorkload.
-	Spec          *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Application rootfs and volume data are consumed only by RunWorkload or
+	// RestoreWorkload, after atelet finishes preparing them.
+	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	// Whether RestoreWorkload, rather than RunWorkload, will consume this
+	// sandbox. Runtimes can defer initialization that depends on checkpoint
+	// contents.
+	FromCheckpoint bool `protobuf:"varint,8,opt,name=from_checkpoint,json=fromCheckpoint,proto3" json:"from_checkpoint,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PrepareSandboxRequest) Reset() {
@@ -1935,6 +1940,13 @@ func (x *PrepareSandboxRequest) GetSpec() *WorkloadSpec {
 		return x.Spec
 	}
 	return nil
+}
+
+func (x *PrepareSandboxRequest) GetFromCheckpoint() bool {
+	if x != nil {
+		return x.FromCheckpoint
+	}
+	return false
 }
 
 type PrepareSandboxResponse struct {
@@ -2193,7 +2205,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x1eGetActiveWorkloadStatsResponse\x124\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleH\x00R\x06sample\x12A\n" +
 	"\x10no_sample_reason\x18\x02 \x01(\x0e2\x15.ateom.NoSampleReasonH\x00R\x0enoSampleReasonB\b\n" +
-	"\x06result\"\x90\x03\n" +
+	"\x06result\"\xb9\x03\n" +
 	"\x15PrepareSandboxRequest\x12\x1b\n" +
 	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\x12\x1d\n" +
 	"\n" +
@@ -2202,7 +2214,8 @@ const file_ateom_proto_rawDesc = "" +
 	"\tcpu_milli\x18\x04 \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x05 \x01(\x03R\vmemoryBytes\x12c\n" +
 	"\x13runtime_asset_paths\x18\x06 \x03(\v23.ateom.PrepareSandboxRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12'\n" +
-	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x1aD\n" +
+	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12'\n" +
+	"\x0ffrom_checkpoint\x18\b \x01(\bR\x0efromCheckpoint\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x18\n" +
