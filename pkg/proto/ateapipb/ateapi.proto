@@ -395,10 +395,11 @@ message Limits {
 enum ActorTemplatePhase {
   ACTOR_TEMPLATE_PHASE_UNSPECIFIED = 0;
   ACTOR_TEMPLATE_PHASE_INITIAL = 1;
-  ACTOR_TEMPLATE_PHASE_RESUME_GOLDEN_ACTOR = 2;
-  ACTOR_TEMPLATE_PHASE_WAIT_GOLDEN_ACTOR = 3;
-  ACTOR_TEMPLATE_PHASE_READY = 4;
-  ACTOR_TEMPLATE_PHASE_FAILED = 5;
+  ACTOR_TEMPLATE_PHASE_ASSETS_FINALIZED = 2;
+  ACTOR_TEMPLATE_PHASE_GOLDEN_ACTOR_CREATED = 3;
+  ACTOR_TEMPLATE_PHASE_GOLDEN_ACTOR_RUNNING = 4;
+  ACTOR_TEMPLATE_PHASE_GOLDEN_SNAPSHOT_READY = 5;
+  ACTOR_TEMPLATE_PHASE_FAILED = 6;
 }
 
 message ActorTemplateStatus {
@@ -419,6 +420,11 @@ message ActorTemplateStatus {
   // sandbox_assets is the referenced SandboxConfig's content frozen at
   // creation time.
   SandboxAssets sandbox_assets = 4;
+
+  // take_golden_snapshot_at is when the golden-actor warmup ends and the
+  // golden snapshot may be taken. Mirrors the CRD's status.takeGoldenSnapshotAt
+  // cmd/atecontroller/internal/controllers/actortemplate_controller.go
+  google.protobuf.Timestamp take_golden_snapshot_at = 5;
 }
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
