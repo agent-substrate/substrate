@@ -138,7 +138,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
 	// Backends may run background maintenance rooted in their own context
-	// (atepg's change-feed maintenance loop); stop it on shutdown.
+	// (atepg's outbox maintenance loop); stop it on shutdown.
 	if closer, ok := persistence.(interface{ Close() }); ok {
 		defer closer.Close()
 	}

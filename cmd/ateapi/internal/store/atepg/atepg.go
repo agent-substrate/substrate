@@ -41,33 +41,27 @@ import (
 
 // Persistence is a service that stores ate state in PostgreSQL.
 // watchPoolMaxConns sizes the dedicated outbox watch pool: one connection
-// for the WatchWorkers poller, and one for the maintenance loop. It is kept
-// separate so background polling never starves the main pool of connections
-// needed for foreground writes. MinConns keeps the poller's connection warm.
+// for the WatchWorkers poller, one for the maintenance loop, and one of headroom
+// so a transiently slow poll can never gate a maintenance pass.
 const (
-	watchPoolMaxConns = 2
+	watchPoolMaxConns = 3
 	watchPoolMinConns = 1
 )
 
 type Persistence struct {
 	pool *pgxpool.Pool
 	// watchPool serves the outbox side only: the WatchWorkers pollers
-	// and the partition-maintenance loop. Connect gives it a small dedicated
-	// pool; NewPersistence (tests, callers owning a single pool) aliases it
-	// to pool.
-	watchPool       *pgxpool.Pool
-	ownsWatchPool   bool
-	lockTTL         time.Duration
-	stopMaintenance context.CancelFunc
-	maintenanceDone chan struct{}
+	// and the partition-maintenance loop.
+	watchPool             *pgxpool.Pool
+	ownsWatchPool         bool
+	lockTTL               time.Duration
+	pollFailureCloseAfter time.Duration
+	stopMaintenance       context.CancelFunc
+	maintenanceDone       chan struct{}
 }
 
 var _ store.Interface = (*Persistence)(nil)
 
-// Connect opens a pgxpool against dsn, verifies connectivity, and applies the
-// embedded schema. Startup fails if the database cannot be reached. A second,
-// two-connection watch pool (owned by the Persistence, closed by Close) isolates
-// outbox polling and maintenance from write traffic.
 // Connect opens a pgxpool against dsn, verifies connectivity, and applies the
 // embedded schema. Startup fails if the database cannot be reached. A second,
 // two-connection watch pool (owned by the Persistence, closed by Close) isolates
@@ -117,11 +111,16 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
-	p := &Persistence{pool: pool, watchPool: watchPool, lockTTL: defaultLockTTL, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	p := &Persistence{pool: pool, watchPool: watchPool, lockTTL: defaultLockTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
 	// Cover the partition lead before accepting writes; from then on the
 	// maintenance loop keeps partitions ahead of the clock (and the
 	// DEFAULT partition catches writes if it ever falls behind).
-	if err := p.createWorkerOutboxPartitions(ctx, outboxPartitionLeadTimes(time.Now())...); err != nil {
+	bootNow, err := p.outboxNow(ctx)
+	if err != nil {
+		stopMaintenance()
+		return nil, err
+	}
+	if err := p.createWorkerOutboxPartitions(ctx, outboxPartitionLeadTimes(bootNow)...); err != nil {
 		stopMaintenance()
 		return nil, err
 	}
@@ -1124,7 +1123,7 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	err = p.writeAndAppendChange(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	err = p.writeAndAppendEvent(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
@@ -1175,7 +1174,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	return p.writeAndAppendChange(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var returned []byte
 		err := tx.QueryRow(ctx, `
 			UPDATE workers
@@ -1204,7 +1203,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 
 func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 	deletedEvent := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-	return p.writeAndAppendChange(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var protoBytes []byte
 		err := tx.QueryRow(ctx, `
 			DELETE FROM workers

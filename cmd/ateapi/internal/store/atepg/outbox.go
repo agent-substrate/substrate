@@ -14,12 +14,10 @@
 
 // The worker outbox: worker writes append one event row to the
 // range-partitioned, UNLOGGED worker_outbox table in the same transaction
-// (writeAndAppendChange), per-replica watchers poll it with an xmin-fenced
+// (writeAndAppendEvent), per-replica watchers poll it with an xmin-fenced
 // xid cursor (WatchWorkers), and a background loop pre-creates partitions
 // and retires old ones by dropping them, recording a trim high-water mark
 // that lets lagging watchers detect loss and resync (outboxMaintenance).
-// See docs/dev/worker-change-feed-internals.md for the full design and its
-// race/edge-case catalog.
 
 package atepg
 
@@ -51,18 +49,30 @@ func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
 	if len(payload) == 0 {
 		return store.WorkerEvent{}, fmt.Errorf("empty worker event payload")
 	}
+	// Assert invariants at the boundary. Corrupted payloads or unknown types
+	// must fail here to trigger a loud resync, rather than falling through
+	// downstream as silent no-ops.
+	eventType := store.WorkerEventType(payload[0])
+	switch eventType {
+	case store.WorkerEventCreated, store.WorkerEventUpdated, store.WorkerEventDeleted:
+	default:
+		return store.WorkerEvent{}, fmt.Errorf("unknown worker event type byte %d", payload[0])
+	}
 	worker := &ateapipb.Worker{}
 	if err := proto.Unmarshal(payload[1:], worker); err != nil {
 		return store.WorkerEvent{}, fmt.Errorf("in proto.Unmarshal: %w", err)
 	}
-	return store.WorkerEvent{Type: store.WorkerEventType(payload[0]), Worker: worker}, nil
+	if worker.GetMetadata().GetName() == "" {
+		return store.WorkerEvent{}, fmt.Errorf("worker event payload has no worker name")
+	}
+	return store.WorkerEvent{Type: eventType, Worker: worker}, nil
 }
 
-// writeAndAppendChange runs fn inside a transaction, then--only if fn
+// writeAndAppendEvent runs fn inside a transaction, then--only if fn
 // reports a change worth publishing--appends the event to the worker_outbox
-// outbox in the same transaction, so watchers see it if and only if the
+// table in the same transaction, so watchers see it if and only if the
 // transaction commits.
-func (p *Persistence) writeAndAppendChange(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (changed bool, err error)) error {
+func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (changed bool, err error)) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
@@ -92,7 +102,7 @@ func (p *Persistence) writeAndAppendChange(ctx context.Context, eventType store.
 
 const (
 	// Bound worker-event delivery latency in the absence of an xmin stall.
-	outboxPollInterval = 100 * time.Millisecond
+	outboxPollInterval = 50 * time.Millisecond
 
 	// Cap rows fetched per poll; a burst beyond it carries over to the next poll
 	// (events are delayed, never dropped).
@@ -107,10 +117,30 @@ const (
 	// The outbox partition range width.
 	outboxPartitionInterval = 15 * time.Minute
 
+	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
+	// which would permanently starve partition creation. Stalls abort and retry.
+	outboxMaintenancePassTimeout = 5 * time.Minute
+
 	// How many intervals ahead partitions are pre-created: creation must stall past
 	// lead-1 intervals before any write detours into the DEFAULT partition backstop.
 	outboxPartitionLead = 2
 )
+
+// Bounds stale-serving during polling outages: after this duration of
+// uninterrupted failures, the watch closes and forces a full cache relist.
+// Balances riding out transient blips vs. failing fast on real outages.
+// Configured per-Persistence-instance to prevent data races in tests.
+const outboxPollFailureCloseAfter = 30 * time.Second
+
+// outboxNow returns the database's clock_timestamp — the clock rows route
+// by, and therefore the one partition bounds and expiry must use.
+func (p *Persistence) outboxNow(ctx context.Context) (time.Time, error) {
+	var now time.Time
+	if err := p.watchPool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return time.Time{}, fmt.Errorf("reading database clock: %w", err)
+	}
+	return now.UTC(), nil
+}
 
 // Maintains worker_outbox partitions on a fixed timer.
 func (p *Persistence) outboxMaintenance(ctx context.Context) {
@@ -122,9 +152,11 @@ func (p *Persistence) outboxMaintenance(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		if err := p.maintainWorkerOutboxPartitions(ctx); err != nil && ctx.Err() == nil {
+		passCtx, cancel := context.WithTimeout(ctx, outboxMaintenancePassTimeout)
+		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
 		}
+		cancel()
 	}
 }
 
@@ -149,17 +181,33 @@ const pollSafetySQL = `
 		WHERE xid > $1::xid8 AND xid > $2::xid8),
 	pg_postmaster_start_time()::text`
 
-// maintainWorkerOutboxPartitions is one maintenance pass. Partition
-// creation runs on every replica, unelected — it is idempotent.
+// maintainWorkerOutboxPartitions runs one maintenance pass. Partition creation
+// is unelected. DEFAULT truncate and partition drops run in SEPARATE elected
+// transactions to prevent AB/BA deadlocks against writers.
 func (p *Persistence) maintainWorkerOutboxPartitions(ctx context.Context) error {
-	now := time.Now().UTC()
+	// Must use the database's clock. App-sourced time would let a fast-clocked
+	// replica accidentally drift partition bounds and shorten retention.
+	now, err := p.outboxNow(ctx)
+	if err != nil {
+		return err
+	}
 	if err := p.createWorkerOutboxPartitions(ctx, outboxPartitionLeadTimes(now)...); err != nil {
 		return err
 	}
 
+	if err := p.retireStrayedOutboxDefault(ctx); err != nil {
+		return err
+	}
+	return p.dropExpiredOutboxRetention(ctx, now)
+}
+
+// retireStrayedOutboxDefault truncates a non-empty DEFAULT partition in its
+// own elected transaction. Locks touched: DEFAULT child only — never the
+// parent (see maintainWorkerOutboxPartitions on deadlock ordering).
+func (p *Persistence) retireStrayedOutboxDefault(ctx context.Context) error {
 	tx, err := p.watchPool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("beginning outbox retention transaction: %w", err)
+		return fmt.Errorf("beginning outbox stray-cleanup transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
@@ -176,13 +224,44 @@ func (p *Persistence) maintainWorkerOutboxPartitions(ctx context.Context) error 
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_outbox_default)`).Scan(&strays); err != nil {
 		return fmt.Errorf("checking outbox default partition: %w", err)
 	}
-	if strays {
-		slog.WarnContext(ctx, "outbox DEFAULT partition is non-empty; partition creation has stalled and writes are detouring")
-		if err := p.truncateWorkerOutboxDefault(ctx, tx); err != nil {
-			return err
+	if !strays {
+		// Nothing to clean; end the election transaction explicitly rather
+		// than leaning on the deferred rollback for a read-only exit.
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("committing outbox stray-cleanup transaction: %w", err)
 		}
+		return nil
 	}
-	// Dropping a partition takes ACCESS EXCLUSIVE on the parent, blocking every worker write's outbox append.
+	slog.WarnContext(ctx, "outbox DEFAULT partition is non-empty; partition creation has stalled and writes are detouring")
+	if err := p.truncateWorkerOutboxDefault(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing outbox stray-cleanup transaction: %w", err)
+	}
+	return nil
+}
+
+// dropExpiredOutboxRetention drops aged-out partitions in its own elected
+// transaction. Locks touched: parent (ACCESS EXCLUSIVE, blocking every
+// worker write's outbox append) plus the dropped children — never the
+// DEFAULT while waiting on the parent.
+func (p *Persistence) dropExpiredOutboxRetention(ctx context.Context, now time.Time) error {
+	tx, err := p.watchPool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning outbox retention transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	var elected bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtext(current_database() || ':' || $1))`, outboxMaintenanceLockKey).Scan(&elected); err != nil {
+		return fmt.Errorf("electing outbox maintenance: %w", err)
+	}
+	if !elected {
+		return nil // another replica is maintaining; next tick retries
+	}
+	// Drops run last in the pass with commit immediately after, keeping the
+	// writer-blocking window minimal.
 	if err := p.dropExpiredWorkerOutboxPartitions(ctx, tx, now); err != nil {
 		return err
 	}
@@ -207,8 +286,25 @@ func outboxPartitionLeadTimes(now time.Time) []time.Time {
 	return times
 }
 
-// createWorkerOutboxPartitions idempotently creates the outbox partitions covering the given instants.
+// createWorkerOutboxPartitions idempotently creates partitions.
+// If writes spilled into DEFAULT, CREATE PARTITION fails (23514). We catch
+// this, TRUNCATE the strays (triggering watcher resyncs), and run CREATE
+// PARTITION inside the SAME transaction to safely un-wedge the system.
 func (p *Persistence) createWorkerOutboxPartitions(ctx context.Context, instants ...time.Time) error {
+	err := p.tryCreateWorkerOutboxPartitions(ctx, false, instants...)
+	if err == nil || !isCheckViolation(err) {
+		return err
+	}
+	slog.WarnContext(ctx, "outbox DEFAULT partition holds rows in a range being created; truncating strays to un-wedge partition creation",
+		slog.Any("err", err))
+	return p.tryCreateWorkerOutboxPartitions(ctx, true, instants...)
+}
+
+// isCheckViolation matches SQLSTATE 23514, which CREATE ... PARTITION OF
+// raises when the DEFAULT partition holds rows inside the new range.
+func isCheckViolation(err error) bool { return pgErrCode(err) == "23514" }
+
+func (p *Persistence) tryCreateWorkerOutboxPartitions(ctx context.Context, truncateStrays bool, instants ...time.Time) error {
 	tx, err := p.watchPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning outbox partition transaction: %w", err)
@@ -217,6 +313,18 @@ func (p *Persistence) createWorkerOutboxPartitions(ctx context.Context, instants
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent-substrate-atepg-outbox-partitions'))`); err != nil {
 		return fmt.Errorf("locking outbox partition DDL: %w", err)
+	}
+	if truncateStrays {
+		// Parent BEFORE child: Writers lock parent-then-child, so locking DEFAULT
+		// first (and later needing parent for CREATE PARTITION) causes deadlocks.
+		// Locking the parent first matches writer order, and holding it through
+		// the CREATEs prevents concurrent writes from re-seeding DEFAULT mid-rescue.
+		if _, err := tx.Exec(ctx, `LOCK TABLE worker_outbox IN ACCESS EXCLUSIVE MODE`); err != nil {
+			return fmt.Errorf("locking outbox parent for stray rescue: %w", err)
+		}
+		if err := p.truncateWorkerOutboxDefault(ctx, tx); err != nil {
+			return err
+		}
 	}
 	for _, at := range instants {
 		start := at.UTC().Truncate(outboxPartitionInterval)
@@ -302,6 +410,11 @@ func (p *Persistence) dropWorkerOutboxPartition(ctx context.Context, q querier, 
 // truncateWorkerOutboxDefault discards the DEFAULT partition wholesale to
 // un-stall partition creation.
 func (p *Persistence) truncateWorkerOutboxDefault(ctx context.Context, q querier) error {
+	// Lock BEFORE reading the trim mark to block concurrent writers. This ensures
+	// our snapshot sees exactly what TRUNCATE will destroy, preventing silent data loss.
+	if _, err := q.Exec(ctx, `LOCK TABLE worker_outbox_default IN ACCESS EXCLUSIVE MODE`); err != nil {
+		return fmt.Errorf("locking outbox default partition: %w", err)
+	}
 	// Highest xid is recorded as a trim mark in the same transaction so lagging watchers detect the loss and resync.
 	if _, err := q.Exec(ctx, `
 		INSERT INTO worker_outbox_trim (xid)
@@ -328,17 +441,15 @@ func (p *Persistence) truncateWorkerOutboxDefault(ctx context.Context, q querier
 func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
 	watchCtx, cancel := context.WithCancel(ctx)
 
-	// cursorXid starts at xmin - 1. The minus 1 is required because the poll
-	// query is exclusive (xid > cursor); starting exactly at xmin on an idle
-	// system would skip the very next event.
-	// baselineXid records the highest xid or trim mark at subscribe time so
-	// past garbage collection isn't mistaken for events lost during this watch.
-	// Xids are passed as decimal strings end-to-end; all ordering happens in SQL.
+	// cursor starts at xmin-1. baseline records pre-subscribe history (xid < xmin)
+	// so past drops aren't mistaken for losses, while preventing artificially
+	// inflated baselines from masking the future drop of slow, in-flight txs.
 	var cursorXid, baselineXid, baselineStart string
 	if err := p.watchPool.QueryRow(watchCtx, `
 		SELECT (pg_snapshot_xmin(pg_current_snapshot())::text::numeric - 1)::text,
 		       GREATEST(
-		           COALESCE((SELECT xid FROM worker_outbox ORDER BY xid DESC LIMIT 1), '0'::xid8),
+		           COALESCE((SELECT max(xid) FROM worker_outbox
+		                     WHERE xid < pg_snapshot_xmin(pg_current_snapshot())), '0'::xid8),
 		           COALESCE((SELECT xid FROM worker_outbox_trim), '0'::xid8))::text,
 		       pg_postmaster_start_time()::text`).Scan(&cursorXid, &baselineXid, &baselineStart); err != nil {
 		cancel()
@@ -350,6 +461,11 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 		defer close(ch)
 		ticker := time.NewTicker(outboxPollInterval)
 		defer ticker.Stop()
+		// failingSince limits how long consumers serve stale state during an outage.
+		// Past outboxPollFailureCloseAfter, the channel closes. Unlike the postmaster
+		// restart check (which fires when connectivity returns), this surfaces the
+		// actual outage in real-time.
+		var failingSince time.Time
 		for {
 			select {
 			case <-watchCtx.Done():
@@ -395,11 +511,20 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 					if watchCtx.Err() != nil {
 						return
 					}
-					// Transient poll failure: keep the cursor, try again on the next tick.
-					// If the outage was a restart, the next successful safety check catches it.
+					// Transient failure: retry next tick. Persistent failure (past the
+					// deadline): close the watch to flip workercache not-ready, forcing
+					// callers to fail fast instead of serving a frozen fleet view.
+					if failingSince.IsZero() {
+						failingSince = time.Now()
+					} else if time.Since(failingSince) > p.pollFailureCloseAfter {
+						slog.WarnContext(watchCtx, "worker outbox polling has failed persistently; closing watch",
+							slog.Duration("failing_for", time.Since(failingSince)), slog.Any("err", err))
+						return
+					}
 					slog.WarnContext(watchCtx, "worker outbox poll failed", slog.Any("err", err))
 					break
 				}
+				failingSince = time.Time{}
 				// A restarted postmaster truncated the UNLOGGED outbox:
 				// committed-but-undelivered events may be gone, so close
 				// before the cursor can skip past them; consumers resync
@@ -422,9 +547,12 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 				for _, r := range batch {
 					event, err := unmarshalWorkerEvent(r.payload)
 					if err != nil {
-						slog.ErrorContext(watchCtx, "worker event unmarshal failed", slog.Any("err", err))
-						cursorXid = r.xid
-						continue
+						// Close to force a relist. Skipping it would cause silent
+						// data loss. The fresh watch starts at the current xmin,
+						// naturally bypassing the corrupt row to prevent a boot loop.
+						slog.ErrorContext(watchCtx, "worker event unmarshal failed; closing watch for resync",
+							slog.String("xid", r.xid), slog.Any("err", err))
+						return
 					}
 					select {
 					case ch <- event:

@@ -357,7 +357,7 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 func (s *Server) denyMint(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest, reason string, args ...any) error {
 	slog.WarnContext(ctx, "ActorIdentity denied: "+reason,
 		append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
-	return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
+	return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor: %s", reason)
 }
 
 // authorizeWithWorker runs the worker↔actor mutual-pointer checks against one

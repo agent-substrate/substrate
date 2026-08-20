@@ -20,6 +20,7 @@ package atepg
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -179,7 +180,10 @@ func TestWatchWorkers_OutOfOrderCommitNotSkipped(t *testing.T) {
 
 	mkPayload := func(pod string) []byte {
 		payload, err := marshalWorkerEvent(store.WorkerEventCreated,
-			&ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: pod})
+			&ateapipb.Worker{
+				Metadata:        &ateapipb.ResourceMetadata{Name: pod},
+				WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: pod,
+			})
 		if err != nil {
 			t.Fatalf("marshaling event for %q: %v", pod, err)
 		}
@@ -342,7 +346,7 @@ func TestOutboxMaintenance_SingleMaintainer(t *testing.T) {
 }
 
 // TestWorkerEvents_OneRowPerTransaction pins the invariant the xid-only
-// watch cursor rests on: writeAndAppendChange appends exactly one outbox row
+// watch cursor rests on: writeAndAppendEvent appends exactly one outbox row
 // per transaction, so xids are distinct across the outbox and a poll batch
 // can never split a same-xid group.
 func TestWorkerEvents_OneRowPerTransaction(t *testing.T) {
@@ -667,5 +671,349 @@ func TestWatchWorkers_ClosesWhenTrimmedPastCursor(t *testing.T) {
 		// Expected: channel closed.
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for the watch channel to close after a trim past the cursor")
+	}
+}
+
+// TestPartitionCreation_UnwedgesFromStrayedDefault reproduces the
+// self-wedging order caught in review: creation stalls past the lead while
+// writes continue, strays land in DEFAULT with current-range timestamps, and
+// CREATE ... PARTITION OF for that range then fails outright — permanently,
+// since maintenance returns before its strays cleanup and boot fails the
+// same way. The fix retries creation with a same-transaction truncate of the
+// strays; this test drills the exact scenario.
+func TestPartitionCreation_UnwedgesFromStrayedDefault(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	// Stay clear of a partition boundary so the stray and the re-created
+	// partition land in the same range.
+	now := time.Now().UTC()
+	if rem := now.Truncate(outboxPartitionInterval).Add(outboxPartitionInterval).Sub(now); rem < 5*time.Second {
+		time.Sleep(rem + time.Second)
+		now = time.Now().UTC()
+	}
+
+	// Simulate the stall: the current range's partition does not exist.
+	if _, err := s.pool.Exec(ctx, `DROP TABLE `+workerOutboxPartitionName(now)); err != nil {
+		t.Fatalf("dropping current partition: %v", err)
+	}
+	// A write during the stall detours into DEFAULT.
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "wedge-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "wedge-pod",
+	}
+	if err := s.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker during stall: %v", err)
+	}
+	var strays bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_outbox_default)`).Scan(&strays); err != nil {
+		t.Fatalf("checking DEFAULT: %v", err)
+	}
+	if !strays {
+		t.Fatal("expected the stall-window write to land in the DEFAULT partition")
+	}
+
+	// The stall clears: creation must dig itself out (pre-fix this returned
+	// SQLSTATE 23514 forever, and NewPersistence failed the same way).
+	if err := s.createWorkerOutboxPartitions(ctx, outboxPartitionLeadTimes(now)...); err != nil {
+		t.Fatalf("createWorkerOutboxPartitions did not un-wedge: %v", err)
+	}
+
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_outbox_default)`).Scan(&strays); err != nil {
+		t.Fatalf("re-checking DEFAULT: %v", err)
+	}
+	if strays {
+		t.Fatal("DEFAULT partition still holds strays after the rescue")
+	}
+	var partitionExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, workerOutboxPartitionName(now)).Scan(&partitionExists); err != nil {
+		t.Fatalf("checking recreated partition: %v", err)
+	}
+	if !partitionExists {
+		t.Fatal("current-range partition was not recreated")
+	}
+	// The truncated stray was never trim-covered before the fix; the rescue
+	// must have recorded it so lagging watchers resync rather than skip.
+	var trimSet bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_outbox_trim WHERE xid > '0'::xid8)`).Scan(&trimSet); err != nil {
+		t.Fatalf("checking trim mark: %v", err)
+	}
+	if !trimSet {
+		t.Fatal("rescue did not record a trim mark for the truncated strays")
+	}
+}
+
+// TestOutboxMaintenance_NoDeadlockWithConcurrentWriters drills the measured
+// child-vs-parent lock-order deadlock: writers route into DEFAULT exactly
+// when the stray cleanup runs (that's the truncate path's precondition, not
+// a coincidence), and writers lock parent-then-child while a single
+// truncate+drops transaction locked child-then-parent. With retention split
+// into two transactions and the wedge rescue locking the parent first, no
+// interleaving can cycle. Pre-fix this test deadlocked (SQLSTATE 40P01)
+// within an iteration or two.
+func TestOutboxMaintenance_NoDeadlockWithConcurrentWriters(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	if rem := now.Truncate(outboxPartitionInterval).Add(outboxPartitionInterval).Sub(now); rem < 10*time.Second {
+		time.Sleep(rem + time.Second)
+		now = time.Now().UTC()
+	}
+
+	// An aged-out partition with a row, so the drops leg has real work.
+	old := now.Add(-2*outboxRetentionAge - 2*outboxPartitionInterval)
+	if err := s.createWorkerOutboxPartitions(ctx, old); err != nil {
+		t.Fatalf("creating expired partition: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO worker_outbox (created_at, payload) VALUES ($1, $2)`,
+		old, []byte{byte(store.WorkerEventUpdated)}); err != nil {
+		t.Fatalf("seeding expired partition: %v", err)
+	}
+
+	// Writers hammering the outbox for the whole test.
+	writerCtx, stopWriters := context.WithCancel(ctx)
+	defer stopWriters()
+	var wg sync.WaitGroup
+	writerErr := make(chan error, 4)
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; writerCtx.Err() == nil; i++ {
+				w := &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: fmt.Sprintf("ddl-worker-%d-%d", g, i)},
+					WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: fmt.Sprintf("ddl-pod-%d-%d", g, i),
+				}
+				if err := s.CreateWorker(writerCtx, w); err != nil && writerCtx.Err() == nil {
+					select {
+					case writerErr <- fmt.Errorf("writer %d iteration %d: %w", g, i, err):
+					default:
+					}
+					return
+				}
+			}
+		}(g)
+	}
+
+	// Repeatedly re-enter the degraded state under live writers: drop the
+	// current partition (parent-first, or this helper itself would ABBA),
+	// let writes detour into DEFAULT, then run a full maintenance pass —
+	// rescue-create, stray cleanup, and drops, all with writers in flight.
+	for i := 0; i < 4; i++ {
+		if _, err := s.pool.Exec(ctx,
+			`DO $$ BEGIN LOCK TABLE worker_outbox IN ACCESS EXCLUSIVE MODE; EXECUTE 'DROP TABLE IF EXISTS `+workerOutboxPartitionName(time.Now().UTC())+`'; END $$`); err != nil {
+			t.Fatalf("dropping current partition (iteration %d): %v", i, err)
+		}
+		time.Sleep(150 * time.Millisecond) // let writers detour into DEFAULT
+		if err := s.maintainWorkerOutboxPartitions(ctx); err != nil {
+			t.Fatalf("maintenance pass %d failed under concurrent writers: %v", i, err)
+		}
+	}
+
+	stopWriters()
+	wg.Wait()
+	select {
+	case err := <-writerErr:
+		t.Fatalf("concurrent writer failed: %v", err)
+	default:
+	}
+
+	var strays bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_outbox_default)`).Scan(&strays); err != nil {
+		t.Fatalf("checking DEFAULT: %v", err)
+	}
+	if strays {
+		t.Fatal("DEFAULT partition still holds strays after maintenance")
+	}
+	var oldExists bool
+	if err := s.pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, workerOutboxPartitionName(old)).Scan(&oldExists); err != nil {
+		t.Fatalf("checking expired partition: %v", err)
+	}
+	if oldExists {
+		t.Fatal("expired partition survived the drops leg")
+	}
+}
+
+// TestWatchWorkers_ClosesAfterPersistentPollFailure pins the watch
+// contract's loss signal for polling outages: transient failures retry with
+// the cursor kept (edge case 12), but a persistent failure must close the
+// channel within outboxPollFailureCloseAfter so workercache flips not-ready
+// and callers fail fast — instead of serving a frozen fleet view for as
+// long as the outage lasts. (The postmaster-restart check cannot cover
+// this: it fires only after connectivity returns.)
+func TestWatchWorkers_ClosesAfterPersistentPollFailure(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	// Connect so the watcher has its own pool: killing it simulates a
+	// persistent outage without touching the shared container pool.
+	p, err := Connect(ctx, containerDSN)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	p.pollFailureCloseAfter = 300 * time.Millisecond // before WatchWorkers starts the poller
+	defer p.pool.Close()
+	defer p.Close()
+
+	watch, err := p.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+	defer watch.Close()
+
+	p.watchPool.Close() // every subsequent poll now fails
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case _, ok := <-watch.Events:
+			if !ok {
+				return // closed: the loss signal fired
+			}
+		case <-deadline:
+			t.Fatal("watch did not close after persistent poll failure")
+		}
+	}
+}
+
+// TestWatchWorkers_BaselineDoesNotMaskOwedTrims pins the subscribe-baseline
+// corner from review: a transaction that took its xid BEFORE this watch
+// subscribed but commits AFTER it is a legitimate owed event — yet with a
+// baseline of "highest existing row xid", an already-committed HIGHER xid
+// (out-of-order commit) raised the baseline above the owed xid, so when the
+// owed row was trimmed while the xmin fence stalled, trim ≤ baseline and the
+// fell-behind close never fired: silent loss. The baseline must only cover
+// settled history below the cursor's own xmin snapshot.
+func TestWatchWorkers_BaselineDoesNotMaskOwedTrims(t *testing.T) {
+	s := setupPostgresStore(t).(*Persistence)
+	ctx := context.Background()
+
+	// L: an old in-flight transaction pinning xmin — the fence stall.
+	lTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin L: %v", err)
+	}
+	defer lTx.Rollback(ctx) //nolint:errcheck
+	var xidL string
+	if err := lTx.QueryRow(ctx, `SELECT pg_current_xact_id()::text`).Scan(&xidL); err != nil {
+		t.Fatalf("assigning L's xid: %v", err)
+	}
+
+	// W: takes the next xid now, but commits only after the subscribe.
+	wTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin W: %v", err)
+	}
+	defer wTx.Rollback(ctx) //nolint:errcheck
+	var xidW string
+	if err := wTx.QueryRow(ctx, `SELECT pg_current_xact_id()::text`).Scan(&xidW); err != nil {
+		t.Fatalf("assigning W's xid: %v", err)
+	}
+
+	// C: a LATER xid that commits BEFORE the subscribe — the baseline poison:
+	// a visible outbox row whose xid exceeds W's.
+	if err := s.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "baseline-poison"},
+		WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "baseline-pod",
+	}); err != nil {
+		t.Fatalf("CreateWorker (C): %v", err)
+	}
+
+	watch, err := s.WatchWorkers(ctx) // cursor = xidL-1; baseline must exclude C's xid (>= xmin)
+	if err != nil {
+		t.Fatalf("WatchWorkers: %v", err)
+	}
+	defer watch.Close()
+
+	// W commits its owed event post-subscribe (fenced behind L, undeliverable).
+	if _, err := wTx.Exec(ctx, `INSERT INTO worker_outbox (payload) VALUES ($1)`,
+		[]byte{byte(store.WorkerEventUpdated)}); err != nil {
+		t.Fatalf("W's outbox insert: %v", err)
+	}
+	if err := wTx.Commit(ctx); err != nil {
+		t.Fatalf("committing W: %v", err)
+	}
+
+	// Retention drops W's partition while the fence still stalls: record the
+	// trim exactly as dropWorkerOutboxPartition would.
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO worker_outbox_trim (xid) VALUES ($1::xid8)
+		ON CONFLICT (id) DO UPDATE SET xid = EXCLUDED.xid
+		WHERE EXCLUDED.xid > worker_outbox_trim.xid`, xidW); err != nil {
+		t.Fatalf("recording trim of W's partition: %v", err)
+	}
+
+	// The fell-behind close must fire: trim (xidW) > cursor (xidL-1), and the
+	// baseline may not be raised by C's higher-but-already-visible xid.
+	// Nothing can be delivered first — everything above xidL is fenced.
+	select {
+	case event, ok := <-watch.Events:
+		if ok {
+			t.Fatalf("delivered event %+v through the fence", event)
+		}
+		// Closed: loss surfaced.
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch stayed open: the trimmed owed event was silently lost (baseline masked the trim)")
+	}
+}
+
+// TestUnmarshalWorkerEvent_BoundaryAssertions pins the write-side invariants
+// asserted at the read boundary: known event-type byte and a keyable worker.
+func TestUnmarshalWorkerEvent_BoundaryAssertions(t *testing.T) {
+	valid, err := marshalWorkerEvent(store.WorkerEventUpdated, &ateapipb.Worker{
+		Metadata: &ateapipb.ResourceMetadata{Name: "w1"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		payload []byte
+		wantErr bool
+	}{
+		"valid":             {valid, false},
+		"empty":             {nil, true},
+		"unknown type byte": {[]byte{0xff, 0x00}, true},
+		"type byte only":    {[]byte{byte(store.WorkerEventCreated)}, true}, // empty proto = nameless
+		"garbage proto":     {append([]byte{byte(store.WorkerEventCreated)}, 0xde, 0xad, 0xbe), true},
+		"nameless worker":   {func() []byte { b, _ := marshalWorkerEvent(store.WorkerEventDeleted, &ateapipb.Worker{}); return b }(), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := unmarshalWorkerEvent(tc.payload)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("unmarshalWorkerEvent() err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestWatchWorkers_ClosesOnCorruptPayload pins close-over-skip: a payload
+// that fails the boundary checks must close the watch (loss surfaced,
+// relist repairs) rather than advance the cursor past it silently.
+func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
+	s := setupPostgresStore(t).(*Persistence)
+	ctx := context.Background()
+
+	watch, err := s.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers: %v", err)
+	}
+	defer watch.Close()
+
+	if _, err := s.pool.Exec(ctx, `INSERT INTO worker_outbox (payload) VALUES ($1)`,
+		[]byte{0xff, 0xde, 0xad}); err != nil {
+		t.Fatalf("inserting corrupt payload: %v", err)
+	}
+
+	select {
+	case event, ok := <-watch.Events:
+		if ok {
+			t.Fatalf("delivered event %+v from a corrupt payload", event)
+		}
+		// Closed: the loss signal fired.
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch stayed open past a corrupt payload (silent skip)")
 	}
 }

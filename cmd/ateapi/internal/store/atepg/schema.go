@@ -81,39 +81,19 @@ CREATE TABLE IF NOT EXISTS workers (
     proto    bytea NOT NULL
 );
 
--- Transactional outbox backing WatchWorkers. Events are appended in
--- the same transaction as the worker write and delivered by polling past
--- an xid cursor;
--- payload is one event-type byte followed by the binary Worker proto.
+-- Transactional outbox backing WatchWorkers.
 --
--- xid is the whole ordering: writeAndAppendChange appends exactly ONE row
--- per transaction (the only insert site), so every outbox row has a distinct
--- xid and a poll batch can never split a same-xid group. That invariant is
--- load-bearing for the watch cursor and pinned by a test.
---
--- Partitioned by created_at range (width: outboxPartitionInterval,
--- kept <= retention so rows outlive it by at most one interval) so
--- retention is a partition DROP — a metadata operation with no row
--- deletes, dead tuples, or vacuum debt — instead of bulk DELETEs whose I/O
--- competes with foreground traffic. The maintenance loop
--- (outboxMaintenance) creates upcoming partitions and drops expired
--- ones; the DEFAULT partition only receives writes if partition creation
--- ever stalls, and is truncated wholesale once maintenance notices
--- (watchers that lose events to that resync via the trim mark).
---
--- Partitions are UNLOGGED: the outbox is ephemeral by design (cursors are
--- not durable, subscriptions start "from now", and every consumer rebuilds
--- from the workers table on resync), so paying WAL on every event — inside
--- every worker-write transaction — buys nothing. Crash/failover truncates
--- unlogged tables; see WatchWorkers for how watchers recover.
--- worker_outbox_trim stays logged — the trim mark must survive a crash.
+-- 1. Ordering (xid): writeAndAppendEvent guarantees exactly one row per tx,
+--    ensuring distinct xids so polling batches never split a transaction.
+-- 2. Retention (created_at partitions): outboxMaintenance drops expired
+--    partitions to avoid VACUUM I/O debt. A DEFAULT partition catches overflow.
+-- 3. Durability (UNLOGGED): Skips WAL overhead. Crash recoveries trigger
+--    watchers to rebuild from the primary workers table. worker_outbox_trim
+--    remains LOGGED to preserve the high-water mark across restarts.
 CREATE TABLE IF NOT EXISTS worker_outbox (
     xid         xid8 NOT NULL DEFAULT pg_current_xact_id(),
-    -- clock_timestamp(), not now(): now() is transaction-START time, so a
-    -- slow transaction would route its event by a stale timestamp — worst
-    -- case into an already-dropped partition (the DEFAULT partition would
-    -- catch it). The outbox insert is the last statement before commit, so
-    -- statement time routes into the partition closest to commit time.
+    -- MUST use clock_timestamp() instead of now(). now() freezes at tx start,
+    -- causing slow transactions to route into expired partitions.
     created_at  timestamptz NOT NULL DEFAULT clock_timestamp(),
     payload     bytea NOT NULL
 ) PARTITION BY RANGE (created_at);
