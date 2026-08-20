@@ -104,6 +104,20 @@ data:
                       upgrade_configs:
                       - upgrade_type: CONNECT
                         connect_config: {}
+                      # A CONNECT tunnel is a session, not a request. Unlike a
+                      # WebSocket upgrade, Envoy never disables the route timeout
+                      # once the tunnel is established, so the 15s default would
+                      # be a ceiling on how long an actor may hold any outbound
+                      # connection open -- fine for a fetch, wrong for SSH, a
+                      # stream, or anything else that idles.
+                      #
+                      # 0 removes the ceiling on the tunnel's lifetime. What
+                      # still bounds it is inactivity: this HCM leaves
+                      # stream_idle_timeout at its 5 minute default, and every
+                      # tunnelled byte in either direction resets that timer. So
+                      # a busy tunnel lives as long as its peers do, and one with
+                      # nothing on it for 5 minutes is reset.
+                      timeout: 0s
               http_filters:
               # Actor-identity authorization: on every egress CONNECT, ext_proc
               # reads the actor certificate out of x-forwarded-client-cert,

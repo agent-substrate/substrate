@@ -53,3 +53,113 @@ spec:
     onPause: Full
     onCommit: Full
     location: gs://${BUCKET_NAME}/ate-demo-egress/
+
+---
+
+# A TCP origin for the non-HTTP egress tests.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bannerserver
+  namespace: ate-demo-egress
+  labels:
+    app: bannerserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bannerserver
+  template:
+    metadata:
+      labels:
+        app: bannerserver
+    spec:
+      containers:
+      - name: bannerserver
+        image: ko://github.com/agent-substrate/substrate/demos/egress/bannerserver
+        ports:
+        # Two ports, because whether the origin speaks first has to be selected
+        # by the address the actor dials: the server decides before it reads.
+        - containerPort: 2222
+          name: banner
+        - containerPort: 2223
+          name: quiet
+        resources:
+          limits:
+            cpu: 100m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: bannerserver
+  namespace: ate-demo-egress
+spec:
+  selector:
+    app: bannerserver
+  ports:
+  - name: banner
+    port: 2222
+    targetPort: banner
+  - name: quiet
+    port: 2223
+    targetPort: quiet
+
+---
+
+# A long-lived-stream origin for the streaming-duration egress tests.
+# It serves cleartext HTTP.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamserver
+  namespace: ate-demo-egress
+  labels:
+    app: streamserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamserver
+  template:
+    metadata:
+      labels:
+        app: streamserver
+    spec:
+      containers:
+      - name: streamserver
+        image: ko://github.com/agent-substrate/substrate/demos/egress/streamserver
+        ports:
+        - containerPort: 8080
+          name: http
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: http
+        resources:
+          limits:
+            cpu: 100m
+            memory: 64Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamserver
+  namespace: ate-demo-egress
+spec:
+  selector:
+    app: streamserver
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http

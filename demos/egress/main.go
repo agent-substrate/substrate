@@ -13,14 +13,20 @@
 // limitations under the License.
 
 // Command egress is a small HTTP service for demonstrating per-Actor egress
-// policy. It accepts a URL, fetches it, and returns the upstream response.
+// policy. It accepts a URL, fetches it, and returns the upstream response; on
+// /tcp it opens a raw TCP connection so that egress can be exercised with
+// something other than HTTP; and on /stream it holds a Server-Sent Events or
+// WebSocket stream open so that egress can be exercised with something other
+// than a request that finishes promptly.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -101,7 +107,123 @@ func newHandler(client *http.Client) http.Handler {
 		}
 		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body)})
 	})
+	mux.HandleFunc("/tcp", handleTCPProbe)
+	mux.HandleFunc("/stream", handleStreamProbe(newStreamProbeRegistry()))
 	return mux
+}
+
+// tcpProbeRequest asks for one raw TCP exchange.
+type tcpProbeRequest struct {
+	Address   string `json:"address"`
+	Send      string `json:"send,omitempty"`
+	ReadBytes int    `json:"readBytes,omitempty"`
+	Timeout   string `json:"timeout,omitempty"`
+}
+
+type tcpProbeResponse struct {
+	// Banner is whatever the peer sent before being spoken to.
+	Banner   string `json:"banner,omitempty"`
+	Received string `json:"received,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// handleTCPProbe opens a TCP connection and reads before it writes.
+func handleTCPProbe(w http.ResponseWriter, r *http.Request) {
+	const defaultProbeTimeout = 5 * time.Second
+	// Enough for an SSH identification string or a test banner.
+	const defaultProbeReadBytes = 512
+	const maxProbeReadBytes = 8 << 10 // 8 KiB
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeTCPProbeJSON(w, http.StatusMethodNotAllowed, tcpProbeResponse{Error: "method must be POST"})
+		return
+	}
+
+	var input tcpProbeRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err := decoder.Decode(&input); err != nil {
+		writeTCPProbeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+		return
+	}
+	if _, _, err := net.SplitHostPort(input.Address); err != nil {
+		writeTCPProbeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("address must be host:port: %v", err)})
+		return
+	}
+
+	timeout := defaultProbeTimeout
+	if input.Timeout != "" {
+		parsed, err := time.ParseDuration(input.Timeout)
+		if err != nil {
+			writeTCPProbeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("invalid timeout: %v", err)})
+			return
+		}
+		timeout = parsed
+	}
+	readBytes := input.ReadBytes
+	if readBytes <= 0 {
+		readBytes = defaultProbeReadBytes
+	}
+	readBytes = min(readBytes, maxProbeReadBytes)
+
+	dialer := net.Dialer{Timeout: timeout}
+	connection, err := dialer.DialContext(r.Context(), "tcp", input.Address)
+	if err != nil {
+		writeTCPProbeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("dialing %s: %v", input.Address, err)})
+		return
+	}
+	defer connection.Close()
+
+	// Read before writing anything at all, so an empty banner really does mean
+	// the peer stayed silent.
+	banner, err := readWithTimeout(connection, readBytes, timeout)
+	if err != nil {
+		writeTCPProbeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("reading banner from %s: %v", input.Address, err)})
+		return
+	}
+
+	response := tcpProbeResponse{Banner: string(banner)}
+	if input.Send == "" {
+		writeTCPProbeJSON(w, http.StatusOK, response)
+		return
+	}
+
+	if err := connection.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		writeTCPProbeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("setting write deadline: %v", err)})
+		return
+	}
+	if _, err := io.WriteString(connection, input.Send); err != nil {
+		writeTCPProbeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("writing to %s: %v", input.Address, err)})
+		return
+	}
+	received, err := readWithTimeout(connection, readBytes, timeout)
+	if err != nil {
+		writeTCPProbeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("reading reply from %s: %v", input.Address, err)})
+		return
+	}
+	response.Received = string(received)
+	writeTCPProbeJSON(w, http.StatusOK, response)
+}
+
+// readWithTimeout returns the bytes of a single read, capped at limit. A peer
+// that says nothing within timeout yields no bytes and no error, since silence
+// is a legitimate answer to "does this peer speak first?".
+func readWithTimeout(connection net.Conn, limit int, timeout time.Duration) ([]byte, error) {
+	if err := connection.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, fmt.Errorf("setting read deadline: %w", err)
+	}
+	buffer := make([]byte, limit)
+	n, err := connection.Read(buffer)
+	if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return buffer[:n], nil
+}
+
+func writeTCPProbeJSON(w http.ResponseWriter, status int, response tcpProbeResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func validateURL(raw string) error {
