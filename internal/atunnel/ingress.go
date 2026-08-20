@@ -96,6 +96,34 @@ type activation struct {
 	wg     sync.WaitGroup
 }
 
+type upstreamTransport struct {
+	http1 *http.Transport
+	h2c   *http.Transport
+}
+
+func newUpstreamTransport() *upstreamTransport {
+	http1 := http.DefaultTransport.(*http.Transport).Clone()
+	h2c := http1.Clone()
+
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	h2c.Protocols = protocols
+
+	return &upstreamTransport{http1: http1, h2c: h2c}
+}
+
+func (t *upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.ProtoMajor == 2 {
+		return t.h2c.RoundTrip(req)
+	}
+	return t.http1.RoundTrip(req)
+}
+
+func (t *upstreamTransport) CloseIdleConnections() {
+	t.http1.CloseIdleConnections()
+	t.h2c.CloseIdleConnections()
+}
+
 // NewServer creates a Server and validates its TLS material.
 func NewServer(cfg Config) (*Server, error) {
 	if cfg.CredentialBundlePath == "" {
@@ -126,7 +154,6 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(cfg.Upstream)
@@ -142,7 +169,7 @@ func NewServer(cfg Config) (*Server, error) {
 			}
 			pr.SetXForwarded()
 		},
-		Transport: transport,
+		Transport: newUpstreamTransport(),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
 			http.Error(w, "bad gateway", http.StatusBadGateway)

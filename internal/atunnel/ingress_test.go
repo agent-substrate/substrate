@@ -190,6 +190,48 @@ func TestServeHTTP(t *testing.T) {
 	}
 }
 
+func TestServeHTTPPreservesProtocol(t *testing.T) {
+	gotProtocol := make(chan int, 1)
+	actor := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotProtocol <- r.ProtoMajor
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	actor.Config.Protocols = protocols
+	actor.Start()
+	defer actor.Close()
+
+	upstreamURL, err := url.Parse(actor.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, upstreamURL)
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name       string
+		protoMajor int
+	}{{"HTTP/1", 1}, {"HTTP/2", 2}} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+			req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+			req.ProtoMajor = tt.protoMajor
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+			}
+			if got := <-gotProtocol; got != tt.protoMajor {
+				t.Errorf("actor protocol = HTTP/%d, want HTTP/%d", got, tt.protoMajor)
+			}
+		})
+	}
+}
+
 func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	upstreamURL, err := url.Parse("http://actor.internal:80")
 	if err != nil {
