@@ -393,7 +393,7 @@ func (s *AteWorkerService) coldBootActor(ctx context.Context, p actorBootParams)
 			return err
 		}
 	} else {
-		s.lookupActor(actorUID).prepared = nil
+		s.setPreparedSandbox(actorUID, nil)
 	}
 	defer func() {
 		if retErr != nil {

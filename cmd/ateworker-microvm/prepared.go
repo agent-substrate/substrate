@@ -30,10 +30,10 @@ import (
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/ch"
 	"go.ate.dev/substrate/cmd/ateworker-microvm/internal/kata"
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/ateworker/sandboxprep"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxprep"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
@@ -48,10 +48,32 @@ type preparedSandbox struct {
 }
 
 func (s *AteWorkerService) preparedSandbox(actorUID string) *preparedSandbox {
-	if h := s.lookupActor(actorUID); h != nil {
+	s.actorsMu.RLock()
+	defer s.actorsMu.RUnlock()
+	if h := s.actors[actorUID]; h != nil {
 		return h.prepared
 	}
 	return nil
+}
+
+func (s *AteWorkerService) setPreparedSandbox(actorUID string, p *preparedSandbox) {
+	s.actorsMu.Lock()
+	defer s.actorsMu.Unlock()
+	if h := s.actors[actorUID]; h != nil {
+		h.prepared = p
+	}
+}
+
+func (s *AteWorkerService) preparedActorUIDs() []string {
+	s.actorsMu.RLock()
+	defer s.actorsMu.RUnlock()
+	var uids []string
+	for uid, h := range s.actors {
+		if h.prepared != nil {
+			uids = append(uids, uid)
+		}
+	}
+	return uids
 }
 
 func (p *preparedSandbox) validate(req *ateworkerpb.PrepareSandboxRequest) error {
@@ -117,7 +139,7 @@ func (s *AteWorkerService) PrepareSandbox(ctx context.Context, req *ateworkerpb.
 		prepared, err := s.bootSandbox(ctx, params)
 		if err == nil {
 			prepared.request = proto.Clone(req).(*ateworkerpb.PrepareSandboxRequest)
-			s.lookupActor(w.GetActorUid()).prepared = prepared
+			s.setPreparedSandbox(w.GetActorUid(), prepared)
 			return &ateworkerpb.PrepareSandboxResponse{}, nil
 		}
 		if attempt >= coldBootAttempts || !errors.Is(err, errGuestStopped) {
@@ -173,10 +195,6 @@ func (s *AteWorkerService) bootSandbox(ctx context.Context, p actorBootParams) (
 		return nil, fmt.Errorf("ateworker-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
 	rr := s.resolveRuntime(paths)
-	_, err := s.tunnel.PrepareEgress(ctx, p.attribution(), p.egressGateway)
-	if err != nil {
-		return nil, err
-	}
 
 	// Networking (host side): the actor's own namespace. The tap is built below
 	// (after the VM exists) so its FDs are fresh. The caller unhosts on final
@@ -258,7 +276,7 @@ func (s *AteWorkerService) bootSandbox(ctx context.Context, p actorBootParams) (
 	}()
 
 	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/pmem0 +
-	// the virtio-fs device; no actor virtio-blk disks — rootfs writes land in the
+	// the virtio-fs device; no actor virtio-blk disks; rootfs writes land in the
 	// host-side overlay upper through the shared mount). The console log is also read
 	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
@@ -294,8 +312,8 @@ func (s *AteWorkerService) bootSandbox(ctx context.Context, p actorBootParams) (
 	slog.InfoContext(ctx, "Micro-VM booted", slog.String("id", actorUID), slog.String("api", apiSocket))
 
 	// Dial the kata-agent over hybrid-vsock. The agent only starts listening once
-	// the guest's init reaches kata-containers.target — well after CH creates the
-	// vsock socket file — so poll the CONNECT until it answers (as the kata shim
+	// the guest's init reaches kata-containers.target, well after CH creates the
+	// vsock socket file, so poll the CONNECT until it answers (as the kata shim
 	// does), rather than dialing once.
 	tBooted := time.Now()
 	vsockPath := kata.VsockSocketPath(actorUID)

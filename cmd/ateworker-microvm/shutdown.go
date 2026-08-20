@@ -89,8 +89,8 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 		slog.ErrorContext(ctx, "Giving up waiting for in-flight RPCs during graceful shutdown",
 			slog.Any("rpcs", s.inFlight.Names()))
 	}
-	for _, h := range s.hostedActors() {
-		if _, err := s.DiscardPreparedSandbox(waitCtx, &ateworkerpb.DiscardPreparedSandboxRequest{ActorUid: h.attribution.UID}); err != nil {
+	for _, uid := range s.preparedActorUIDs() {
+		if _, err := s.DiscardPreparedSandbox(waitCtx, &ateworkerpb.DiscardPreparedSandboxRequest{ActorUid: uid}); err != nil {
 			slog.WarnContext(ctx, "Failed to discard prepared sandbox during shutdown", slog.Any("err", err))
 		}
 	}

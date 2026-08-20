@@ -25,10 +25,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"go.ate.dev/substrate/internal/apierror"
-	"go.ate.dev/substrate/internal/ateworker/sandboxprep"
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/ocispec"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/sandboxprep"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/workerstats"
 )
@@ -42,10 +42,32 @@ type preparedSandbox struct {
 }
 
 func (s *AteWorkerService) preparedSandbox(actorUID string) *preparedSandbox {
-	if h := s.lookupActor(actorUID); h != nil {
+	s.actorsMu.RLock()
+	defer s.actorsMu.RUnlock()
+	if h := s.actors[actorUID]; h != nil {
 		return h.prepared
 	}
 	return nil
+}
+
+func (s *AteWorkerService) setPreparedSandbox(actorUID string, p *preparedSandbox) {
+	s.actorsMu.Lock()
+	defer s.actorsMu.Unlock()
+	if h := s.actors[actorUID]; h != nil {
+		h.prepared = p
+	}
+}
+
+func (s *AteWorkerService) preparedActorUIDs() []string {
+	s.actorsMu.RLock()
+	defer s.actorsMu.RUnlock()
+	var uids []string
+	for uid, h := range s.actors {
+		if h.prepared != nil {
+			uids = append(uids, uid)
+		}
+	}
+	return uids
 }
 
 func (p *preparedSandbox) validate(req *ateworkerpb.PrepareSandboxRequest) error {
@@ -94,7 +116,7 @@ func (s *AteWorkerService) PrepareSandbox(ctx context.Context, req *ateworkerpb.
 	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, w.GetActorDirs())
+	_, err = s.hostActor(ctx, attribution, w.GetActorDirs())
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +128,7 @@ func (s *AteWorkerService) PrepareSandbox(ctx context.Context, req *ateworkerpb.
 			durableVolumes: durableVolumeNames(w.GetSpec()), containers: w.GetSpec().GetContainers(), flags: s.flags,
 		},
 	}
-	hosted.prepared = p
+	s.setPreparedSandbox(w.GetActorUid(), p)
 	defer func() {
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)

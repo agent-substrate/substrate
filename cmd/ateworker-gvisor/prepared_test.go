@@ -99,3 +99,22 @@ func TestDiscardPreparedSandboxPreservesOtherActors(t *testing.T) {
 		t.Fatal("discard changed another actor")
 	}
 }
+
+func TestRestoreRejectsPreparedColdRun(t *testing.T) {
+	req := preparedTestRequest(t)
+	s := NewService(nil, nil, 2, nil)
+	prepared := &preparedSandbox{request: req}
+	s.actors["actor-a"] = &hostedActor{prepared: prepared}
+	w := req.GetWorkload()
+	_, err := s.RestoreWorkload(t.Context(), &ateworkerpb.RestoreWorkloadRequest{
+		ActorUid: w.GetActorUid(), ActorDirs: w.GetActorDirs(), RunscPath: w.GetRunscPath(),
+		CpuMilli: w.GetCpuMilli(), MemoryBytes: w.GetMemoryBytes(),
+		Fidelity: ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	})
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreWorkload = %v, want FailedPrecondition", err)
+	}
+	if s.preparedSandbox("actor-a") != prepared {
+		t.Fatal("restore consumed cold-run preparation")
+	}
+}

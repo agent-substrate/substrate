@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,6 +39,7 @@ import (
 	"go.ate.dev/substrate/internal/imagecache"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxprep"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/wakeupprobe"
 )
@@ -128,6 +130,16 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	}
 	defer release()
 
+	prepared := s.preparedSandbox(req.GetActorUid())
+	if prepared != nil {
+		if req.GetFidelity() != ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+			return nil, apierror.FailedPrecondition("only a volumes restore can consume a prepared sandbox")
+		}
+		if err := prepared.validate(sandboxprep.FromRestore(req)); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.tunnel.Deactivate(ctx, workerstats.ActorAttributionFromRequest(req)); err != nil {
 		return nil, err
 	}
@@ -150,22 +162,27 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	attribution := p.actorAttribution()
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
-	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
-		return nil, err
-	}
-	// Publish attribution before restore, so a stats read during it is
-	// attributed. Only a MEMORY restore resumes the guest and its CPU counters,
-	// so only it counts from the first reading; the lower fidelities cold-boot
-	// a fresh guest whose CPU counts from zero.
-	resumesGuest := includesMemory(req.GetFidelity())
-	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
-		return nil, err
+	if prepared == nil {
+		if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
+			return nil, err
+		}
+		// Publish attribution before restore, so a stats read during it is
+		// attributed. Only a MEMORY restore resumes the guest and its CPU counters,
+		// so only it counts from the first reading; the lower fidelities cold-boot
+		// a fresh guest whose CPU counts from zero.
+		resumesGuest := includesMemory(req.GetFidelity())
+		if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
+			return nil, err
+		}
 	}
 	defer func() {
 		if retErr != nil {
 			// Detached: the RPC's context may be what failed it.
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cleanupCancel()
+			if pending := s.preparedSandbox(attribution.UID); pending != nil {
+				retErr = errors.Join(retErr, s.teardownActor(cleanupCtx, attribution.UID, req.GetActorDirs(), pending.actor, ch.NewClient(pending.actor.apiSocket)))
+			}
 			_ = s.unhostActor(cleanupCtx, attribution.UID)
 		}
 	}()

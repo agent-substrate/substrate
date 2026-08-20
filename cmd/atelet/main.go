@@ -54,6 +54,7 @@ import (
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxprep"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/substratex509"
 	"go.ate.dev/substrate/internal/version"
@@ -595,6 +596,11 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		return nil, apierror.InvalidArgument("%v", err)
 	}
 
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+	if err != nil {
+		return nil, err
+	}
+
 	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
@@ -632,6 +638,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 	workload := &ateworkerpb.RunWorkloadRequest{
+		RunscPath: runscPathFor(assetPaths), RuntimeAssetPaths: assetPaths,
 		Atespace:              actorRef.Atespace,
 		ActorName:             actorRef.Name,
 		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
@@ -646,17 +653,7 @@ func (s *Atelet) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *atele
 	var containerSpecs []*ateworkerpb.ContainerSpec
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		dependencies, depCtx := errgroup.WithContext(gctx)
-		dependencies.Go(func() error {
-			paths, err := s.ensureSandboxAssets(depCtx, sandboxRec)
-			workload.RuntimeAssetPaths = paths
-			workload.RunscPath = runscPathFor(paths)
-			return err
-		})
-		dependencies.Go(func() error {
-			return s.preparePauseOCIBundle(depCtx, actorUID, sandboxRec.PauseImage)
-		})
-		if err := dependencies.Wait(); err != nil {
+		if err := s.preparePauseOCIBundle(gctx, actorUID, sandboxRec.PauseImage); err != nil {
 			return err
 		}
 		_, err := client.PrepareSandbox(gctx, &ateworkerpb.PrepareSandboxRequest{Workload: workload})
@@ -1313,6 +1310,36 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		}
 	}()
 
+	var client ateworkerpb.WorkerClient
+	actorDirs := ateletpath.ActorDirs(actorUID)
+	actorDirs.RestoreDir = checkpointDir
+	workload := &ateworkerpb.RestoreWorkloadRequest{
+		Atespace:              actorRef.Atespace,
+		ActorName:             actorRef.Name,
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+
+		Fidelity:           toWorkerFidelity(req.GetSnapshot().GetFidelity()),
+		ActorUid:           req.GetActorUid(),
+		ActorDirs:          actorDirs,
+		PreserveRestoreDir: directLocal,
+		EgressGateway:      toWorkerEgressGateway(req.GetEgressGateway()),
+		CpuMilli:           req.GetCpuMilli(),
+		MemoryBytes:        req.GetMemoryBytes(),
+	}
+	prepareEarly := shouldPrepareSandboxForRestore(req.GetSnapshot().GetFidelity())
+	if prepareEarly {
+		workload.Spec, err = buildWorkerWorkloadSpec(req.GetSpec(), nil)
+		if err != nil {
+			return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
+		}
+		defer func() {
+			if err != nil && client != nil {
+				discardPreparedSandbox(ctx, client, actorUID)
+			}
+		}()
+	}
+
 	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
 	// CONCURRENTLY. They are independent — only the final worker.RestoreWorkload
 	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
@@ -1352,14 +1379,41 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return err
 		}
-		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
-		dBundles = time.Since(t)
+		if !prepareEarly {
+			t := time.Now()
+			containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
+			dBundles = time.Since(t)
+		} else {
+			if err := s.prepareOCIPrerequisites(actorUID, req.GetSpec()); err != nil {
+				return err
+			}
+			client, err = s.dialWorker(gctx, req.GetWorkerPodUid())
+			if err != nil {
+				return err
+			}
+			workload.RuntimeAssetPaths = assetPaths
+			workload.RunscPath = runscPathFor(assetPaths)
+			preparation, prepCtx := errgroup.WithContext(gctx)
+			preparation.Go(func() error {
+				if err := s.preparePauseOCIBundle(prepCtx, actorUID, runtimeRec.PauseImage); err != nil {
+					return err
+				}
+				_, err := client.PrepareSandbox(prepCtx, sandboxprep.FromRestore(workload))
+				return err
+			})
+			preparation.Go(func() error {
+				t := time.Now()
+				defer func() { dBundles = time.Since(t) }()
+				var imageErr error
+				containerSpecs, imageErr = s.prepareApplicationOCIBundles(prepCtx, actorUID, req.GetSpec())
+				return imageErr
+			})
+			err = preparation.Wait()
+		}
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
-			return err
 		}
-		return nil
+		return err
 	})
 	if err := g.Wait(); err != nil {
 		if isCollateral(err, downloadErr) {
@@ -1371,9 +1425,11 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, err
 	}
 
-	client, err := s.dialWorker(ctx, req.GetWorkerPodUid())
-	if err != nil {
-		return nil, err
+	if client == nil {
+		client, err = s.dialWorker(ctx, req.GetWorkerPodUid())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Tell worker to do runsc create + runsc restore for pause container and
@@ -1383,28 +1439,11 @@ func (s *Atelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (res
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
-	actorDirs := ateletpath.ActorDirs(actorUID)
-	actorDirs.RestoreDir = checkpointDir
-
-	// The worker_restore phase is opaque from here; worker logs its own breakdown of
-	// this call as "Actor restore phases".
+	workload.Spec = spec
+	workload.RuntimeAssetPaths = assetPaths
+	workload.RunscPath = runscPathFor(assetPaths)
 	tWorker := time.Now()
-	_, err = client.RestoreWorkload(ctx, &ateworkerpb.RestoreWorkloadRequest{
-		Atespace:              actorRef.Atespace,
-		ActorName:             actorRef.Name,
-		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-		ActorTemplateName:     req.GetActorTemplateName(),
-		RunscPath:             runscPathFor(assetPaths),
-		RuntimeAssetPaths:     assetPaths,
-		Spec:                  spec,
-		Fidelity:              toWorkerFidelity(req.GetSnapshot().GetFidelity()),
-		ActorUid:              req.GetActorUid(),
-		ActorDirs:             actorDirs,
-		PreserveRestoreDir:    directLocal,
-		EgressGateway:         toWorkerEgressGateway(req.GetEgressGateway()),
-		CpuMilli:              req.GetCpuMilli(),
-		MemoryBytes:           req.GetMemoryBytes(),
-	})
+	_, err = client.RestoreWorkload(ctx, workload)
 	dWorker = time.Since(tWorker)
 	if err != nil {
 		// TODO: classify the errors returned by Worker and crash the actor if needed.
@@ -1995,4 +2034,8 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 		return nil, nil, fmt.Errorf("create ate clientset: %w", err)
 	}
 	return clientset, ateClient, nil
+}
+
+func shouldPrepareSandboxForRestore(fidelity ateletpb.SnapshotFidelity) bool {
+	return fidelity == ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 }

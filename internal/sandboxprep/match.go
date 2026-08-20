@@ -34,3 +34,15 @@ func shape(req *ateworkerpb.PrepareSandboxRequest) *ateworkerpb.PrepareSandboxRe
 	}
 	return copy
 }
+
+// FromRestore describes the cold sandbox needed by a volumes-only restore.
+// The snapshot files themselves are consumed only by RestoreWorkload.
+func FromRestore(req *ateworkerpb.RestoreWorkloadRequest) *ateworkerpb.PrepareSandboxRequest {
+	return &ateworkerpb.PrepareSandboxRequest{FromCheckpoint: true, Workload: &ateworkerpb.RunWorkloadRequest{
+		Atespace: req.GetAtespace(), ActorName: req.GetActorName(), ActorUid: req.GetActorUid(),
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(), ActorTemplateName: req.GetActorTemplateName(),
+		RunscPath: req.GetRunscPath(), RuntimeAssetPaths: req.GetRuntimeAssetPaths(), Spec: req.GetSpec(),
+		ActorDirs: req.GetActorDirs(), EgressGateway: req.GetEgressGateway(),
+		CpuMilli: req.GetCpuMilli(), MemoryBytes: req.GetMemoryBytes(),
+	}}
+}

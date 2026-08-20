@@ -68,3 +68,22 @@ func TestPrepareSandboxIdempotencyStopsWhenCleanupStarts(t *testing.T) {
 		t.Fatalf("PrepareSandbox during cleanup = %v, want FailedPrecondition", err)
 	}
 }
+
+func TestRestoreRejectsPreparedColdRun(t *testing.T) {
+	req := testPrepareRequest(t)
+	s := NewService("pod", "", false, 128, 2, nil, nil)
+	prepared := &preparedSandbox{request: req}
+	s.actors["actor-a"] = &hostedActor{prepared: prepared}
+	w := req.GetWorkload()
+	_, err := s.RestoreWorkload(t.Context(), &ateworkerpb.RestoreWorkloadRequest{
+		ActorUid: w.GetActorUid(), ActorDirs: w.GetActorDirs(), RunscPath: w.GetRunscPath(),
+		CpuMilli: w.GetCpuMilli(), MemoryBytes: w.GetMemoryBytes(),
+		Fidelity: ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	})
+	if apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreWorkload = %v, want FailedPrecondition", err)
+	}
+	if s.preparedSandbox("actor-a") != prepared {
+		t.Fatal("restore consumed cold-run preparation")
+	}
+}

@@ -52,6 +52,7 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sandboxprep"
 	"go.ate.dev/substrate/internal/serverboot"
 	"go.ate.dev/substrate/internal/sizing"
 	"go.ate.dev/substrate/internal/version"
@@ -425,8 +426,8 @@ func (s *AteWorkerService) gracefulShutdown(ctx context.Context) {
 		slog.ErrorContext(ctx, "Giving up waiting for in-flight RPCs during graceful shutdown",
 			slog.Any("rpcs", s.inFlight.Names()))
 	}
-	for _, h := range s.hostedActors() {
-		if _, err := s.DiscardPreparedSandbox(waitCtx, &ateworkerpb.DiscardPreparedSandboxRequest{ActorUid: h.attribution.UID}); err != nil {
+	for _, uid := range s.preparedActorUIDs() {
+		if _, err := s.DiscardPreparedSandbox(waitCtx, &ateworkerpb.DiscardPreparedSandboxRequest{ActorUid: uid}); err != nil {
 			slog.WarnContext(ctx, "Failed to discard prepared sandbox during shutdown", slog.Any("err", err))
 		}
 	}
@@ -658,7 +659,7 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 	var containersToDelete []string
 	if prepared != nil {
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		hosted.prepared = nil
+		s.setPreparedSandbox(req.GetActorUid(), nil)
 	}
 	defer func() {
 		if retErr != nil {
@@ -682,9 +683,9 @@ func (s *AteWorkerService) RunWorkload(ctx context.Context, req *ateworkerpb.Run
 		}
 	}()
 	if prepared == nil {
-		// Create and start pause container. The bundle rootfs is composed here —
+		// Create and start pause container. The bundle rootfs is composed here:
 		// an overlay of the node's cached image layers plus the bundle's private
-		// upper — because mounting is ateworker's job (atelet runs with no
+		// upper, because mounting is ateworker's job (atelet runs with no
 		// capabilities); runsc's gofer resolves the mount in this pod's mount
 		// namespace.
 		if err := imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer)); err != nil {
@@ -991,8 +992,14 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
-	if s.preparedSandbox(req.GetActorUid()) != nil {
-		return nil, apierror.FailedPrecondition("actor has an unconsumed prepared sandbox")
+	prepared := s.preparedSandbox(req.GetActorUid())
+	if prepared != nil {
+		if req.GetFidelity() != ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+			return nil, apierror.FailedPrecondition("only a volumes restore can consume a prepared sandbox")
+		}
+		if err := prepared.validate(sandboxprep.FromRestore(req)); err != nil {
+			return nil, err
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -1019,8 +1026,10 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		return nil, err
 	}
 	defer release()
-	if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
-		return nil, err
+	if prepared == nil {
+		if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
+			return nil, err
+		}
 	}
 
 	err = s.tunnel.Deactivate(ctx, attribution)
@@ -1042,11 +1051,14 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	if err != nil {
 		return nil, err
 	}
-	hosted, err := s.hostActor(ctx, attribution, req.GetActorDirs())
-	timing.netSetup = lap(&tLast)
-	if err != nil {
-		return nil, err
+	hosted := s.lookupActor(req.GetActorUid())
+	if prepared == nil {
+		hosted, err = s.hostActor(ctx, attribution, req.GetActorDirs())
+		if err != nil {
+			return nil, err
+		}
 	}
+	timing.netSetup = lap(&tLast)
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
 		actorUID:       req.GetActorUid(),
@@ -1057,6 +1069,9 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 		flags:          s.flags,
 	}
 	var containersToDelete []string
+	if prepared != nil {
+		s.setPreparedSandbox(req.GetActorUid(), nil)
+	}
 	defer func() {
 		if retErr != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -1084,10 +1099,13 @@ func (s *AteWorkerService) RestoreWorkload(ctx context.Context, req *ateworkerpb
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
-	err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer))
-	timing.pauseRootfs = lap(&tLast)
-	if err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	if prepared == nil {
+		err = imagecache.SetupBundleRootfs(ociBundlePath(req.GetActorDirs(), ocispec.PauseContainer))
+		timing.pauseRootfs = lap(&tLast)
+		if err != nil {
+			return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+		}
+
 	}
 
 	// Attribute runsc CLI output and the pause container's stdio to the actor.
