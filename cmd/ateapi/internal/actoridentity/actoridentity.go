@@ -29,7 +29,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
@@ -55,19 +54,17 @@ type Server struct {
 
 	// store is the actor database. MintCert consults it to confirm the caller
 	// is entitled to the actor it is asking for a credential for.
-	store   store.Interface
-	workers *workercache.Cache
+	store store.Interface
 }
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer, actorIDJWTPoolFile, actorIDCAPoolFile string, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer, actorIDJWTPoolFile, actorIDCAPoolFile string, store store.Interface) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPoolFile:     actorIDJWTPoolFile,
 		actorIDCAPoolFile:      actorIDCAPoolFile,
 		store:                  store,
-		workers:                workers,
 	}
 }
 
@@ -326,7 +323,7 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 		return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
 	}
 
-	worker, err := s.workers.Worker(req.GetWorker().GetName())
+	worker, err := s.store.GetWorker(ctx, req.GetWorker().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, resources.ActorRef{}, deny("worker not found")

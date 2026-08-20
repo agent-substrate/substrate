@@ -31,7 +31,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -154,16 +153,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 		t.Fatalf("write CA pool: %v", err)
 	}
 
-	var workers *workercache.Cache
-	if st != nil {
-		workers = workercache.New(st, time.Hour)
-		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
-		if err := workers.Start(ctx); err != nil {
-			t.Fatalf("start worker cache: %v", err)
-		}
-	}
-	return New("issuer", "", poolFile, st, workers)
+	return New("issuer", "", poolFile, st)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
@@ -717,6 +707,51 @@ func TestMintCertDeniesUnassignedActorWhateverItsState(t *testing.T) {
 	}
 }
 
+// assignmentOnlyInStore serves one worker's committed assignment from
+// GetWorker alone; List and Watch still report it unassigned, the way a
+// watch-fed cache sees the store until the event lands.
+type assignmentOnlyInStore struct {
+	store.Interface
+	worker *ateapipb.Worker
+}
+
+func (s *assignmentOnlyInStore) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
+	if name == s.worker.GetMetadata().GetName() {
+		return s.worker, nil
+	}
+	return s.Interface.GetWorker(ctx, name)
+}
+
+// TestMintCertUsesAnAssignmentAsSoonAsItIsWritten guards the invariant the gate
+// rests on: it reads the store, so an assignment is usable the instant resume
+// writes it. A gate behind a replica-local cache denies inside the lag window.
+func TestMintCertUsesAnAssignmentAsSoonAsItIsWritten(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	seedActor(t, ctx, st, actorFixture{
+		state:      ateapipb.ActorState_ACTOR_STATE_RESUMING,
+		workerNode: testNode,
+		unassigned: true,
+	})
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
+	actor, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := st.GetWorker(ctx, testWorkerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.Status.Assignment = &ateapipb.ActorAssignment{Actor: actorRef.ToObjectRef(), ActorUid: actor.GetMetadata().GetUid()}
+	srv := newTestServer(t, &assignmentOnlyInStore{Interface: st, worker: worker})
+
+	if _, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), mintCertRequest(t, actor.GetMetadata().GetUid())); err != nil {
+		t.Errorf("MintCert() error = %v, want success from the assignment the store holds", err)
+	}
+}
+
 // TestMintCertAuthorizesBeforeSigning checks that the gate runs before any CSR
 // parsing or CA material is touched. An unauthorized caller must be rejected
 // with PermissionDenied even when the rest of the request is unusable, so that
@@ -730,13 +765,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 
 	// A server whose CA pool file does not exist: reaching the signing path at
 	// all would surface as Internal rather than PermissionDenied.
-	workers := workercache.New(st, time.Hour)
-	cacheCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	if err := workers.Start(cacheCtx); err != nil {
-		t.Fatal(err)
-	}
-	srv := New("issuer", "", filepath.Join(t.TempDir(), "missing.json"), st, workers)
+	srv := New("issuer", "", filepath.Join(t.TempDir(), "missing.json"), st)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {
