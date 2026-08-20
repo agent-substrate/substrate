@@ -35,7 +35,7 @@ POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
 # through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default.
-read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
+read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full glutton-storage}"
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
   echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
@@ -53,6 +53,8 @@ ACTOR_MEMORY="256Mi"
 # and limit. Empty leaves the pod unsized. The limit is also the memory the
 # worker reports as its actor capacity.
 WORKER_MEMORY=""
+# The StorageClass for the glutton-storage external volume.
+STORAGE_CLASS_NAME="${STORAGE_CLASS_NAME:-csi-nfs-sc}"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -74,6 +76,7 @@ usage() {
   echo "                              the smallest size microvm admits)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
   echo "                              (default: unset, the pod is unsized)"
+  echo "  --storage-class-name NAME   StorageClass for external volume ActorTemplates (default: csi-nfs-sc)"
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
@@ -145,6 +148,7 @@ substitute() {
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
+      -e "s|\${STORAGE_CLASS_NAME}|${STORAGE_CLASS_NAME}|g" \
       "${manifest}"
 }
 
@@ -195,7 +199,7 @@ wait_templates_ready() {
 
 deploy() {
   resolve_otlp_endpoint
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, storage_class=${STORAGE_CLASS_NAME}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl wait --for=create deployment/benchmark-ateom \
@@ -288,6 +292,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --worker-memory=*)
       WORKER_MEMORY="${1#*=}"
+      ;;
+    --storage-class-name)
+      shift
+      STORAGE_CLASS_NAME="$1"
+      ;;
+    --storage-class-name=*)
+      STORAGE_CLASS_NAME="${1#*=}"
       ;;
     --wait-timeout)
       shift

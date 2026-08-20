@@ -41,6 +41,9 @@
 #                  node needs more than half the node's allocatable memory.
 #                  The limit is also the memory the worker reports as its
 #                  actor capacity.
+#   storageClassName
+#                  Optional (default "csi-nfs-sc"). StorageClass name
+#                  for external volumes in storage benchmarks.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
@@ -635,3 +638,45 @@ tests:
     nighthawk-ingress:
       envoyCpu: 16
       tailLatencySloMs: 25
+  - name: glutton_storage_baseline_1_user
+    type: locust
+    description: "GluttonStorage baseline: 1 concurrent user for 1 minute with CSI volume"
+    targetCluster: dev
+    file: /app/tests/glutton_storage.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    storageClassName: csi-nfs-sc
+    flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_storage_baseline_10_users
+    type: locust
+    description: "GluttonStorage baseline: 10 concurrent users for 2 minutes (1:1 worker allocation)"
+    targetCluster: dev
+    file: /app/tests/glutton_storage.py
+    duration: 2m
+    users: 10
+    workerCount: 10
+    storageClassName: csi-nfs-sc
+    flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "2.0"
+  - name: glutton_storage_oversubscribe_15_users
+    type: locust
+    description: "GluttonStorage oversubscribed: 15 users across 10 workers for 2 minutes (50% oversubscribed with volume attach churn)"
+    targetCluster: dev
+    file: /app/tests/glutton_storage.py
+    duration: 2m
+    users: 15
+    workerCount: 10
+    storageClassName: csi-nfs-sc
+    flags:
+      - "--min-wait-time"
+      - "0.5"
+      - "--max-wait-time"
+      - "1.0"
