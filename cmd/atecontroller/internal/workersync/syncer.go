@@ -316,7 +316,15 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
-	return pod.Status.PodIP != ""
+	if pod.Status.PodIP == "" {
+		return false
+	}
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // ateomContainerName is the name of the container in a worker pod that hosts the
