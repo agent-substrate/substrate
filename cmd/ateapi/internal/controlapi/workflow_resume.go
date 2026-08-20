@@ -402,13 +402,14 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	}
 	if !w.scheduler.Applies(worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
-		release := proto.Clone(worker).(*ateapipb.Worker)
-		release.Status.Assignment = nil
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
 		// to the free pool instead of leaving it claimed forever — nothing else
 		// reclaims a healthy worker whose actor moved on to a different pool.
-		if err := w.store.UpdateWorker(ctx, release, release.GetMetadata().GetVersion()); err != nil {
+		if _, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status.Assignment = nil
+			return nil
+		}); err != nil {
 			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
@@ -473,10 +474,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			assignedWorker = worker
 			break
 		}
-		// Workers() returns pointers directly from the cache so we need to clone before
-		// mutating so that the cache is not corrupted if UpdateWorker fails.
+		// Workers() returns pointers directly from the cache, so clone before
+		// handing the worker to the goroutine: the mutation runs against the
+		// store's own copy, but the precondition and the log below read this one.
 		releaseWorker := proto.Clone(worker).(*ateapipb.Worker)
-		releaseWorker.Status.Assignment = nil
 		// The claimed worker is no longer eligible (e.g. the actor's
 		// worker_selector changed after the failed attempt); release it back
 		// to the free pool — nothing else reclaims a healthy worker whose
@@ -484,7 +485,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		go func(release *ateapipb.Worker) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := w.store.UpdateWorker(bgCtx, release, release.GetMetadata().GetVersion()); err != nil {
+			if _, err := w.store.UpdateWorker(bgCtx, release.GetMetadata().GetName(), store.PreconditionFrom(release), func(toUpdate *ateapipb.Worker) error {
+				toUpdate.Status.Assignment = nil
+				return nil
+			}); err != nil {
 				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",
 					slog.String("worker", release.GetWorkerNamespace()+"/"+release.GetWorkerPod()),
 					slog.Any("err", err))
@@ -505,10 +509,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
-	// Workers() returns pointers directly from the cache so we need to clone before
-	// mutating so that the cache is not corrupted if UpdateWorker fails.
-	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.Status.Assignment = &ateapipb.ActorAssignment{
+	assignment := &ateapipb.ActorAssignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: actor.GetActorTemplateNamespace(),
 			Name:      actor.GetActorTemplateName(),
@@ -520,13 +521,21 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		ActorUid: actor.GetMetadata().GetUid(),
 	}
 
-	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.GetMetadata().GetVersion()); err != nil {
+	// Workers() returns pointers directly from the cache, so the claim is written
+	// by mutating the store's own copy; the cached one is only read, for the
+	// version this claim is conditioned on.
+	stored, err := w.store.UpdateWorker(ctx, assignedWorker.GetMetadata().GetName(), store.PreconditionFrom(assignedWorker), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = assignment
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
 			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
 		}
 		return nil, nil, err
 	}
+	assignedWorker = stored
 
 	newAssignment := workerAssignmentFrom(assignedWorker)
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {

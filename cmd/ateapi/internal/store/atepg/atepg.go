@@ -1176,33 +1176,33 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 
 // --- Workers ---
 
-func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
+func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
 	// Workers are global-scoped, so the atespace is always empty.
 	dbWorker.Metadata = newCreateMetadata("", worker.GetMetadata().GetName())
 
 	protoBytes, err := proto.Marshal(dbWorker)
 	if err != nil {
-		return fmt.Errorf("marshaling worker: %w", err)
+		return nil, fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	err = p.writeAndAppendEvent(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	created, err := p.writeAndAppendEvent(ctx, store.WorkerEventCreated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
 			dbWorker.GetMetadata().GetName(), dbWorker.GetMetadata().GetUid(), dbWorker.GetMetadata().GetVersion(), protoBytes)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		return true, nil
+		return dbWorker, nil
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			return store.ErrAlreadyExists
+			return nil, store.ErrAlreadyExists
 		}
-		return fmt.Errorf("creating worker: %w", err)
+		return nil, fmt.Errorf("creating worker: %w", err)
 	}
-	return nil
+	return created, nil
 }
 
 func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker, error) {
@@ -1225,61 +1225,94 @@ func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapipb.Wor
 	return getWorkerRow(ctx, p.pool, name)
 }
 
-func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	name := worker.GetMetadata().GetName()
-
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	dbWorker.Metadata = newUpdateMetadata(worker.GetMetadata())
-	dbWorker.Metadata.Version = expectedVersion + 1
-
-	protoBytes, err := proto.Marshal(dbWorker)
-	if err != nil {
-		return fmt.Errorf("marshaling worker: %w", err)
+// getWorkerRowForUpdate reads the worker and holds its row lock for the rest of
+// tx, so nothing else can write the row between this read and the write that
+// follows it.
+func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.Worker, error) {
+	var protoBytes []byte
+	if err := tx.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1 FOR UPDATE`, name).Scan(&protoBytes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("locking worker %s for update: %w", name, err)
 	}
+	out := &ateapipb.Worker{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling worker: %w", err)
+	}
+	return out, nil
+}
 
-	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
-		var returned []byte
-		err := tx.QueryRow(ctx, `
+// UpdateWorker runs mutate against the worker read FOR UPDATE inside the write
+// transaction, so a concurrent writer blocks on the row lock rather than
+// interleaving. That is what makes an occupancy test inside mutate a
+// compare-and-set. The predicate cannot be pushed into SQL: the row stores an
+// opaque marshaled proto, so assignment is not addressable in a WHERE clause.
+func (p *Persistence) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+		dbWorker, err := getWorkerRowForUpdate(ctx, tx, name)
+		if err != nil {
+			return nil, err
+		}
+		if err := precondition.Check(dbWorker.GetMetadata()); err != nil {
+			return nil, err
+		}
+
+		// Snapshot the stored state before handing the worker to mutate.
+		// mutate is free to edit anything it is given.
+		workerBeforeMutation := proto.Clone(dbWorker).(*ateapipb.Worker)
+		if err := mutate(dbWorker); err != nil {
+			return nil, err
+		}
+		if err := store.CheckWorkerMutation(workerBeforeMutation, dbWorker); err != nil {
+			return nil, err
+		}
+		// Stored metadata is authoritative; discard any metadata edits made by
+		// the closure and derive the next revision from the row we locked.
+		dbWorker.Metadata = newUpdateMetadata(workerBeforeMutation.GetMetadata())
+
+		protoBytes, err := proto.Marshal(dbWorker)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling worker: %w", err)
+		}
+
+		commandTag, err := tx.Exec(ctx, `
 			UPDATE workers
 			SET version = $1, proto = $2
-			WHERE name = $3 AND version = $4
-			RETURNING proto`,
-			dbWorker.GetMetadata().GetVersion(), protoBytes, name, expectedVersion,
-		).Scan(&returned)
-		if err == nil {
-			return true, nil
+			WHERE name = $3`,
+			dbWorker.GetMetadata().GetVersion(), protoBytes, name)
+		if err != nil {
+			return nil, fmt.Errorf("updating worker %s: %w", name, err)
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return false, fmt.Errorf("updating worker %s: %w", name, err)
+		if commandTag.RowsAffected() != 1 {
+			return nil, fmt.Errorf("updating worker %s affected %d rows, want 1", name, commandTag.RowsAffected())
 		}
-
-		current, getErr := getWorkerRow(ctx, tx, name)
-		if getErr != nil {
-			return false, getErr
-		}
-		if current.GetMetadata().GetVersion() != expectedVersion {
-			return false, store.ErrVersionConflict
-		}
-		return false, fmt.Errorf("update worker %s: no row matched but current state is otherwise consistent", name)
+		return dbWorker, nil
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
-	deletedEvent := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
-		var protoBytes []byte
-		err := tx.QueryRow(ctx, `
-			DELETE FROM workers
-			WHERE name = $1
-			RETURNING proto`, name).Scan(&protoBytes)
+func (p *Persistence) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+		// Locked rather than plainly read so the incarnation pre was evaluated
+		// against is the one the DELETE removes.
+		deleted, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				// Idempotent: nothing existed, so no event to publish either.
-				return false, nil
-			}
-			return false, fmt.Errorf("deleting worker %s: %w", name, err)
+			return nil, err
 		}
-		return true, nil
+		if err := pre.Check(deleted.GetMetadata()); err != nil {
+			return nil, err
+		}
+		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)
+		if err != nil {
+			return nil, fmt.Errorf("deleting worker %s: %w", name, err)
+		}
+		if commandTag.RowsAffected() != 1 {
+			return nil, fmt.Errorf("deleting worker %s affected %d rows, want 1", name, commandTag.RowsAffected())
+		}
+		return deleted, nil
 	})
 }
 

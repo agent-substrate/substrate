@@ -409,7 +409,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 					},
 				},
 			}
-			if err := persistence.CreateWorker(ctx, worker); err != nil {
+			if _, err := persistence.CreateWorker(ctx, worker); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
 

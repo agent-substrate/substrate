@@ -4217,9 +4217,16 @@ func (x *CreateWorkerRequest) GetWorker() *Worker {
 type UpdateWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to update.
-	// worker.metadata.name identifies which resource to update.
-	// worker.metadata.version and worker.metadata.uid are optional preconditions
-	// and zero values skip the check.
+	// worker.metadata.name identifies which resource to update. atespace is
+	// always empty; Workers are global-scoped.
+	// worker.metadata.version and worker.metadata.uid are required preconditions.
+	//
+	// sandbox_class and labels are the only fields an update may change. Every
+	// other field is replaced with what the request carries, and a field left
+	// unset is cleared — so read the Worker, change what you mean to change, and
+	// send the whole thing back. A request that alters an immutable field, by
+	// changing it or by omitting it, returns INVALID_ARGUMENT naming the field.
+	// status is output-only and whatever it carries is ignored.
 	Worker        *Worker `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4488,22 +4495,32 @@ func (x *ListActorsResponse) GetNextPageToken() string {
 // Global-scoped: metadata.atespace is always empty. metadata.name is assigned
 // by the control plane and is opaque to clients — never parse it or derive it
 // from anything else; read pod identity from the named fields below.
+//
+// sandbox_class and labels are the only mutable fields; every other field is
+// either immutable after creation or output-only. UpdateWorker replaces the
+// whole resource, so an immutable field that a request changes — including by
+// omitting it, which would clear it — is rejected with INVALID_ARGUMENT.
 type Worker struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Common resource metadata: name, uid, version, timestamps.
+	// Output-only: name, uid, version and timestamps are all server-assigned.
+	// uid and version are echoed back on UpdateWorker as preconditions.
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Kubernetes coordinates. Immutable, set at creation.
-	WorkerNamespace string            `protobuf:"bytes,2,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
-	WorkerPool      string            `protobuf:"bytes,3,opt,name=worker_pool,json=workerPool,proto3" json:"worker_pool,omitempty"`
-	WorkerPod       string            `protobuf:"bytes,4,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
-	WorkerPodUid    string            `protobuf:"bytes,5,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
-	NodeName        string            `protobuf:"bytes,6,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	Ip              string            `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
-	SandboxClass    string            `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
-	Labels          map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// The compute capacity this worker can give an actor sandbox.
+	WorkerNamespace string `protobuf:"bytes,2,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
+	WorkerPool      string `protobuf:"bytes,3,opt,name=worker_pool,json=workerPool,proto3" json:"worker_pool,omitempty"`
+	WorkerPod       string `protobuf:"bytes,4,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
+	WorkerPodUid    string `protobuf:"bytes,5,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
+	NodeName        string `protobuf:"bytes,6,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	Ip              string `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
+	// Mutable.
+	SandboxClass string            `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
+	Labels       map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// The compute capacity this worker can give an actor sandbox. Immutable, set
+	// at creation: a worker pod's limits are fixed for its lifetime.
 	Capacity *WorkerCapacity `protobuf:"bytes,10,opt,name=capacity,proto3" json:"capacity,omitempty"`
-	// Server-managed state. Absent from Create/Update request payloads.
+	// Output-only server-managed state. Absent from Create/Update request
+	// payloads; whatever a request carries here is ignored. DrainWorker is the
+	// only way a client moves state, and assignment is the scheduler's.
 	Status        *WorkerStatus `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -121,7 +121,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 					InProgressLocalSnapshotName: "snap-prefix",
 				},
 			})
-			if err := st.CreateWorker(ctx, &ateapipb.Worker{
+			if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
 				WorkerNamespace: "default",
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-pod-1",

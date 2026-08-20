@@ -92,15 +92,7 @@ func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceR
 
 func validateGetAtespaceRequest(req *ateapipb.GetAtespaceRequest) field.ErrorList {
 	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateGlobalObjectRef(val, fldPath)...)
-	}
-
-	return errs
+	return resources.ValidateGlobalObjectRef(req.GetAtespace(), fldPath.Child("atespace"))
 }
 
 func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespacesRequest) (*ateapipb.ListAtespacesResponse, error) {
@@ -159,13 +151,5 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAte
 
 func validateDeleteAtespaceRequest(req *ateapipb.DeleteAtespaceRequest) field.ErrorList {
 	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateGlobalObjectRef(val, fldPath)...)
-	}
-
-	return errs
+	return resources.ValidateGlobalObjectRef(req.GetAtespace(), fldPath.Child("atespace"))
 }

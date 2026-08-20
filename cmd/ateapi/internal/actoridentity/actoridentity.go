@@ -307,11 +307,7 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 // validateWorkerRef checks the reference to the Worker the certificate is
 // minted for. Workers are global-scoped, so the reference carries no atespace.
 func validateWorkerRef(worker *ateapipb.ObjectRef) error {
-	fldPath := field.NewPath("worker")
-	if worker == nil {
-		return field.Required(fldPath, "")
-	}
-	return resources.ValidateGlobalObjectRef(worker, fldPath).ToAggregate()
+	return resources.ValidateGlobalObjectRef(worker, field.NewPath("worker")).ToAggregate()
 }
 
 // authorizeActor resolves the actor from the authenticated worker and verifies

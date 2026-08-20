@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,6 +90,7 @@ func newTestWorker(name, pod string) *ateapipb.Worker {
 		WorkerPool:      "pool-1",
 		WorkerPod:       pod,
 		WorkerPodUid:    testWorkerPodUID,
+		Capacity:        &ateapipb.WorkerCapacity{CpuMilli: 2000, MemoryBytes: 4 << 30},
 		Status:          &ateapipb.WorkerStatus{},
 	}
 }
@@ -1088,13 +1091,17 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		defer watch.Close()
 
 		worker := newTestWorker(testWorkerName, "pod-1")
-		if err := s.CreateWorker(ctx, worker); err != nil {
+		created, err := s.CreateWorker(ctx, worker)
+		if err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
 		got, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if diff := cmp.Diff(got, created, protocmp.Transform()); diff != "" {
+			t.Errorf("CreateWorker returned a different worker than it stored (-stored +returned):\n%s", diff)
 		}
 		if got.GetMetadata().GetUid() == "" {
 			t.Errorf("CreateWorker stored an empty uid; want server-assigned uid")
@@ -1129,10 +1136,10 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		ctx := context.Background()
 
 		worker := newTestWorker(testWorkerName, "pod-1")
-		if err := s.CreateWorker(ctx, worker); err != nil {
+		if _, err := s.CreateWorker(ctx, worker); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
-		if err := s.CreateWorker(ctx, worker); !errors.Is(err, store.ErrAlreadyExists) {
+		if _, err := s.CreateWorker(ctx, worker); !errors.Is(err, store.ErrAlreadyExists) {
 			t.Errorf("expected ErrAlreadyExists, got %v", err)
 		}
 	})
@@ -1142,7 +1149,8 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		ctx := context.Background()
 
 		worker := newTestWorker(testWorkerName, "pod-1")
-		if err := s.CreateWorker(ctx, worker); err != nil {
+		created, err := s.CreateWorker(ctx, worker)
+		if err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
@@ -1153,11 +1161,15 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 		defer watch.Close()
 
-		worker.Status.Assignment = &ateapipb.ActorAssignment{
+		assignment := &ateapipb.ActorAssignment{
 			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "default", Name: "test-template"},
 			Actor:         &ateapipb.ObjectRef{Name: "session-1"},
 		}
-		if err := s.UpdateWorker(ctx, worker, 1); err != nil {
+		updated, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status.Assignment = assignment
+			return nil
+		})
+		if err != nil {
 			t.Fatalf("UpdateWorker failed: %v", err)
 		}
 
@@ -1165,11 +1177,15 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
+		if diff := cmp.Diff(got, updated, protocmp.Transform()); diff != "" {
+			t.Errorf("UpdateWorker returned a different worker than it stored (-stored +returned):\n%s", diff)
+		}
 		if got.GetMetadata().GetVersion() != 2 {
 			t.Errorf("expected version 2, got %d", got.GetMetadata().GetVersion())
 		}
 
 		want := proto.Clone(worker).(*ateapipb.Worker)
+		want.Status.Assignment = assignment
 		want.Metadata.Version = 2
 		if diff := cmp.Diff(want, got, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 			t.Errorf("UpdateWorker yielded unexpected state in DB (-want +got):\n%s", diff)
@@ -1184,32 +1200,270 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 	})
 
+	t.Run("UpdateWorker_NotFound", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		// A well-formed precondition, so it is the missing worker rather than the
+		// guard that decides the error.
+		pre := store.Precondition{UID: otherTestWorkerName, Version: 1}
+		_, err := s.UpdateWorker(ctx, testWorkerName, pre, func(*ateapipb.Worker) error {
+			t.Error("mutate ran for a worker that does not exist")
+			return nil
+		})
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("UpdateWorker_MissingPrecondition", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+
+		for _, tt := range []struct {
+			name         string
+			precondition store.Precondition
+		}{
+			{"no precondition", store.Precondition{}},
+			{"guarding on only a uid", store.Precondition{UID: created.GetMetadata().GetUid()}},
+			{"guarding on only a version", store.Precondition{Version: created.GetMetadata().GetVersion()}},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := s.UpdateWorker(ctx, testWorkerName, tt.precondition, func(*ateapipb.Worker) error {
+					t.Error("mutate ran for a blind write")
+					return nil
+				})
+				if !errors.Is(err, store.ErrPreconditionRequired) {
+					t.Errorf("UpdateWorker error = %v, want one matching store.ErrPreconditionRequired", err)
+				}
+			})
+		}
+	})
+
+	// A worker name is a pod UID, so a name is only reused when the same pod is
+	// re-registered. The store still hands out a fresh uid, and a guard naming
+	// the old one must not reach the new incarnation.
+	t.Run("UpdateWorker_UIDConflict", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		original, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteWorker failed: %v", err)
+		}
+		recreated, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("recreate CreateWorker failed: %v", err)
+		}
+		if recreated.GetMetadata().GetUid() == original.GetMetadata().GetUid() {
+			t.Fatalf("recreated worker reused uid %s, want a fresh one", recreated.GetMetadata().GetUid())
+		}
+
+		_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(original), func(toUpdate *ateapipb.Worker) error {
+			t.Error("mutate ran past its precondition once the guarded incarnation was gone")
+			toUpdate.SandboxClass = "edited-anyway"
+			return nil
+		})
+		if !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("UpdateWorker error = %v, want one matching store.ErrUIDConflict", err)
+		}
+
+		got, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if diff := cmp.Diff(recreated, got, protocmp.Transform()); diff != "" {
+			t.Errorf("rejected update changed the stored worker (-recreated +got):\n%s", diff)
+		}
+	})
+
 	t.Run("UpdateWorker_Conflict", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
-		if err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
-		worker1, err := s.GetWorker(ctx, testWorkerName)
+		// Both readers observe version 1; the first update moves the worker
+		// past it, so the second one's precondition can no longer hold.
+		observed, err := s.GetWorker(ctx, testWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		worker2, err := s.GetWorker(ctx, testWorkerName)
-		if err != nil {
-			t.Fatalf("GetWorker failed: %v", err)
-		}
-
-		worker1.Status.Assignment = &ateapipb.ActorAssignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
-		if err := s.UpdateWorker(ctx, worker1, worker1.GetMetadata().GetVersion()); err != nil {
+		if _, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(observed), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status.Assignment = &ateapipb.ActorAssignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
+			return nil
+		}); err != nil {
 			t.Fatalf("UpdateWorker failed: %v", err)
 		}
 
-		worker2.Status.Assignment = &ateapipb.ActorAssignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
-		err = s.UpdateWorker(ctx, worker2, worker2.GetMetadata().GetVersion())
+		_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(observed), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status.Assignment = &ateapipb.ActorAssignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
+			return nil
+		})
 		if !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("expected ErrVersionConflict, got %v", err)
+		}
+	})
+
+	// A mutation that reports an error leaves the worker exactly as it was, at
+	// the version it was already at. Callers depend on this to report "already
+	// in the desired state" without a write: DrainWorker on a worker already
+	// DRAINING, and the in-process release of a worker that is not assigned.
+	t.Run("UpdateWorker_MutateError", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+
+		sentinel := errors.New("nothing to do")
+		_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.SandboxClass = "edited-anyway"
+			return sentinel
+		})
+		if !errors.Is(err, sentinel) {
+			t.Errorf("expected the mutate's error verbatim, got %v", err)
+		}
+
+		got, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if got.GetSandboxClass() != "" {
+			t.Errorf("aborted mutation was written: sandbox_class is %q", got.GetSandboxClass())
+		}
+		if got.GetMetadata().GetVersion() != 1 {
+			t.Errorf("aborted mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
+		}
+	})
+
+	// Every backend must reject a mutation that touches an immutable field, and
+	// must name the field it rejected on. This is the case that holds any new
+	// backend to that.
+	t.Run("UpdateWorker_ImmutableFields", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		// Every case below is rejected, so nothing writes and this stays the
+		// current incarnation for all of them.
+		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+
+		for _, tc := range []struct {
+			name   string
+			field  string
+			mutate func(*ateapipb.Worker)
+		}{
+			{"worker_namespace", "worker_namespace", func(w *ateapipb.Worker) { w.WorkerNamespace = "other-ns" }},
+			{"worker_pool", "worker_pool", func(w *ateapipb.Worker) { w.WorkerPool = "other-pool" }},
+			{"worker_pod", "worker_pod", func(w *ateapipb.Worker) { w.WorkerPod = "other-pod" }},
+			{"worker_pod_uid", "worker_pod_uid", func(w *ateapipb.Worker) { w.WorkerPodUid = otherTestWorkerName }},
+			{"node_name", "node_name", func(w *ateapipb.Worker) { w.NodeName = "other-node" }},
+			{"ip", "ip", func(w *ateapipb.Worker) { w.Ip = "10.0.0.9" }},
+			{"capacity_changed", "capacity", func(w *ateapipb.Worker) { w.Capacity.CpuMilli = 4000 }},
+			// An update replaces the worker, so a caller that leaves capacity
+			// out is asking to clear it. That is a change like any other.
+			{"capacity_cleared", "capacity", func(w *ateapipb.Worker) { w.Capacity = nil }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+					tc.mutate(toUpdate)
+					return nil
+				})
+				if !errors.Is(err, store.ErrImmutableField) {
+					t.Fatalf("changing %s returned %v, want ErrImmutableField", tc.field, err)
+				}
+				if !strings.Contains(err.Error(), tc.field) {
+					t.Errorf("error %v does not name the offending field %s", err, tc.field)
+				}
+				got, err := s.GetWorker(ctx, testWorkerName)
+				if err != nil {
+					t.Fatalf("GetWorker failed: %v", err)
+				}
+				if got.GetMetadata().GetVersion() != 1 {
+					t.Errorf("rejected mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
+				}
+			})
+		}
+	})
+
+	// Claimants that all observed the same free worker must not all win. Two
+	// things keep that true and this exercises both: the precondition rejects
+	// every claimant whose read the winner has since invalidated, and the
+	// occupancy test inside mutate runs against the state the write lands on
+	// rather than the state the claimant read.
+	t.Run("UpdateWorker_ConcurrentAssign", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+
+		const claimants = 8
+		errTaken := errors.New("already assigned")
+		var wg sync.WaitGroup
+		won := make([]bool, claimants)
+		for i := range claimants {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+					if toUpdate.GetStatus().GetAssignment() != nil {
+						return errTaken
+					}
+					toUpdate.Status.Assignment = &ateapipb.ActorAssignment{
+						Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: fmt.Sprintf("actor-%d", i)},
+						ActorUid: fmt.Sprintf("uid-%d", i),
+					}
+					return nil
+				})
+				switch {
+				case err == nil:
+					won[i] = true
+				case errors.Is(err, errTaken), errors.Is(err, store.ErrVersionConflict):
+				default:
+					t.Errorf("claimant %d: unexpected error %v", i, err)
+				}
+			}()
+		}
+		wg.Wait()
+
+		winners := 0
+		for _, w := range won {
+			if w {
+				winners++
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("%d of %d claimants won the assignment, want exactly 1", winners, claimants)
+		}
+
+		got, err := s.GetWorker(ctx, testWorkerName)
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if uid := got.GetStatus().GetAssignment().GetActorUid(); !strings.HasPrefix(uid, "uid-") {
+			t.Errorf("stored assignment names %q, want one of the claimants", uid)
+		}
+		// One winning write on top of the create, and no partial ones.
+		if got.GetMetadata().GetVersion() != 2 {
+			t.Errorf("worker is at version %d, want 2 (create plus the single winning assign)", got.GetMetadata().GetVersion())
 		}
 	})
 
@@ -1217,7 +1471,8 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		if err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1")); err != nil {
+		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
@@ -1227,8 +1482,12 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 		defer watch.Close()
 
-		if err := s.DeleteWorker(ctx, testWorkerName); err != nil {
+		deleted, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{})
+		if err != nil {
 			t.Fatalf("DeleteWorker failed: %v", err)
+		}
+		if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+			t.Errorf("DeleteWorker returned something other than what it removed (-want +got):\n%s", diff)
 		}
 		if _, err := s.GetWorker(ctx, testWorkerName); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("expected ErrNotFound after delete, got %v", err)
@@ -1243,12 +1502,40 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 	})
 
-	t.Run("DeleteWorker_Idempotent", func(t *testing.T) {
+	// Absence is reported, not swallowed. Deletes of Workers used to succeed
+	// silently, unlike every other Delete on the interface; callers that want
+	// re-drivable cleanup treat ErrNotFound as success themselves.
+	t.Run("DeleteWorker_NotFound", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
-		if err := s.DeleteWorker(ctx, testWorkerName); err != nil {
-			t.Errorf("DeleteWorker of a missing worker should be a no-op, got %v", err)
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("expected ErrNotFound deleting a missing worker, got %v", err)
+		}
+	})
+
+	t.Run("DeleteWorker_Preconditions", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		uid, version := created.GetMetadata().GetUid(), created.GetMetadata().GetVersion()
+
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{Version: version + 1}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("expected ErrVersionConflict for a stale version, got %v", err)
+		}
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{UID: otherTestWorkerName}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("expected ErrUIDConflict for a foreign uid, got %v", err)
+		}
+		if _, err := s.GetWorker(ctx, testWorkerName); err != nil {
+			t.Fatalf("a rejected delete removed the worker anyway: %v", err)
+		}
+
+		if _, err := s.DeleteWorker(ctx, testWorkerName, store.DeletePreconditions{UID: uid, Version: version}); err != nil {
+			t.Errorf("DeleteWorker with matching preconditions failed: %v", err)
 		}
 	})
 
@@ -1276,10 +1563,10 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		s := setup(t)
 		ctx := context.Background()
 
-		if err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod1")); err != nil {
+		if _, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod1")); err != nil {
 			t.Fatalf("failed to create worker1: %v", err)
 		}
-		if err := s.CreateWorker(ctx, newTestWorker(otherTestWorkerName, "pod2")); err != nil {
+		if _, err := s.CreateWorker(ctx, newTestWorker(otherTestWorkerName, "pod2")); err != nil {
 			t.Fatalf("failed to create worker2: %v", err)
 		}
 
@@ -1325,7 +1612,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 
 		for i := 0; i < 5; i++ {
 			worker := newTestWorker(fmt.Sprintf("bb2e6a1c-0000-4000-8000-00000000000%d", i), fmt.Sprintf("pod%d", i))
-			if err := s.CreateWorker(ctx, worker); err != nil {
+			if _, err := s.CreateWorker(ctx, worker); err != nil {
 				t.Fatalf("failed to create worker %d: %v", i, err)
 			}
 		}
@@ -1678,7 +1965,7 @@ func runDebugContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
-		if err := s.CreateWorker(ctx, &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}); err != nil {
+		if _, err := s.CreateWorker(ctx, &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 		lock, err := s.AcquireLock(ctx, "lock-1")

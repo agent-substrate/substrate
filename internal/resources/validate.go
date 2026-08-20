@@ -107,13 +107,53 @@ func ValidateUpdateMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field.P
 	return errs
 }
 
+// ValidateGlobalUpdateMetadataRef is the global-scoped counterpart of
+// ValidateUpdateMetadataRef, and enforces the same rules: name identifies the
+// resource, uid and version guard the incarnation and revision the update was
+// written against, and all three are required. It differs only in atespace,
+// which must be empty because a global resource belongs to none. It does not
+// check the server-managed timestamps, which clients may not set. Unlike
+// ValidateObjectRef, nil metadata is an error rather than a no-op: a request
+// that names no resource cannot be served.
+func ValidateGlobalUpdateMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val != "" {
+		errs = append(errs, field.Invalid(fldPath, val, "must be empty for a global-scoped resource"))
+	}
+
+	if val, fldPath := meta.GetName(), fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val == 0 {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else if val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
+	}
+
+	return errs
+}
+
 // ValidateGlobalObjectRef checks that a reference to a global-scoped resource is
 // well-formed: its atespace must be empty (global resources do not belong to an
 // atespace) and its name must be a valid resource name. It does not check that
 // the referenced resource actually exists.
+//
+// Unlike ValidateObjectRef, and like ValidateUpdateMetadataRef, nil is an
+// error rather than a no-op: every global ref in the API names the resource a
+// request acts on, and a request that names nothing cannot be served.
 func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
 	if ref == nil {
-		return nil
+		return field.ErrorList{field.Required(fldPath, "")}
 	}
 
 	var errs field.ErrorList
@@ -212,140 +252,6 @@ func ValidateSnapshotLocation(location string) error {
 		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
 	}
 	return nil
-}
-
-// ValidateWorker checks that the worker message is well-formed.
-func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
-	var errs field.ErrorList
-
-	errs = append(errs, validateWorkerMetadata(worker, fldPath.Child("metadata"))...)
-
-	if val, fldPath := worker.WorkerNamespace, fldPath.Child("worker_namespace"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Label(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
-		}
-	}
-
-	if val, fldPath := worker.WorkerPool, fldPath.Child("worker_pool"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
-		}
-	}
-
-	if val, fldPath := worker.WorkerPod, fldPath.Child("worker_pod"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
-		}
-	}
-
-	if val := worker.GetStatus().GetAssignment(); val != nil {
-		errs = append(errs, ValidateAssignment(val, fldPath.Child("status", "assignment"))...)
-	}
-
-	if val, fldPath := worker.Ip, fldPath.Child("ip"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, ValidateIP(val, fldPath)...)
-	}
-
-	if val, fldPath := worker.WorkerPodUid, fldPath.Child("worker_pod_uid"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, ValidateUUID(val, fldPath)...)
-	}
-
-	if val, fldPath := worker.NodeName, fldPath.Child("node_name"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
-		}
-	}
-
-	// state is server-managed; accept any defined enum value (the unset/zero
-	// WORKER_STATE_UNSPECIFIED is tolerated for backward compatibility), reject
-	// unknowns.
-	if val, fldPath := worker.GetStatus().GetState(), fldPath.Child("status", "state"); ateapipb.WorkerState_name[int32(val)] == "" {
-		errs = append(errs, field.NotSupported(fldPath, val, []string{
-			ateapipb.WorkerState_WORKER_STATE_ACTIVE.String(),
-			ateapipb.WorkerState_WORKER_STATE_DRAINING.String(),
-		}))
-	}
-
-	return errs
-}
-
-// validateWorkerMetadata checks the Worker's identity. Workers are
-// global-scoped, so atespace must be empty.
-func validateWorkerMetadata(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
-	var errs field.ErrorList
-
-	meta := worker.GetMetadata()
-	if meta == nil {
-		return append(errs, field.Required(fldPath, ""))
-	}
-
-	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val != "" {
-		errs = append(errs, field.Invalid(fldPath, val, "must be empty; Workers are global-scoped"))
-	}
-
-	if val, fldPath := meta.GetName(), fldPath.Child("name"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, ValidateResourceName(val, fldPath)...)
-	}
-
-	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val != "" {
-		errs = append(errs, ValidateUUID(val, fldPath)...)
-	}
-
-	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val < 0 {
-		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
-	}
-
-	return errs
-}
-
-func ValidateAssignment(assignment *ateapipb.ActorAssignment, fldPath *field.Path) field.ErrorList {
-	var errs field.ErrorList
-
-	if val, fldPath := assignment.ActorTemplate, fldPath.Child("actor_template"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		if val, fldPath := assignment.ActorTemplate.Namespace, fldPath.Child("namespace"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			for _, msg := range content.IsDNS1123Label(val) {
-				errs = append(errs, field.Invalid(fldPath, val, msg))
-			}
-		}
-
-		if val, fldPath := assignment.ActorTemplate.Name, fldPath.Child("name"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			for _, msg := range content.IsDNS1123Subdomain(val) {
-				errs = append(errs, field.Invalid(fldPath, val, msg))
-			}
-		}
-	}
-
-	if val, fldPath := assignment.Actor, fldPath.Child("actor"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, ValidateObjectRef(val, fldPath)...)
-	}
-
-	if val, fldPath := assignment.ActorUid, fldPath.Child("actor_uid"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	}
-
-	return errs
 }
 
 // ValidateIP checks that the given string is a valid IP address, is not an

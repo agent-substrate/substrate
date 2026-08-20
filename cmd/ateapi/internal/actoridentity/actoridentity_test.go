@@ -212,14 +212,17 @@ func TestMintCertReadsThroughStaleWorkerCache(t *testing.T) {
 				if err != nil {
 					t.Fatalf("read seeded worker: %v", err)
 				}
-				if worker.Status == nil {
-					worker.Status = &ateapipb.WorkerStatus{}
-				}
-				worker.Status.Assignment = &ateapipb.ActorAssignment{
-					Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
-					ActorUid: actor.GetMetadata().GetUid(),
-				}
-				if err := st.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
+				_, err = st.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+					if toUpdate.Status == nil {
+						toUpdate.Status = &ateapipb.WorkerStatus{}
+					}
+					toUpdate.Status.Assignment = &ateapipb.ActorAssignment{
+						Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
+						ActorUid: actor.GetMetadata().GetUid(),
+					}
+					return nil
+				})
+				if err != nil {
 					t.Fatalf("assign worker in store: %v", err)
 				}
 			}
@@ -273,7 +276,7 @@ func TestMintCertReadsThroughWorkerCacheMiss(t *testing.T) {
 			if workerInStore {
 				// Phase 2: register and assign the worker in the store only,
 				// after the cache stopped listening.
-				if err := st.CreateWorker(ctx, &ateapipb.Worker{
+				if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
 					Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 					WorkerNamespace: testPodNS,
 					WorkerPool:      testPool,
@@ -461,7 +464,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	if f.unassigned {
 		worker.Status.Assignment = nil
 	}
-	if err := st.CreateWorker(ctx, worker); err != nil {
+	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
 }

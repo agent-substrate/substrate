@@ -80,7 +80,7 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 			}
 		}
 	}
-	if err := st.CreateWorker(ctx, worker); err != nil {
+	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
 }
@@ -200,7 +200,7 @@ func TestCrashActor(t *testing.T) {
 						},
 					},
 				}
-				if err := st.CreateWorker(ctx, worker); err != nil {
+				if _, err := st.CreateWorker(ctx, worker); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
 			},
@@ -432,7 +432,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 			},
 		},
 	}
-	if err := st.CreateWorker(ctx, worker); err != nil {
+	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 
@@ -513,8 +513,8 @@ type failingUpdateWorkerStore struct {
 	err error
 }
 
-func (f failingUpdateWorkerStore) UpdateWorker(context.Context, *ateapipb.Worker, int64) error {
-	return f.err
+func (f failingUpdateWorkerStore) UpdateWorker(context.Context, string, store.Precondition, func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	return nil, f.err
 }
 
 // A transient failure releasing the worker must not move the actor to the
