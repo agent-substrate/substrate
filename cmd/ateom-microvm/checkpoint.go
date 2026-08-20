@@ -88,16 +88,30 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// under either scope — and are the ONLY thing a Data-scope snapshot
 	// captures. DATA_ON_GOLDEN is restore-only (a DataOnGolden commit arrives
 	// here as plain DATA) and lands in the default rejection.
+	//
+	// CSI (external) volumes persist independently on network storage and are
+	// NOT captured in snapshots under any scope: at restore, the same CSI
+	// volume is re-mounted from the storage backend. A Data-scope checkpoint
+	// for an actor with only CSI volumes (no durable-dirs) produces no snapshot
+	// files, which is correct — the working data lives on the network volume.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	csi := hasCsiVolumes(req.GetSpec().GetContainers())
 	scope := req.GetScope()
 	switch scope {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		// TODO: Revisit handling for CSI volumes since snapshots are currently quietly ignored.
 		if !durable && !csi {
 			return nil, status.Error(codes.FailedPrecondition,
 				"no durable-dir or CSI volumes found for a Data-scope snapshot")
+		}
+		// CSI volumes are not captured in the snapshot; log this explicitly so
+		// operators understand why a Data-scope checkpoint may produce no files.
+		if csi && !durable {
+			slog.InfoContext(ctx, "Data-scope checkpoint: CSI volumes present but not captured (they persist independently on network storage); no durable-dir volumes, snapshot will produce no files",
+				slog.String("id", actorUID))
+		} else if csi && durable {
+			slog.InfoContext(ctx, "Data-scope checkpoint: CSI volumes present but not captured (they persist independently on network storage); durable-dir volumes will be captured",
+				slog.String("id", actorUID))
 		}
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
