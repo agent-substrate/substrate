@@ -47,7 +47,7 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 		if err != nil {
 			return fmt.Errorf("failed to get volume plugin for %q: %w", ext.GetVolumeType(), err)
 		}
-		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext()); err != nil {
+		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext(), ext.GetPublishContext()); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
 	}

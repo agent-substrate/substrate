@@ -145,6 +145,9 @@ message ExternalVolumeSource {
   string storage_volume_id = 1;
   string volume_type = 2;
   map<string, string> volume_context = 3;
+  // publish_context is forwarded verbatim from ExternalVolume.publish_context.
+  // atelet passes it to NodeStageVolume.PublishContext and NodePublishVolume.PublishContext.
+  map<string, string> publish_context = 4;
 }
 
 message Volume {

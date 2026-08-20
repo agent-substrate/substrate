@@ -178,6 +178,10 @@ message ExternalVolume {
   // volume_context contains metadata returned by the CSI driver during volume
   // provisioning, needed by the node plugin for mounting (e.g. attachment info).
   map<string, string> volume_context = 5;
+  // publish_context is the opaque metadata returned by CSI ControllerPublishVolume.
+  // Required by block-device drivers (Alibaba Cloud disk, AWS EBS, GKE PD) for
+  // NodeStageVolume and NodePublishVolume. Nil for drivers that skip ControllerPublish.
+  map<string, string> publish_context = 6;
 }
 
 message Actor {

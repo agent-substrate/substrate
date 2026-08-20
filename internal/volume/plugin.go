@@ -23,12 +23,18 @@ type VolumePluginControlPlane interface {
 	DriverName(ctx context.Context) (string, error)
 	CreateVolume(ctx context.Context, name string, capacity string, driverName string, parameters map[string]string) (volumeID string, volumeContext map[string]string, err error)
 	DeleteVolume(ctx context.Context, volumeID string) error
-	AttachVolume(ctx context.Context, volumeID string, node string) error
+	// AttachVolume attaches the volume to a node and returns the publishContext
+	// from CSI ControllerPublishVolume. Returns nil publishContext when the driver
+	// does not implement ControllerPublishVolume.
+	AttachVolume(ctx context.Context, volumeID string, node string) (publishContext map[string]string, err error)
 	DetachVolume(ctx context.Context, volumeID string, node string) error
 }
 
 // VolumePluginWorkerPlane abstracts storage operations performed on worker nodes.
 type VolumePluginWorkerPlane interface {
-	MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error
+	// MountVolume mounts the volume at targetPath. publishContext is the opaque
+	// metadata from ControllerPublishVolume forwarded to NodeStageVolume and
+	// NodePublishVolume; nil when the driver does not use it.
+	MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string, publishContext map[string]string) error
 	UnmountVolume(ctx context.Context, volumeID string, targetPath string) error
 }

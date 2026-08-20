@@ -228,18 +228,38 @@ func TestPlugin_AttachVolume(t *testing.T) {
 	plugin := NewPlugin(client)
 
 	ctx := context.Background()
-	err = plugin.AttachVolume(ctx, "test-vol", "node-1")
+	pubCtx, err := plugin.AttachVolume(ctx, "test-vol", "node-1")
 	if err != nil {
 		t.Fatalf("AttachVolume failed: %v", err)
+	}
+	if pubCtx != nil {
+		t.Errorf("AttachVolume should return nil publishContext for default mock, got: %v", pubCtx)
+	}
+
+	// Test that PublishContext is returned when driver provides one.
+	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		return &csi.ControllerPublishVolumeResponse{
+			PublishContext: map[string]string{"serialNumber": "vol-12345"},
+		}, nil
+	}
+	pubCtx, err = plugin.AttachVolume(ctx, "test-vol", "node-1")
+	if err != nil {
+		t.Fatalf("AttachVolume failed: %v", err)
+	}
+	if pubCtx == nil || pubCtx["serialNumber"] != "vol-12345" {
+		t.Errorf("AttachVolume should return publishContext with serialNumber=vol-12345, got: %v", pubCtx)
 	}
 
 	// Test Unimplemented warning bypass
 	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 		return nil, status.Error(codes.Unimplemented, "unimplemented")
 	}
-	err = plugin.AttachVolume(ctx, "test-vol", "node-1")
+	pubCtx, err = plugin.AttachVolume(ctx, "test-vol", "node-1")
 	if err != nil {
 		t.Errorf("AttachVolume should have ignored Unimplemented error, got: %v", err)
+	}
+	if pubCtx != nil {
+		t.Errorf("AttachVolume should return nil publishContext for Unimplemented, got: %v", pubCtx)
 	}
 }
 
@@ -294,7 +314,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	targetPath := filepath.Join(tmpDir, "target")
 
 	ctx := context.Background()
-	err = plugin.MountVolume(ctx, "test-vol", targetPath, nil)
+	err = plugin.MountVolume(ctx, "test-vol", targetPath, nil, nil)
 	if err != nil {
 		t.Fatalf("MountVolume failed: %v", err)
 	}
@@ -313,7 +333,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	os.RemoveAll(tmpDir)
 	os.MkdirAll(plugin.stagingDirPrefix, 0750)
 
-	err = plugin.MountVolume(ctx, "test-vol-2", targetPath, nil)
+	err = plugin.MountVolume(ctx, "test-vol-2", targetPath, nil, nil)
 	if err != nil {
 		t.Errorf("MountVolume should have succeeded when NodeStageVolume is unimplemented, got: %v", err)
 	}

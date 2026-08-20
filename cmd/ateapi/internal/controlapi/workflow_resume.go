@@ -108,9 +108,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	actor = assigned
-	if err = w.ensureVolumesAttached(lockCtx, actor, worker, actorTemplate); err != nil {
+	if assigned, err = w.ensureVolumesAttached(lockCtx, actorRef, actor, worker, actorTemplate); err != nil {
 		return nil, false, err
 	}
+	actor = assigned
 	if tele, err = w.ensureAteletRestored(lockCtx, actorRef, actor, actorTemplate, src); err != nil {
 		return nil, false, err
 	}
@@ -586,30 +587,54 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplat
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
-// assigned worker's node. Attachment is idempotent, so a re-entered workflow
-// safely runs it again.
+// assigned worker's node and persists the returned publish context so it can be
+// forwarded to atelet for NodeStageVolume/NodePublishVolume. Attachment is
+// idempotent, so a re-entered workflow safely runs it again.
 // TODO replace re-execution with a proper check on the volumes' attach state.
-func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *atev1alpha1.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
 
 	node := worker.GetNodeName()
 	if node == "" {
-		return fmt.Errorf("assigned worker has no node name")
+		return nil, fmt.Errorf("assigned worker has no node name")
 	}
 
-	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), actorTemplate) {
+	mountedVols := getMountedActorVolumes(ctx, &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}, actor.GetStatus().GetActorVolumes(), actorTemplate)
+	if len(mountedVols) == 0 {
+		markSkipped(ctx, "no mounted external volumes to attach")
+		return actor, nil
+	}
+
+	publishContexts := make(map[string]map[string]string, len(mountedVols))
+	for _, vol := range mountedVols {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
-			return fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err)
+			return nil, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err)
 		}
-		if err := plugin.AttachVolume(ctx, vol.GetStorageVolumeId(), node); err != nil {
-			return fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
+		publishContext, err := plugin.AttachVolume(ctx, vol.GetStorageVolumeId(), node)
+		if err != nil {
+			return nil, fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
 		}
+		publishContexts[vol.GetVolumeName()] = publishContext
 	}
-	return nil
+
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+		for i := range toUpdate.Status.ActorVolumes {
+			if pc, ok := publishContexts[toUpdate.Status.ActorVolumes[i].GetVolumeName()]; ok {
+				toUpdate.Status.ActorVolumes[i].PublishContext = pc
+			}
+		}
+		return nil
+	}))
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		return nil, fmt.Errorf("while persisting publish context after attach: %w", err)
+	}
+	return storedActor, nil
 }
 
 // ensureAteletRestored brings the workload up on the assigned worker:

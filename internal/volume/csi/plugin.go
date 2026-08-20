@@ -100,7 +100,7 @@ func (p *Plugin) DeleteVolume(ctx context.Context, volumeID string) error {
 }
 
 // AttachVolume maps to CSI Controller ControllerPublishVolume.
-func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string) error {
+func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string) (map[string]string, error) {
 	req := &csi.ControllerPublishVolumeRequest{
 		VolumeId:         volumeID,
 		NodeId:           node,
@@ -114,21 +114,15 @@ func (p *Plugin) AttachVolume(ctx context.Context, volumeID string, node string)
 		// to avoid calling unimplemented methods and generating spammy logs.
 		if status.Code(err) == codes.Unimplemented {
 			slog.WarnContext(ctx, "CSI ControllerPublishVolume is unimplemented by driver; skipping attach", slog.String("volume_id", volumeID), slog.String("node", node))
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("CSI ControllerPublishVolume failed: %w", err)
+		return nil, fmt.Errorf("CSI ControllerPublishVolume failed: %w", err)
 	}
 
-	// NOTE: CSI ControllerPublishVolume returns PublishContext (metadata needed for mounting).
-	// Currently, Substrate VolumePlugin interface does not support returning PublishContext.
-	// We might need to store this context if the driver requires it (e.g. AWS EBS attachment info).
-	// TODO: Extend Substrate's VolumePlugin interface to return and propagate
-	// PublishContext if required by the driver for mounting.
-	if resp != nil {
-		_ = resp.GetPublishContext()
+	if resp == nil {
+		return nil, nil
 	}
-
-	return nil
+	return resp.GetPublishContext(), nil
 }
 
 // DetachVolume maps to CSI Controller ControllerUnpublishVolume.
@@ -151,7 +145,7 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 
 // MountVolume maps to CSI Node NodePublishVolume.
 // It also handles NodeStageVolume staging if required by the driver.
-func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error {
+func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string, publishContext map[string]string) error {
 	// 1. Stage the volume
 	stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
@@ -163,6 +157,7 @@ func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath st
 		StagingTargetPath: stagingPath,
 		VolumeCapability:  getStandardCapabilities()[0], // Use primary capability
 		VolumeContext:     volumeContext,
+		PublishContext:    publishContext,
 	}
 
 	_, err := p.client.NodeStageVolume(ctx, stageReq)
@@ -182,6 +177,7 @@ func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath st
 		VolumeCapability: getStandardCapabilities()[0],
 		Readonly:         false,
 		VolumeContext:    volumeContext,
+		PublishContext:   publishContext,
 	}
 	if stagingPath != "" {
 		req.StagingTargetPath = stagingPath
