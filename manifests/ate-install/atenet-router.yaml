@@ -86,7 +86,9 @@ data:
     admin:
       address:
         socket_address:
-          address: 0.0.0.0
+          # ipv4_compat is load-bearing: dataplane.go probes /ready over IPv4 loopback.
+          address: "::"
+          ipv4_compat: true
           port_value: 9901
 
     node:
@@ -354,6 +356,7 @@ metadata:
   namespace: ate-system
 spec:
   type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: atenet-router
   ports:

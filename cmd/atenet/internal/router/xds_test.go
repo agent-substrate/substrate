@@ -48,6 +48,36 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
 
+// assertDualStackIngress checks an ingress listener keeps its 0.0.0.0 primary
+// and gains exactly one "::" socket on the same port.
+func assertDualStackIngress(t *testing.T, l *listenerv3.Listener, wantPort uint32) {
+	t.Helper()
+
+	sa := l.GetAddress().GetSocketAddress()
+	if sa.GetAddress() != "0.0.0.0" {
+		t.Errorf("Expected address '0.0.0.0', got %s", sa.GetAddress())
+	}
+	if sa.GetPortValue() != wantPort {
+		t.Errorf("Expected port %d, got %d", wantPort, sa.GetPortValue())
+	}
+
+	addrs := l.GetAdditionalAddresses()
+	if len(addrs) != 1 {
+		t.Fatalf("Expected 1 additional address on %s, got %d", l.GetName(), len(addrs))
+	}
+
+	asa := addrs[0].GetAddress().GetSocketAddress()
+	if asa.GetAddress() != "::" {
+		t.Errorf("Expected additional address '::', got %s", asa.GetAddress())
+	}
+	if asa.GetIpv4Compat() {
+		t.Error("Expected additional address Ipv4Compat to be false")
+	}
+	if asa.GetPortValue() != wantPort {
+		t.Errorf("Expected additional port %d, got %d", wantPort, asa.GetPortValue())
+	}
+}
+
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
 	server := NewXdsServer(18000)
 	server.SetConfig(8081, 50052, "10.0.0.1")
@@ -150,14 +180,7 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 	if raw, exists := listenersMap[IngressHTTPListener]; !exists {
 		t.Errorf("Listener name '%s' is missing from snapshot listeners", IngressHTTPListener)
 	} else {
-		l := raw.(*listenerv3.Listener)
-		sa := l.GetAddress().GetSocketAddress()
-		if sa.GetPortValue() != 8081 {
-			t.Errorf("Expected port 8081, got %d", sa.GetPortValue())
-		}
-		if sa.GetAddress() != "0.0.0.0" {
-			t.Errorf("Expected address '0.0.0.0', got %s", sa.GetAddress())
-		}
+		assertDualStackIngress(t, raw.(*listenerv3.Listener), 8081)
 	}
 }
 
@@ -192,10 +215,7 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 		t.Errorf("Listener name '%s' is missing from snapshot listeners", IngressHTTPSListener)
 	} else {
 		l := raw.(*listenerv3.Listener)
-		sa := l.GetAddress().GetSocketAddress()
-		if sa.GetPortValue() != 8443 {
-			t.Errorf("Expected port 8443, got %d", sa.GetPortValue())
-		}
+		assertDualStackIngress(t, l, 8443)
 
 		// Verify the TLS config references the serving cert via SDS rather
 		// than embedding it: inline filename DataSources are read only once
@@ -354,16 +374,14 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	}
 	if raw, exists := listenersMap["connect_terminate"]; !exists {
 		t.Error("connect_terminate listener missing")
-	} else if sa := raw.(*listenerv3.Listener).GetAddress().GetSocketAddress(); sa.GetPortValue() != 8081 {
-		t.Errorf("Expected connect_terminate port 8081, got %d", sa.GetPortValue())
+	} else {
+		assertDualStackIngress(t, raw.(*listenerv3.Listener), 8081)
 	}
 	if raw, exists := listenersMap["connect_terminate_tls"]; !exists {
 		t.Error("connect_terminate_tls listener missing")
 	} else {
 		l := raw.(*listenerv3.Listener)
-		if sa := l.GetAddress().GetSocketAddress(); sa.GetPortValue() != 8444 {
-			t.Errorf("Expected connect_terminate_tls port 8444, got %d", sa.GetPortValue())
-		}
+		assertDualStackIngress(t, l, 8444)
 		ts := l.GetFilterChains()[0].GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected connect_terminate_tls to be TLS-wrapped, got transport socket %q", ts.GetName())
