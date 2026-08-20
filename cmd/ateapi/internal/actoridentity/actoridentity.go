@@ -351,9 +351,8 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 		return nil, resources.ActorRef{}, status.Error(codes.Internal, "failed to look up actor")
 	}
 
-	// Deletion is only entered from SUSPENDED or CRASHED, both of which
-	// have already released the worker, so the assignment check below would
-	// reject this too. It is kept for better visibility and logging.
+	// Refuse credential minting if the actor is being deleted. Under force deletion,
+	// an actor enters ACTOR_STATE_DELETING while its worker assignment is still active.
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
 		slog.WarnContext(ctx, "ActorIdentity refused: actor is being deleted", slog.Any("actor", actorRef))
 		return nil, resources.ActorRef{}, status.Error(codes.FailedPrecondition, "actor is being deleted")

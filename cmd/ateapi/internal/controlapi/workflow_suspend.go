@@ -353,29 +353,10 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		return nil, err
 	}
 
-	// 1. Free the worker (if the actor has one and it hasn't been freed yet)
-	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		workerPod := assignment.GetWorkerPod()
-
-		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
-		if err != nil {
-			if !errors.Is(err, store.ErrNotFound) {
-				return nil, fmt.Errorf("while getting worker for release: %w", err)
-			}
-			slog.WarnContext(ctx, "Worker already gone during finalize suspend, skipping release", "worker", workerPod)
-		} else {
-			// Only free it if it still belongs to us
-			if wass := worker.GetStatus().GetAssignment(); wass != nil {
-				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
-					worker.Status.Assignment = nil
-					if err := w.store.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
-						if errors.Is(err, store.ErrVersionConflict) {
-							return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-						}
-						return nil, err
-					}
-				}
-			}
+	// 1. Free the worker (if it hasn't been freed yet)
+	if latestActor.GetStatus().GetWorkerAssignment() != nil {
+		if _, err := releaseWorker(ctx, w.store, latestActor); err != nil {
+			return nil, err
 		}
 
 		// Re-fetch the actor now that the worker is freed.

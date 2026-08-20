@@ -56,6 +56,26 @@ service AteomHerder {
   // paused, its sandbox is gone; the checkpoint files plus their manifest
   // already sit under the actor's local-checkpoints directory.
   rpc UploadPausedCheckpoint(UploadPausedCheckpointRequest) returns (UploadPausedCheckpointResponse) {}
+
+  // Terminate tells atelet to terminate/kill any running workload for an actor,
+  // unmount its volumes, and clean up actor state on the node.
+  rpc Terminate(TerminateRequest) returns (TerminateResponse) {}
+}
+
+message TerminateRequest {
+  string target_ateom_uid = 1;
+
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
+
+  string actor_template_namespace = 5;
+  string actor_template_name = 6;
+
+  WorkloadSpec spec = 7;
+}
+
+message TerminateResponse {
 }
 
 message RunRequest {

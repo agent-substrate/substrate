@@ -720,6 +720,7 @@ message ResumeActorResponse {
 
 message DeleteActorRequest {
   ObjectRef actor = 1;
+  bool any_state = 2;
 }
 
 message GetActorSnapshotRequest {
