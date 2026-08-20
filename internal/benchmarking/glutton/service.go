@@ -45,6 +45,10 @@ type Service struct {
 	gluttonpb.UnimplementedGluttonServer
 
 	dataDir string
+	// syncWrites makes WriteDisk fsync each file before it returns.
+	syncWrites bool
+	// readyzDir, when set, is the directory /readyz must be able to write to.
+	readyzDir string
 
 	// TODO: split this into per-resource locks (ram, fds, peers). A single
 	// global mutex serializes unrelated operations across all three.
@@ -65,15 +69,33 @@ type Service struct {
 	gossipLatency  metric.Float64Histogram
 }
 
+// Option configures a Service.
+type Option func(*Service)
+
+// WithSyncWrites makes WriteDisk fsync each file before it returns, so the
+// measured write includes the flush to the backing volume.
+func WithSyncWrites() Option {
+	return func(s *Service) { s.syncWrites = true }
+}
+
+// WithWritableReadyz makes /readyz fail until the data dir is writable, so
+// ResumeActor waits for an external volume mount before the actor takes load.
+func WithWritableReadyz() Option {
+	return func(s *Service) { s.readyzDir = s.dataDir }
+}
+
 // New constructs a Service storing WriteDisk files under dir and registers its
 // otel instruments. The caller is responsible for creating dir and for calling
 // Close to stop any running gossip goroutines.
-func New(dir string) (*Service, error) {
+func New(dir string, opts ...Option) (*Service, error) {
 	s := &Service{
 		dataDir:   dir,
 		ram:       make(map[string][]byte),
 		ramCursor: make(map[string]int),
 		peers:     make(map[string]*peerGossip),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	if err := s.initMetrics(); err != nil {
 		return nil, err
@@ -241,6 +263,11 @@ func (s *Service) WriteDisk(ctx context.Context, req *gluttonpb.WriteDiskRequest
 	size := int64(req.GetSize())
 	if err := streamRandomBytes(io.MultiWriter(f, h), size); err != nil {
 		return nil, status.Errorf(codes.Internal, "write %s: %v", path, err)
+	}
+	if s.syncWrites {
+		if err := f.Sync(); err != nil {
+			return nil, status.Errorf(codes.Internal, "sync %s: %v", path, err)
+		}
 	}
 
 	// OVERWRITE has no O_TRUNC, bytes from a larger, earlier write will persist.

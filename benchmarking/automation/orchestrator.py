@@ -331,6 +331,7 @@ def deploy_workloads(
     worker_count: int = 1,
     sandbox_class: str = "gvisor",
     actor_memory: str = "",
+    storage_class_name: str = "csi-nfs-sc",
     wait_timeout_secs: int | str = "",
 ) -> None:
     cmd = [
@@ -340,6 +341,8 @@ def deploy_workloads(
         str(worker_count),
         "--sandbox-class",
         sandbox_class,
+        "--storage-class-name",
+        storage_class_name,
     ]
     # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
@@ -523,6 +526,7 @@ def main() -> None:
                     test.get("workerCount", 1),
                     sandbox_class,
                     test.get("actorMemory", ""),
+                    test.get("storageClassName", "csi-nfs-sc"),
                     test.get("workerWaitTimeout", ""),
                 )
                 try:
