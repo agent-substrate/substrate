@@ -162,17 +162,17 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	actorRef := resources.ActorRefFromActor(created)
 
 	mutations := 0
-	_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(created, func(toUpdate *ateapipb.Actor) error {
+	_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
 		mutations++
-		if _, err := s.UpdateActor(ctx, actorRef, store.WithPrecondition(created, func(concurrent *ateapipb.Actor) error {
+		if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(concurrent *ateapipb.Actor) error {
 			concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 			return nil
-		})); err != nil {
+		}); err != nil {
 			return fmt.Errorf("concurrent actor update: %w", err)
 		}
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
-	}))
+	})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("UpdateActor error = %v, want ErrVersionConflict", err)
 	}
@@ -206,17 +206,17 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 	}
 
 	mutations := 0
-	_, err = s.UpdateActorTemplate(ctx, templateRef, store.WithPrecondition(created, func(toUpdate *ateapipb.ActorTemplate) error {
+	_, err = s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.ActorTemplate) error {
 		mutations++
-		if _, err := s.UpdateActorTemplate(ctx, templateRef, store.WithPrecondition(created, func(concurrent *ateapipb.ActorTemplate) error {
+		if _, err := s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(concurrent *ateapipb.ActorTemplate) error {
 			concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 			return nil
-		})); err != nil {
+		}); err != nil {
 			return fmt.Errorf("concurrent actor template update: %w", err)
 		}
 		toUpdate.Status = &ateapipb.ActorTemplateStatus{Message: "ready"}
 		return nil
-	}))
+	})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("UpdateActorTemplate error = %v, want ErrVersionConflict", err)
 	}
@@ -257,7 +257,7 @@ func TestUpdateActorSnapshotTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 
 	mutations := 0
 	var recreated *ateapipb.ActorSnapshotTag
-	_, err = s.UpdateActorSnapshotTag(ctx, "team-a", "tag-a", store.WithPrecondition(original, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	_, err = s.UpdateActorSnapshotTag(ctx, "team-a", "tag-a", store.PreconditionFrom(original), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		mutations++
 		if _, err := s.DeleteActorSnapshotTag(ctx, "team-a", "tag-a"); err != nil {
 			return fmt.Errorf("deleting original tag: %w", err)
@@ -271,7 +271,7 @@ func TestUpdateActorSnapshotTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 		}
 		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 		return nil
-	}))
+	})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("UpdateActorSnapshotTag error = %v, want ErrVersionConflict", err)
 	}
