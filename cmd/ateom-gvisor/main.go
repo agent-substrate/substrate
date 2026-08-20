@@ -65,9 +65,9 @@ var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
 	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
-	//
-	// Every listen address here is an unspecified wildcard, which Go binds as a
-	// dual-stack socket.
+
+	// The ingress addresses are unspecified wildcards, which Go binds dual-stack.
+	// Egress below stays IPv4 until the actor datapath carries v6.
 	atunnelListenAddress        = pflag.String("atunnel-listen-address", ":443", "Address for actor ingress HTTPS")
 	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", ":444", "Address for actor ingress mTLS CONNECT")
 	workerCredentialBundle      = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
