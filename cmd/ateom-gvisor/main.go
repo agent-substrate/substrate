@@ -330,13 +330,18 @@ type preparedSandbox struct {
 	cpuMilli       int64
 	memoryBytes    int64
 	durableVolumes []string
+	fromCheckpoint bool
+	rootCreated    bool
+	// cleanupStarted prevents a partially discarded sandbox from being reused.
+	cleanupStarted bool
 	// rootDeleted makes DiscardPreparedSandbox retryable when later cleanup fails.
 	rootDeleted bool
 }
 
-func (p *preparedSandbox) matches(actorUID, runscPath string, redirectEgress bool, cpuMilli, memoryBytes int64, durableVolumes []string) bool {
+func (p *preparedSandbox) matches(actorUID, runscPath string, redirectEgress bool, cpuMilli, memoryBytes int64, durableVolumes []string, fromCheckpoint bool) bool {
 	return p.actorUID == actorUID && p.runscPath == runscPath && p.redirectEgress == redirectEgress &&
-		p.cpuMilli == cpuMilli && p.memoryBytes == memoryBytes && slices.Equal(p.durableVolumes, durableVolumes)
+		p.cpuMilli == cpuMilli && p.memoryBytes == memoryBytes &&
+		slices.Equal(p.durableVolumes, durableVolumes) && p.fromCheckpoint == fromCheckpoint
 }
 
 type cancelableMutex struct {
@@ -617,8 +622,10 @@ func containerNames(containers []*ateompb.Container) []string {
 	return names
 }
 
-// PrepareSandbox starts gVisor's root container while atelet continues pulling
-// and unpacking the application images.
+// PrepareSandbox performs the sandbox work that does not depend on application
+// images or checkpoint contents. A cold Run can start the root container here;
+// a DATA restore configures networking and the rootfs but defers runsc create
+// until RestoreWorkload has the filesystem checkpoint.
 func (s *AteomService) PrepareSandbox(ctx context.Context, req *ateompb.PrepareSandboxRequest) (resp *ateompb.PrepareSandboxResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -629,10 +636,10 @@ func (s *AteomService) PrepareSandbox(ctx context.Context, req *ateompb.PrepareS
 		return nil, status.Error(codes.InvalidArgument, "actor_uid and runsc_path are required")
 	}
 	if s.prepared != nil {
-		if s.prepared.rootDeleted {
+		if s.prepared.cleanupStarted {
 			return nil, status.Error(codes.FailedPrecondition, "prepared sandbox cleanup is incomplete")
 		}
-		if s.prepared.matches(req.GetActorUid(), req.GetRunscPath(), req.GetRedirectEgress(), req.GetCpuMilli(), req.GetMemoryBytes(), durableVolumeNames(req.GetSpec())) {
+		if s.prepared.matches(req.GetActorUid(), req.GetRunscPath(), req.GetRedirectEgress(), req.GetCpuMilli(), req.GetMemoryBytes(), durableVolumeNames(req.GetSpec()), req.GetFromCheckpoint()) {
 			return &ateompb.PrepareSandboxResponse{}, nil
 		}
 		return nil, status.Error(codes.FailedPrecondition, "ateom already has a different prepared sandbox")
@@ -687,12 +694,14 @@ func (s *AteomService) PrepareSandbox(ctx context.Context, req *ateompb.PrepareS
 	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
-	}
-	rootCreated = true
-	if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
+	if !req.GetFromCheckpoint() {
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+			return nil, fmt.Errorf("while creating pause container: %w", err)
+		}
+		rootCreated = true
+		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+			return nil, fmt.Errorf("while starting pause container: %w", err)
+		}
 	}
 
 	s.prepared = &preparedSandbox{
@@ -702,12 +711,14 @@ func (s *AteomService) PrepareSandbox(ctx context.Context, req *ateompb.PrepareS
 		cpuMilli:       req.GetCpuMilli(),
 		memoryBytes:    req.GetMemoryBytes(),
 		durableVolumes: durableVolumeNames(req.GetSpec()),
+		fromCheckpoint: req.GetFromCheckpoint(),
+		rootCreated:    rootCreated,
 	}
 	return &ateompb.PrepareSandboxResponse{}, nil
 }
 
-// DiscardPreparedSandbox releases a root sandbox when another concurrent
-// preparation step failed before RunWorkload could use it.
+// DiscardPreparedSandbox releases sandbox resources when another concurrent
+// preparation step failed before RunWorkload or RestoreWorkload could use them.
 func (s *AteomService) DiscardPreparedSandbox(ctx context.Context, req *ateompb.DiscardPreparedSandboxRequest) (*ateompb.DiscardPreparedSandboxResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -719,10 +730,11 @@ func (s *AteomService) DiscardPreparedSandbox(ctx context.Context, req *ateompb.
 	}
 
 	p := s.prepared
+	p.cleanupStarted = true
 	s.activeActor.Store(nil)
 	rcmd := &runsc{path: p.runscPath, actorUID: p.actorUID}
 	var cleanupErr error
-	if !p.rootDeleted {
+	if p.rootCreated && !p.rootDeleted {
 		if err := rcmd.cmdDelete(ctx, "pause"); err != nil {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while deleting prepared pause container: %w", err))
 		} else {
@@ -754,10 +766,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	defer s.clearActiveRPC()
 
 	prepared := s.prepared != nil
-	if prepared && s.prepared.rootDeleted {
+	if prepared && s.prepared.cleanupStarted {
 		return nil, status.Error(codes.FailedPrecondition, "prepared sandbox cleanup is incomplete")
 	}
-	if prepared && !s.prepared.matches(req.GetActorUid(), req.GetRunscPath(), req.GetEgressGateway() != nil, req.GetCpuMilli(), req.GetMemoryBytes(), durableVolumeNames(req.GetSpec())) {
+	if prepared && !s.prepared.matches(req.GetActorUid(), req.GetRunscPath(), req.GetEgressGateway() != nil, req.GetCpuMilli(), req.GetMemoryBytes(), durableVolumeNames(req.GetSpec()), false) {
 		return nil, status.Error(codes.FailedPrecondition, "prepared sandbox does not match RunWorkload request")
 	}
 	if !prepared {
@@ -1032,8 +1044,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := s.rejectIfDraining(); err != nil {
 		return nil, err
 	}
-	if s.prepared != nil {
-		return nil, status.Error(codes.FailedPrecondition, "cannot restore over a prepared sandbox")
+	prepared := s.prepared != nil
+	if prepared && s.prepared.cleanupStarted {
+		return nil, status.Error(codes.FailedPrecondition, "prepared sandbox cleanup is incomplete")
+	}
+	if prepared && (req.GetScope() != ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA ||
+		!s.prepared.matches(req.GetActorUid(), req.GetRunscPath(), req.GetEgressGateway() != nil, req.GetCpuMilli(), req.GetMemoryBytes(), durableVolumeNames(req.GetSpec()), true)) {
+		return nil, status.Error(codes.FailedPrecondition, "prepared sandbox does not match RestoreWorkload request")
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -1041,8 +1058,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.setActiveRPC(rpcRestoreWorkload, cancel)
 	defer s.clearActiveRPC()
 
-	if err := s.deactivateActorNetworking(ctx); err != nil {
-		return nil, err
+	if !prepared {
+		if err := s.deactivateActorNetworking(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
@@ -1061,14 +1080,16 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err != nil {
 		return nil, err
 	}
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
-		InteriorNetNS:      s.interiorNetNS,
-		DumpNetInfo:        true,
-		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
-	}); err != nil {
-		// Same as the Run path: the defer below is not registered yet.
-		s.activeActor.Store(nil)
-		return nil, fmt.Errorf("while setting up actor network: %w", err)
+	if !prepared {
+		if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+			InteriorNetNS:      s.interiorNetNS,
+			DumpNetInfo:        true,
+			EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
+		}); err != nil {
+			// Same as the Run path: the defer below is not registered yet.
+			s.activeActor.Store(nil)
+			return nil, fmt.Errorf("while setting up actor network: %w", err)
+		}
 	}
 	rcmd := &runsc{
 		path:           req.GetRunscPath(),
@@ -1096,13 +1117,17 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			}
 		}
 	}()
+	if prepared {
+		s.prepared = nil
+	}
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
 
-	// Compose the pause rootfs before create (see RunWorkload). runsc restore
-	// only needs the rootfs to hold the correct content; whether it came from
-	// an untar or an overlay of cached layers is transparent to it.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
-		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+	if !prepared {
+		// PrepareSandbox already composed this rootfs on the parallel path. The
+		// serial fallback still needs it before runsc create/restore.
+		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+			return nil, fmt.Errorf("while composing pause rootfs: %w", err)
+		}
 	}
 
 	switch req.GetScope() {

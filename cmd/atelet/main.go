@@ -521,6 +521,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 			RedirectEgress:    req.GetEgressGateway() != nil,
 			CpuMilli:          req.GetCpuMilli(),
 			MemoryBytes:       req.GetMemoryBytes(),
+			FromCheckpoint:    false,
 		})
 	})
 	g.Go(func() error {
@@ -737,6 +738,13 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	default:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
+}
+
+// shouldPrepareSandboxForRestore is true only for DATA snapshots. They contain
+// no sandbox memory, so the runtime cold-boots a new sandbox. FULL and
+// DATA_ON_GOLDEN restore the captured sandbox and must not create another one.
+func shouldPrepareSandboxForRestore(scope ateletpb.SnapshotScope) bool {
+	return scope == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 }
 
 func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
@@ -977,7 +985,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// the way out, so a failed restore still accounts for the phases it completed.
 	// Phases left at zero never ran.
 	tStart := time.Now()
-	var dMount, dManifest, dAssets, dDownload, dBundles, dAteom time.Duration
+	var dMount, dManifest, dAssets, dDownload, dBundles, dAteom, dPrepare time.Duration
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
@@ -1119,12 +1127,20 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	if goldenRec != nil {
 		runtimeRec = goldenRec
 	}
+	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	if err != nil {
+		return nil, err
+	}
+	spec, err := buildAteomWorkloadSpec(req.GetSpec())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+	}
+	dataRestore := shouldPrepareSandboxForRestore(req.GetScope())
 
-	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
-	// CONCURRENTLY. They are independent — only the final ateom.RestoreWorkload
-	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
-	// fetch + image unpack hides whichever leg is shorter, and on a cold node
-	// (uncached assets + image, ~2.5s unpack) that overlap is large.
+	// Download the checkpoint and prepare the sandbox assets + OCI bundles
+	// concurrently. For a DATA restore, also start the new sandbox as soon as its
+	// runtime assets and pause bundle are ready. The final RestoreWorkload waits
+	// for both the download and preparation legs.
 	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
 	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
@@ -1181,6 +1197,89 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	})
 	g.Go(func() (err error) {
 		defer func() { prepErr = err }()
+		if dataRestore {
+			tPrerequisites := time.Now()
+			if err := s.prepareOCIPrerequisites(gctx, actorUID, actorRef, req.GetSpec()); err != nil {
+				dBundles = time.Since(tPrerequisites)
+				prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
+				return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
+			}
+			dPrerequisites := time.Since(tPrerequisites)
+
+			var assetErr, pauseErr, appErr, prepareErr error
+			var dPause, dApps time.Duration
+			work, workCtx := errgroup.WithContext(gctx)
+			work.Go(func() (err error) {
+				t := time.Now()
+				defer func() {
+					dApps = time.Since(t)
+					appErr = err
+				}()
+				err = s.prepareApplicationOCIBundles(workCtx, actorUID, req.GetSpec(), req.GetTargetAteomUid())
+				return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidContainerConfig)
+			})
+			work.Go(func() error {
+				dependencies, dependenciesCtx := errgroup.WithContext(workCtx)
+				dependencies.Go(func() (err error) {
+					t := time.Now()
+					defer func() {
+						dAssets = time.Since(t)
+						assetErr = err
+					}()
+					assetPaths, err = s.ensureSandboxAssets(dependenciesCtx, runtimeRec)
+					if err != nil {
+						return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
+					}
+					return nil
+				})
+				dependencies.Go(func() (err error) {
+					t := time.Now()
+					defer func() {
+						dPause = time.Since(t)
+						pauseErr = err
+					}()
+					err = s.preparePauseOCIBundle(dependenciesCtx, actorUID, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidContainerConfig)
+				})
+				if err := dependencies.Wait(); err != nil {
+					return err
+				}
+				t := time.Now()
+				prepareErr = prepareSandbox(workCtx, client, &ateompb.PrepareSandboxRequest{
+					ActorUid:          actorUID,
+					RunscPath:         runscPathFor(assetPaths),
+					RuntimeAssetPaths: assetPaths,
+					Spec:              spec,
+					RedirectEgress:    req.GetEgressGateway() != nil,
+					CpuMilli:          req.GetCpuMilli(),
+					MemoryBytes:       req.GetMemoryBytes(),
+					FromCheckpoint:    true,
+				})
+				dPrepare = time.Since(t)
+				return prepareErr
+			})
+
+			err = work.Wait()
+			dBundles = dPrerequisites + max(dPause, dApps)
+
+			switch {
+			case assetErr != nil && !errors.Is(assetErr, context.Canceled):
+				prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
+			case (pauseErr != nil && !errors.Is(pauseErr, context.Canceled)) ||
+				(appErr != nil && !errors.Is(appErr, context.Canceled)):
+				prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
+			case prepareErr != nil && !errors.Is(prepareErr, context.Canceled):
+				prepFailedPhase = ateattr.SnapshotPhaseAteomRestore
+			case assetErr != nil:
+				prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
+			case pauseErr != nil || appErr != nil:
+				prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
+			case prepareErr != nil:
+				prepFailedPhase = ateattr.SnapshotPhaseAteomRestore
+			}
+			return err
+		}
+
 		tAssets := time.Now()
 		assetPaths, err = s.ensureSandboxAssets(gctx, runtimeRec)
 		dAssets = time.Since(tAssets)
@@ -1198,30 +1297,22 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
+		if dataRestore {
+			dAteom = dPrepare
+			discardPreparedSandbox(ctx, client, actorUID)
+		}
 		op.failedPhase = groupFailedPhase(err, downloadErr, prepErr, prepFailedPhase)
 		if isCollateral(err, downloadErr) {
 			dDownload = 0
 		}
 		if isCollateral(err, prepErr) {
 			dAssets, dBundles = assetsAfterCollateral(prepFailedPhase, dAssets), 0
+			dAteom = 0
 		}
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
-	if err != nil {
-		return nil, err
-	}
-
-	// Tell ateom to do runsc create + runsc restore for pause container and
-	// all application containers.
-	spec, err := buildAteomWorkloadSpec(req.GetSpec())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
-	}
-
-	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
-	// this call as "Actor restore phases".
+	// Tell ateom to complete the restore and start all application containers.
 	tAteom := time.Now()
 	_, err = client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
 		Atespace:              actorRef.Atespace,
@@ -1241,8 +1332,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		// ateom restores from the shared dir and never fetches this URI.
 		GoldenSnapshotUri: req.GetGoldenSnapshotUri(),
 	})
-	dAteom = time.Since(tAteom)
+	dAteom = dPrepare + time.Since(tAteom)
 	if err != nil {
+		if dataRestore {
+			discardPreparedSandbox(ctx, client, actorUID)
+		}
 		// TODO: classify the errors returned by Ateom and crash the actor if needed.
 		op.failedPhase = ateattr.SnapshotPhaseAteomRestore
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)

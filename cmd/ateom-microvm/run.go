@@ -351,8 +351,9 @@ type actorBootParams struct {
 	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
 	// prepared is non-nil when PrepareSandbox already booted the VM while atelet
-	// prepared the application OCI bundles. coldBootActor consumes it exactly
-	// once; a retry after a dead prepared VM performs a full fresh boot.
+	// prepared the application OCI bundles and, on restore, the checkpoint.
+	// coldBootActor consumes it exactly once; a retry after a dead prepared VM
+	// performs a full fresh boot.
 	prepared *preparedSandbox
 }
 
@@ -414,7 +415,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		defer cancel()
 		if prepared != nil {
 			if cleanupErr := s.cleanupPreparedSandbox(cleanupCtx, prepared); cleanupErr != nil {
-				slog.WarnContext(cleanupCtx, "Failed to clean up microVM after Run failure", slog.Any("err", cleanupErr))
+				slog.WarnContext(cleanupCtx, "Failed to clean up microVM after cold boot failure", slog.Any("err", cleanupErr))
 			}
 		}
 		// buildActorContainers may have composed bundle overlays before a fresh

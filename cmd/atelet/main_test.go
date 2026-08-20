@@ -639,6 +639,22 @@ func TestToAteomSnapshotScope(t *testing.T) {
 	}
 }
 
+func TestShouldPrepareSandboxForRestore(t *testing.T) {
+	tests := []struct {
+		scope ateletpb.SnapshotScope
+		want  bool
+	}{
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, true},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, false},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, false},
+	}
+	for _, tt := range tests {
+		if got := shouldPrepareSandboxForRestore(tt.scope); got != tt.want {
+			t.Errorf("shouldPrepareSandboxForRestore(%v) = %v, want %v", tt.scope, got, tt.want)
+		}
+	}
+}
+
 // TestFetchAssetRejectsBadHash confirms fetchAsset validates the asset hash
 // before the cache-hit os.Stat/early-return, not merely "at some point". To
 // prove the ordering, it plants a real file at the exact path an invalid hash

@@ -46,6 +46,7 @@ func TestSandboxBootParamsMatchesVMShape(t *testing.T) {
 		{name: "assets", other: sandboxBootParams{actorUID: want.actorUID, assetPaths: map[string]string{assetKernel: "/other", assetImage: "/image"}, redirectEgress: true, size: want.size}},
 		{name: "egress", other: sandboxBootParams{actorUID: want.actorUID, assetPaths: want.assetPaths, size: want.size}},
 		{name: "limits", other: sandboxBootParams{actorUID: want.actorUID, assetPaths: want.assetPaths, redirectEgress: true, size: sizing.FromLimits(2000, 512*1024*1024)}},
+		{name: "checkpoint origin", other: sandboxBootParams{actorUID: want.actorUID, assetPaths: want.assetPaths, redirectEgress: true, size: want.size, fromCheckpoint: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,6 +54,23 @@ func TestSandboxBootParamsMatchesVMShape(t *testing.T) {
 				t.Fatalf("matches() = %v, want %v", got, tt.match)
 			}
 		})
+	}
+}
+
+func TestSandboxParamsFromRestoreMarksCheckpointOrigin(t *testing.T) {
+	req := &ateompb.RestoreWorkloadRequest{
+		ActorUid:          "actor-1",
+		RuntimeAssetPaths: map[string]string{assetKernel: "/kernel", assetImage: "/image"},
+		EgressGateway:     &ateompb.EgressGateway{},
+		CpuMilli:          1500,
+		MemoryBytes:       512 * 1024 * 1024,
+	}
+	got := sandboxParamsFromRestore(req)
+	if !got.fromCheckpoint {
+		t.Fatal("sandboxParamsFromRestore() did not mark checkpoint origin")
+	}
+	if got.actorUID != req.GetActorUid() || !got.redirectEgress || got.size != sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()) {
+		t.Fatalf("sandboxParamsFromRestore() = %+v, want request shape", got)
 	}
 }
 

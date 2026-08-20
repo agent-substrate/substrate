@@ -482,8 +482,14 @@ message PrepareSandboxRequest {
 
   // Runtime-specific preparation needs the workload shape: gVisor declares
   // durable mount hints while microVM decides its early sandbox shape.
-  // Application image contents are consumed only by RunWorkload.
+  // Application rootfs and volume data are consumed only by RunWorkload or
+  // RestoreWorkload, after atelet finishes preparing them.
   WorkloadSpec spec = 7;
+
+  // Whether RestoreWorkload, rather than RunWorkload, will consume this
+  // sandbox. Runtimes can defer initialization that depends on checkpoint
+  // contents.
+  bool from_checkpoint = 8;
 }
 
 message PrepareSandboxResponse {
