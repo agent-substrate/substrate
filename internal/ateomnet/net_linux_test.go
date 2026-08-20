@@ -17,6 +17,7 @@
 package ateomnet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"runtime"
@@ -24,6 +25,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/roottest"
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
+	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
@@ -75,15 +78,49 @@ func withTestNetNS(t *testing.T, fn func(interior netns.NsHandle)) {
 	fn(interior)
 }
 
-// requireNftables skips when the kernel in this environment cannot serve the
-// nftables netlink API at all, which SetupActorNetwork needs and which is a
-// property of the machine rather than of the code under test.
+// requireNftables skips when this kernel cannot serve what SetupActorNetwork
+// installs, which is a property of the machine rather than of the code under
+// test. Listing the inet family is not a sufficient probe: inet filter is far
+// older than inet nat, which needs Linux 5.2, so this builds and drops a nat
+// chain in the family the actor table uses.
 func requireNftables(t *testing.T) {
 	t.Helper()
 	c := &nftables.Conn{}
-	if _, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4); err != nil {
-		t.Skipf("nftables unavailable in this environment: %v", err)
+	probe := c.AddTable(&nftables.Table{Family: nftables.TableFamilyINet, Name: "ateom_nft_probe"})
+	c.AddChain(&nftables.Chain{
+		Name:     "prerouting",
+		Table:    probe,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPrerouting,
+		Priority: nftables.ChainPriorityNATDest,
+	})
+	if err := c.Flush(); err != nil {
+		t.Skipf("nftables inet nat unavailable in this environment: %v", err)
 	}
+	c.DelTable(probe)
+	if err := c.Flush(); err != nil {
+		t.Fatalf("deleting the nftables probe table: %v", err)
+	}
+}
+
+// actorNftTableExists reports whether the actor table is present in the family
+// InstallActorNftablesRules creates it in. The family is load-bearing:
+// ListTablesOfFamily puts it in the netlink dump header, so the kernel filters
+// the dump and a query for the wrong family comes back empty rather than
+// erroring.
+func actorNftTableExists(t *testing.T) bool {
+	t.Helper()
+	c := &nftables.Conn{}
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyINet)
+	if err != nil {
+		t.Fatalf("listing inet nftables tables: %v", err)
+	}
+	for _, table := range tables {
+		if table.Name == ActorNftTableName {
+			return true
+		}
+	}
+	return false
 }
 
 // linkByName returns the link, or nil when it does not exist.
@@ -215,8 +252,19 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 			if linkByName(t, HostVethName) == nil {
 				t.Fatalf("host veth %q missing after activation %d", HostVethName, i)
 			}
+			if !actorNftTableExists(t) {
+				t.Fatalf("nftables table %q missing after activation %d", ActorNftTableName, i)
+			}
 			if err := CleanupActorNetwork(ctx, interior); err != nil {
 				t.Fatalf("CleanupActorNetwork (activation %d): %v", i, err)
+			}
+			// Install and teardown have to name the same family. When they do not,
+			// teardown's dump comes back empty, its "missing tables are already
+			// clean" path reports success, and the table survives -- so the next
+			// activation stacks another copy of every chain and rule onto it and
+			// the leak is invisible to every other assertion here.
+			if actorNftTableExists(t) {
+				t.Fatalf("nftables table %q survived cleanup after activation %d", ActorNftTableName, i)
 			}
 		}
 
@@ -228,6 +276,9 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 		if stray := linkByName(t, HostVethName); stray != nil {
 			t.Errorf("host veth %q survived cleanup", HostVethName)
 		}
+		if actorNftTableExists(t) {
+			t.Errorf("nftables table %q survived a repeated cleanup", ActorNftTableName)
+		}
 		if err := NetNSDo(ctx, interior, func(context.Context) error {
 			if stray := linkByName(t, ActorVethName); stray != nil {
 				t.Errorf("actor veth %q survived cleanup", ActorVethName)
@@ -235,6 +286,93 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 			return nil
 		}); err != nil {
 			t.Fatalf("inspecting interior netns: %v", err)
+		}
+	})
+}
+
+// TestRemoveActorNftablesRulesSweepsIPv4Family covers the upgrade case: a
+// worker whose previous ateom created the actor table in the ip family. Table
+// names are unique per family, so an inet-only cleanup could never see that
+// table, and it would have kept redirecting alongside the inet one installed
+// next to it.
+func TestRemoveActorNftablesRulesSweepsIPv4Family(t *testing.T) {
+	roottest.Require(t, "creating network namespaces and nftables rules")
+
+	withTestNetNS(t, func(netns.NsHandle) {
+		requireNftables(t)
+
+		c := &nftables.Conn{}
+		c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: ActorNftTableName})
+		if err := c.Flush(); err != nil {
+			t.Fatalf("creating the stand-in ip actor table: %v", err)
+		}
+
+		if err := RemoveActorNftablesRules(); err != nil {
+			t.Fatalf("RemoveActorNftablesRules: %v", err)
+		}
+
+		tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+		if err != nil {
+			t.Fatalf("listing ip nftables tables: %v", err)
+		}
+		for _, table := range tables {
+			if table.Name == ActorNftTableName {
+				t.Fatal("the ip actor table survived cleanup")
+			}
+		}
+	})
+}
+
+// TestSetupActorNetworkInstallsEgressRedirect covers the rule no other test in
+// this package builds: they all leave EgressRedirectPort zero, so the kernel
+// never sees the redirect. Its acceptance is not implied by the masquerade rule
+// next to it -- redirect in the inet family is separate kernel support from the
+// nat chain type -- and it is the rule the whole actor egress path rides on.
+func TestSetupActorNetworkInstallsEgressRedirect(t *testing.T) {
+	roottest.Require(t, "creating network namespaces, veth pairs, and nftables rules")
+	ctx := context.Background()
+
+	const egressPort = 15001
+
+	withTestNetNS(t, func(interior netns.NsHandle) {
+		requireNftables(t)
+
+		if err := SetupActorNetwork(ctx, NetworkConfig{
+			InteriorNetNS:      interior,
+			EgressRedirectPort: egressPort,
+		}); err != nil {
+			t.Fatalf("SetupActorNetwork: %v", err)
+		}
+
+		c := &nftables.Conn{}
+		rules, err := c.GetRules(
+			&nftables.Table{Family: nftables.TableFamilyINet, Name: ActorNftTableName},
+			&nftables.Chain{Name: "prerouting"},
+		)
+		if err != nil {
+			t.Fatalf("listing prerouting rules of the actor table: %v", err)
+		}
+		if len(rules) != 1 {
+			t.Fatalf("prerouting holds %d rules, want the egress redirect alone", len(rules))
+		}
+
+		// Read back what the kernel stored rather than what the builder emitted:
+		// TestActorNftablesRuleExprs already pins the builder, and what is in
+		// doubt here is whether an inet nat chain takes these expressions at all.
+		var haveNFProto, havePort, haveRedir bool
+		for _, e := range rules[0].Exprs {
+			switch e := e.(type) {
+			case *expr.Meta:
+				haveNFProto = haveNFProto || e.Key == expr.MetaKeyNFPROTO
+			case *expr.Immediate:
+				havePort = havePort || bytes.Equal(e.Data, binaryutil.BigEndian.PutUint16(egressPort))
+			case *expr.Redir:
+				haveRedir = true
+			}
+		}
+		if !haveNFProto || !havePort || !haveRedir {
+			t.Errorf("installed redirect has nfproto=%t port=%t redir=%t, want all three, got %v",
+				haveNFProto, havePort, haveRedir, rules[0].Exprs)
 		}
 	})
 }
