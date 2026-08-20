@@ -42,10 +42,28 @@ fail() { echo "  FAIL  $*"; fails=$((fails + 1)); }
 # failure -- but only above roughly 100K of input, which looks like a flake.
 contains() { grep -q -- "$2" <<<"$1"; }
 
+# Pods of the current generation only. A pod with a deletionTimestamp is still
+# listed, still serving, and still carries the *previous* config -- so anything
+# selected by label alone can be answered by the change we just backed out.
+current_pods() { # app
+  local pod
+  for pod in $(${K} -n "${NS}" get pod -l "app=$1" -o jsonpath='{.items[*].metadata.name}'); do
+    [ -n "$(${K} -n "${NS}" get pod "${pod}" -o jsonpath='{.metadata.deletionTimestamp}')" ] && continue
+    echo "${pod}"
+  done
+}
+
 # The envoy image ships neither curl nor wget, but it has bash, so /dev/tcp is
 # the way in -- HTTP/1.1, because the admin listener answers 1.0 with 426.
-admin_get() { # deploy loopback port path
-  ${K} -n "${NS}" exec "deploy/$1" -c envoy -- bash -c \
+# Exec into a named current pod, never deploy/<name>: that resolves to whatever
+# pod kubectl picks, which mid-rollout may be the draining one.
+admin_get() { # app loopback port path
+  local pod
+  # Not `| head -1`: head exits at the first line, SIGPIPEs current_pods on the
+  # second, and under pipefail that sinks the assignment and trips errexit.
+  pod="$(current_pods "$1")"; pod="${pod%%$'\n'*}"
+  [ -n "${pod}" ] || return 0
+  ${K} -n "${NS}" exec "${pod}" -c envoy -- bash -c \
     "exec 3<>/dev/tcp/$2/$3; printf 'GET $4 HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n' >&3; cat <&3" \
     2>/dev/null | tr -d '\r'
 }
@@ -97,14 +115,22 @@ done
 echo "== admin sockets bound on :: (from the Envoy startup log) =="
 for app in atenet-router:9901 atenet-egress:15000; do
   a="${app%:*}"; port="${app#*:}"
-  # --all-containers: the router's Envoy is a child of the atenet-router
-  # process, so its startup log lands in that container, not in "envoy".
-  logs="$(${K} -n "${NS}" logs -l "app=${a}" --all-containers --tail=-1 2>/dev/null || true)"
-  if contains "${logs}" "admin address: \[::\]:${port}"; then
-    pass "${a}: admin address: [::]:${port}"
-  else
-    fail "${a}: no '[::]:${port}' admin line (v4-wildcard bind, or Envoy never started)"
-  fi
+  pods="$(current_pods "${a}")"
+  [ -n "${pods}" ] || { fail "${a}: no pods of the current generation"; continue; }
+  # Per pod, and every one has to say it. `logs -l app=` concatenates the
+  # draining previous generation's log into the same buffer, so a substring
+  # match there passes on the config we just backed out.
+  for pod in ${pods}; do
+    # --all-containers: the router's Envoy is a child of the atenet-router
+    # process, so its startup log lands in that container, not in "envoy".
+    logs="$(${K} -n "${NS}" logs "${pod}" --all-containers --tail=-1 2>/dev/null || true)"
+    if contains "${logs}" "admin address: \[::\]:${port}"; then
+      pass "${pod}: admin address: [::]:${port}"
+    else
+      fail "${pod}: no '[::]:${port}' admin line (v4-wildcard bind, or Envoy never started)"
+      grep -o 'admin address: [^ ]*' <<<"${logs}" | sort -u | sed 's/^/        envoy: /' || true
+    fi
+  done
 done
 
 echo "== IPv4 loopback still serves the admin socket =="
