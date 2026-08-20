@@ -320,7 +320,7 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
   * **Lifecycle Management**: The `ateom` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for micro-VMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
 
-  * **Storage Mover**: The `atelet` streams snapshots to and from GCS/S3, ensuring process state is persistent and portable across the cluster.
+  * **Storage Mover**: The `atelet` streams snapshots through a provider-neutral object storage interface, ensuring process state is persistent and portable across the cluster.
 
 ### Sandbox Classes
 
@@ -449,7 +449,7 @@ Triggered by an explicit `SuspendActor` call.
 
   1. **Checkpoint**: The `atelet` instructs `ateom` to freeze the process and capture a memory+disk snapshot.
 
-  2. **Persistence**: The `atelet` streams the snapshot from the pod to durable storage (e.g., GCS).
+  2. **Persistence**: The `atelet` streams the snapshot from the pod to durable object storage.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
@@ -482,9 +482,14 @@ In the current implementation, both memory and disk states are tied to the
 specific version of the code (ActorTemplate). This ensures strict consistency
 during resumption.
 
-Snapshots are stored durably in **Google Cloud Storage (GCS)**. This model
-allows the physical compute resources in the `WorkerPool` to be fully reclaimed
-while an actor is idle, without losing any process or filesystem progress.
+Snapshots are stored durably through a provider-neutral object storage
+interface. The built-in backends are Google Cloud Storage (`gcs`), S3-compatible
+storage (`s3`), and Azure Blob Storage (`azure`). Select one with
+`ATE_STORAGE_BACKEND`. Azure accepts either `AZURE_STORAGE_CONNECTION_STRING`
+or `AZURE_STORAGE_ACCOUNT_URL`; the account URL mode uses Azure's default
+credential chain. This model allows the physical compute resources in the
+`WorkerPool` to be fully reclaimed while an actor is idle, without losing any
+process or filesystem progress.
 
 ## Security & Isolation
 

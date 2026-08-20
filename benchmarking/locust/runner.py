@@ -15,7 +15,7 @@
 """Headless locust runner that publishes results as JSONL + CSVs.
 
 Runs locust with the given flags, converts the resulting stats CSV
-to JSONL, and uploads everything to either GCS or local disk under
+to JSONL, and uploads everything to object storage or local disk under
 <dest>/runs/<tag>/<timestamp>/.
 
 When the test target is glutton.py, also spawns the boomer-glutton Go
@@ -41,7 +41,8 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, TextIO
+from typing import IO, Protocol, TextIO
+from urllib.parse import urlsplit
 
 from common.boomer_config import build_config_json
 
@@ -371,23 +372,40 @@ def stats_to_jsonl(stats_csv: Path, jsonl_path: Path, timestamp: str, tag: str, 
     return rows_written
 
 
-def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
-    # Imported here so non-GCS use doesn't require google-cloud-storage.
-    from google.cloud import storage
+class StorageProvider(Protocol):
+    def upload(self, local_path: Path, destination: str) -> None: ...
 
-    bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
-    storage.Client().bucket(bucket_name).blob(blob_path).upload_from_filename(
-        str(local_path)
-    )
+
+class GCSStorageProvider:
+    def upload(self, local_path: Path, destination: str) -> None:
+        # Imported here so non-GCS use doesn't require google-cloud-storage.
+        from google.cloud import storage
+
+        parsed = urlsplit(destination)
+        storage.Client().bucket(parsed.netloc).blob(
+            parsed.path.lstrip("/")
+        ).upload_from_filename(str(local_path))
+
+
+_storage_providers: dict[str, StorageProvider] = {"gs": GCSStorageProvider()}
+
+
+def register_storage_provider(scheme: str, provider: StorageProvider) -> None:
+    _storage_providers[scheme] = provider
 
 
 def upload(src: Path, dest: str) -> None:
-    if dest.startswith("gs://"):
-        upload_to_gcs(src, dest)
-    else:
+    scheme = urlsplit(dest).scheme
+    if not scheme:
         dest_path = Path(dest)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src, dest_path)
+        return
+
+    provider = _storage_providers.get(scheme)
+    if provider is None:
+        raise ValueError(f"unsupported storage scheme: {scheme}")
+    provider.upload(src, dest)
 
 
 def main() -> None:
