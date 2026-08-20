@@ -367,7 +367,6 @@ def run_test(
         "TAG": commit,
         "NAME": name,
         "DEST": dest,
-        "ATE_ATEAPI_CLIENT_AUTH": os.environ.get("ATE_ATEAPI_CLIENT_AUTH", "cert"),
     }
     manifest = render_template(runner_job_tmpl, subs, test.get("flags", []))
     wait_for_no_active_runners()

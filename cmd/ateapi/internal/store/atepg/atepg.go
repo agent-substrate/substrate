@@ -313,7 +313,11 @@ func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi
 	return nil
 }
 
-func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning actor template update: %w", err)
@@ -334,6 +338,9 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	dbTemplate := &ateapipb.ActorTemplate{}
 	if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
+	}
+	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
+		return nil, err
 	}
 	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapipb.ActorTemplate)
 	if err := mutate(dbTemplate); err != nil {
@@ -523,7 +530,10 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 	return nil
 }
 
-func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	atespace, name := actorRef.Atespace, actorRef.Name
 
 	tx, err := p.pool.Begin(ctx)
@@ -546,6 +556,9 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	dbActor := &ateapipb.Actor{}
 	if err := proto.Unmarshal(protoBytes, dbActor); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
+	}
+	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
+		return nil, err
 	}
 	actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
 	if err := mutate(dbActor); err != nil {
@@ -975,7 +988,11 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 	return nil
 }
 
-func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning actor snapshot tag update: %w", err)
@@ -996,6 +1013,9 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 	dbTag := &ateapipb.ActorSnapshotTag{}
 	if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
+	}
+	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
+		return nil, err
 	}
 	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.ActorSnapshotTag)
 	if err := mutate(dbTag); err != nil {

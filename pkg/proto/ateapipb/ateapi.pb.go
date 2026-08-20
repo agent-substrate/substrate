@@ -3235,8 +3235,7 @@ type UpdateActorRequest struct {
 	// The actor to update.
 	// actor.metadata.atespace and actor.metadata.name identify which resource to
 	// update.
-	// actor.metadata.version and actor.metadata.uid are optional preconditions and
-	// zero values skip the check.
+	// actor.metadata.version and actor.metadata.uid are required preconditions.
 	Actor *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// The set of fields to update. Required.
 	//
@@ -3870,8 +3869,7 @@ type UpdateActorSnapshotTagRequest struct {
 	// The tag to update.
 	// tag.metadata.atespace and tag.metadata.name identify which resource to
 	// update.
-	// tag.metadata.version and tag.metadata.uid are optional preconditions
-	// and zero values skip the check.
+	// tag.metadata.version and tag.metadata.uid are required preconditions
 	Tag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
 	// The set of fields to update. Required.
 	//

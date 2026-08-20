@@ -26,37 +26,48 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-// With an identity dir, a read-only bind mount appears at IdentityMountPath.
-func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
+// Each system-info volume mount becomes a read-only bind mount whose source
+// is the per-actor on-host SystemInfoVolumeRoot for that volume name. It is
+// delivered as a bind mount rather than environment variables because env
+// lives in the checkpointed process memory and would be frozen at the golden
+// snapshot's values after a restore; a bind mount is re-attached per-actor on
+// every resume.
+func TestBuildActorOCISpec_SystemInfoVolumeMounts(t *testing.T) {
+	const actorUID = "actor_uid"
+	volumeMounts := []*ateletpb.VolumeMount{
+		{Name: "sysinfo", MountPath: "/run/ate"},
+	}
+	volumes := []*ateletpb.Volume{
+		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
+	}
 	spec := buildActorOCISpec(
-		"actor_uid", "app",
+		actorUID, "app",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
 		"/run/netns/x",
-		"/host/actors/actor_uid/identity",
-		nil,
-		nil,
+		volumes,
+		volumeMounts,
 		nil,
 	)
 	found := false
 	for _, m := range spec.Mounts {
-		if m.Destination != IdentityMountPath {
+		if m.Destination != "/run/ate" {
 			continue
 		}
 		found = true
-		if m.Source != "/host/actors/actor_uid/identity" {
-			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
+		if want := ateompath.SystemInfoVolumeRoot(actorUID, "sysinfo"); m.Source != want {
+			t.Errorf("system-info mount source = %q, want %q", m.Source, want)
 		}
 		if m.Type != "bind" {
-			t.Errorf("identity mount type = %q, want bind", m.Type)
+			t.Errorf("system-info mount type = %q, want bind", m.Type)
 		}
 		if !slices.Contains(m.Options, "ro") {
-			t.Errorf("identity mount must be read-only, options=%v", m.Options)
+			t.Errorf("system-info mount must be read-only, options=%v", m.Options)
 		}
 	}
 	if !found {
-		t.Fatalf("identity mount %q missing; mounts=%v", IdentityMountPath, spec.Mounts)
+		t.Fatalf("system-info mount %q missing; mounts=%v", "/run/ate", spec.Mounts)
 	}
 }
 
@@ -194,16 +205,6 @@ func TestResolveProcessArgs(t *testing.T) {
 	}
 }
 
-// Without an identity dir (the pause container), no identity mount appears.
-func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("actor_uid", "app", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil, nil)
-	for _, m := range bare.Mounts {
-		if m.Destination == IdentityMountPath {
-			t.Errorf("identity mount must be absent when identityDir is empty")
-		}
-	}
-}
-
 // Each durable-dir volume mount becomes a bind mount whose source is the
 // per-actor on-host DurableDirVolumeMountPoint for that volume name.
 func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
@@ -213,14 +214,13 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		{Name: "cache", MountPath: "/var/cache"},
 	}
 	volumes := []*ateletpb.Volume{
-		{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-		{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+		{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 	}
 	spec := buildActorOCISpec(
 		actorUID, "app",
 		[]string{"/app"}, nil, nil,
 		"/run/netns/x",
-		"",
 		volumes,
 		durableDirs,
 		nil,
@@ -250,8 +250,8 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 // An image volume binds the layer directory resolved for it, read-only.
 func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
 	volumes := []*ateletpb.Volume{
-		{Name: "agent", Type: ateletpb.VolumeType_VOLUME_TYPE_IMAGE},
-		{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+		{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
+		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 	}
 	mounts := []*ateletpb.VolumeMount{
 		{Name: "agent", MountPath: "/ate"},
@@ -261,7 +261,6 @@ func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
 		"actor_uid", "app",
 		[]string{"/ate/payload-binary"}, nil, nil,
 		"/run/netns/x",
-		"",
 		volumes,
 		mounts,
 		nil,
@@ -368,7 +367,7 @@ func TestResolveCapabilities(t *testing.T) {
 // ambient stay empty — see the comment in buildActorOCISpec.
 func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 	want := []string{"CAP_CHOWN", "CAP_KILL"}
-	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", "", nil, nil, want)
+	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -401,7 +400,7 @@ func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 
 // The pause container only reaps, so it is built with no capabilities at all.
 func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
-	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil, nil)
+	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {

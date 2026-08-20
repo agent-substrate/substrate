@@ -78,13 +78,13 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, actor.GetStatus().GetState())
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
 		for _, vol := range toUpdate.GetStatus().GetActorVolumes() {
 			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 		}
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

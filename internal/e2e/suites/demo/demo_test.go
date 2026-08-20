@@ -155,20 +155,19 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef})
 	})
-	if _, err := clients.SubstrateAPI.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
+	tagToUpdate, err := clients.SubstrateAPI.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
 			Snapshot: snapshotRef,
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to tag ActorSnapshot: %v", err)
 	}
+	tagToUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-		},
+		Tag:        tagToUpdate,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	}); err != nil {
 		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)

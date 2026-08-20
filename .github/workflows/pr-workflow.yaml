@@ -78,11 +78,11 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth=cert --store-backend=postgres
+      run: hack/install-ate-kind.sh --deploy-ate-system --store-backend=postgres
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=cert
+      run: hack/run-microvm-demo-kind.sh
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Deploy egress demos

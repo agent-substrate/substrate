@@ -677,8 +677,7 @@ message UpdateActorRequest {
   // The actor to update.
   // actor.metadata.atespace and actor.metadata.name identify which resource to
   // update.
-  // actor.metadata.version and actor.metadata.uid are optional preconditions and
-  // zero values skip the check.
+  // actor.metadata.version and actor.metadata.uid are required preconditions.
   Actor actor = 1;
 
   // The set of fields to update. Required.
@@ -753,8 +752,7 @@ message UpdateActorSnapshotTagRequest {
   // The tag to update.
   // tag.metadata.atespace and tag.metadata.name identify which resource to
   // update.
-  // tag.metadata.version and tag.metadata.uid are optional preconditions
-  // and zero values skip the check.
+  // tag.metadata.version and tag.metadata.uid are required preconditions
   ActorSnapshotTag tag = 1;
 
   // The set of fields to update. Required.

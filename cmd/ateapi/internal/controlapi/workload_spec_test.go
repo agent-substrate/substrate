@@ -55,7 +55,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -66,6 +65,72 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						VolumeMounts: []*ateletpb.VolumeMount{
 							{Name: "home", MountPath: "/home/user"},
 							{Name: "home", MountPath: "/workspace"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "converts SystemInfo volume with actorMetadata items",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{
+							Name: "system-info",
+							VolumeSource: atev1alpha1.VolumeSource{
+								SystemInfo: &atev1alpha1.SystemInfoVolumeSource{
+									DataSources: []atev1alpha1.SystemInfoDataSource{
+										{ActorMetadata: &atev1alpha1.ActorMetadataDataSource{
+											Items: []atev1alpha1.ActorMetadataItem{
+												{Field: atev1alpha1.ActorMetadataFieldName, Path: "actor-name"},
+												{Field: atev1alpha1.ActorMetadataFieldAtespace, Path: "atespace"},
+												{Field: atev1alpha1.ActorMetadataFieldUID, Path: "identity/actor-uid"},
+											},
+										}},
+									},
+								},
+							},
+						},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "system-info", MountPath: "/run/ate"},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name: "system-info",
+						Source: &ateletpb.Volume_SystemInfo{
+							SystemInfo: &ateletpb.SystemInfoVolume{
+								DataSources: []*ateletpb.SystemInfoDataSource{
+									{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+										ActorMetadata: &ateletpb.ActorMetadataDataSource{
+											Items: []*ateletpb.ActorMetadataItem{
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+											},
+										},
+									}},
+								},
+							},
+						},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "system-info", MountPath: "/run/ate"},
 						},
 					},
 				},
@@ -96,12 +161,10 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 					{
 						Name:   "agent",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_IMAGE,
 						Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}},
 					},
 				},
@@ -141,7 +204,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -173,7 +235,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -356,7 +417,6 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Volumes: []*ateletpb.Volume{
 			{
 				Name: "vol-1",
-				Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 				Source: &ateletpb.Volume_External{
 					External: &ateletpb.ExternalVolumeSource{
 						StorageVolumeId: "vol-gce-pd-123",

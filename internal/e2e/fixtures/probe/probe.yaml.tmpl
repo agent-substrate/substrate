@@ -45,10 +45,25 @@ metadata:
   namespace: ate-e2e-probe${FIXTURE_SUFFIX}
 spec:
 ${TEMPLATE_SANDBOX_CLASS}
+  volumes:
+  - name: system-info
+    systemInfo:
+      dataSources:
+      - actorMetadata:
+          items:
+          - field: name
+            path: actor-id
+          - field: atespace
+            path: atespace
+          - field: uid
+            path: actor-uid
   containers:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
     command: ["/ko-app/probe"]
+    volumeMounts:
+    - name: system-info
+      mountPath: /run/ate   # the probe reads /run/ate/actor-id
     # The probe binary binds :80 immediately, so this gates actor start on a
     # readiness signal rather than a guess, and carries a non-default
     # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom

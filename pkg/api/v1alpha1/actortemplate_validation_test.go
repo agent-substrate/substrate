@@ -668,7 +668,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image systemInfo] must be set",
 	}, {
 		name: "Volumes: an unmounted Image volume is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -848,7 +848,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image systemInfo] must be set",
 	}, {
 		name: "Volumes: VolumeSource with no source set is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -857,7 +857,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image systemInfo] must be set",
 	}, {
 		name: "Volumes: VolumeSource with no source set is invalid (mixed with a valid DurableDir volume)",
 		mutate: func(at *ActorTemplate) {
@@ -871,7 +871,221 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate image systemInfo] must be set",
+	}, {
+		name: "Volumes: SystemInfo volume projecting all actor metadata fields is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{
+										{Field: ActorMetadataFieldName, Path: "actor-name"},
+										{Field: ActorMetadataFieldAtespace, Path: "atespace"},
+										{Field: ActorMetadataFieldUID, Path: "identity/actor-uid"},
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/ate"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: SystemInfo data source with no member set is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{{}},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "exactly one of the fields in [actorMetadata] must be set",
+	}, {
+		name: "Volumes: SystemInfo actorMetadata with no items is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{Items: []ActorMetadataItem{}}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+	}, {
+		name: "Volumes: SystemInfo item with unknown field is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{
+										{Field: ActorMetadataField("hostname"), Path: "hostname"},
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+	}, {
+		name: "Volumes: SystemInfo item with empty path is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{
+										{Field: ActorMetadataFieldName, Path: ""},
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+	}, {
+		name: "Volumes: SystemInfo item with absolute path is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{
+										{Field: ActorMetadataFieldName, Path: "/etc/actor-name"},
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "path must be a clean relative Unix path",
+	}, {
+		name: "Volumes: SystemInfo item with path traversal is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{
+										{Field: ActorMetadataFieldName, Path: "../escape"},
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "path must be a clean relative Unix path",
+	}, {
+		name: "Volumes: SystemInfo items projecting the same field twice are invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{
+										{Field: ActorMetadataFieldName, Path: "actor-name"},
+										{Field: ActorMetadataFieldName, Path: "name-again"},
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "items must not project the same field twice",
+	}, {
+		name: "Volumes: SystemInfo items with duplicate paths are invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{
+										{Field: ActorMetadataFieldName, Path: "actor-name"},
+										{Field: ActorMetadataFieldUID, Path: "actor-name"},
+									},
+								}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "items must not contain duplicate paths",
+	}, {
+		name: "Volumes: SystemInfo with two actorMetadata entries is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{{Field: ActorMetadataFieldName, Path: "actor-name"}},
+								}},
+								{ActorMetadata: &ActorMetadataDataSource{
+									Items: []ActorMetadataItem{{Field: ActorMetadataFieldUID, Path: "actor-uid"}},
+								}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "dataSources must contain at most one actorMetadata entry",
 	}, {
 		name: "Volumes: DurableDir MountPath with nested absolute path is valid",
 		mutate: func(at *ActorTemplate) {

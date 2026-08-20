@@ -105,7 +105,6 @@ func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 
 	volumes := []*ateletpb.Volume{{
 		Name:   "agent",
-		Type:   ateletpb.VolumeType_VOLUME_TYPE_IMAGE,
 		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: ref}},
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
@@ -140,7 +139,6 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 
 	volumes := []*ateletpb.Volume{{
 		Name:   "agent",
-		Type:   ateletpb.VolumeType_VOLUME_TYPE_IMAGE,
 		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: ref}},
 	}}
 	mounts := []*ateletpb.VolumeMount{{Name: "agent", MountPath: "/ate"}}
@@ -164,7 +162,6 @@ func TestResolveImageVolumes_MultiLayer(t *testing.T) {
 func TestResolveImageVolumes_UnmountedVolumeNotPulled(t *testing.T) {
 	volumes := []*ateletpb.Volume{{
 		Name:   "agent",
-		Type:   ateletpb.VolumeType_VOLUME_TYPE_IMAGE,
 		Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "127.0.0.1:1/nope@sha256:abc"}},
 	}}
 

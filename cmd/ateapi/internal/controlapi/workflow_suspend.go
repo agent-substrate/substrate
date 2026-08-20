@@ -137,12 +137,12 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if _, err := inProgressSnapshotURI(actorTemplate, actorRef.Atespace, name); err != nil {
 		return nil, err
 	}
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 		toUpdate.Status.InProgressSnapshotSourceActorVersion = toUpdate.GetMetadata().GetVersion()
 		toUpdate.Status.InProgressSnapshotName = name
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -404,7 +404,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			return nil, err
 		}
 	}
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		if snapshotName != "" {
 			toUpdate.Status.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snapshotName}
@@ -414,7 +414,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.LocalSnapshotInfo = nil
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

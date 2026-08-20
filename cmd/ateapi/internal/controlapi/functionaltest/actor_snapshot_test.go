@@ -24,7 +24,23 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
-// TestUpdateActorSnapshotTag_Preconditions verifies the optional version and uid
+// tagActorSnapshot points tagName at snapshotRef with atespace scope.
+func tagActorSnapshot(t *testing.T, tc *testContext, snapshotRef *ateapipb.ObjectRef, tagName string) *ateapipb.ActorSnapshotTag {
+	t.Helper()
+	tag, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Snapshot: snapshotRef,
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorSnapshotTag(%s) failed: %v", tagName, err)
+	}
+	return tag
+}
+
+// TestUpdateActorSnapshotTag_Preconditions verifies the required version and uid
 // guards carried in the tag's metadata.
 func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	ns := namespaceForTest("ns-update-tag-preconditions")
@@ -35,12 +51,22 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 
 	ctx := context.Background()
 	const snapshotName, tagName = "snapshot-1", "before-upgrade"
-	snapshotRef := createActorSnapshot(t, tc, snapshotName)
+	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: snapshotName},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/" + snapshotName},
+	}); err != nil {
+		t.Fatalf("CreateActorSnapshot(%s) failed: %v", snapshotName, err)
+	}
+	snapshotRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: snapshotName}
 
 	// Each call to update() flips the scope, so every accepted update is an
 	// observable write that bumps the version.
 	update := func(meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
-		return updateActorSnapshotTagScope(tc, tagName, meta, scope)
+		meta.Atespace, meta.Name = testAtespace, tagName
+		return tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
+			Tag:        &ateapipb.ActorSnapshotTag{Metadata: meta, Scope: scope},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+		})
 	}
 
 	// Delete and recreate the same atespace/name tag, so the first lifecycle's
@@ -58,31 +84,36 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	if uid == staleUID {
 		t.Fatalf("recreated tag reused uid %s, want a fresh one", uid)
 	}
+	// No preconditions
+	_, err := update(&ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	assertGrpcError(t, err, codes.InvalidArgument, "[tag.metadata.uid: Required value, tag.metadata.version: Required value]")
+
 	// The uid from the deleted lifecycle must be rejected, even though the
-	// atespace/name it was observed under still resolves.
-	_, err := update(&ateapipb.ResourceMetadata{Uid: staleUID}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	// atespace/name it was observed under still resolves and the version it
+	// guards on matches the recreated tag's.
+	_, err = update(&ateapipb.ResourceMetadata{Uid: staleUID, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
 	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("ActorSnapshot tag %s/%s not found with uid %s", testAtespace, tagName, staleUID))
 
-	// An unguarded update is last-writer-wins, and moves the tag past the
-	// version observed above.
-	unguarded, err := update(&ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	// Both guards matching the observed state: the update goes through, and
+	// moves the tag past the version observed above.
+	first, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
 	if err != nil {
-		t.Fatalf("UpdateActorSnapshotTag(no guards) failed: %v", err)
+		t.Fatalf("UpdateActorSnapshotTag(matching guards) failed: %v", err)
 	}
-	currentVersion := unguarded.GetMetadata().GetVersion()
+	currentVersion := first.GetMetadata().GetVersion()
 	if currentVersion <= staleVersion {
 		t.Fatalf("version = %d, want greater than %d after an update", currentVersion, staleVersion)
 	}
-	if got, want := unguarded.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED; got != want {
+	if got, want := first.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED; got != want {
 		t.Errorf("scope = %v, want %v", got, want)
 	}
 
 	// The version observed before that write is now stale: rejected rather than
 	// silently overwriting the concurrent change.
-	_, err = update(&ateapipb.ResourceMetadata{Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
+	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 
-	// Both uid and version matching the observed state: the update goes through.
+	// Guarding on the version the last write produced succeeds again.
 	updated, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
 	if err != nil {
 		t.Fatalf("UpdateActorSnapshotTag(matching guards) failed: %v", err)
@@ -95,7 +126,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	}
 
 	// The guard the client just satisfied is now stale in turn.
-	_, err = update(&ateapipb.ResourceMetadata{Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 }
 
@@ -106,8 +137,14 @@ func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
 
 	_, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
 		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "does-not-exist"},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     "does-not-exist",
+				// Well-formed guards to pass preconditions validation
+				Uid:     "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+				Version: 1,
+			},
+			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 		},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})

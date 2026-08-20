@@ -27,30 +27,58 @@ import (
 func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
 	workloadSpec := &ateletpb.WorkloadSpec{}
 
-	// add volumes
+	// Convert volumes to atelet's representation.  ActorTemplate validation has
+	// already ensured that only one source is set.
 	for _, vol := range actorTemplate.Spec.Volumes {
-		// volume is durable-dir type
-		if vol.VolumeSource.DurableDir != nil {
+		switch {
+		case vol.VolumeSource.DurableDir != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
-				Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 				Source: &ateletpb.Volume_DurableDir{
 					DurableDir: &ateletpb.DurableDirVolume{},
 				},
 			})
-		}
 
-		// volume is image type
-		if vol.VolumeSource.Image != nil {
+		case vol.VolumeSource.SystemInfo != nil:
+			ateletSystemInfo := &ateletpb.SystemInfoVolume{}
+			for _, dataSource := range vol.VolumeSource.SystemInfo.DataSources {
+				switch {
+				case dataSource.ActorMetadata != nil:
+					actorMetadata := &ateletpb.ActorMetadataDataSource{}
+					for _, item := range dataSource.ActorMetadata.Items {
+						actorMetadata.Items = append(actorMetadata.Items, &ateletpb.ActorMetadataItem{
+							Field: toAteletActorMetadataField(item.Field),
+							Path:  item.Path,
+						})
+					}
+					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
+						DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+							ActorMetadata: actorMetadata,
+						},
+					})
+				default:
+					continue // Drop unrecognized data sources
+				}
+			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
-				Type: ateletpb.VolumeType_VOLUME_TYPE_IMAGE,
+				Source: &ateletpb.Volume_SystemInfo{
+					SystemInfo: ateletSystemInfo,
+				},
+			})
+
+		case vol.VolumeSource.Image != nil:
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name: vol.Name,
 				Source: &ateletpb.Volume_Image{
 					Image: &ateletpb.ImageVolumeSource{
 						Reference: vol.VolumeSource.Image.Reference,
 					},
 				},
 			})
+
+		default:
+			continue // Drop unrecognized volumes.
 		}
 	}
 
@@ -118,7 +146,6 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *atev1a
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
-				Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 				Source: &ateletpb.Volume_External{
 					External: &ateletpb.ExternalVolumeSource{
 						StorageVolumeId: storageVolID,
@@ -146,6 +173,22 @@ func isVolumeMounted(volumeName string, template *atev1alpha1.ActorTemplate) boo
 // toAteletReadyz projects the CRD readyz field onto the ateletpb wire type.
 // Returns nil when the source is nil so containers without a probe stay
 // unchanged on the wire.
+// toAteletActorMetadataField projects the CRD field selector onto the atelet
+// wire enum. Unknown values map to UNSPECIFIED, which atelet skips; CRD enum
+// validation makes that unreachable for stored templates.
+func toAteletActorMetadataField(in atev1alpha1.ActorMetadataField) ateletpb.ActorMetadataField {
+	switch in {
+	case atev1alpha1.ActorMetadataFieldName:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME
+	case atev1alpha1.ActorMetadataFieldAtespace:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE
+	case atev1alpha1.ActorMetadataFieldUID:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID
+	default:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED
+	}
+}
+
 func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 	if in == nil {
 		return nil

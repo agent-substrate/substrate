@@ -323,14 +323,14 @@ type conflictInjectingStore struct {
 	inject func()
 }
 
-func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	c.once.Do(c.inject)
-	return c.Interface.UpdateActor(ctx, actorRef, mutate)
+	return c.Interface.UpdateActor(ctx, actorRef, precondition, mutate)
 }
 
-func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	c.once.Do(c.inject)
-	return c.Interface.UpdateActorSnapshotTag(ctx, atespace, name, mutate)
+	return c.Interface.UpdateActorSnapshotTag(ctx, atespace, name, precondition, mutate)
 }
 
 // seedAssignFixture stores one free gvisor worker and a SUSPENDED actor and
@@ -413,15 +413,12 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 					t.Errorf("inject GetActor: %v", err)
 					return
 				}
-				// Pins the version alone: the observed actor carries the version
-				// just read and no uid.
-				pinVersion := &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Uid: store.AnyUID, Version: fresh.GetMetadata().GetVersion()},
-				}
-				injected, err = persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.WithPrecondition(pinVersion, func(toUpdate *ateapipb.Actor) error {
+				// Guards on the uid and version just read, so the racing
+				// write lands and the attempt under test is the one that loses.
+				injected, err = persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.PreconditionFrom(fresh), func(toUpdate *ateapipb.Actor) error {
 					tc.mutate(toUpdate)
 					return nil
-				}))
+				})
 				if err != nil {
 					t.Errorf("inject UpdateActor: %v", err)
 				}

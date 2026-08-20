@@ -56,12 +56,91 @@ type ExternalVolumeTemplate struct {
 	StorageClassName string `json:"storageClassName"`
 }
 
+// ActorMetadataField selects one identity field of the actor, following the
+// resource identity model (see docs/api-style-guide.md#2-resource-naming-and-identity).
+//
+// +kubebuilder:validation:Enum=name;atespace;uid
+type ActorMetadataField string
+
+const (
+	// ActorMetadataFieldName is the actor's metadata.name, unique within its
+	// atespace.
+	ActorMetadataFieldName ActorMetadataField = "name"
+	// ActorMetadataFieldAtespace is the atespace the actor belongs to.
+	ActorMetadataFieldAtespace ActorMetadataField = "atespace"
+	// ActorMetadataFieldUID is the actor's server-generated UID, which
+	// distinguishes incarnations of the same (atespace, name).
+	ActorMetadataFieldUID ActorMetadataField = "uid"
+)
+
+// ActorMetadataItem projects one actor identity field to one file.
+type ActorMetadataItem struct {
+	// Field selects which identity field to project.
+	//
+	// +required
+	Field ActorMetadataField `json:"field"`
+
+	// Relative path from the root of the SystemInfo volume at which the
+	// field's value is written. Must be a clean relative Unix path: must not
+	// start or end with '/', and contain no ':', '..', '.', '//', or control
+	// characters.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: must not start or end with '/', and contain no ':', '..', '.', '//', or control characters"
+	Path string `json:"path"`
+}
+
+// ActorMetadataDataSource is a SystemInfo volume data source that projects the
+// actor's identity fields (name, atespace, uid) to files, one per item —
+// analogous to the Kubernetes downwardAPI volume. Values are written raw with
+// no trailing newline, and are fixed for the actor's lifetime across
+// suspend/resume/migration.
+type ActorMetadataDataSource struct {
+	// Items is the list of fields to project and the file path each is
+	// written to.
+	//
+	// +required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=8
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.field == x.field))",message="items must not project the same field twice"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.path == x.path))",message="items must not contain duplicate paths"
+	Items []ActorMetadataItem `json:"items"`
+}
+
+// SystemInfoDataSource is a container allowing you to pick a particular
+// SystemInfo data source.
+//
+// Exactly one member must be set.
+//
+// +kubebuilder:validation:ExactlyOneOf={actorMetadata}
+type SystemInfoDataSource struct {
+	ActorMetadata *ActorMetadataDataSource `json:"actorMetadata,omitempty"`
+}
+
+// Represents a system information volume, which provides files containing
+// substrate-generated per-actor data such as the actor's identity fields
+// (and, in the future, identity JWTs and certificates).
+type SystemInfoVolumeSource struct {
+	// DataSources is the list of data sources to place within the SystemInfo
+	// volume.
+	//
+	// At most one actorMetadata entry may appear; this is what keeps file
+	// paths unique across the whole volume (uniqueness within the entry is
+	// enforced on its items).
+	//
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:XValidation:rule="self.filter(x, has(x.actorMetadata)).size() <= 1",message="dataSources must contain at most one actorMetadata entry"
+	DataSources []SystemInfoDataSource `json:"dataSources,omitempty"`
+}
+
 // Represents the source of a volume to mount.
 // Exactly one of its members must be specified.
 //
 // When adding a new source type, list it in the ExactlyOneOf marker below.
 //
-// +kubebuilder:validation:ExactlyOneOf={durableDir,externalVolumeTemplate,image}
+// +kubebuilder:validation:ExactlyOneOf={durableDir,externalVolumeTemplate,image,systemInfo}
 type VolumeSource struct {
 	// durableDir represents a durable directory on rootfs that persists across
 	// resumes and participates in snapshots.
@@ -77,6 +156,11 @@ type VolumeSource struct {
 	// when the actor is deleted.
 	// +optional
 	ExternalVolumeTemplate *ExternalVolumeTemplate `json:"externalVolumeTemplate,omitempty"`
+
+	// systemInfo configures a system information volume.
+	//
+	// +optional
+	SystemInfo *SystemInfoVolumeSource `json:"systemInfo,omitempty"`
 }
 
 type Volume struct {

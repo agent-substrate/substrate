@@ -66,7 +66,6 @@ function usage() {
   echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
-  echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
   echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
@@ -166,18 +165,6 @@ run_ko() {
   esac
 }
 
-ateapi_client_auth() {
-  case "${ATE_ATEAPI_CLIENT_AUTH:-cert}" in
-    cert|token)
-      echo "${ATE_ATEAPI_CLIENT_AUTH:-cert}"
-      ;;
-    *)
-      echo "Error: ATE_ATEAPI_CLIENT_AUTH must be cert or token, got '${ATE_ATEAPI_CLIENT_AUTH}'" >&2
-      exit 1
-      ;;
-  esac
-}
-
 atenet_router() {
   case "${ATE_ATENET_ROUTER:-envoy}" in
     envoy|agentgateway)
@@ -208,30 +195,13 @@ default_postgres_connection_string() {
 }
 
 render_ate_system_manifests() {
-  local client_auth=""
   local router=""
-  client_auth="$(ateapi_client_auth)"
   router="$(atenet_router)"
 
   if [[ "${router}" == "agentgateway" ]]; then
     local overlay="manifests/ate-install/agentgateway"
-    if [[ "${client_auth}" == "token" ]]; then
-      overlay="manifests/ate-install/agentgateway-token-client"
-    fi
     if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
       overlay="manifests/ate-install/kind-agentgateway"
-      if [[ "${client_auth}" == "token" ]]; then
-        overlay="manifests/ate-install/kind-agentgateway-token-client"
-      fi
-    fi
-    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
-    return
-  fi
-
-  if [[ "${client_auth}" == "token" ]]; then
-    local overlay="manifests/ate-install/token-client"
-    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-      overlay="manifests/ate-install/kind-token-client"
     fi
     kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
     return
@@ -623,8 +593,8 @@ deploy_ate_system() {
 
   wait_for_podcertificate_trust_bundles
 
-  # The existing Kind and token-client overlays include Valkey but do not
-  # include the opt-in PostgreSQL manifest. Apply PostgreSQL explicitly when
+  # The Kind overlays include Valkey but do not include the opt-in PostgreSQL
+  # manifest. Apply PostgreSQL explicitly when
   # selected so backend configuration and deployed resources cannot diverge.
   # Store-specific overlay composition can remove the unused Valkey resources
   # in a separate change.
@@ -942,14 +912,6 @@ BENCHMARK_ACTOR_MEMORY=""
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
   case "${prescan_args[i]}" in
-    --ateapi-client-auth=*) ATE_ATEAPI_CLIENT_AUTH="${prescan_args[i]#*=}" ;;
-    --ateapi-client-auth)
-      if (( i + 1 >= ${#prescan_args[@]} )); then
-        echo "Error: --ateapi-client-auth requires cert or token" >&2
-        exit 1
-      fi
-      ATE_ATEAPI_CLIENT_AUTH="${prescan_args[$((i + 1))]}"
-      ;;
     --atenet-router=*) ATE_ATENET_ROUTER="${prescan_args[i]#*=}" ;;
     --atenet-router)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1030,15 +992,6 @@ while [[ "$#" -gt 0 ]]; do
   done
 
   case $1 in
-    --ateapi-client-auth=*) ATE_ATEAPI_CLIENT_AUTH="${1#*=}" ;;
-    --ateapi-client-auth)
-      shift
-      if [[ "$#" -eq 0 ]]; then
-        echo "Error: --ateapi-client-auth requires cert or token" >&2
-        exit 1
-      fi
-      ATE_ATEAPI_CLIENT_AUTH="$1"
-      ;;
     --atenet-router=*) ATE_ATENET_ROUTER="${1#*=}" ;;
     --atenet-router)
       shift

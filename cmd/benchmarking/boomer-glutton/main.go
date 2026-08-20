@@ -44,7 +44,6 @@ func main() {
 		promAddr      = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
 		configJSON    = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds, durdir_file_size_bytes, resume_mode, durdir_read_mode, durdir_template). Unset fields keep their built-in defaults.")
 		masterWebPort = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message and fail fatally on error. {master-host} comes from boomer's existing --master-host flag.")
-		useTokenAuth  = flag.Bool("use-token-auth", false, "Use Kubernetes ServiceAccount token for ateapi auth instead of client certificate.")
 		userClass     = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
@@ -74,7 +73,7 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	conn, apiStub, err := glutton.DialControl(*apiEndpoint, *useTokenAuth)
+	conn, apiStub, err := glutton.DialControl(*apiEndpoint)
 	if err != nil {
 		slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
 		os.Exit(1)

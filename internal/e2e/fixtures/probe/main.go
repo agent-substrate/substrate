@@ -24,6 +24,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -32,9 +33,13 @@ import (
 	"strings"
 )
 
-// identityFile is the actor-id file inside the identity directory atelet
-// bind-mounts at IdentityMountPath.
-const identityFile = "/run/ate/actor-id"
+// The actorMetadata data-source files of the systemInfo volume that
+// probe.yaml.tmpl mounts at /run/ate.
+const (
+	identityFile = "/run/ate/actor-id"
+	atespaceFile = "/run/ate/atespace"
+	uidFile      = "/run/ate/actor-uid"
+)
 
 // procStatus is where the kernel reports this process's capability sets. Asking
 // the kernel — rather than reading back the OCI spec atelet wrote — is the whole
@@ -145,6 +150,15 @@ func capabilities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, resp)
 }
 
+// heldIdentity is identityFile opened at startup and held open for the
+// probe's whole life, deliberately violating the read-at-time-of-use
+// guidance. It exists so a snapshot taken after startup carries live guest
+// file state for a system-info file, and a restore must re-bind it (virtiofsd
+// find-paths / gofer re-open by path). whoami reads through it on every
+// request; after a restore from a shared golden snapshot the read must
+// succeed and yield the restored actor's own id, not the golden's.
+var heldIdentity *os.File
+
 // whoami reports the actor's identity as observed at request time from the
 // bind-mounted identity file. A read failure is reported in the response
 // rather than swallowed, so a failing e2e assertion explains itself.
@@ -152,11 +166,27 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 	host, _ := os.Hostname()
 
 	resp := map[string]string{"hostname": host}
-	if b, err := os.ReadFile(identityFile); err == nil {
-		resp["file"] = string(b)
+	for key, path := range map[string]string{
+		"file":     identityFile,
+		"atespace": atespaceFile,
+		"uid":      uidFile,
+	} {
+		if b, err := os.ReadFile(path); err == nil {
+			resp[key] = string(b)
+		} else {
+			resp[key] = ""
+			// Concatenate: a failed assertion should explain every missing file.
+			resp["error"] += err.Error() + "; "
+		}
+	}
+
+	resp["held"] = ""
+	if heldIdentity == nil {
+		resp["error"] += "identity file was not open at startup; "
+	} else if b, err := readAllAt(heldIdentity); err == nil {
+		resp["held"] = string(b)
 	} else {
-		resp["file"] = ""
-		resp["error"] = err.Error()
+		resp["error"] += "reading held identity fd: " + err.Error() + "; "
 	}
 
 	writeJSON(w, resp)
@@ -184,6 +214,17 @@ func writefile(w http.ResponseWriter, r *http.Request) {
 		resp["ok"] = "true"
 	}
 	writeJSON(w, resp)
+}
+
+// readAllAt reads f's full contents from offset 0 without moving its offset,
+// so concurrent requests do not interleave seeks on the shared fd.
+func readAllAt(f *os.File) ([]byte, error) {
+	buf := make([]byte, 4096)
+	n, err := f.ReadAt(buf, 0)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	return buf[:n], nil
 }
 
 // resources reports the compute envelope the actor observes from inside the
@@ -254,6 +295,15 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func main() {
+	// Hold the identity file open before serving: every snapshot of this actor
+	// then contains an open guest handle on a system-info file (see
+	// heldIdentity).
+	if f, err := os.Open(identityFile); err == nil {
+		heldIdentity = f
+	} else {
+		log.Printf("probe: opening %s at startup: %v", identityFile, err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
 	mux.HandleFunc("/readfile", readfile)

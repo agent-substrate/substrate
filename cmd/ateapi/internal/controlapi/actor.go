@@ -283,10 +283,10 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	actorRef := resources.ActorRefFromActor(in)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(in, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
 		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -296,6 +296,9 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "actor %s not found", actorRef)
+		}
+		if errors.Is(err, store.ErrPreconditionRequired) {
+			return nil, status.Errorf(codes.InvalidArgument, "while updating actor %s: %v", actorRef, err)
 		}
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
@@ -314,7 +317,7 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 		return field.ErrorList{field.Required(actorPath, "")}
 	}
 
-	errs = append(errs, resources.ValidateResourceMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
+	errs = append(errs, resources.ValidateUpdateMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
 
 	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorMutableFields, fldPath.Child("update_mask"))...)
 

@@ -151,7 +151,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `sandboxClass` | `string` | Optional. The sandbox runtime family this template's actors require: `gvisor` (default) or `microvm`. Only `WorkerPool`s whose `sandboxClass` matches are eligible. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
-| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each either a `durableDir` or an `externalVolumeTemplate`. Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one, and `externalVolumeTemplate` is `gvisor`-only. |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate`, or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one, and `externalVolumeTemplate` is `gvisor`-only. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-specresources). Immutable, like the rest of the spec. |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — is **not configured on the `ActorTemplate`**. It is resolved from the referenced `WorkerPool`'s [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) — by name (`workerPool.spec.sandboxConfigName`) or, by default, the cluster default `SandboxConfig` for the pool's `sandboxClass`.
@@ -177,10 +177,38 @@ Substrate uses a **Uniform DNS Mesh**: every actor created from a template is au
 
 **Format:** `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`
 
-### Actor Identity
-Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`** into each of the actor's containers. An actor can learn its own name without parsing the `Host` header by reading the file **`/run/ate/actor-id`** inside it, which contains the raw actor name with no trailing newline. Further identity and configuration data may appear in this directory over time.
+### SystemInfo Volumes
 
-Read it fresh rather than caching it at process start. It is delivered as a per-actor bind mount, not an environment variable, precisely so it carries the correct name after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's name, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
+To deliver identity information, including credentials, to a running actor, you can use a SystemInfo volume. Define it in `spec.volumes`, and mount it into each container that needs it.
+
+Available information sources:
+
+#### actorMetadata
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity and DNS name), or `uid` (server-generated, distinguishes incarnations of the same name) — and the relative `path` the value is written to, raw with no trailing newline.
+
+```yaml
+spec:
+  volumes:
+  - name: system-info
+    systemInfo:
+      dataSources:
+      - actorMetadata:
+          items:
+          - field: name
+            path: actor-name
+          - field: atespace
+            path: atespace
+          - field: uid
+            path: actor-uid
+  containers:
+  - name: main
+    # ...
+    volumeMounts:
+    - name: system-info
+      mountPath: /run/ate   # the actor reads e.g. /run/ate/actor-name
+```
+
+The values are delivered as files on a read-only per-actor bind mount, not environment variables, precisely so they carry the correct values after a resume from a shared snapshot — an env var (or a file baked into the image) would be frozen at the snapshot-source actor's values, since it lives in the checkpointed process memory, and would therefore be identical for every actor restored from that snapshot. The metadata fields themselves are fixed for the actor's lifetime, so workloads may cache them; future data sources that rotate (identity tokens and certificates) must be re-read at time of use.
 
 ### Container Fields
 
@@ -382,7 +410,17 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); `actor_template_namespace` and `actor_template_name` select the `ActorTemplate`.
-*   **Response:** `CreateActorResponse` containing the initialized `Actor` object.
+*   **Response:** the initialized `Actor`.
+
+#### `UpdateActor`
+Changes mutable fields on an existing actor.
+*   **Request:** `UpdateActorRequest`
+    *   `actor`: `Actor` — `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions.
+    *   `update_mask`: **required**, and must list only mutable paths (currently just `worker_selector`). `*` is not accepted, and fields outside the mask are left untouched.
+*   **Response:** the updated `Actor`.
+*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the mask is missing/empty/names an immutable path; `ABORTED` if either guard no longer matches the stored resource.
+
+Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 
 #### `ResumeActor`
 Activates a suspended actor by restoring it onto a physical worker.
@@ -401,7 +439,8 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
 Removes an actor from the registry.
 *   **Constraints:** Only actors in `ACTOR_STATE_SUSPENDED` can be deleted.
 *   **Request:** `DeleteActorRequest`
-*   **Response:** `DeleteActorResponse` (empty).
+    *   `actor`: `ObjectRef` of the actor to delete. Delete takes no preconditions today, so it is last-writer-wins.
+*   **Response:** the deleted `Actor`, as it was immediately before removal.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.
@@ -417,7 +456,7 @@ Query the physical resource pool.
 
 ## 7. Advanced: Actor Identity Credentials
 
-Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor Identity** credentials that persist even as the process migrates between different physical workers. This is distinct from the `/run/ate/actor-id` bind mount described under [Actor Identity](#actor-identity), which only tells an actor its own name.
+Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor Identity** credentials that persist even as the process migrates between different physical workers. This is distinct from the `actorMetadata` data source described under [SystemInfo Volumes](#systeminfo-volumes), which only tells an actor its own identity fields (name, atespace, uid).
 
 ### Service: `ateapi.ActorIdentity`
 *   **`MintJWT`:** Generates an OIDC-compatible JWT identifying the Substrate Actor.
