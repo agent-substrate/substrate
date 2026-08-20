@@ -123,7 +123,9 @@ func (c *RouterClient) request(ctx context.Context, method string, actorRef reso
 		}
 	}
 
-	deadline := time.Now().Add(30 * time.Second)
+	retryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	for {
 		var reqBody io.Reader
 		if bodyBytes != nil {
@@ -146,10 +148,10 @@ func (c *RouterClient) request(ctx context.Context, method string, actorRef reso
 		if resp.StatusCode == http.StatusServiceUnavailable {
 			respBodyBytes, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if strings.Contains(string(respBodyBytes), "upstream connect error") && time.Now().Before(deadline) {
+			if strings.Contains(string(respBodyBytes), "upstream connect error") {
 				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
+				case <-retryCtx.Done():
+					return nil, retryCtx.Err()
 				case <-time.After(1 * time.Second):
 					continue
 				}
