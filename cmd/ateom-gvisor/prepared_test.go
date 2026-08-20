@@ -63,6 +63,47 @@ func TestPreparedSandboxRejectsMismatchedRun(t *testing.T) {
 	}
 }
 
+func TestPreparedSandboxOriginMustMatchConsumer(t *testing.T) {
+	p := &preparedSandbox{
+		actorUID:       "actor-a",
+		runscPath:      "/runsc",
+		cpuMilli:       1000,
+		memoryBytes:    1 << 30,
+		durableVolumes: []string{"data"},
+		fromCheckpoint: true,
+	}
+	if p.matches("actor-a", "/runsc", false, 1000, 1<<30, []string{"data"}, false) {
+		t.Fatal("checkpoint preparation matched a cold RunWorkload")
+	}
+	if p.matches("actor-a", "/runsc", false, 1000, 1<<30, []string{"other"}, true) {
+		t.Fatal("checkpoint preparation matched different durable volumes")
+	}
+	if !p.matches("actor-a", "/runsc", false, 1000, 1<<30, []string{"data"}, true) {
+		t.Fatal("checkpoint preparation did not match its RestoreWorkload")
+	}
+}
+
+func TestCheckpointPreparedSandboxCannotBeReusedAfterCleanupStarts(t *testing.T) {
+	p := &preparedSandbox{
+		actorUID:       "actor-a",
+		runscPath:      "/runsc",
+		fromCheckpoint: true,
+		cleanupStarted: true,
+	}
+	s := &AteomService{lock: newCancelableMutex(), prepared: p}
+
+	if _, err := s.PrepareSandbox(t.Context(), &ateompb.PrepareSandboxRequest{
+		ActorUid: "actor-a", RunscPath: "/runsc", FromCheckpoint: true,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("PrepareSandbox() during cleanup error = %v, want FailedPrecondition", err)
+	}
+	if _, err := s.RestoreWorkload(t.Context(), &ateompb.RestoreWorkloadRequest{
+		ActorUid: "actor-a", RunscPath: "/runsc", Scope: ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("RestoreWorkload() during cleanup error = %v, want FailedPrecondition", err)
+	}
+}
+
 // TestPreparedSandboxLifecycleWithRunsc crosses the actual gVisor boundary:
 // PrepareSandbox boots the Sentry, then RunWorkload adds an application to it.
 // Set RUNSC_TEST_BINARY and run this test as root (a throwaway user/net/mount

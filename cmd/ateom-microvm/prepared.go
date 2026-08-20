@@ -42,13 +42,15 @@ type sandboxBootParams struct {
 	assetPaths     map[string]string
 	redirectEgress bool
 	size           sizing.SandboxSize
+	fromCheckpoint bool
 }
 
 func (p sandboxBootParams) matches(other sandboxBootParams) bool {
 	return p.actorUID == other.actorUID &&
 		maps.Equal(p.assetPaths, other.assetPaths) &&
 		p.redirectEgress == other.redirectEgress &&
-		p.size == other.size
+		p.size == other.size &&
+		p.fromCheckpoint == other.fromCheckpoint
 }
 
 func sandboxParamsFromPrepare(req *ateompb.PrepareSandboxRequest) sandboxBootParams {
@@ -57,6 +59,17 @@ func sandboxParamsFromPrepare(req *ateompb.PrepareSandboxRequest) sandboxBootPar
 		assetPaths:     req.GetRuntimeAssetPaths(),
 		redirectEgress: req.GetRedirectEgress(),
 		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		fromCheckpoint: req.GetFromCheckpoint(),
+	}
+}
+
+func sandboxParamsFromRestore(req *ateompb.RestoreWorkloadRequest) sandboxBootParams {
+	return sandboxBootParams{
+		actorUID:       req.GetActorUid(),
+		assetPaths:     req.GetRuntimeAssetPaths(),
+		redirectEgress: req.GetEgressGateway() != nil,
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		fromCheckpoint: true,
 	}
 }
 
@@ -71,9 +84,9 @@ func sandboxParamsFromRun(req *ateompb.RunWorkloadRequest) sandboxBootParams {
 
 // preparedSandbox is a booted microVM whose kata-agent is answering, but whose
 // application rootfs has not been mounted and whose sandbox has not been
-// created in the guest. RunWorkload consumes it after atelet finishes the OCI
-// bundles; DiscardPreparedSandbox tears it down when the parallel image path
-// fails.
+// created in the guest. RunWorkload or a DATA RestoreWorkload consumes it after
+// atelet finishes the OCI bundles; DiscardPreparedSandbox tears it down when a
+// concurrent preparation step fails.
 type preparedSandbox struct {
 	params   sandboxBootParams
 	actor    *runningActor
@@ -85,9 +98,9 @@ type preparedSandbox struct {
 }
 
 // PrepareSandbox boots a microVM through a responsive kata-agent while atelet
-// prepares application OCI bundles in parallel. The kataShared filesystem is
-// deliberately left unmounted in the guest until RunWorkload late-mounts the
-// rootfs trees on the host and calls CreateSandbox.
+// prepares application OCI bundles and, for a DATA restore, downloads the
+// checkpoint in parallel. The shared tree stays empty until RunWorkload or
+// RestoreWorkload stages the rootfs and volumes before CreateSandbox.
 func (s *AteomService) PrepareSandbox(ctx context.Context, req *ateompb.PrepareSandboxRequest) (*ateompb.PrepareSandboxResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
