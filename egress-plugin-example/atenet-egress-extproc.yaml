@@ -1,0 +1,150 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atenet-egress-extproc
+  namespace: nous-dev
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atenet-egress-extproc
+  namespace: nous-dev
+  labels:
+    app: atenet-egress-extproc
+spec:
+  # Two, because of the fail-closed note above: a single replica makes every
+  # rollout and every node drain an egress outage for MITM'd traffic.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: atenet-egress-extproc
+  template:
+    metadata:
+      labels:
+        app: atenet-egress-extproc
+    spec:
+      serviceAccountName: atenet-egress-extproc
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+      containers:
+      - name: extprocd
+        image: ko://github.com/agent-substrate/substrate/egress-plugin-example
+        args:
+        - --addr=:50051
+        - --log-level=info
+        ports:
+        - name: extproc
+          containerPort: 50051
+        # These paths are compiled into extprocd, not passed as flags, and it
+        # refuses to start without them: mTLS with the gateway is not optional.
+        # Unlike the gateway's own ext_proc sidecar, which is reached over
+        # localhost inside one pod, this processor is a Service, so the hop
+        # crosses the pod network -- anything that can route to :50051 could
+        # otherwise ask it to authorize egress, and anything that can answer on
+        # that name could otherwise decide it. Renaming a mount here breaks the
+        # Deployment; see gatewayTLSConfig in tls.go, alongside this file.
+        volumeMounts:
+        # Serving identity: the servicedns leaf carries
+        # atenet-egress-extproc.nous-dev.svc as a DNS SAN, which is the name
+        # the gateway's cluster validates against.
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        # Client trust: callers are verified against the pod-identity CA, then
+        # narrowed to the gateway's SPIFFE ID. The narrowing matters because
+        # chaining to that CA only proves the caller is some pod in this
+        # cluster; every workload has such a certificate.
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        # A TCP probe, matching the gateway's own ext-proc sidecar. It proves
+        # the listener is bound, which is the failure this catches: extprocd
+        # has no dependencies to be unready against.
+        readinessProbe:
+          tcpSocket:
+            port: extproc
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: extproc
+          periodSeconds: 20
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      # Serving identity. The servicedns signer puts <service>.<namespace>.svc
+      # in the leaf for every Service selecting this pod, so the Service below
+      # is what gives this certificate its name -- and the signer refuses to
+      # issue at all while no Service selects the pod, which is worth knowing
+      # if this Deployment is ever applied without it.
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      # Client trust. Only the trust bundle is used here -- extprocd verifies
+      # callers, it never dials anything -- but the credential is projected
+      # alongside it to keep the pair identical to every other pod in the
+      # install.
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atenet-egress-extproc
+  namespace: nous-dev
+spec:
+  type: ClusterIP
+  selector:
+    app: atenet-egress-extproc
+  ports:
+  - name: extproc
+    port: 50051
+    targetPort: extproc
+    protocol: TCP
