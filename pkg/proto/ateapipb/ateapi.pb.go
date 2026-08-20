@@ -3576,6 +3576,7 @@ func (x *ResumeActorResponse) GetResumed() bool {
 type DeleteActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	AnyState      bool                   `protobuf:"varint,2,opt,name=any_state,json=anyState,proto3" json:"any_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3615,6 +3616,13 @@ func (x *DeleteActorRequest) GetActor() *ObjectRef {
 		return x.Actor
 	}
 	return nil
+}
+
+func (x *DeleteActorRequest) GetAnyState() bool {
+	if x != nil {
+		return x.AnyState
+	}
+	return false
 }
 
 type GetActorSnapshotRequest struct {
@@ -5426,9 +5434,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x04boot\x18\x02 \x01(\bR\x04boot\"T\n" +
 	"\x13ResumeActorResponse\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\x12\x18\n" +
-	"\aresumed\x18\x02 \x01(\bR\aresumed\"=\n" +
+	"\aresumed\x18\x02 \x01(\bR\aresumed\"Z\n" +
 	"\x12DeleteActorRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"H\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
+	"\tany_state\x18\x02 \x01(\bR\banyState\"H\n" +
 	"\x17GetActorSnapshotRequest\x12-\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\bsnapshot\"A\n" +
 	"\x1aGetActorSnapshotTagRequest\x12#\n" +

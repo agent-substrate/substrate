@@ -122,6 +122,9 @@ data:
                       # egress_forward_proxy here would be a raw TCP passthrough
                       # with no per-destination visibility at all.
                       cluster: mitm_internal
+                      # Set request timeout to disabled (0) as CONNECT is a long-running stream.
+                      # There will still be a stream_idle_timeout (5 minutes by default).
+                      timeout: 0s
                       upgrade_configs:
                       - upgrade_type: CONNECT
                         connect_config: {}
@@ -158,6 +161,26 @@ data:
                     response_body_mode: NONE
                     request_trailer_mode: SKIP
                     response_trailer_mode: SKIP
+              # Copy the CONNECT authority into filter state so the passthrough
+              # chain can still see it after the internal-listener hop. The value
+              # is a literal address -- 163.172.157.3:9001 -- never a hostname:
+              # atunnel takes it from SO_ORIGINAL_DST, the address the actor's
+              # kernel was dialing.
+              #
+              # For a tunnel that carries neither TLS nor HTTP there is no SNI and
+              # no Host header, so that address is the only record of where the
+              # traffic was going. The MITM leg's two HTTP chains recover it from
+              # inside the tunnel instead and never needed this; the raw TCP chain
+              # has nothing to read and does.
+              - name: envoy.filters.http.set_filter_state
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
+                  on_request_headers:
+                  - object_key: envoy.network.transport_socket.original_dst_address
+                    format_string:
+                      text_format_source:
+                        inline_string: "%REQ(:AUTHORITY)%"
+                    shared_with_upstream: ONCE
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -173,18 +196,37 @@ data:
       # tunnelled TLS with a leaf sdsmint mints for the SNI, reads the real
       # Host, and re-originates.
       #
-      # Two chains, selected by what the tunnel actually carries. tls_inspector
-      # tags a ClientHello "tls" and anything else "raw_buffer", so a cleartext
-      # HTTP tunnel gets an HTTP chain instead of being fed to a TLS transport
-      # socket, which would fail the handshake and close the tunnel.
+      # Three chains, selected by what the tunnel actually carries.
+      # tls_inspector tags a ClientHello "tls" and anything else "raw_buffer".
+      # http_inspector then splits "raw_buffer" again, because "not TLS" is not
+      # the same claim as "HTTP": without it, SSH and every other non-HTTP
+      # protocol lands on an HTTP connection manager that parses the first bytes
+      # of the stream as a request line, finds no request, and drops the
+      # connection with nothing in the access log to say why.
       # ---------------------------------------------------------------------
       - name: mitm_listener
         stat_prefix: mitm
         internal_listener: {}
+        # Both inspectors work by peeking at bytes the client sends first, so on
+        # a server-speaks-first protocol -- SSH, SMTP, MySQL -- they wait for a
+        # client that is itself waiting for the origin, and the tunnel deadlocks
+        # until the actor's own timeout fires. Giving up quickly and continuing
+        # is the only way out: continue_on_listener_filters_timeout hands the
+        # socket to the chains with no transport protocol detected, and Envoy
+        # defaults that to raw_buffer, which is exactly the passthrough chain
+        # such a connection belongs on. The cost is paid only by connections
+        # that send nothing; a client that speaks is classified immediately. One
+        # second is far longer than a local actor needs to emit a ClientHello,
+        # and short enough to stay well inside the probe timeouts.
+        listener_filters_timeout: 1s
+        continue_on_listener_filters_timeout: true
         listener_filters:
         - name: envoy.filters.listener.tls_inspector
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
+        - name: envoy.filters.listener.http_inspector
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector
         filter_chains:
         - filter_chain_match:
             transport_protocol: tls
@@ -193,6 +235,15 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_http
+              # Absent this, Envoy answers an Upgrade request itself instead of
+              # proxying it, so every WebSocket through this leg fails at the
+              # handshake. Note it covers the HTTP/1.1 path only; WebSockets over
+              # h2 are RFC 8441 extended CONNECT and would additionally need
+              # http2_protocol_options.allow_connect.
+              upgrade_configs:
+              - upgrade_type: websocket
+              # Disable stream_idle_timeout as there is already an overall timeout in the outer tunnel in the HCM.
+              stream_idle_timeout: 0s
               # This is the leg that knows where the traffic actually went.
               # REQUESTED_SERVER_NAME is the SNI the leaf was minted for and it
               # should always equal the authority -- dynamic_forward_proxy
@@ -213,6 +264,7 @@ data:
                       path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
                       protocol: "%PROTOCOL%"
                       status: "%RESPONSE_CODE%"
+                      grpc_status: "%GRPC_STATUS%"
                       flags: "%RESPONSE_FLAGS%"
                       duration_ms: "%DURATION%"
                       bytes_sent: "%BYTES_SENT%"
@@ -226,10 +278,42 @@ data:
                 - name: all
                   domains: ["*"]
                   routes:
+                  # Upgrade is what cannot cross an h2 upstream: forwarding one
+                  # needs RFC 8441 extended CONNECT, which almost no origin
+                  # advertises. So the default route below stays pinned to
+                  # HTTP/1.1, which every origin accepts, rather than letting
+                  # upstream ALPN choose -- ALPN takes h2 against nearly
+                  # everything today, and every WebSocket then fails with a 502.
+                  #
+                  # gRPC is the one thing that default cannot serve: its status
+                  # rides in trailers, which HTTP/1.1 cannot express.
+                  # content-type is how it opts out. The prefix also catches
+                  # application/grpc-web, which is deliberate --
+                  # egress_forward_proxy_grpc reads its protocol from upstream
+                  # ALPN, so a grpc-web endpoint that only speaks HTTP/1.1 still
+                  # gets HTTP/1.1.
+                  #
+                  # The cost of the pinned default is that non-gRPC h2 traffic
+                  # is downgraded and its trailers dropped silently. Nothing
+                  # sends those today. If that changes, invert this: match on
+                  # the `upgrade` header, pin that route to HTTP/1.1, and let
+                  # everything else negotiate.
+                  - match:
+                      prefix: "/"
+                      headers:
+                      - name: content-type
+                        string_match:
+                          prefix: application/grpc
+                    route:
+                      cluster: egress_forward_proxy_grpc
+                      timeout: 0s
                   - match: { prefix: "/" }
                     route:
                       cluster: egress_forward_proxy
-                      timeout: 30s
+                      # The route timeout runs until the response is completely
+                      # processed, which for a stream is never, so 0 is what an
+                      # SSE or long-poll response needs to survive at all.
+                      timeout: 0s
               http_filters:
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
@@ -248,6 +332,7 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
               common_tls_context:
+                alpn_protocols: ["h2", "http/1.1"]
                 custom_tls_certificate_selector:
                   name: on-demand
                   typed_config:
@@ -277,13 +362,20 @@ data:
         # The cleartext chain. Nothing to terminate and nothing to mint: the
         # Host header is already in the clear, so this leg reads the
         # destination directly rather than from a certificate it issued.
+        #
+        # application_protocols is what confines it to traffic http_inspector
+        # actually recognised as HTTP.
         - filter_chain_match:
             transport_protocol: raw_buffer
+            application_protocols: ["http/1.0", "http/1.1", "h2c"]
           filters:
           - name: envoy.filters.network.http_connection_manager
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_cleartext
+              upgrade_configs:
+              - upgrade_type: websocket
+              stream_idle_timeout: 0s
               access_log:
               - name: envoy.access_loggers.file
                 typed_config:
@@ -298,6 +390,7 @@ data:
                       path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
                       protocol: "%PROTOCOL%"
                       status: "%RESPONSE_CODE%"
+                      grpc_status: "%GRPC_STATUS%"
                       flags: "%RESPONSE_FLAGS%"
                       duration_ms: "%DURATION%"
                       bytes_sent: "%BYTES_SENT%"
@@ -314,7 +407,7 @@ data:
                   - match: { prefix: "/" }
                     route:
                       cluster: egress_forward_proxy_cleartext
-                      timeout: 30s
+                      timeout: 0s
               http_filters:
               # Same reasoning as the TLS chain: resolve from the request's own
               # Host, so the name that was policed is the name that is dialled.
@@ -328,11 +421,53 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 
+        # The passthrough chain: everything the two inspectors could not claim,
+        # plus everything from a client that sent nothing at all. No filter
+        # chain match beyond raw_buffer, so it is the fallback the more specific
+        # chains above fall out of.
+        #
+        # This leg is deliberately blind. It does not decrypt, does not mint,
+        # and cannot name what it is carrying -- an opaque byte stream has no
+        # Host and no SNI to police.
+        - filter_chain_match:
+            transport_protocol: raw_buffer
+          filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: mitm_passthrough
+              cluster: egress_tcp_passthrough
+              access_log:
+              - name: envoy.access_loggers.file
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
+                  path: /dev/stdout
+                  log_format:
+                    json_format:
+                      leg: passthrough
+                      time: "%START_TIME%"
+                      sni: "%REQUESTED_SERVER_NAME%"
+                      flags: "%RESPONSE_FLAGS%"
+                      duration_ms: "%DURATION%"
+                      bytes_sent: "%BYTES_SENT%"
+                      bytes_rcvd: "%BYTES_RECEIVED%"
+                      upstream: "%UPSTREAM_HOST%"
+                      upstream_failure: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+                      termination: "%CONNECTION_TERMINATION_DETAILS%"
+
       clusters:
       # The only way into mitm_listener. An internal address, not a socket, so
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
         connect_timeout: 1s
+        transport_socket:
+          name: envoy.transport_sockets.internal_upstream
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.internal_upstream.v3.InternalUpstreamTransport
+            transport_socket:
+              name: envoy.transport_sockets.raw_buffer
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.transport_sockets.raw_buffer.v3.RawBuffer
         load_assignment:
           cluster_name: mitm_internal
           endpoints:
@@ -436,6 +571,34 @@ data:
                 trusted_ca:
                   filename: /etc/ssl/certs/ca-certificates.crt
 
+      - name: egress_forward_proxy_grpc
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 5s
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: egress_dns_cache
+              dns_lookup_family: V4_ONLY
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            upstream_http_protocol_options:
+              auto_sni: true
+              auto_san_validation: true
+            auto_config:
+              http_protocol_options: {}
+              http2_protocol_options: {}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              validation_context:
+                trusted_ca:
+                  filename: /etc/ssl/certs/ca-certificates.crt
+
       # The cleartext chain's upstream. Identical to egress_forward_proxy but
       # without the TLS transport socket: the actor sent plaintext and this
       # gateway does not upgrade it. Re-originating over TLS here would mean
@@ -466,8 +629,19 @@ data:
         typed_extension_protocol_options:
           envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            explicit_http_config:
+            use_downstream_protocol_config:
               http_protocol_options: {}
+              http2_protocol_options: {}
+
+      # The passthrough chain's upstream. Not a dynamic forward proxy like the
+      # other two: there is no name to resolve. The destination arrives as the
+      # literal IP:port the actor's kernel recorded in SO_ORIGINAL_DST, relayed
+      # here as the envoy.network.transport_socket.original_dst_address filter
+      # state object.
+      - name: egress_tcp_passthrough
+        type: ORIGINAL_DST
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 5s
 ---
 apiVersion: apps/v1
 kind: Deployment

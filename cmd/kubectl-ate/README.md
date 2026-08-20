@@ -168,8 +168,11 @@ kubectl ate resume actor my-actor -a <atespace>
 # Suspend an actor (snapshots its state to storage and frees the worker)
 kubectl ate suspend actor my-actor -a <atespace>
 
-# Delete an actor.
+# Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
 kubectl ate delete actor my-actor -a <atespace>
+
+# Delete an actor from any state (e.g. RUNNING, PAUSED), terminating workloads and detaching volumes.
+kubectl ate delete actor my-actor -a <atespace> --any-state
 ```
 
 ### Actor Snapshots

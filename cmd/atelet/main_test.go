@@ -784,6 +784,41 @@ func TestRPCBoundariesReject(t *testing.T) {
 		})
 		wantInvalidArgument(t, "Restore", err)
 	})
+	t.Run("Terminate", func(t *testing.T) {
+		const okTargetAteomUID = "123e4567-e89b-12d3-a456-426614174001"
+		t.Run("invalid ateom UID", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				TargetAteomUid: badUID, Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing template namespace", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateName: "template",
+				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing template name", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default",
+				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing target ateom UID", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+	})
 }
 
 func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {

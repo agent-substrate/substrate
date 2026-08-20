@@ -338,6 +338,10 @@ func TestMintCertAuthorization(t *testing.T) {
 			fixture:  runningOnNode(testNode),
 			wantCode: codes.OK,
 		},
+		"actor is in ACTOR_STATE_DELETING with active worker assignment": {
+			fixture:  actorFixture{state: ateapipb.ActorState_ACTOR_STATE_DELETING, workerNode: testNode},
+			wantCode: codes.FailedPrecondition,
+		},
 		"caller presented no certificate": {
 			noPeer:   true,
 			fixture:  runningOnNode(testNode),
