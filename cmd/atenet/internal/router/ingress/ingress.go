@@ -65,9 +65,12 @@ type Handler struct {
 }
 
 func New(apiClient ateapipb.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
+	// The lot is shared: the resumer charges it at each caller's park
+	// transition; the handler keeps a reference only for the status page.
+	lot := newParkingLot(parkCfg, parkMetrics)
 	return &Handler{
-		resumer: NewActorResumer(apiClient, withParking(parkCfg)),
-		parking: newParkingLot(parkCfg, parkMetrics),
+		resumer: NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot)),
+		parking: lot,
 	}
 }
 
@@ -109,19 +112,13 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		}
 	}
 
-	// Admit the request to the parking lot before resuming. While resume is
-	// in-flight the request occupies a slot; if the actor's worker pool is
-	// momentarily saturated the resumer parks (retries) here rather than failing
-	// fast. A full lot sheds the request immediately so the router applies
-	// backpressure instead of queueing without bound.
-	release, ok := h.parking.enter(ctx)
-	if !ok {
-		return extproc.Result{}, parkingFullErr(actorRef.String())
-	}
-
+	// The resumer parks the request if the actor's worker pool is momentarily
+	// saturated, retrying rather than failing fast. Parking-lot admission
+	// happens inside, at the park transition: a request resolved on the first
+	// attempt never occupies a slot, so a full lot sheds only requests that
+	// would actually wait — never traffic to already-running actors.
 	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
 	actor, resumeOutcome, err := h.resumer.ResumeActor(ctx, actorRef)
-	release(parkOutcomeFor(err))
 	if err != nil {
 		return extproc.Result{Resume: string(resumeOutcome)}, mapResumeError(actorRef, err)
 	}

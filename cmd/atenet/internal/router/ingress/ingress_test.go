@@ -21,7 +21,9 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -338,9 +340,12 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	}
 }
 
-// TestHandleRequestHeaders_ParkingLotFull verifies that when the parking lot is at capacity
-// the request is shed with a 503 before any resume is attempted.
-func TestHandleRequestHeaders_ParkingLotFull(t *testing.T) {
+// TestHandleRequestHeaders_FullLotServesRunningActor pins the design guarantee
+// from docs/request-parking.md: a saturated parking lot cannot starve requests
+// to already-running actors, at any lot size. A request whose resume resolves
+// on the first attempt never occupies a slot, so it is served even with the
+// lot at capacity (issue #1081).
+func TestHandleRequestHeaders_FullLotServesRunningActor(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev"
 
@@ -348,7 +353,7 @@ func TestHandleRequestHeaders_ParkingLotFull(t *testing.T) {
 	clientMock := &mockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			resumeCalled = true
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"}}}}, nil
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"}}}}, nil
 		},
 	}
 
@@ -365,21 +370,73 @@ func TestHandleRequestHeaders_ParkingLotFull(t *testing.T) {
 		&corev3.HeaderValue{Key: ":authority", Value: authority},
 	)
 
-	_, err := h.HandleRequestHeaders(context.Background(), md)
-	if err == nil {
-		t.Fatal("expected error when parking lot is full")
+	res, err := h.HandleRequestHeaders(context.Background(), md)
+	if err != nil {
+		t.Fatalf("a running actor must be served despite a full lot, got: %v", err)
 	}
-	var reqErr *extproc.ReqError
-	if !errors.As(err, &reqErr) {
-		t.Fatalf("expected *extproc.ReqError, got %T (%v)", err, err)
+	if !resumeCalled {
+		t.Error("the resume lookup must still run when the lot is full")
 	}
-	if reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
-		t.Errorf("status code = %d, want %d (503)", reqErr.StatusCode, envoy_type.StatusCode_ServiceUnavailable)
+	const wantTarget = "10.0.0.1:443"
+	if res.Target != wantTarget {
+		t.Errorf("target = %q, want %q", res.Target, wantTarget)
 	}
-	if !strings.Contains(reqErr.Error(), "router at capacity") {
-		t.Errorf("error body = %q, want it to mention capacity", reqErr.Error())
+	if got := h.parking.activeCount(); got != 1 {
+		t.Errorf("a first-attempt resolution must not occupy a slot; active = %d, want 1 (the priming entry)", got)
 	}
-	if resumeCalled {
-		t.Error("resume must not be attempted for a shed request")
-	}
+}
+
+// TestHandleRequestHeaders_FullLotShedsParkedRequest verifies the other half
+// of lot admission: when the lot is full, a request whose resume actually
+// parks (first retryable failure) is shed with 503 "router at capacity" — at
+// the park transition, after its single initial attempt, not before any.
+func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+		authority := testUUID + ".team-a.actors.resources.substrate.ate.dev"
+
+		var resumeCalls atomic.Int32
+		clientMock := &mockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeCalls.Add(1)
+				return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+			},
+		}
+
+		h := New(clientMock, ParkedRequestConfig{Budget: 500 * time.Millisecond, Max: 1}, nil)
+		release, ok := h.parking.enter(context.Background())
+		if !ok {
+			t.Fatal("priming enter should be admitted")
+		}
+		defer release(parkOutcomeServed)
+
+		md := requestMetadata(t, authority,
+			&corev3.HeaderValue{Key: ":authority", Value: authority},
+		)
+
+		_, err := h.HandleRequestHeaders(context.Background(), md)
+		if err == nil {
+			t.Fatal("expected error when a parked request finds the lot full")
+		}
+		var reqErr *extproc.ReqError
+		if !errors.As(err, &reqErr) {
+			t.Fatalf("expected *extproc.ReqError, got %T (%v)", err, err)
+		}
+		if reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+			t.Errorf("status code = %d, want %d (503)", reqErr.StatusCode, envoy_type.StatusCode_ServiceUnavailable)
+		}
+		if !strings.Contains(reqErr.Error(), "router at capacity") {
+			t.Errorf("error body = %q, want it to mention capacity", reqErr.Error())
+		}
+		// Shedding happens at the park transition: exactly one attempt has run
+		// when the caller is turned away.
+		if got := resumeCalls.Load(); got != 1 {
+			t.Errorf("expected the caller shed after exactly 1 attempt, got %d", got)
+		}
+
+		// The abandoned flight retries on until its budget, like any flight
+		// whose callers left; sleep (fake time) past the budget so it exits
+		// before the bubble does.
+		time.Sleep(600 * time.Millisecond)
+	})
 }
