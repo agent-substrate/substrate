@@ -239,6 +239,62 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			},
 		},
 		{
+			name: "converts actorIdentityToken data sources with unminted bytes",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{
+							Name: "system-info",
+							VolumeSource: atev1alpha1.VolumeSource{
+								SystemInfo: &atev1alpha1.SystemInfoVolumeSource{
+									DataSources: []atev1alpha1.SystemInfoDataSource{
+										{ActorIdentityToken: &atev1alpha1.ActorIdentityTokenDataSource{Audience: "verifier.example.com", Path: "identity/token"}},
+									},
+								},
+							},
+						},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "system-info", MountPath: "/run/ate"},
+							},
+						},
+					},
+				},
+			},
+			// Audience and TTL do not cross the wire, and Token stays empty:
+			// mintActorIdentityTokens fills it on the resume path.
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name: "system-info",
+						Source: &ateletpb.Volume_SystemInfo{
+							SystemInfo: &ateletpb.SystemInfoVolume{
+								DataSources: []*ateletpb.SystemInfoDataSource{
+									{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentityToken{
+										ActorIdentityToken: &ateletpb.ActorIdentityTokenDataSource{Path: "identity/token"},
+									}},
+								},
+							},
+						},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "system-info", MountPath: "/run/ate"},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "skips non-DurableDir volumes",
 			template: &atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},

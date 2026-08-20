@@ -44,6 +44,7 @@ const (
 	atespaceFile = "/run/ate/atespace"
 	uidFile      = "/run/ate/actor-uid"
 	trustFile    = "/run/ate/trust-bundle.pem"
+	tokenFile    = "/run/ate/token"
 )
 
 // procStatus is where the kernel reports this process's capability sets. Asking
@@ -176,6 +177,7 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 		"atespace": atespaceFile,
 		"uid":      uidFile,
 		"trust":    trustFile,
+		"token":    tokenFile,
 	} {
 		if b, err := os.ReadFile(path); err == nil {
 			resp[key] = string(b)

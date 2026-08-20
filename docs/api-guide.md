@@ -250,6 +250,29 @@ spec:
 
 atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer dynamic refresh will later hang off) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated, with block headers stripped and the anchors deliberately shuffled — order carries no meaning, so consumers must not depend on it. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if the name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates. Bundle contents are re-resolved on every Run/Restore.
 
+#### actorIdentityToken
+The actorIdentityToken data source projects a signed JWT attesting the actor's identity to a single file — analogous to the [Kubernetes serviceAccountToken projected volume source](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken).
+
+```yaml
+spec:
+  volumes:
+  - name: identity
+    systemInfo:
+      dataSources:
+      - actorIdentityToken:
+          audience: some-verifier.example.com
+          expirationSeconds: 3600   # optional; default 3600, min 600, max 86400
+          path: token
+  containers:
+  - name: main
+    # ...
+    volumeMounts:
+    - name: identity
+      mountPath: /run/ate           # the actor reads /run/ate/token
+```
+
+ateapi mints the token when the actor starts, so the mint is inherently bound to the activation: the claims carry the actor's identity (`sub: atespaces:<atespace>:actors:<name>`, plus the `ate.dev` claim object with `atespace`/`actorName`/`actorUid`), the requested `audience`, and standard `exp`/`iat`/`jti`. Tokens are re-minted on every Run/Restore — a resumed actor always carries a token for its own, current activation, and a token captured into a snapshot expires quickly and cannot be renewed from elsewhere (renewal is never a bearer operation). Verifiers must check `aud` and validate against the deployment's actor JWT authority. Workloads should re-read the file at time of use rather than caching it; live re-minting for actors that run longer than `expirationSeconds` is not yet implemented. Starting the actor fails, with a clear error, if the deployment has no actor JWT signing pool.
+
 ### Container Fields
 
 Each entry in `containers` describes one process to run in the actor's sandbox.

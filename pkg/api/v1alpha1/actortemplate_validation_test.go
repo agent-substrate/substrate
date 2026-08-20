@@ -1010,7 +1010,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [actorMetadata trustBundle] must be set",
+		errMsg:  "exactly one of the fields in [actorMetadata trustBundle actorIdentityToken] must be set",
 	}, {
 		name: "Volumes: SystemInfo actorMetadata with no items is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -1181,6 +1181,89 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
+		name: "Volumes: SystemInfo actorIdentityToken data source is valid",
+		mutate: func(at *ActorTemplate) {
+			exp := int64(900)
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentityToken: &ActorIdentityTokenDataSource{Audience: "verifier.example.com", ExpirationSeconds: &exp, Path: "identity/token"}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/ate"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: SystemInfo actorIdentityToken with empty audience is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentityToken: &ActorIdentityTokenDataSource{Audience: "", Path: "token"}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/ate"},
+			}
+		},
+		wantErr: true,
+	}, {
+		name: "Volumes: SystemInfo actorIdentityToken expiration below the floor is invalid",
+		mutate: func(at *ActorTemplate) {
+			exp := int64(60)
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentityToken: &ActorIdentityTokenDataSource{Audience: "verifier.example.com", ExpirationSeconds: &exp, Path: "token"}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/ate"},
+			}
+		},
+		wantErr: true,
+	}, {
+		name: "Volumes: SystemInfo actorIdentityToken path duplicating a trustBundle path is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{TrustBundle: &TrustBundleDataSource{Name: "egress-trust", Path: "shared.pem"}},
+								{ActorIdentityToken: &ActorIdentityTokenDataSource{Audience: "verifier.example.com", Path: "shared.pem"}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/ate"},
+			}
+		},
+		wantErr: true,
+	}, {
 		name: "Volumes: SystemInfo clusterTrustBundle with empty name is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
@@ -1235,7 +1318,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [actorMetadata trustBundle] must be set",
+		errMsg:  "exactly one of the fields in [actorMetadata trustBundle actorIdentityToken] must be set",
 	}, {
 		name: "Volumes: SystemInfo clusterTrustBundles with duplicate paths are invalid",
 		mutate: func(at *ActorTemplate) {

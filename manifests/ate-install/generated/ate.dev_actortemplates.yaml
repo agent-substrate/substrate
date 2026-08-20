@@ -542,6 +542,58 @@ spec:
 
                               Exactly one member must be set.
                             properties:
+                              actorIdentityToken:
+                                description: |-
+                                  ActorIdentityTokenDataSource is a SystemInfo volume data source that
+                                  projects a signed JWT attesting the actor's identity to a single file —
+                                  analogous to the Kubernetes serviceAccountToken projected volume source.
+
+                                  The token is minted by ateapi when the actor starts, carries the actor's
+                                  identity (atespace, name, uid) in its claims, and is bound to the
+                                  requested audience. It is re-minted on every Run/Restore, so a resumed
+                                  actor always carries a token for its own, current activation; a token
+                                  captured into a snapshot is useless elsewhere (short TTL, and renewal is
+                                  never a bearer operation — see the SystemInfo leakage notes in #802).
+                                  Workloads should re-read the file at time of use rather than caching it.
+                                properties:
+                                  audience:
+                                    description: |-
+                                      Audience is the intended recipient of the token, bound into its aud
+                                      claim. Verifiers must reject tokens minted for other audiences.
+                                    maxLength: 255
+                                    minLength: 1
+                                    type: string
+                                  expirationSeconds:
+                                    default: 3600
+                                    description: |-
+                                      ExpirationSeconds is the requested token lifetime. Tokens are only
+                                      refreshed on actor Run/Restore today, so a long-running actor holds
+                                      its token for up to this long; verifiers see standard exp semantics.
+                                    format: int64
+                                    maximum: 86400
+                                    minimum: 600
+                                    type: integer
+                                  path:
+                                    description: |-
+                                      Relative path from the root of the SystemInfo volume at which the
+                                      token is written. Must be a clean relative Unix path: must not start
+                                      or end with '/', and contain no ':', '..', '.', '//', or control
+                                      characters.
+                                    maxLength: 255
+                                    minLength: 1
+                                    type: string
+                                    x-kubernetes-validations:
+                                    - message: 'path must be a clean relative Unix
+                                        path: must not start or end with ''/'', and
+                                        contain no '':'', ''..'', ''.'', ''//'', or
+                                        control characters'
+                                      rule: '!self.startsWith(''/'') && !self.endsWith(''/'')
+                                        && !self.contains(''//'') && !self.contains('':'')
+                                        && !self.matches(''[\x00-\x1f\x7f]'') && !self.matches(''(^|/)[.][.]?(/|$)'')'
+                                required:
+                                - audience
+                                - path
+                                type: object
                               actorMetadata:
                                 description: |-
                                   ActorMetadataDataSource is a SystemInfo volume data source that projects the
@@ -657,8 +709,8 @@ spec:
                             type: object
                             x-kubernetes-validations:
                             - message: exactly one of the fields in [actorMetadata
-                                trustBundle] must be set
-                              rule: '[has(self.actorMetadata),has(self.trustBundle)].filter(x,x==true).size()
+                                trustBundle actorIdentityToken] must be set
+                              rule: '[has(self.actorMetadata),has(self.trustBundle),has(self.actorIdentityToken)].filter(x,x==true).size()
                                 == 1'
                           maxItems: 8
                           type: array
@@ -673,6 +725,17 @@ spec:
                             rule: '!self.exists(x, has(x.trustBundle) && self.exists(y,
                               has(y.actorMetadata) && y.actorMetadata.items.exists(i,
                               i.path == x.trustBundle.path)))'
+                          - message: dataSources must not contain duplicate paths
+                            rule: self.all(x, !has(x.actorIdentityToken) || self.exists_one(y,
+                              has(y.actorIdentityToken) && y.actorIdentityToken.path
+                              == x.actorIdentityToken.path))
+                          - message: dataSources must not contain duplicate paths
+                            rule: '!self.exists(x, has(x.actorIdentityToken) && self.exists(y,
+                              has(y.trustBundle) && y.trustBundle.path == x.actorIdentityToken.path))'
+                          - message: dataSources must not contain duplicate paths
+                            rule: '!self.exists(x, has(x.actorIdentityToken) && self.exists(y,
+                              has(y.actorMetadata) && y.actorMetadata.items.exists(i,
+                              i.path == x.actorIdentityToken.path)))'
                       type: object
                   required:
                   - name

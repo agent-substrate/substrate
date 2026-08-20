@@ -150,16 +150,60 @@ type TrustBundleDataSource struct {
 	Path string `json:"path"`
 }
 
+// ActorIdentityTokenDataSource is a SystemInfo volume data source that
+// projects a signed JWT attesting the actor's identity to a single file —
+// analogous to the Kubernetes serviceAccountToken projected volume source.
+//
+// The token is minted by ateapi when the actor starts, carries the actor's
+// identity (atespace, name, uid) in its claims, and is bound to the
+// requested audience. It is re-minted on every Run/Restore, so a resumed
+// actor always carries a token for its own, current activation; a token
+// captured into a snapshot is useless elsewhere (short TTL, and renewal is
+// never a bearer operation — see the SystemInfo leakage notes in #802).
+// Workloads should re-read the file at time of use rather than caching it.
+type ActorIdentityTokenDataSource struct {
+	// Audience is the intended recipient of the token, bound into its aud
+	// claim. Verifiers must reject tokens minted for other audiences.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	Audience string `json:"audience"`
+
+	// ExpirationSeconds is the requested token lifetime. Tokens are only
+	// refreshed on actor Run/Restore today, so a long-running actor holds
+	// its token for up to this long; verifiers see standard exp semantics.
+	//
+	// +optional
+	// +kubebuilder:default=3600
+	// +kubebuilder:validation:Minimum=600
+	// +kubebuilder:validation:Maximum=86400
+	ExpirationSeconds *int64 `json:"expirationSeconds,omitempty"`
+
+	// Relative path from the root of the SystemInfo volume at which the
+	// token is written. Must be a clean relative Unix path: must not start
+	// or end with '/', and contain no ':', '..', '.', '//', or control
+	// characters.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: must not start or end with '/', and contain no ':', '..', '.', '//', or control characters"
+	Path string `json:"path"`
+}
+
 // SystemInfoDataSource is a container allowing you to pick a particular
 // SystemInfo data source.
 //
 // Exactly one member must be set.
 //
-// +kubebuilder:validation:ExactlyOneOf={actorMetadata,trustBundle}
+// +kubebuilder:validation:ExactlyOneOf={actorMetadata,trustBundle,actorIdentityToken}
 type SystemInfoDataSource struct {
 	ActorMetadata *ActorMetadataDataSource `json:"actorMetadata,omitempty"`
 
 	TrustBundle *TrustBundleDataSource `json:"trustBundle,omitempty"`
+
+	ActorIdentityToken *ActorIdentityTokenDataSource `json:"actorIdentityToken,omitempty"`
 }
 
 // Represents a system information volume, which provides files containing
@@ -178,6 +222,9 @@ type SystemInfoVolumeSource struct {
 	// +kubebuilder:validation:XValidation:rule="self.filter(x, has(x.actorMetadata)).size() <= 1",message="dataSources must contain at most one actorMetadata entry"
 	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.trustBundle) || self.exists_one(y, has(y.trustBundle) && y.trustBundle.path == x.trustBundle.path))",message="dataSources must not contain duplicate paths"
 	// +kubebuilder:validation:XValidation:rule="!self.exists(x, has(x.trustBundle) && self.exists(y, has(y.actorMetadata) && y.actorMetadata.items.exists(i, i.path == x.trustBundle.path)))",message="dataSources must not contain duplicate paths"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.actorIdentityToken) || self.exists_one(y, has(y.actorIdentityToken) && y.actorIdentityToken.path == x.actorIdentityToken.path))",message="dataSources must not contain duplicate paths"
+	// +kubebuilder:validation:XValidation:rule="!self.exists(x, has(x.actorIdentityToken) && self.exists(y, has(y.trustBundle) && y.trustBundle.path == x.actorIdentityToken.path))",message="dataSources must not contain duplicate paths"
+	// +kubebuilder:validation:XValidation:rule="!self.exists(x, has(x.actorIdentityToken) && self.exists(y, has(y.actorMetadata) && y.actorMetadata.items.exists(i, i.path == x.actorIdentityToken.path)))",message="dataSources must not contain duplicate paths"
 	DataSources []SystemInfoDataSource `json:"dataSources,omitempty"`
 }
 

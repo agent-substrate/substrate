@@ -89,6 +89,16 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 							},
 						},
 					})
+				case dataSource.ActorIdentityToken != nil:
+					// Token stays empty here: mintActorIdentityTokens fills
+					// it on the resume path, like resolveTrustBundles above.
+					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
+						DataSource: &ateletpb.SystemInfoDataSource_ActorIdentityToken{
+							ActorIdentityToken: &ateletpb.ActorIdentityTokenDataSource{
+								Path: dataSource.ActorIdentityToken.Path,
+							},
+						},
+					})
 				default:
 					continue // Drop unrecognized data sources
 				}
