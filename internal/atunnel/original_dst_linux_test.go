@@ -37,6 +37,53 @@ import (
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
 
+// TestTCPOriginalDestinationPreservesErrno covers the failure path on an
+// ordinary connection that no REDIRECT rule touched. The IPv4 lookup misses
+// and reports ENOENT; that error must reach the caller. Retrying the IPv6
+// option on an AF_INET socket would replace it with EOPNOTSUPP, which says
+// nothing about why the lookup failed.
+//
+// It runs in a fresh namespace because conntrack tracks loopback in any
+// namespace that has nftables rules — including the one Docker runs in — and a
+// tracked connection returns its real destination instead of missing.
+func TestTCPOriginalDestinationPreservesErrno(t *testing.T) {
+	roottest.Require(t, "CAP_SYS_ADMIN for a network namespace with no conntrack hooks")
+
+	ns := newTestNetNS(t)
+	if err := ateomnet.NetNSDo(context.Background(), ns, func(context.Context) error {
+		loopback, err := netlink.LinkByName("lo")
+		if err != nil {
+			return err
+		}
+		if err := netlink.LinkSetUp(loopback); err != nil {
+			return err
+		}
+
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+		client, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		server, err := listener.Accept()
+		if err != nil {
+			return err
+		}
+		defer server.Close()
+
+		if _, err := TCPOriginalDestination(server); !errors.Is(err, unix.ENOENT) {
+			return fmt.Errorf("want the IPv4 lookup's ENOENT, got %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTCPOriginalDestination(t *testing.T) {
 	roottest.Require(t, "CAP_NET_ADMIN + CAP_SYS_ADMIN for an actor-like network namespace and nftables REDIRECT rule")
 
