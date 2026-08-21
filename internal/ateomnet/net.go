@@ -192,11 +192,11 @@ func PodIPv4() (net.IP, error) {
 	return nil, fmt.Errorf("pod eth0 has no IPv4 address")
 }
 
-// EnableIPv4Forwarding enables IPv4 forwarding in the current network namespace.
-// It also enables IPv6 forwarding so actor IPv6 traffic (including DNS queries
-// on IPv6-capable clusters) is routed between the veth and eth0 instead of
-// being dropped by ip6_forward().
-func EnableIPv4Forwarding() error {
+// EnableForwarding enables IPv4 and IPv6 forwarding in the current network
+// namespace, so actor traffic (including DNS queries on IPv6-capable clusters)
+// is routed between the veth and eth0 instead of being dropped by ip_forward()
+// or ip6_forward().
+func EnableForwarding() error {
 	// Forwarding is required because actor packets now enter the worker pod via
 	// the host-side veth and then leave through the pod's eth0. Without this, the
 	// kernel would not route traffic between those interfaces even though both
@@ -595,7 +595,7 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 		return fmt.Errorf("while configuring actor veth in interior netns: %w", err)
 	}
 
-	if err := EnableIPv4Forwarding(); err != nil {
+	if err := EnableForwarding(); err != nil {
 		return err
 	}
 	if err := InstallActorNftablesRules(cfg.EgressRedirectPort); err != nil {
