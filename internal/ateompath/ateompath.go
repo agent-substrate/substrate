@@ -178,6 +178,29 @@ func CheckpointStateDir(actorUID string) string {
 	)
 }
 
+// CheckpointDoneFileName is the completion marker ateom writes into
+// CheckpointStateDir once a checkpoint's files are all on disk, holding the
+// same file list the RPC reports. Its presence is what lets a repeated
+// CheckpointWorkload replay that result instead of driving the sandbox
+// runtime a second time — the sandbox is gone after the first checkpoint, so
+// the second attempt would fail against state that no longer exists.
+//
+// It is named here rather than in ateom because atelet reads the same
+// directory, and both must agree the marker is not one of the snapshot's own
+// files.
+const CheckpointDoneFileName = "checkpoint-done.json"
+
+// CheckpointDoneFile is CheckpointDoneFileName inside the actor's checkpoint
+// directory. It lives under CheckpointStateDir, which atelet wipes in
+// resetActorDirs, so the marker's lifetime is bounded by the actor's existing
+// on-node state and needs no cleanup of its own.
+func CheckpointDoneFile(actorUID string) string {
+	return filepath.Join(
+		CheckpointStateDir(actorUID),
+		CheckpointDoneFileName,
+	)
+}
+
 func LocalCheckpointsDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),
