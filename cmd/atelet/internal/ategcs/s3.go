@@ -19,9 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -76,12 +78,42 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 		Key:    aws.String(object),
 	})
 	if err != nil {
-		if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
+		if objectAbsent(err) {
 			return nil, fmt.Errorf("%w: Failed to get S3 Bucket:%q, Object:%q", ateerrors.ReasonFailedGetExternalObject, bucket, object)
 		}
 		return nil, err
 	}
 	return output.Body, nil
+}
+
+// objectAbsent reports whether err is S3 saying the object is not there, as
+// opposed to failing to answer. Callers key real decisions on the difference:
+// the checkpoint fast-forward reads "absent" as "this snapshot has not been
+// committed yet" and goes on to take one, so anything it cannot classify has
+// to stay an error rather than be guessed at.
+//
+// Matching the modeled NoSuchKey alone is not enough. The SDK only produces it
+// when S3 returns a body it can deserialize into that shape, and several
+// ordinary absences do not arrive that way: a 404 carrying no error code at
+// all surfaces as a generic NotFound, NoSuchBucket is its own code, and
+// S3-compatible endpoints (MinIO, R2, Ceph) are not uniform about which they
+// send. The status code is what all of them agree on, so it carries the check
+// and the typed match stays for the case it names.
+//
+// Deliberately not here: 403. S3 answers AccessDenied instead of NoSuchKey for
+// a missing key when the caller lacks s3:ListBucket, so on those deployments an
+// ordinary absence is indistinguishable from a real permission failure -- and
+// reading a permission failure as "not committed" would re-run a destructive
+// checkpoint. Whether to require s3:ListBucket or to accept the ambiguity is a
+// deployment decision, not one this function can make.
+func objectAbsent(err error) bool {
+	if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
+		return true
+	}
+	if re, ok := errors.AsType[*awshttp.ResponseError](err); ok {
+		return re.HTTPStatusCode() == http.StatusNotFound
+	}
+	return false
 }
 
 func (s *s3Client) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {
