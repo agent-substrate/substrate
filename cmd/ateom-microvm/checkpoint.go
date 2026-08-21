@@ -29,8 +29,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/checkpointmarker"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"golang.org/x/sync/errgroup"
@@ -70,12 +72,55 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.setActiveRPC(rpcCheckpointWorkload, cancel)
 	defer s.clearActiveRPC()
 
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	actorUID := req.GetActorUid()
+
+	// A checkpoint that already completed is replayed from its marker rather
+	// than re-run: the first one tore the guest down, so there is nothing left
+	// to pause and snapshot (#372). Checked before anything else touches the
+	// actor, including the network teardown and the checkpoint-dir wipe below,
+	// which would destroy the very evidence this reads.
+	if rec, ok, err := checkpointmarker.Read(actorUID, req.GetScope().String()); err != nil {
+		return nil, err
+	} else if ok {
+		slog.InfoContext(ctx, "Checkpoint already completed for this actor; replaying its result",
+			slog.String("id", actorUID), slog.Any("snapshot_files", rec.SnapshotFiles))
+		// The marker is written before the teardown below, so an attempt that
+		// died in between left the VMM and its virtiofsds running, the actor
+		// still in s.running, and the actor network still up. Replaying the
+		// answer without finishing that teardown would strand the guest's
+		// memory on this node, let GetWorkloadStats report a checkpointed actor
+		// as running, and leave virtiofsd serving bundle dirs that atelet wipes
+		// as soon as it has this response. The teardown is best-effort and
+		// safe to repeat, so it runs here whether or not the first attempt got
+		// to it.
+		//
+		// Unless the ateom has moved on. Parts of the teardown are the ateom's,
+		// not the actor's — the interior network, the stats attribution — so
+		// running it for an actor this ateom no longer holds would cut the
+		// network out from under whoever holds it now. A marker outlives its
+		// attempt until resetActorDirs clears it, and a late retry can arrive
+		// after the ateom has been handed to someone else.
+		if held := s.activeActor.Load(); held != nil && held.UID != actorUID {
+			slog.WarnContext(ctx, "Not running the post-checkpoint teardown: this ateom now holds a different actor",
+				slog.String("id", actorUID), slog.String("active_actor_uid", held.UID))
+			return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: rec.SnapshotFiles}, nil
+		}
+		// A nil activeActor is not the reassignment case: it means nobody is
+		// holding this ateom, so there is nothing to protect, and a VMM the
+		// first attempt left running still needs shutting down. teardownActor
+		// reaches it through the conventional socket path when s.running has no
+		// record (ateom restarted).
+		if err := s.terminateWorkload(ctx, actorUID); err != nil {
+			slog.WarnContext(ctx, "Failed to terminate workload while replaying checkpoint",
+				slog.String("actorUID", actorUID), slog.Any("err", err))
+		}
+		return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: rec.SnapshotFiles}, nil
+	}
+
 	if err := s.deactivateActorNetworking(ctx); err != nil {
 		return nil, err
 	}
-
-	attribution := ateomstats.ActorAttributionFromRequest(req)
-	actorUID := req.GetActorUid()
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
@@ -105,8 +150,21 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
 	ra := s.running[actorUID]
-	client := ch.NewClient(chSocketFor(actorUID, ra))
+	chSocket := chSocketFor(actorUID, ra)
+	client := ch.NewClient(chSocket)
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
+		// WaitReady also fails on a VMM that is merely slow, which is worth
+		// retrying, so only the unambiguous case is called unrecoverable: no
+		// api-socket at all means no VMM to snapshot. Together with the absent
+		// marker above, that says the actor's state is gone rather than
+		// pending — the shape a replayed checkpoint takes when the first one
+		// tore the guest down but did not live to record it. Saying so with
+		// the crash directive stops the control plane retrying a call that can
+		// never succeed.
+		if _, statErr := os.Stat(chSocket); errors.Is(statErr, os.ErrNotExist) {
+			return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(),
+				fmt.Errorf("%w: no guest remains to checkpoint: api-socket %q is gone: %w", ateerrors.ReasonInvalidCheckpointResult, chSocket, err))
+		}
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
 	}
 
@@ -182,6 +240,18 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
 	}
 
+	// Record the result before the teardown below and before answering, so a
+	// caller that never sees this response can ask again and be told the same
+	// thing. From here on the checkpoint is a fact on disk.
+	//
+	// Failing here is safe, unlike in the gVisor ateom: the guest is only
+	// paused until the teardown below, so a retry re-runs this checkpoint from
+	// the top and succeeds. Refusing to answer without a marker therefore costs
+	// nothing and keeps the response and the marker in step.
+	if err := checkpointmarker.Write(actorUID, req.GetScope().String(), snapshotFiles); err != nil {
+		return nil, err
+	}
+
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
 	// already on disk for atelet to ship.
 	tTeardown := time.Now()
@@ -203,6 +273,45 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
+}
+
+// chSocketFor returns the actor's CH api-socket: the one ateom recorded when it
+// launched the VMM, or a conventional path when ateom has no in-memory record
+// of the actor (it restarted, or the actor is already torn down).
+//
+// Without a record there are two conventions to choose between, because
+// RunWorkload and RestoreWorkload launch their VMMs on different paths, and
+// nothing left on the node says which one this actor came up through. So the
+// socket that exists wins. Guessing the boot path for a restored actor would
+// aim a shutdown at a socket its VMM never listened on — and would have the
+// caller below read "this path is absent" as "no guest remains", crashing an
+// actor whose VMM is alive on the other one.
+func chSocketFor(actorUID string, ra *runningActor) string {
+	return firstExistingPath(chSocketCandidates(actorUID, ra))
+}
+
+// chSocketCandidates lists the api-socket paths the actor's VMM could be
+// listening on, likeliest first. One when ateom knows which socket it launched
+// the VMM on; otherwise both conventions, since the record is what would have
+// said whether this actor was booted or restored.
+func chSocketCandidates(actorUID string, ra *runningActor) []string {
+	if ra != nil && ra.apiSocket != "" {
+		return []string{ra.apiSocket}
+	}
+	return []string{kata.CLHSocketPath(actorUID), kata.RestoredCLHSocketPath(actorUID)}
+}
+
+// firstExistingPath returns the first candidate that is present, or the first
+// candidate when none is. None being present is an answer in itself — the
+// caller reads it as the guest being gone — so the likeliest path is returned
+// for the error to name.
+func firstExistingPath(candidates []string) string {
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return candidates[0]
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
@@ -262,44 +371,6 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	return dSnapshot, nil
 }
 
-// chSocketFor returns the actor's CH api-socket: the one ateom recorded when it
-// launched the VMM, or a conventional path when ateom has no in-memory record
-// of the actor (it restarted, or the actor is already torn down).
-//
-// Without a record there are two conventions to choose between, because
-// RunWorkload and RestoreWorkload launch their VMMs on different paths, and
-// nothing left on the node says which one this actor came up through. So the
-// socket that exists wins. Guessing the boot path for a restored actor would
-// aim a shutdown at a socket its VMM never listened on, leaving a guest running
-// that the caller believes it has torn down.
-func chSocketFor(actorUID string, ra *runningActor) string {
-	return firstExistingPath(chSocketCandidates(actorUID, ra))
-}
-
-// chSocketCandidates lists the api-socket paths the actor's VMM could be
-// listening on, likeliest first. One when ateom knows which socket it launched
-// the VMM on; otherwise both conventions, since the record is what would have
-// said whether this actor was booted or restored.
-func chSocketCandidates(actorUID string, ra *runningActor) []string {
-	if ra != nil && ra.apiSocket != "" {
-		return []string{ra.apiSocket}
-	}
-	return []string{kata.CLHSocketPath(actorUID), kata.RestoredCLHSocketPath(actorUID)}
-}
-
-// firstExistingPath returns the first candidate that is present, or the first
-// candidate when none is. None being present is an answer in itself -- the
-// caller reads it as the guest being gone -- so the likeliest path is returned
-// for the error to name.
-func firstExistingPath(candidates []string) string {
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return candidates[0]
-}
-
 // listFiles returns the (relative) names of regular files directly under dir.
 func listFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
@@ -308,7 +379,9 @@ func listFiles(dir string) ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if e.Type().IsRegular() {
+		// ateom's own completion marker shares the directory but is
+		// bookkeeping, not snapshot content, so it never joins the set.
+		if e.Type().IsRegular() && e.Name() != ateompath.CheckpointDoneFileName {
 			files = append(files, e.Name())
 		}
 	}
