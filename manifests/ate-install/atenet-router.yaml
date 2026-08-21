@@ -86,7 +86,8 @@ data:
     admin:
       address:
         socket_address:
-          # ipv4_compat is load-bearing: dataplane.go probes /ready over IPv4 loopback.
+          # ipv4_compat keeps `kubectl port-forward` to the admin port working;
+          # in-pod callers dial localhost and need no help.
           address: "::"
           ipv4_compat: true
           port_value: 9901

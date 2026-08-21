@@ -80,7 +80,7 @@ func TestCheckDataplane(t *testing.T) {
 		{
 			name:        "envoy",
 			router:      atenetRouterEnvoy,
-			wantURL:     "http://127.0.0.1:9901/ready",
+			wantURL:     "http://localhost:9901/ready",
 			response:    "LIVE",
 			wantMessage: "LIVE",
 		},
