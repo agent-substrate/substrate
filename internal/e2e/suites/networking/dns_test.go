@@ -127,3 +127,37 @@ func TestActorDNSZone(t *testing.T) {
 		}
 	})
 }
+
+// TestActorDNSAAAA asserts the zone publishes the router's IPv6 ClusterIP.
+//
+// Skipped unless the atenet-router Service actually has one, which is the
+// steady state on every single-stack cluster: a Service with no
+// ipFamilyPolicy is SingleStack and never gets a second ClusterIP, so there is
+// nothing an AAAA could correctly point at.
+//
+// Deliberately separate from TestActorDNSZone: it is the only assertion here
+// whose expected result changes when the cluster becomes dual-stack, so keeping
+// it its own function lets a dual-stack CI job exclude it while the AAAA
+// generator is still in flight.
+func TestActorDNSAAAA(t *testing.T) {
+	ctx := context.Background()
+
+	_, routerV6, err := e2e.RouterClusterIPs(ctx)
+	if err != nil {
+		t.Fatalf("reading atenet-router ClusterIPs: %v", err)
+	}
+	if routerV6 == "" {
+		t.Skip("atenet-router has no IPv6 ClusterIP; single-stack cluster, nothing to publish")
+	}
+
+	dns := mustDNSClient(t, ctx)
+	name := probeActorDNSName()
+
+	addrs, rcode, err := dns.Lookup(ctx, "ip6", name)
+	if rcode != e2e.DNSAnswered {
+		t.Fatalf("AAAA %s: %v (%v); want the router IPv6 ClusterIP %s", name, rcode, err, routerV6)
+	}
+	if !slices.Contains(addrs, routerV6) {
+		t.Fatalf("AAAA %s = %v; want it to contain the atenet-router IPv6 ClusterIP %s", name, addrs, routerV6)
+	}
+}
