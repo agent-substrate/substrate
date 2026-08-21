@@ -411,6 +411,10 @@ type AteomHerder struct {
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+
+	// Serializes node-local operations per actor; see actorLocks. Zero value
+	// is usable.
+	actorLocks actorLocks
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -447,6 +451,14 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+
+	// resetActorDirs below wipes the actor's checkpoint dir, which a checkpoint
+	// that is still uploading is reading from. See actorLocks.
+	release, err := s.lockActorFor("run", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	sandboxRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
@@ -555,6 +567,20 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+
+	// One node-local operation per actor at a time. A checkpoint reads the
+	// actor's checkpoint dir for as long as it is uploading, and every other
+	// operation here either wipes that dir or prunes the snapshots it is moving
+	// into. Two attempts at one actor can also overlap on their own -- a lease
+	// expires and a new leader retries while the original handler's connection
+	// is still alive.
+	//
+	// Held for the whole call, so nothing can interleave with the persist.
+	release, err := s.lockActorFor("checkpoint", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed. Phases left at zero never ran.
@@ -791,6 +817,15 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// The prune at the end of this call removes every local snapshot of the
+	// actor, including the destination a concurrent local checkpoint is part
+	// way through renaming files into. See actorLocks.
+	release, err := s.lockActorFor("paused-checkpoint upload", req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	tStart := time.Now()
 	var dPersist time.Duration
 	op := snapshotOp{
@@ -921,6 +956,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+
+	// resetActorDirs below wipes the actor's checkpoint dir, which a checkpoint
+	// that is still uploading is reading from. See actorLocks.
+	release, err := s.lockActorFor("restore", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	// Per-step timing so we can attribute resume latency between the rustfs
 	// download/decompress, the OCI image unpack, and ateom's own work. Logged at
@@ -1204,6 +1247,14 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
+
+	// resetActorDirs below wipes the actor's checkpoint dir, which a checkpoint
+	// that is still uploading is reading from. See actorLocks.
+	release, err := s.lockActorFor("terminate", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	var assetPaths map[string]string
 	sandboxRec, err := readSandboxRecord(actorUID)

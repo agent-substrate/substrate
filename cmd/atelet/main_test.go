@@ -380,6 +380,18 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 	}
 }
 
+func validTerminateRequest() *ateletpb.TerminateRequest {
+	return &ateletpb.TerminateRequest{
+		Atespace:               "ate-demo",
+		ActorName:              "counter-1",
+		ActorTemplateNamespace: "ate-demo",
+		ActorTemplateName:      "counter",
+		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
+		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
+	}
+}
+
 func validRestoreRequest() *ateletpb.RestoreRequest {
 	return &ateletpb.RestoreRequest{
 		Atespace:               "ate-demo",
@@ -1924,6 +1936,131 @@ func TestShouldHaveSnapshots(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := shouldHaveSnapshots(tc.req); got != tc.want {
 				t.Errorf("shouldHaveSnapshots() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func useTempActorsDir(t *testing.T) {
+	t.Helper()
+	orig := ateompath.ActorsDir
+	t.Cleanup(func() { ateompath.ActorsDir = orig })
+	ateompath.ActorsDir = t.TempDir()
+}
+
+func TestActorLocks(t *testing.T) {
+	var l actorLocks // zero value, as embedded in AteomHerder
+
+	release, ok := l.tryLock("actor-a")
+	if !ok {
+		t.Fatal("tryLock on a free actor returned false")
+	}
+	if _, ok := l.tryLock("actor-a"); ok {
+		t.Error("tryLock on a held actor returned true")
+	}
+	// Locks are per actor: a busy actor must not block any other.
+	releaseB, ok := l.tryLock("actor-b")
+	if !ok {
+		t.Error("tryLock on a different actor returned false")
+	}
+	releaseB()
+
+	release()
+	release() // idempotent: a second release must not free a later holder's claim
+	if _, ok := l.tryLock("actor-a"); !ok {
+		t.Error("tryLock after release returned false")
+	}
+
+	// Released entries are dropped rather than accumulating one per actor seen.
+	l.mu.Lock()
+	held := len(l.held)
+	l.mu.Unlock()
+	if held != 1 {
+		t.Errorf("held = %d entries, want 1 (only the outstanding lock)", held)
+	}
+}
+
+// Recovering a lost response made a re-entered Checkpoint succeed instead of
+// dying at ateom, which means two attempts at one actor can now both reach the
+// teardown that wipes the checkpoint dir the other is still uploading from.
+// The second attempt has to be turned away rather than run alongside the first.
+func TestCheckpointRejectsConcurrentAttemptForSameActor(t *testing.T) {
+	useTempActorsDir(t)
+	s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+
+	req := validCheckpointRequest()
+	release, ok := s.actorLocks.tryLock(req.GetActorUid())
+	if !ok {
+		t.Fatal("could not take the actor lock to stand in for an in-flight checkpoint")
+	}
+	defer release()
+
+	_, err := s.Checkpoint(context.Background(), req)
+	if status.Code(err) != codes.Aborted {
+		t.Errorf("Checkpoint code = %v (err=%v), want %v", status.Code(err), err, codes.Aborted)
+	}
+	// Aborted is retriable and must not carry the crash directive: the actor is
+	// fine, another attempt simply holds it.
+	if ateerrors.ActorCrashRequested(err) {
+		t.Error("the concurrent-attempt rejection asks the control plane to crash the actor")
+	}
+
+	// A different actor on the same node is unaffected. It fails for its own
+	// reasons (no sandbox record, no dialer); it must not fail as concurrent.
+	other := validCheckpointRequest()
+	other.ActorUid = "123e4567-e89b-12d3-a456-426614174001"
+	if _, err := s.Checkpoint(context.Background(), other); status.Code(err) == codes.Aborted {
+		t.Error("a checkpoint for a different actor was rejected as concurrent")
+	}
+}
+
+// The lock is only worth having if every RPC that clears the actor's on-node
+// state takes it: UploadPausedCheckpoint prunes its local snapshots, and Run,
+// Restore and Terminate reset its directories, each of them destroying what an
+// in-flight checkpoint is still reading from.
+func TestActorLockExcludesTheOtherNodeLocalOperations(t *testing.T) {
+	ctx := context.Background()
+	const actorUID = "123e4567-e89b-12d3-a456-426614174000"
+
+	tests := []struct {
+		name string
+		call func(*AteomHerder) error
+	}{
+		{"Run", func(s *AteomHerder) error {
+			_, err := s.Run(ctx, validRunRequest())
+			return err
+		}},
+		{"Restore", func(s *AteomHerder) error {
+			_, err := s.Restore(ctx, validRestoreRequest())
+			return err
+		}},
+		{"UploadPausedCheckpoint", func(s *AteomHerder) error {
+			_, err := s.UploadPausedCheckpoint(ctx, validUploadPausedCheckpointRequest())
+			return err
+		}},
+		{"Terminate", func(s *AteomHerder) error {
+			_, err := s.Terminate(ctx, validTerminateRequest())
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempActorsDir(t)
+			s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+
+			release, ok := s.actorLocks.tryLock(actorUID)
+			if !ok {
+				t.Fatal("could not take the actor lock to stand in for an in-flight checkpoint")
+			}
+			defer release()
+
+			err := tt.call(s)
+			if status.Code(err) != codes.Aborted {
+				t.Errorf("%s code = %v (err=%v), want %v", tt.name, status.Code(err), err, codes.Aborted)
+			}
+			// The actor is fine; another operation simply holds it.
+			if ateerrors.ActorCrashRequested(err) {
+				t.Errorf("%s's concurrent-operation rejection asks the control plane to crash the actor", tt.name)
 			}
 		})
 	}
