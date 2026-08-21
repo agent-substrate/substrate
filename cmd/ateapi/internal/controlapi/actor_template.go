@@ -234,3 +234,25 @@ func validateDeleteActorTemplateRequest(req *ateapipb.DeleteActorTemplateRequest
 
 	return errs
 }
+
+func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if sel.MatchLabels != nil {
+		const maxSelectorMatchLabels = 10
+		if n := len(sel.MatchLabels); n > maxSelectorMatchLabels {
+			return field.ErrorList{field.TooMany(fldPath.Child("match_labels"), n, maxSelectorMatchLabels)}
+		}
+
+		for k, v := range sel.MatchLabels {
+			for _, msg := range content.IsLabelKey(k) {
+				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), k, msg))
+			}
+			for _, msg := range content.IsLabelValue(v) {
+				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), v, msg))
+			}
+		}
+	}
+
+	return errs
+}

@@ -111,39 +111,39 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		}),
 		nil, // ignored on input
 	}, {
-		"worker_selector with nil match_labels",
-		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
-		nil,
-	}, {
-		"worker_selector with empty match_labels",
-		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{}} }),
-		nil,
-	}, {
 		"valid worker_selector",
 		validActor(func(a *ateapipb.Actor) {
 			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
 		}),
 		nil,
 	}, {
+		"worker_selector with nil match_labels",
+		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector"), nil, "one of").WithOrigin("union")},
+	}, {
+		"worker_selector with empty match_labels",
+		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{}} }),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector"), nil, "one of").WithOrigin("union")},
+	}, {
 		"worker_selector with exactly max match_labels",
 		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(10)} }),
 		nil,
+	}, {
+		"too many worker_selector.match_labels",
+		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)} }),
+		field.ErrorList{field.TooMany(field.NewPath("actor", "worker_selector", "match_labels"), 11, 10).WithOrigin("maxProperties")},
 	}, {
 		"invalid worker_selector label key",
 		validActor(func(a *ateapipb.Actor) {
 			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "1"}}
 		}),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels").Key("bad key!"), "bad key!", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels"), "bad key!", "").WithOrigin("format=k8s-label-key")},
 	}, {
 		"invalid worker_selector label value",
 		validActor(func(a *ateapipb.Actor) {
 			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}}
 		}),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels").Key("tier"), "not valid!", "")},
-	}, {
-		"too many worker_selector.match_labels",
-		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)} }),
-		field.ErrorList{field.TooMany(field.NewPath("actor", "worker_selector", "match_labels"), 11, 10)},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels").Key("tier"), "not valid!", "").WithOrigin("format=k8s-label-value")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -238,10 +238,52 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(func(a *ateapipb.Actor) { a.Status.State = 1234567890 }),
 		field.ErrorList{field.Invalid(field.NewPath("status", "state"), nil, "").WithOrigin("maximum")},
 	}, {
-		"worker_selector with nil match_labels",
+		"set valid worker_selector",
+		validInput(func(a *ateapipb.Actor) { a.WorkerSelector = nil }),
+		validOutput(func(a *ateapipb.Actor) {
+			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		}),
+		nil,
+	}, {
+		"clear worker_selector",
+		validInput(func(a *ateapipb.Actor) {
+			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		}),
+		validOutput(func(a *ateapipb.Actor) { a.WorkerSelector = nil }),
+		nil,
+	}, {
+		"modify worker_selector",
+		validInput(func(a *ateapipb.Actor) {
+			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		}),
+		validOutput(func(a *ateapipb.Actor) {
+			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "2"}}
+		}),
+		nil,
+	}, {
+		"invalid worker_selector with nil match_labels",
 		validInput(nil),
 		validOutput(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
-		nil,
+		field.ErrorList{field.Invalid(field.NewPath("worker_selector"), nil, "one of").WithOrigin("union")},
+	}, {
+		"invalid worker_selector label key",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"bad key": "2"}}
+		}),
+		field.ErrorList{field.Invalid(field.NewPath("worker_selector", "match_labels"), nil, "").WithOrigin("format=k8s-label-key")},
+	}, {
+		"invalid worker_selector label value",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "bad value"}}
+		}),
+		field.ErrorList{field.Invalid(field.NewPath("worker_selector", "match_labels").Key("tier"), nil, "").WithOrigin("format=k8s-label-value")},
+	}, {
+		"too many worker_selector.match_labels",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)} }),
+		field.ErrorList{field.TooMany(field.NewPath("worker_selector", "match_labels"), 11, 10).WithOrigin("maxProperties")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -372,26 +414,6 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 			field.Required(field.NewPath("actor", "metadata", "uid"), ""),
 			field.Required(field.NewPath("actor", "metadata", "version"), ""),
 		},
-	}, {
-		"nil worker_selector",
-		updateActorReq(),
-		nil,
-	}, {
-		"valid worker_selector",
-		updateActorReq(withSelector(map[string]string{"tier": "1"})),
-		nil,
-	}, {
-		"invalid worker_selector label key",
-		updateActorReq(withSelector(map[string]string{"bad key!": "1"})),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels").Key("bad key!"), "bad key!", "")},
-	}, {
-		"invalid worker_selector label value",
-		updateActorReq(withSelector(map[string]string{"tier": "not valid!"})),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels").Key("tier"), "not valid!", "")},
-	}, {
-		"too many worker_selector.match_labels",
-		updateActorReq(withSelector(selectorLabelsOfSize(11))),
-		field.ErrorList{field.TooMany(field.NewPath("actor", "worker_selector", "match_labels"), 11, 10)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

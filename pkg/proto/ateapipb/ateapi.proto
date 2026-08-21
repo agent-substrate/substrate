@@ -144,6 +144,14 @@ enum ActorSnapshotTagScope {
 // Selector matches worker pools by label.
 // Only equality-based matching is supported.
 message Selector {
+  // match_labels selects by exact equality on a set of labels.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:minProperties=1
+  // +k8s:maxProperties=10
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> match_labels = 1;
 }
 
@@ -256,6 +264,8 @@ message Actor {
   // evaluates the AND of this selector and the template's workerSelector to
   // find eligible pools.
   // Changes take effect on the next ResumeActor call.
+  //
+  // +k8s:optional
   Selector worker_selector = 5;
 
   // The tag specified by the caller at CreateActor to seed this Actor from an
@@ -425,6 +435,8 @@ message ActorTemplate {
 
   // worker_selector restricts which worker pools actors from this template
   // may use.
+  //
+  // +k8s:opaqueType
   Selector worker_selector = 2;
 
   repeated Container containers = 3;

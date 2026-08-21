@@ -227,9 +227,6 @@ func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRe
 		}
 	}
 
-	if val := actor.GetWorkerSelector(); val != nil {
-		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
-	}
 	if tag := actor.GetSourceSnapshotTag(); tag != nil {
 		errs = append(errs, resources.ValidateObjectRef(tag, actorPath.Child("source_snapshot_tag"))...)
 	}
@@ -378,8 +375,6 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 }
 
 func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRequest) field.ErrorList {
-	var fldPath *field.Path
-
 	// Call the generated validation.
 	// We model this as a create rather than an update because updates assume
 	// the existence of a "current" value, which we do not have yet.  This is
@@ -387,20 +382,7 @@ func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 	// we have a current value to compare against.
 	op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
 	errs := Validate_UpdateActorRequest(ctx, op, nil, req, nil)
-
-	actor := req.GetActor()
-	actorPath := fldPath.Child("actor")
-	if actor == nil {
-		// handled by DV
-		return errs
-	}
-
-	errs = append(errs, validateNoUnknownFields(actor, actorPath)...)
-
-	if selector := actor.GetWorkerSelector(); selector != nil {
-		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)
-	}
-
+	errs = append(errs, validateNoUnknownFields(req.Actor, field.NewPath("actor"))...)
 	return errs
 }
 
@@ -552,29 +534,5 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorL
 func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, validateOutput bool) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Update, Options: map[string]bool{"validateOutput": validateOutput}}
-	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
-
-	return errs
-}
-
-func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorList {
-	var errs field.ErrorList
-
-	if sel.MatchLabels != nil {
-		const maxSelectorMatchLabels = 10
-		if n := len(sel.MatchLabels); n > maxSelectorMatchLabels {
-			return field.ErrorList{field.TooMany(fldPath.Child("match_labels"), n, maxSelectorMatchLabels)}
-		}
-
-		for k, v := range sel.MatchLabels {
-			for _, msg := range content.IsLabelKey(k) {
-				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), k, msg))
-			}
-			for _, msg := range content.IsLabelValue(v) {
-				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), v, msg))
-			}
-		}
-	}
-
-	return errs
+	return Validate_Actor(ctx, op, fldPath, newVal, oldVal)
 }

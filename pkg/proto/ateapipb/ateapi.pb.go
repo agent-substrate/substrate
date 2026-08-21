@@ -591,8 +591,16 @@ func (x *LocalSnapshotInfo) GetContentScope() SnapshotContentScope {
 // Selector matches worker pools by label.
 // Only equality-based matching is supported.
 type Selector struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MatchLabels   map[string]string      `protobuf:"bytes,1,rep,name=match_labels,json=matchLabels,proto3" json:"match_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// match_labels selects by exact equality on a set of labels.
+	//
+	// +k8s:optional
+	// +k8s:unionMember
+	// +k8s:minProperties=1
+	// +k8s:maxProperties=10
+	// +k8s:eachKey=+k8s:format=k8s-label-key
+	// +k8s:eachVal=+k8s:format=k8s-label-value
+	MatchLabels   map[string]string `protobuf:"bytes,1,rep,name=match_labels,json=matchLabels,proto3" json:"match_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -867,6 +875,8 @@ type Actor struct {
 	// evaluates the AND of this selector and the template's workerSelector to
 	// find eligible pools.
 	// Changes take effect on the next ResumeActor call.
+	//
+	// +k8s:optional
 	WorkerSelector *Selector `protobuf:"bytes,5,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
 	// The tag specified by the caller at CreateActor to seed this Actor from an
 	// ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
@@ -1582,6 +1592,8 @@ type ActorTemplate struct {
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// worker_selector restricts which worker pools actors from this template
 	// may use.
+	//
+	// +k8s:opaqueType
 	WorkerSelector  *Selector        `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
 	Containers      []*Container     `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
 	Volumes         []*Volume        `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
