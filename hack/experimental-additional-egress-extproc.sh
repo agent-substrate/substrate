@@ -92,8 +92,10 @@ patch_atenet_egress_manifest() {
 
   # Both blocks are written at column zero; awk below re-indents each to the
   # marker it replaces, so the depth they nest to is the manifest's to decide.
+  # bash 3.2, which macOS ships, mis-parses a heredoc inside $( ) whose body
+  # holds an apostrophe. read keeps the trailing newline that $( ) would strip.
   local filter_block cluster_block
-  filter_block="$(cat <<EOF
+  IFS= read -r -d '' filter_block <<EOF || true
 # Added by hack/install-ate.sh
 # --experimental-additional-egress-extproc-service=${ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE}.
 # Spliced over each #ATE_MITM_EXTPROC_FILTER marker in
@@ -126,9 +128,9 @@ patch_atenet_egress_manifest() {
       disallow_system: true
       disallow_is_error: true
 EOF
-)" || return 1
+  filter_block="${filter_block%$'\n'}"
 
-  cluster_block="$(cat <<EOF
+  IFS= read -r -d '' cluster_block <<EOF || true
 # Added by hack/install-ate.sh
 # --experimental-additional-egress-extproc-service=${ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE}.
 # Spliced over the #ATE_MITM_EXTPROC_CLUSTER marker in
@@ -184,7 +186,7 @@ EOF
               address: ${address}
               port_value: ${port}
 EOF
-)" || return 1
+  cluster_block="${cluster_block%$'\n'}"
 
   # One per HTTP filter chain in mitm_listener.
   #
@@ -199,10 +201,12 @@ EOF
   # Anchored to the start of the line so that prose mentioning a marker -- the
   # mitm_listener comment in the manifest names both of them -- is not itself
   # replaced by a config block.
-  awk -v filter="${filter_block}" -v cluster="${cluster_block}" \
-      -v want_filters="${expected_filter_markers}" '
-    /^[ \t]*#ATE_MITM_EXTPROC_FILTER/  { splice(filter);  filters++;  next }
-    /^[ \t]*#ATE_MITM_EXTPROC_CLUSTER/ { splice(cluster); clusters++; next }
+  # Blocks reach awk through the environment, not -v: the awk macOS ships
+  # rejects a newline inside a -v assignment.
+  ATE_FILTER_BLOCK="${filter_block}" ATE_CLUSTER_BLOCK="${cluster_block}" \
+  awk -v want_filters="${expected_filter_markers}" '
+    /^[ \t]*#ATE_MITM_EXTPROC_FILTER/  { splice(ENVIRON["ATE_FILTER_BLOCK"]);  filters++;  next }
+    /^[ \t]*#ATE_MITM_EXTPROC_CLUSTER/ { splice(ENVIRON["ATE_CLUSTER_BLOCK"]); clusters++; next }
     { print }
     END {
       if (filters != want_filters || clusters != 1) {
