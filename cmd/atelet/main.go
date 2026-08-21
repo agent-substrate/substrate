@@ -614,6 +614,38 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		// actor whose volumes it is about to detach while they are still
 		// node-published. Both steps are idempotent, so re-running them here
 		// costs nothing when the first attempt did finish.
+		//
+		// Tearing down here is safe only because this request cannot outlive
+		// the suspend that sent it. finishCheckpoint is node-local and
+		// destructive -- it unpublishes the actor's volumes and wipes its
+		// bundle and runsc state dirs -- so what it needs is that no sandbox is
+		// still using them, and that is not what the manifest proves. The
+		// manifest is a fact about object storage; a live guest is a fact about
+		// this node, and the two are only related because of who sends this
+		// request.
+		//
+		// What relates them is ateapi's state machine, not anything here. The
+		// destination is minted once per suspend under a version CAS
+		// (ensureMarkedSuspending), and every re-drive of the suspend workflow
+		// re-reads the actor before dispatching, so an actor that has left
+		// SUSPENDING never has this URI re-sent to it. A resumed actor is
+		// RUNNING, and suspending it again mints a fresh destination that no
+		// manifest answers for. A stale request therefore cannot arrive at a
+		// live guest, and the fast-forward never tears one down.
+		//
+		// That is a load-bearing invariant owned by another service, which is
+		// why it is written down rather than left to be rediscovered. Note what
+		// it replaced: before the fast-forward, this teardown was reachable
+		// only after ateom.CheckpointWorkload returned, and that return WAS the
+		// proof the sandbox was gone -- safe by construction, depending on
+		// nothing outside this file. If the control plane ever re-dispatches an
+		// in-progress destination after the actor leaves SUSPENDING, that
+		// construction is gone and this branch needs local evidence of its own
+		// before running the teardown. The target ateom carries it:
+		// GetWorkloadStats is a lock-free read that answers NOT_FOUND for an
+		// actor it is not executing, and req.TargetAteomUid already names the
+		// pod to ask -- this branch simply returns before dialAteom and so asks
+		// nobody.
 		if err := s.finishCheckpoint(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 			return nil, err
 		}
