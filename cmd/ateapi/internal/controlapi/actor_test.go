@@ -85,21 +85,21 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validActor(func(a *ateapipb.Actor) { a.Metadata.Name = "ID1" }),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"missing actor_template_namespace",
+		"missing actor.actor_template_namespace",
 		validActor(func(a *ateapipb.Actor) { a.ActorTemplateNamespace = "" }),
 		field.ErrorList{field.Required(field.NewPath("actor", "actor_template_namespace"), "")},
 	}, {
-		"invalid actor_template_namespace",
+		"invalid actor.actor_template_namespace",
 		validActor(func(a *ateapipb.Actor) { a.ActorTemplateNamespace = "invalid value" }),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_namespace"), nil, "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_namespace"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"missing actor_template_name",
+		"missing actor.actor_template_name",
 		validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "" }),
 		field.ErrorList{field.Required(field.NewPath("actor", "actor_template_name"), "")},
 	}, {
 		"invalid actor_template_name",
 		validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "invalid value" }),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_name"), nil, "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_name"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
 		"unspecified actor.status",
 		validActor(func(a *ateapipb.Actor) { a.Status = nil }),
@@ -217,6 +217,32 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(nil),
 		validOutput(func(a *ateapipb.Actor) { a.Metadata.Name = "ID1" }),
 		field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("immutable")},
+	}, {
+		"missing actor.actor_template_namespace",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.ActorTemplateNamespace = "" }),
+		field.ErrorList{
+			field.Required(field.NewPath("actor_template_namespace"), ""),
+			field.Invalid(field.NewPath("actor_template_namespace"), nil, "").WithOrigin("immutable"),
+		},
+	}, {
+		"invalid actor.actor_template_namespace",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.ActorTemplateNamespace = "invalid value" }),
+		field.ErrorList{field.Invalid(field.NewPath("actor_template_namespace"), nil, "").WithOrigin("immutable")},
+	}, {
+		"missing actor.actor_template_name",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.ActorTemplateName = "" }),
+		field.ErrorList{
+			field.Required(field.NewPath("actor_template_name"), ""),
+			field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("immutable"),
+		},
+	}, {
+		"invalid actor.actor_template_name",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.ActorTemplateName = "invalid value" }),
+		field.ErrorList{field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("immutable")},
 	}, {
 		"unspecified actor.status",
 		validInput(func(a *ateapipb.Actor) { a.Status = &ateapipb.ActorStatus{} }),

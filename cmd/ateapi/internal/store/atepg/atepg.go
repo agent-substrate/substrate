@@ -631,12 +631,6 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 // validateUpdateActorMutation reports whether an actor mutation changed fields
 // that are immutable for the lifetime of the stored actor.
 func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) error {
-	if stored, mutated := storedActor.GetActorTemplateNamespace(), mutatedActor.GetActorTemplateNamespace(); stored != mutated {
-		return fmt.Errorf("actor_template_namespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
-		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
 	if stored, mutated := storedActor.GetActorTemplate(), mutatedActor.GetActorTemplate(); !proto.Equal(stored, mutated) {
 		return fmt.Errorf("actor_template is immutable: mutation changed it from %v to %v", stored, mutated)
 	}

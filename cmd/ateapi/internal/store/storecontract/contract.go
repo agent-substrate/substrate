@@ -428,32 +428,6 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 	})
 
-	t.Run("UpdateActor_ImmutableFields", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, testAtespace)
-
-		actor := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "test-template",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-		}
-		created, err := s.CreateActor(ctx, actor)
-		if err != nil {
-			t.Fatalf("CreateActor failed: %v", err)
-		}
-
-		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(dbActor *ateapipb.Actor) error {
-			dbActor.ActorTemplateName = "other-template"
-			return nil
-		}); err == nil {
-			t.Errorf("expected error updating actor_template_name, got nil")
-		} else if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrNotFound) {
-			t.Errorf("expected a plain immutable-field error, got sentinel %v", err)
-		}
-	})
-
 	t.Run("UpdateActor_MutateError", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

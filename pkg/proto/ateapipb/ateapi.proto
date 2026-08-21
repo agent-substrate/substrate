@@ -254,7 +254,13 @@ message Actor {
   ResourceMetadata metadata = 1;
 
   // TODO: delete both fields once we start using actor_template below.
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string actor_template_namespace = 2;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string actor_template_name = 3;
 
   // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
