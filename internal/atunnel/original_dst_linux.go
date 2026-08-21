@@ -42,15 +42,23 @@ func TCPOriginalDestination(conn net.Conn) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("atunnel: acquiring TCP syscall connection: %w", err)
 	}
+	// The IPv6 option is only meaningful on an AF_INET6 socket: on AF_INET the
+	// kernel returns EOPNOTSUPP, which would mask the real IPv4 error. A
+	// v4-mapped local address still means an IPv4 flow, so To4 is the test.
+	local, ok := tcpConn.LocalAddr().(*net.TCPAddr)
+	if !ok {
+		return "", fmt.Errorf("atunnel: original destination requires a TCP local address, got %T", tcpConn.LocalAddr())
+	}
+	isIPv6 := local.IP.To4() == nil
 
 	var sockoptErr error
 	var destination string
 	if err := rawConn.Control(func(fd uintptr) {
 		destination, sockoptErr = originalIPv4Destination(fd)
-		// Linux returns ENOENT when the IPv4 original-destination option is
-		// queried on a redirected IPv6 connection. Only then try the IPv6
-		// equivalent, so unrelated IPv4 failures retain their original error.
-		if errors.Is(sockoptErr, unix.ENOENT) {
+		// A pure-IPv6 socket leaves the inet addresses zeroed, so the IPv4
+		// conntrack lookup always misses with ENOENT. That is the redirected
+		// IPv6 connection, and the only case worth retrying.
+		if isIPv6 && errors.Is(sockoptErr, unix.ENOENT) {
 			destination, sockoptErr = originalIPv6Destination(fd)
 		}
 	}); err != nil {
