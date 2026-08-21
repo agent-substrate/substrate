@@ -66,7 +66,9 @@ func TestCheckpointWorkloadReplaySkipsTeardownForAReassignedAteom(t *testing.T) 
 		Ref: resources.ActorRef{Atespace: "ate-demo", Name: "counter-2"},
 		UID: "actor-2",
 	}
-	s := &AteomService{}
+	s := &AteomService{
+		lock: newCancelableMutex(),
+	}
 	s.activeActor.Store(successor)
 	s.guestStats.Store(&guestStatsTarget{actorUID: successor.UID})
 

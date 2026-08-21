@@ -149,20 +149,22 @@ func CleanupActorNetwork(ctx context.Context, interiorNetNS netns.NsHandle) erro
 		slog.WarnContext(ctx, "Failed to look up host veth; continuing actor netns cleanup", "err", err)
 	}
 
-	if err := NetNSDo(ctx, interiorNetNS, func(_ context.Context) error {
-		link, err := netlink.LinkByName(ActorVethName)
-		if err == nil {
-			if err := netlink.LinkDel(link); err != nil {
-				return fmt.Errorf("while deleting interior veth %q: %w", ActorVethName, err)
+	if interiorNetNS > 0 && interiorNetNS.IsOpen() {
+		if err := NetNSDo(ctx, interiorNetNS, func(_ context.Context) error {
+			link, err := netlink.LinkByName(ActorVethName)
+			if err == nil {
+				if err := netlink.LinkDel(link); err != nil {
+					return fmt.Errorf("while deleting interior veth %q: %w", ActorVethName, err)
+				}
+				return nil
+			}
+			if _, notFound := errors.AsType[netlink.LinkNotFoundError](err); !notFound {
+				return fmt.Errorf("while looking up interior veth %q: %w", ActorVethName, err)
 			}
 			return nil
+		}); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while cleaning interior netns links: %w", err))
 		}
-		if _, notFound := errors.AsType[netlink.LinkNotFoundError](err); !notFound {
-			return fmt.Errorf("while looking up interior veth %q: %w", ActorVethName, err)
-		}
-		return nil
-	}); err != nil {
-		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while cleaning interior netns links: %w", err))
 	}
 
 	return cleanupErr

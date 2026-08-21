@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/checkpointmarker"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 // testScope stands in for a CheckpointWorkloadRequest's stringified scope.
@@ -117,6 +118,48 @@ func TestCheckpointWorkloadReplaysCompletedCheckpoint(t *testing.T) {
 	}
 	if !slices.Equal(resp.GetSnapshotFiles(), want) {
 		t.Errorf("SnapshotFiles = %v, want %v (the recorded result, replayed verbatim)", resp.GetSnapshotFiles(), want)
+	}
+}
+
+// A marker outlives the attempt that wrote it until resetActorDirs clears it,
+// so a late retry can arrive after the ateom has been handed to another actor.
+// Parts of the post-checkpoint teardown are the ateom's rather than the
+// actor's — the interior network, the stats attribution — so running it then
+// would cut the network out from under the actor now holding the ateom.
+func TestCheckpointWorkloadReplaySkipsTeardownForAReassignedAteom(t *testing.T) {
+	const actorUID = "actor-1"
+	useTempActorsDir(t, actorUID)
+
+	want := []string{"checkpoint.img", "pages.img"}
+	if err := checkpointmarker.Write(actorUID, testScope, want); err != nil {
+		t.Fatalf("checkpointmarker.Write: %v", err)
+	}
+
+	// The ateom has moved on: it now runs a different actor.
+	successor := &resources.ActorAttribution{
+		Ref: resources.ActorRef{Atespace: "ate-demo", Name: "counter-2"},
+		UID: "actor-2",
+	}
+	s := newCheckpointTestService()
+	s.activeActor.Store(successor)
+
+	resp, err := s.CheckpointWorkload(context.Background(), &ateompb.CheckpointWorkloadRequest{
+		Atespace:  "ate-demo",
+		ActorName: "counter-1",
+		ActorUid:  actorUID,
+		Scope:     ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+	})
+	if err != nil {
+		t.Fatalf("CheckpointWorkload: %v", err)
+	}
+	// The recorded result is still owed to the caller: the checkpoint did
+	// happen, and only its teardown is someone else's business now.
+	if !slices.Equal(resp.GetSnapshotFiles(), want) {
+		t.Errorf("SnapshotFiles = %v, want %v (the recorded result, replayed verbatim)", resp.GetSnapshotFiles(), want)
+	}
+
+	if got := s.activeActor.Load(); got != successor {
+		t.Errorf("activeActor = %v, want the successor %v left untouched", got, successor)
 	}
 }
 

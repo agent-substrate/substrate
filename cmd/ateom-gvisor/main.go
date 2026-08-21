@@ -726,7 +726,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.setActiveRPC(rpcCheckpointWorkload, cancel)
 	defer s.clearActiveRPC()
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+	attribution := ateomstats.ActorAttributionFromRequest(req)
 
 	// A checkpoint that already completed is replayed from its marker rather
 	// than re-run: the first one took the sandbox down, so driving runsc again
@@ -737,9 +737,32 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	} else if ok {
 		slog.InfoContext(ctx, "Checkpoint already completed for this actor; replaying its result",
-			"actor", actorRef,
+			"actor", attribution.Ref,
 			"actorUID", req.GetActorUid(),
 			"snapshotFiles", rec.SnapshotFiles)
+		// The marker is written before the teardown below, so an attempt that
+		// died in between left container rootfs mounts attached and the actor
+		// network still up. Replaying the answer without finishing that
+		// teardown would leave mounts under bundle dirs that atelet wipes as
+		// soon as it has this response. The teardown is best-effort and safe
+		// to repeat, so it runs here whether or not the first attempt got to it.
+		//
+		// Unless the ateom has moved on. Parts of the teardown are the ateom's,
+		// not the actor's — the interior network, the stats attribution — so
+		// running it for an actor this ateom no longer holds would cut the
+		// network out from under whoever holds it now. A marker outlives its
+		// attempt until resetActorDirs clears it, and a late retry can arrive
+		// after the ateom has been handed to someone else.
+		if held := s.activeActor.Load(); held != nil && held.UID != req.GetActorUid() {
+			slog.WarnContext(ctx, "Not running the post-checkpoint teardown: this ateom now holds a different actor",
+				slog.String("id", req.GetActorUid()), slog.String("active_actor_uid", held.UID))
+			return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: rec.SnapshotFiles}, nil
+		}
+		if err := s.terminateWorkload(ctx, attribution.Ref, req.GetActorUid(), req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+			slog.WarnContext(ctx, "Failed to terminate workload while replaying checkpoint",
+				slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
+		}
+		s.activeSession = nil
 		return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: rec.SnapshotFiles}, nil
 	}
 
@@ -747,7 +770,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	}
 
-	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
 	// Contract with atelet:
@@ -821,15 +843,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// reporting its usage is then the honest answer.
 	s.activeActor.Store(nil)
 
-	// Cleanup the containers after checkpointing.
-	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
-		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", attribution.Ref.String()),
-			slog.String("actorUID", attribution.UID),
-			slog.Any("err", err))
-	}
-
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img plus any pages images), rather than a hardcoded list.
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
@@ -837,9 +850,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
 	}
 
-	// Record the result before answering, so a caller that never sees this
-	// response can ask again and be told the same thing. Written last: from
-	// here on the checkpoint is a fact on disk, whatever happens to the reply.
+	// Record the result before the teardown below and before answering, so a
+	// caller that never sees this response can ask again and be told the same
+	// thing. From here on the checkpoint is a fact on disk, whatever happens
+	// to the reply.
 	//
 	// A marker that cannot be written is logged and no more: it buys re-entry,
 	// it is not what makes the checkpoint valid. By this point the snapshot is
@@ -856,10 +870,19 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// keeps the response and the marker in step.
 	if err := checkpointmarker.Write(req.GetActorUid(), req.GetScope().String(), snapshotFiles); err != nil {
 		slog.ErrorContext(ctx, "Failed to record the checkpoint completion marker; answering anyway, but a lost response can no longer be replayed",
-			"actor", actorRef,
+			"actor", attribution.Ref,
 			"actorUID", req.GetActorUid(),
 			"snapshotFiles", snapshotFiles,
 			"err", err)
+	}
+
+	// Cleanup the containers after checkpointing.
+	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
+	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
+			slog.String("actor", attribution.Ref.String()),
+			slog.String("actorUID", attribution.UID),
+			slog.Any("err", err))
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
