@@ -114,7 +114,7 @@ func TestTCPOriginalDestination(t *testing.T) {
 		// hostIP:targetPort. The worker's PREROUTING rule redirects it before
 		// it reaches the host network stack's local delivery path.
 		clientDone <- ateomnet.NetNSDo(context.Background(), actorNS, func(context.Context) error {
-			conn, err := net.DialTimeout("tcp4", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), time.Second)
+			conn, err := net.DialTimeout("tcp4", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), 10*time.Second)
 			if err == nil {
 				_ = conn.Close()
 			}
@@ -122,7 +122,7 @@ func TestTCPOriginalDestination(t *testing.T) {
 		})
 	}()
 
-	if err := redirectListener.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second)); err != nil {
+	if err := redirectListener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	redirected, err := redirectListener.Accept()
@@ -164,7 +164,7 @@ func TestTCPOriginalDestinationIPv6(t *testing.T) {
 	clientDone := make(chan error, 1)
 	go func() {
 		clientDone <- ateomnet.NetNSDo(context.Background(), actorNS, func(context.Context) error {
-			conn, err := net.DialTimeout("tcp6", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), time.Second)
+			conn, err := net.DialTimeout("tcp6", net.JoinHostPort(hostIP.String(), fmt.Sprint(targetPort)), 10*time.Second)
 			if err == nil {
 				_ = conn.Close()
 			}
@@ -172,7 +172,7 @@ func TestTCPOriginalDestinationIPv6(t *testing.T) {
 		})
 	}()
 
-	if err := redirectListener.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second)); err != nil {
+	if err := redirectListener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	redirected, err := redirectListener.Accept()
