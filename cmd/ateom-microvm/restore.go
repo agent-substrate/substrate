@@ -325,7 +325,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 
 	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS). CH reopens
 	// /dev/vda (image) + each /dev/vd{b+i} (actor rootfs) from the snapshot config paths.
-	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api-restore.sock")
+	apiSocket := kata.RestoredCLHSocketPath(actorUID)
 	tTap := time.Now()
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
 		Binary: rr.chBinary, APISocket: apiSocket, Stdout: slogWriter{ctx}, Stderr: slogWriter{ctx},

@@ -316,25 +316,46 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	return nil
 }
 
-func (r *runsc) cmdState(ctx context.Context, containerName string) error {
-	reapLock.RLock()
-	defer reapLock.RUnlock()
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+// stateArgs builds the argv for `runsc state <container>`. Factored out so the
+// two forms below cannot drift, and so the argument construction can be
+// unit-tested without executing runsc.
+func (r *runsc) stateArgs(containerName string) []string {
+	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
 		"state",
 		containerName,
-	)
+	}
+}
+
+func (r *runsc) cmdState(ctx context.Context, containerName string) error {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	cmd := exec.CommandContext(ctx, r.path, r.stateArgs(containerName)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc state`: %w", err)
 	}
 	return nil
+}
+
+// cmdStateOutput is cmdState for callers that need to know WHY the state call
+// failed, not just that it did: `runsc state` reports "this container does not
+// exist" and "I could not ask" with the same exit status, so the distinction
+// lives only in its output. Captured rather than streamed to the ateom's own
+// stdout/stderr, so the caller decides what to log.
+func (r *runsc) cmdStateOutput(ctx context.Context, containerName string) ([]byte, error) {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	out, err := exec.CommandContext(ctx, r.path, r.stateArgs(containerName)...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("while running `runsc state`: %w", err)
+	}
+	return out, nil
 }
 
 // killArgs builds the argv for `runsc kill <container> <signal>`. Factored out
