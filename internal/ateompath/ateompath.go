@@ -178,6 +178,18 @@ func CheckpointStateDir(actorUID string) string {
 	)
 }
 
+// CheckpointDoneFileName is the filename of the checkpoint completion marker
+// written into CheckpointStateDir upon successful checkpoint.
+const CheckpointDoneFileName = "checkpoint-done.json"
+
+// CheckpointDoneFile returns the path to the actor's checkpoint completion marker file.
+func CheckpointDoneFile(actorUID string) string {
+	return filepath.Join(
+		CheckpointStateDir(actorUID),
+		CheckpointDoneFileName,
+	)
+}
+
 func LocalCheckpointsDir(actorUID string) string {
 	return filepath.Join(
 		ActorPath(actorUID),

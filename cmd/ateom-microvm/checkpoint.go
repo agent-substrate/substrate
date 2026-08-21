@@ -29,8 +29,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/checkpointmarker"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"golang.org/x/sync/errgroup"
@@ -70,12 +72,31 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.setActiveRPC(rpcCheckpointWorkload, cancel)
 	defer s.clearActiveRPC()
 
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	actorUID := req.GetActorUid()
+
+	// Replay a previously completed checkpoint for this actor if available.
+	if rec, ok, err := checkpointmarker.Read(actorUID, req.GetScope().String()); err != nil {
+		return nil, err
+	} else if ok {
+		slog.InfoContext(ctx, "Checkpoint already completed for this actor; replaying its result",
+			slog.String("id", actorUID), slog.Any("snapshot_files", rec.SnapshotFiles))
+		// Finish any pending workload termination, unless the ateom now holds a different actor.
+		if held := s.activeActor.Load(); held != nil && held.UID != actorUID {
+			slog.WarnContext(ctx, "Not running the post-checkpoint teardown: this ateom now holds a different actor",
+				slog.String("id", actorUID), slog.String("active_actor_uid", held.UID))
+			return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: rec.SnapshotFiles}, nil
+		}
+		if err := s.terminateWorkload(ctx, actorUID); err != nil {
+			slog.WarnContext(ctx, "Failed to terminate workload while replaying checkpoint",
+				slog.String("actorUID", actorUID), slog.Any("err", err))
+		}
+		return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: rec.SnapshotFiles}, nil
+	}
+
 	if err := s.deactivateActorNetworking(ctx); err != nil {
 		return nil, err
 	}
-
-	attribution := ateomstats.ActorAttributionFromRequest(req)
-	actorUID := req.GetActorUid()
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
@@ -111,6 +132,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 	client := ch.NewClient(chSocket)
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
+		// If the API socket is completely gone, the VMM no longer exists (unrecoverable).
+		// Otherwise, treat as a potentially retriable transient error.
+		if _, statErr := os.Stat(chSocket); errors.Is(statErr, os.ErrNotExist) {
+			return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(),
+				fmt.Errorf("%w: no guest remains to checkpoint: api-socket %q is gone: %w", ateerrors.ReasonInvalidCheckpointResult, chSocket, err))
+		}
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
 	}
 
@@ -184,6 +211,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
+	}
+
+	// Record checkpoint completion before teardown. In micro-VM, failing here is safe
+	// because the guest is only paused and can be retried from the top.
+	if err := checkpointmarker.Write(actorUID, req.GetScope().String(), snapshotFiles); err != nil {
+		return nil, err
 	}
 
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
@@ -274,7 +307,9 @@ func listFiles(dir string) ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if e.Type().IsRegular() {
+		// ateom's own completion marker shares the directory but is
+		// bookkeeping, not snapshot content, so it never joins the set.
+		if e.Type().IsRegular() && e.Name() != ateompath.CheckpointDoneFileName {
 			files = append(files, e.Name())
 		}
 	}
