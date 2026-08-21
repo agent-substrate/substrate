@@ -37,7 +37,8 @@ data:
   envoy.yaml: |
     admin:
       address:
-        # ipv4_compat is load-bearing: see --envoy-admin-address below.
+        # ipv4_compat is load-bearing: the probes below are the kubelet
+        # dialling the pod IP, which is IPv4 on an IPv4 cluster.
         socket_address: { address: "::", ipv4_compat: true, port_value: 15000 }
     static_resources:
       listeners:
@@ -307,7 +308,7 @@ spec:
         # defaults to (that is the ingress gateway's port). Without this the
         # drain sequence dials a closed port, reads the connection refusal as
         # "Envoy already exited", and reports a drain it never performed.
-        - --envoy-admin-address=127.0.0.1:15000
+        - --envoy-admin-address=localhost:15000
         env:
         - name: POD_NAME
           valueFrom:
