@@ -23,13 +23,22 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
-// pruneLocalCheckpoints removes every local snapshot of the actor.
+// pruneLocalCheckpoints removes the actor's local snapshots, except the one
+// named by keep (pass "" to remove them all).
+//
+// keep is the destination of a checkpoint currently being written. An earlier
+// attempt at that same checkpoint may already have moved files into it, and
+// those files are the only copy: the rename took them out of the checkpoint
+// dir, and the snapshot is not committed until its manifest lands, so nothing
+// would re-create them. Pruning the destination would therefore destroy a
+// half-moved snapshot that the move is about to finish.
+//
 // Best-effort: failures are logged, never fatal.
-func pruneLocalCheckpoints(ctx context.Context, actorUID string) {
-	pruneLocalCheckpointDir(ctx, ateompath.LocalCheckpointsDir(actorUID))
+func pruneLocalCheckpoints(ctx context.Context, actorUID, keep string) {
+	pruneLocalCheckpointDir(ctx, ateompath.LocalCheckpointsDir(actorUID), keep)
 }
 
-func pruneLocalCheckpointDir(ctx context.Context, dir string) {
+func pruneLocalCheckpointDir(ctx context.Context, dir, keep string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -38,6 +47,9 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string) {
 		return
 	}
 	for _, entry := range entries {
+		if keep != "" && entry.Name() == keep {
+			continue
+		}
 		path := filepath.Join(dir, entry.Name())
 		if err := os.RemoveAll(path); err != nil {
 			slog.WarnContext(ctx, "failed to prune local checkpoint", slog.String("path", path), slog.Any("err", err))
@@ -45,5 +57,6 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string) {
 		}
 		slog.InfoContext(ctx, "pruned local checkpoint", slog.String("path", path))
 	}
+	// Only removes the directory when it is empty, so a kept snapshot stays.
 	_ = os.Remove(dir)
 }
