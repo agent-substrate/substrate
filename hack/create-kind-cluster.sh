@@ -146,14 +146,16 @@ if [[ "${IP_FAMILY}" != "ipv4" &&
 fi
 
 # For ipv6 kind writes a kubeconfig pointing at [::1], the address it published
-# the apiserver on, which only works for a client on the Docker host itself: a
-# VM-hosted daemon (Lima on macOS) forwards the port to the *v4* loopback, so
-# every kubectl below fails at connect. localhost is a SAN on the apiserver
-# cert and lets the client pick a family that works from either side.
+# the apiserver on. That works for a client on the Docker host itself but not
+# behind a VM-hosted daemon (Lima on macOS), which forwards the port to the *v4*
+# loopback. localhost is a SAN on the apiserver cert and covers that case.
+# Don't guess the platform; ask the apiserver. Debian-family hosts name ::1
+# ip6-localhost / ip6-loopback, not localhost. See issue #1099 and PR #958.
 if [[ "${IP_FAMILY}" == "ipv6" ]]; then
   server="$(kubectl config view \
     -o jsonpath="{.clusters[?(@.name==\"${KUBECTL_CONTEXT}\")].cluster.server}")"
-  if [[ "${server}" == "https://[::1]:"* ]]; then
+  if [[ "${server}" == "https://[::1]:"* ]] &&
+    ! kubectl --context="${KUBECTL_CONTEXT}" get --raw /healthz >/dev/null 2>&1; then
     echo "Repointing the kubeconfig for '${KUBECTL_CONTEXT}' at localhost..."
     kubectl config set-cluster "${KUBECTL_CONTEXT}" \
       --server="https://localhost:${server##*:}" >/dev/null
