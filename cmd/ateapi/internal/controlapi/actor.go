@@ -387,18 +387,6 @@ func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 	// we have a current value to compare against.
 	op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
 	errs := Validate_UpdateActorRequest(ctx, op, nil, req, nil)
-	if req.Actor != nil && req.Actor.Metadata != nil {
-		// TODO: Once we drop the fieldmask, we can do a full validation of the input actor and don't need this.
-		errs = append(errs, Validate_ResourceMetadata(ctx, op, field.NewPath("actor", "metadata"), req.Actor.Metadata, nil)...)
-		// This is an update, so the UID and version must be set.  When those
-		// become optional, we can drop this.
-		if req.Actor.Metadata.Uid == "" {
-			errs = append(errs, field.Required(field.NewPath("actor", "metadata", "uid"), ""))
-		}
-		if req.Actor.Metadata.Version == 0 {
-			errs = append(errs, field.Required(field.NewPath("actor", "metadata", "version"), ""))
-		}
-	}
 
 	actor := req.GetActor()
 	actorPath := fldPath.Child("actor")

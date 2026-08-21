@@ -15,12 +15,16 @@
 package controlapi
 
 import (
+	"context"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protopath"
 	"google.golang.org/protobuf/reflect/protorange"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -86,4 +90,26 @@ func protoDeepEqual[T any](a, b T) bool {
 		panic("protoDeepEqual: b is not a proto.Message")
 	}
 	return proto.Equal(pa, pb)
+}
+
+// This exists only because nested subfield tags are not supported yet.
+func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.Operation, fldPath *field.Path, actor, _ *ateapipb.Actor) field.ErrorList {
+	if actor == nil || actor.Metadata == nil {
+		return nil // handled by DV
+	}
+
+	// TODO: Once we drop the fieldmask, we can do a full validation of the
+	// input actor and don't need this.
+	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
+
+	// This is an update request, so the UID and version must be set.  When
+	// those become optional or when we have nested subfield tags, we can drop
+	// this.
+	if actor.Metadata.Uid == "" {
+		errs = append(errs, field.Required(field.NewPath("actor", "metadata", "uid"), ""))
+	}
+	if actor.Metadata.Version == 0 {
+		errs = append(errs, field.Required(field.NewPath("actor", "metadata", "version"), ""))
+	}
+	return errs
 }
