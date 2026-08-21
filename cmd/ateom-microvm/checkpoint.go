@@ -105,11 +105,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
 	ra := s.running[actorUID]
-	chSocket := kata.CLHSocketPath(actorUID)
-	if ra != nil && ra.apiSocket != "" {
-		chSocket = ra.apiSocket
-	}
-	client := ch.NewClient(chSocket)
+	client := ch.NewClient(chSocketFor(actorUID, ra))
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
 	}
@@ -266,6 +262,44 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	return dSnapshot, nil
 }
 
+// chSocketFor returns the actor's CH api-socket: the one ateom recorded when it
+// launched the VMM, or a conventional path when ateom has no in-memory record
+// of the actor (it restarted, or the actor is already torn down).
+//
+// Without a record there are two conventions to choose between, because
+// RunWorkload and RestoreWorkload launch their VMMs on different paths, and
+// nothing left on the node says which one this actor came up through. So the
+// socket that exists wins. Guessing the boot path for a restored actor would
+// aim a shutdown at a socket its VMM never listened on, leaving a guest running
+// that the caller believes it has torn down.
+func chSocketFor(actorUID string, ra *runningActor) string {
+	return firstExistingPath(chSocketCandidates(actorUID, ra))
+}
+
+// chSocketCandidates lists the api-socket paths the actor's VMM could be
+// listening on, likeliest first. One when ateom knows which socket it launched
+// the VMM on; otherwise both conventions, since the record is what would have
+// said whether this actor was booted or restored.
+func chSocketCandidates(actorUID string, ra *runningActor) []string {
+	if ra != nil && ra.apiSocket != "" {
+		return []string{ra.apiSocket}
+	}
+	return []string{kata.CLHSocketPath(actorUID), kata.RestoredCLHSocketPath(actorUID)}
+}
+
+// firstExistingPath returns the first candidate that is present, or the first
+// candidate when none is. None being present is an answer in itself -- the
+// caller reads it as the guest being gone -- so the likeliest path is returned
+// for the error to name.
+func firstExistingPath(candidates []string) string {
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return candidates[0]
+}
+
 // listFiles returns the (relative) names of regular files directly under dir.
 func listFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
@@ -373,12 +407,12 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorUID string) e
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 
+	// chSocketFor, not the Run convention alone: with no in-memory record (this
+	// ateom restarted) a restored actor's VMM is listening on the restore
+	// socket, and aiming the shutdown at the path it never listened on would
+	// leave the guest running.
 	ra := s.running[actorUID]
-	chSocket := kata.CLHSocketPath(actorUID)
-	if ra != nil && ra.apiSocket != "" {
-		chSocket = ra.apiSocket
-	}
-	client := ch.NewClient(chSocket)
+	client := ch.NewClient(chSocketFor(actorUID, ra))
 
 	if err := s.teardownActor(ctx, actorUID, ra, client); err != nil {
 		errs = append(errs, fmt.Errorf("while tearing down actor: %w", err))

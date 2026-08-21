@@ -37,3 +37,12 @@ const vcVMDir = "/run/vc/vm"
 func CLHSocketPath(id string) string {
 	return filepath.Join(vcVMDir, id, "clh-api.sock")
 }
+
+// RestoredCLHSocketPath is CLHSocketPath's counterpart for a VMM relaunched by
+// a restore, which listens on a path of its own. Named here beside the boot
+// path so that code reaching for an actor's api-socket without ateom's own
+// record of it has both conventions in one place, rather than assuming the
+// actor was booted rather than restored.
+func RestoredCLHSocketPath(id string) string {
+	return filepath.Join(vcVMDir, id, "clh-api-restore.sock")
+}
