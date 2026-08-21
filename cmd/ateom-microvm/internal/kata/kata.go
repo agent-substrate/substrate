@@ -31,9 +31,12 @@ import (
 // cloud-hypervisor API socket and the hybrid-vsock socket).
 const vcVMDir = "/run/vc/vm"
 
-// CLHSocketPath returns the default cloud-hypervisor API socket path for the
-// sandbox with the given id (the per-sandbox runtime dir). ateom records the
-// actual api-socket it launched the VMM on, but uses this as the fallback.
+// CLHSocketPath returns the cloud-hypervisor API socket path for a booted actor.
 func CLHSocketPath(id string) string {
 	return filepath.Join(vcVMDir, id, "clh-api.sock")
+}
+
+// RestoredCLHSocketPath returns the cloud-hypervisor API socket path for a restored actor.
+func RestoredCLHSocketPath(id string) string {
+	return filepath.Join(vcVMDir, id, "clh-api-restore.sock")
 }
