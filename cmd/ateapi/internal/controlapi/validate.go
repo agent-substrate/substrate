@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -80,16 +81,19 @@ func toGRPCInternalError(errs field.ErrorList) error {
 	return status.Error(codes.Internal, errs.ToAggregate().Error())
 }
 
-func protoDeepEqual[T any](a, b T) bool {
-	pa, ok := any(a).(proto.Message)
-	if !ok {
-		panic("protoDeepEqual: a is not a proto.Message")
+func ateDeepEqual[T any](a, b T) bool {
+	if pa, pb := asProtoMessage(a), asProtoMessage(b); pa != nil && pb != nil {
+		return proto.Equal(pa, pb)
 	}
-	pb, ok := any(b).(proto.Message)
+	return reflect.DeepEqual(a, b)
+}
+
+func asProtoMessage(x any) proto.Message {
+	pm, ok := x.(proto.Message)
 	if !ok {
-		panic("protoDeepEqual: b is not a proto.Message")
+		return nil
 	}
-	return proto.Equal(pa, pb)
+	return pm
 }
 
 // This exists only because nested subfield tags are not supported yet.

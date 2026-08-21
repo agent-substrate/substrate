@@ -43,7 +43,7 @@ func Validate_Actor(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if protoDeepEqual(obj, oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -99,7 +99,7 @@ func Validate_Actor(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if protoDeepEqual(obj, oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -194,7 +194,7 @@ func Validate_CreateActorRequest(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if protoDeepEqual(obj, oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -390,7 +390,7 @@ func Validate_ResourceMetadata(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if protoDeepEqual(obj, oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -426,7 +426,7 @@ func Validate_ResourceMetadata(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if protoDeepEqual(obj, oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -467,7 +467,7 @@ func Validate_UpdateActorRequest(
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
-				if protoDeepEqual(obj, oldObj) {
+				if ateDeepEqual(obj, oldObj) {
 					return nil
 				}
 			}
@@ -509,5 +509,5 @@ func Validate_UpdateActorRequest(
 
 // deepEqualImpl_ is a validate.MatchFunc which allows the implementation of deep-equality to be defined at codegen time.
 func deepEqualImpl_[T any](a, b T) bool {
-	return protoDeepEqual(a, b)
+	return ateDeepEqual(a, b)
 }
