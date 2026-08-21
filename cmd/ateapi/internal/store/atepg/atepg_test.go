@@ -109,6 +109,39 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	return containerPool
 }
 
+func TestMigrationsConcurrentStartup(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+		t.Fatalf("resetting PostgreSQL schema: %v", err)
+	}
+
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			p, err := NewPersistence(ctx, pool)
+			if p != nil {
+				p.Close()
+			}
+			errs <- err
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("NewPersistence failed: %v", err)
+		}
+	}
+
+	var version int
+	var dirty bool
+	if err := pool.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty); err != nil {
+		t.Fatalf("reading migration version: %v", err)
+	}
+	if version != 1 || dirty {
+		t.Fatalf("migration state = (%d, %t), want (1, false)", version, dirty)
+	}
+}
+
 func setupPostgresPersistence(t *testing.T) *Persistence {
 	t.Helper()
 	ctx := context.Background()

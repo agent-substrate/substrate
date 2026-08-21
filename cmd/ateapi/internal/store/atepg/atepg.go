@@ -63,9 +63,8 @@ type Persistence struct {
 var _ store.Interface = (*Persistence)(nil)
 
 // Connect opens a pgxpool against dsn, verifies connectivity, and applies the
-// embedded schema. Startup fails if the database cannot be reached. A second,
-// two-connection watch pool (owned by the Persistence, closed by Close) isolates
-// outbox polling and maintenance from write traffic.
+// pending schema migrations. Startup fails if the database cannot be reached.
+// A dedicated watch pool isolates outbox polling and maintenance from writes.
 func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -99,7 +98,7 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 	return p, nil
 }
 
-// NewPersistence wraps an already-open pool, applying the idempotent schema.
+// NewPersistence wraps an already-open pool, applying pending migrations.
 // Callers that already hold a pool (e.g. tests using testcontainers) use
 // this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
@@ -107,7 +106,7 @@ func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, erro
 }
 
 func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
-	if err := applySchema(ctx, pool); err != nil {
+	if err := applyMigrations(ctx, pool); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
