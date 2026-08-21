@@ -196,25 +196,10 @@ func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace s
 }
 
 func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
-	var fldPath *field.Path
-
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
 	errs := Validate_CreateActorRequest(ctx, op, nil, req, nil)
-
-	actor := req.GetActor()
-	actorPath := fldPath.Child("actor")
-	if actor == nil {
-		// handled by DV
-		return errs
-	}
-
-	errs = append(errs, validateNoUnknownFields(actor, actorPath)...)
-
-	if tag := actor.GetSourceSnapshotTag(); tag != nil {
-		errs = append(errs, resources.ValidateObjectRef(tag, actorPath.Child("source_snapshot_tag"))...)
-	}
-
+	errs = append(errs, validateNoUnknownFields(req.Actor, field.NewPath("actor"))...)
 	return errs
 }
 

@@ -648,8 +648,8 @@ type ResourceMetadata struct {
 	// atespace is the namespace the resource belongs to. Empty for global-scoped
 	// resources. Caller-specified at creation and immutable thereafter.
 	//
-	// Atespaced resources should add +k8s:subfield(atespace)=+k8s:required
-	// Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
+	// Atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`
+	// Non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
 	// +k8s:immutable
@@ -876,6 +876,9 @@ type Actor struct {
 	// +k8s:immutable
 	ActorTemplateName string `protobuf:"bytes,3,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
+	// +k8s:optional # TODO: this should be required?
+	// +k8s:subfield(atespace)=+k8s:required
+	// +k8s:immutable # TODO: is this mutable?
 	ActorTemplate *ObjectRef `protobuf:"bytes,4,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	// worker_selector is the per-actor placement constraint. The scheduler
 	// evaluates the AND of this selector and the template's workerSelector to
@@ -887,6 +890,10 @@ type Actor struct {
 	// The tag specified by the caller at CreateActor to seed this Actor from an
 	// ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
 	// once at creation and immutable afterward.
+	//
+	// +k8s:optional
+	// +k8s:subfield(atespace)=+k8s:required
+	// +k8s:immutable
 	SourceSnapshotTag *ObjectRef `protobuf:"bytes,6,opt,name=source_snapshot_tag,json=sourceSnapshotTag,proto3" json:"source_snapshot_tag,omitempty"`
 	// status is the system-managed state of the Actor. It is updated by the
 	// server and ignored on input. It is always present in output.
@@ -990,6 +997,7 @@ type ActorStatus struct {
 	WorkerAssignment       *WorkerAssignment `protobuf:"bytes,2,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`
 	InProgressSnapshotName string            `protobuf:"bytes,3,opt,name=in_progress_snapshot_name,json=inProgressSnapshotName,proto3" json:"in_progress_snapshot_name,omitempty"`
 	// The latest durable snapshot created for this Actor.
+	// +k8s:opaqueType
 	LatestSnapshot *ObjectRef `protobuf:"bytes,4,opt,name=latest_snapshot,json=latestSnapshot,proto3" json:"latest_snapshot,omitempty"`
 	// Node-local state used only while the Actor is paused.
 	LocalSnapshotInfo *LocalSnapshotInfo `protobuf:"bytes,5,opt,name=local_snapshot_info,json=localSnapshotInfo,proto3" json:"local_snapshot_info,omitempty"`
@@ -1105,6 +1113,7 @@ type ActorSourceSnapshotStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The (atespace, name) of the snapshot the tag resolved to at
 	// creation time.
+	// +k8s:opaqueType
 	Snapshot *ObjectRef `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// UID of the snapshot resolved at creation time.
 	SnapshotUid   string `protobuf:"bytes,2,opt,name=snapshot_uid,json=snapshotUid,proto3" json:"snapshot_uid,omitempty"`
@@ -1172,6 +1181,7 @@ type WorkerAssignment struct {
 	// readers on a hot path do not have to fetch the Worker at all.
 	//
 	// Workers are global-scoped, so this carries no atespace.
+	// +k8s:opaqueType
 	Worker *ObjectRef `protobuf:"bytes,6,opt,name=worker,proto3" json:"worker,omitempty"`
 	// worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
 	WorkerNamespace string `protobuf:"bytes,1,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
@@ -1315,16 +1325,18 @@ func (x *ActorSnapshot) GetStatus() *ActorSnapshotStatus {
 }
 
 type ActorSnapshotStatus struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	SourceActor            *ObjectRef             `protobuf:"bytes,1,opt,name=source_actor,json=sourceActor,proto3" json:"source_actor,omitempty"`
-	SourceActorUid         string                 `protobuf:"bytes,2,opt,name=source_actor_uid,json=sourceActorUid,proto3" json:"source_actor_uid,omitempty"`
-	SourceActorVersion     int64                  `protobuf:"varint,3,opt,name=source_actor_version,json=sourceActorVersion,proto3" json:"source_actor_version,omitempty"`
-	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
-	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	ActorTemplateUid       string                 `protobuf:"bytes,6,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
-	ContentScope           SnapshotContentScope   `protobuf:"varint,7,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
-	SnapshotUri            string                 `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	SourceActor            *ObjectRef           `protobuf:"bytes,1,opt,name=source_actor,json=sourceActor,proto3" json:"source_actor,omitempty"`
+	SourceActorUid         string               `protobuf:"bytes,2,opt,name=source_actor_uid,json=sourceActorUid,proto3" json:"source_actor_uid,omitempty"`
+	SourceActorVersion     int64                `protobuf:"varint,3,opt,name=source_actor_version,json=sourceActorVersion,proto3" json:"source_actor_version,omitempty"`
+	ActorTemplateNamespace string               `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
+	ActorTemplateName      string               `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	ActorTemplateUid       string               `protobuf:"bytes,6,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
+	ContentScope           SnapshotContentScope `protobuf:"varint,7,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
+	SnapshotUri            string               `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// Immutable reference to the actor_template where the snapshot was created from.
+	// +k8s:opaqueType
 	ActorTemplate *ObjectRef `protobuf:"bytes,9,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1429,7 +1441,8 @@ type ActorSnapshotTag struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: name, uid, version, timestamps.
 	// +k8s:opaqueType
-	Metadata      *ResourceMetadata     `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	// +k8s:opaqueType
 	Snapshot      *ObjectRef            `protobuf:"bytes,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	Scope         ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1538,10 +1551,19 @@ func (x *Atespace) GetMetadata() *ResourceMetadata {
 // ObjectRef references a Substrate resource by its (atespace, name) identity.
 type ObjectRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The atespace where the resource lives. Empty if the resource is global-scoped.
+	// The atespace of the referenced resource. This field should be empty if the
+	// target resource is global-scoped, but references to objects in the same
+	// atespace as the referrer must still populate this field.
+	//
+	// References to atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`
+	// References to non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	// The name of the resource. Required. Unique within an atespace, or globally
-	// unique if the resource is global-scoped.
+	// The name of the referenced resource. This field is required.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1807,6 +1829,7 @@ type ActorTemplateStatus struct {
 	// golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
 	// system atespace, built for this version by ate-api. Set once state is
 	// READY.
+	// +k8s:opaqueType
 	GoldenSnapshot *ObjectRef `protobuf:"bytes,3,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
 	// sandbox_assets is the referenced SandboxConfig's content frozen at
 	// creation time.
@@ -2757,8 +2780,9 @@ func (x *CreateAtespaceRequest) GetAtespace() *Atespace {
 }
 
 type GetAtespaceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Atespace      *ObjectRef             `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2912,8 +2936,9 @@ func (x *ListAtespacesResponse) GetNextPageToken() string {
 }
 
 type DeleteAtespaceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Atespace      *ObjectRef             `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3003,8 +3028,9 @@ func (x *CreateActorTemplateRequest) GetActorTemplate() *ActorTemplate {
 }
 
 type GetActorTemplateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorTemplate *ObjectRef             `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	ActorTemplate *ObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3169,8 +3195,9 @@ func (x *ListActorTemplatesResponse) GetNextPageToken() string {
 }
 
 type DeleteActorTemplateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorTemplate *ObjectRef             `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	ActorTemplate *ObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3213,8 +3240,9 @@ func (x *DeleteActorTemplateRequest) GetActorTemplate() *ObjectRef {
 }
 
 type GetActorRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3364,8 +3392,9 @@ func (x *UpdateActorRequest) GetActor() *Actor {
 }
 
 type SuspendActorRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3452,8 +3481,9 @@ func (x *SuspendActorResponse) GetActor() *Actor {
 }
 
 type PauseActorRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3541,7 +3571,8 @@ func (x *PauseActorResponse) GetActor() *Actor {
 
 type ResumeActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Actor *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	// +k8s:opaqueType
+	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// If true, skip golden snapshot and boot the workload from scratch.
 	Boot          bool `protobuf:"varint,2,opt,name=boot,proto3" json:"boot,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -3647,9 +3678,10 @@ func (x *ResumeActorResponse) GetResumed() bool {
 }
 
 type DeleteActorRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actor         *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
-	AnyState      bool                   `protobuf:"varint,2,opt,name=any_state,json=anyState,proto3" json:"any_state,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	AnyState      bool       `protobuf:"varint,2,opt,name=any_state,json=anyState,proto3" json:"any_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3699,8 +3731,9 @@ func (x *DeleteActorRequest) GetAnyState() bool {
 }
 
 type GetActorSnapshotRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorSnapshot *ObjectRef             `protobuf:"bytes,1,opt,name=actor_snapshot,json=actorSnapshot,proto3" json:"actor_snapshot,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	ActorSnapshot *ObjectRef `protobuf:"bytes,1,opt,name=actor_snapshot,json=actorSnapshot,proto3" json:"actor_snapshot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3743,8 +3776,9 @@ func (x *GetActorSnapshotRequest) GetActorSnapshot() *ObjectRef {
 }
 
 type GetActorSnapshotTagRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	ActorSnapshotTag *ObjectRef             `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	ActorSnapshotTag *ObjectRef `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -3995,8 +4029,9 @@ func (x *UpdateActorSnapshotTagRequest) GetActorSnapshotTag() *ActorSnapshotTag 
 }
 
 type DeleteActorSnapshotTagRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	ActorSnapshotTag *ObjectRef             `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	ActorSnapshotTag *ObjectRef `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -4214,6 +4249,7 @@ func (x *ListWorkersResponse) GetNextPageToken() string {
 type GetWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to fetch. atespace is always empty; Workers are global-scoped.
+	// +k8s:opaqueType
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4359,6 +4395,7 @@ func (x *UpdateWorkerRequest) GetWorker() *Worker {
 type DeleteWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to deregister.
+	// +k8s:opaqueType
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// Optional per-delete preconditions.
 	Options       *DeleteOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
@@ -4413,6 +4450,7 @@ func (x *DeleteWorkerRequest) GetOptions() *DeleteOptions {
 type DrainWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to mark as terminating.
+	// +k8s:opaqueType
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4839,8 +4877,9 @@ type ActorAssignment struct {
 	// ActorTemplates are Kubernetes CRDs rather than Substrate API resources, so
 	// this stays a kube reference.
 	ActorTemplate *KubeNamespacedObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
-	Actor         *ObjectRef               `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
-	ActorUid      string                   `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	// +k8s:opaqueType
+	Actor         *ObjectRef `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
+	ActorUid      string     `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5163,6 +5202,7 @@ type MintCertRequest struct {
 	// This is the one caller that recovers a Worker name from a pod certificate:
 	// the atelet has only the worker Pod's identity to go on. Everywhere else the
 	// name is opaque and must be carried, not reconstructed.
+	// +k8s:opaqueType
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// Request contains DER encoded bytes of a x509 certificate signing request.
 	// The signer will ignore the contents of the CSR except to extract the

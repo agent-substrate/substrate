@@ -160,8 +160,8 @@ message ResourceMetadata {
   // atespace is the namespace the resource belongs to. Empty for global-scoped
   // resources. Caller-specified at creation and immutable thereafter.
   //
-  // Atespaced resources should add +k8s:subfield(atespace)=+k8s:required
-  // Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
+  // Atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`
+  // Non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`
   // +k8s:optional
   // +k8s:format=k8s-short-name
   // +k8s:immutable
@@ -264,6 +264,9 @@ message Actor {
   string actor_template_name = 3;
 
   // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
+  // +k8s:optional # TODO: this should be required?
+  // +k8s:subfield(atespace)=+k8s:required
+  // +k8s:immutable # TODO: is this mutable?
   ObjectRef actor_template = 4;
 
   // worker_selector is the per-actor placement constraint. The scheduler
@@ -277,6 +280,10 @@ message Actor {
   // The tag specified by the caller at CreateActor to seed this Actor from an
   // ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
   // once at creation and immutable afterward.
+  //
+  // +k8s:optional
+  // +k8s:subfield(atespace)=+k8s:required
+  // +k8s:immutable
   ObjectRef source_snapshot_tag = 6;
 
   // status is the system-managed state of the Actor. It is updated by the
@@ -315,6 +322,7 @@ message ActorStatus {
   string in_progress_snapshot_name = 3;
 
   // The latest durable snapshot created for this Actor.
+  // +k8s:opaqueType
   ObjectRef latest_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
@@ -339,6 +347,7 @@ message ActorStatus {
 message ActorSourceSnapshotStatus {
   // The (atespace, name) of the snapshot the tag resolved to at
   // creation time.
+  // +k8s:opaqueType
   ObjectRef snapshot = 1;
 
   // UID of the snapshot resolved at creation time.
@@ -360,6 +369,7 @@ message WorkerAssignment {
   // readers on a hot path do not have to fetch the Worker at all.
   //
   // Workers are global-scoped, so this carries no atespace.
+  // +k8s:opaqueType
   ObjectRef worker = 6;
 
   // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
@@ -387,6 +397,7 @@ message ActorSnapshot {
 }
 
 message ActorSnapshotStatus {
+  // +k8s:opaqueType
   ObjectRef source_actor = 1;
   string source_actor_uid = 2;
   int64 source_actor_version = 3;
@@ -396,6 +407,7 @@ message ActorSnapshotStatus {
   SnapshotContentScope content_scope = 7;
   string snapshot_uri = 8;
   // Immutable reference to the actor_template where the snapshot was created from.
+  // +k8s:opaqueType
   ObjectRef actor_template = 9;
 }
 
@@ -405,6 +417,7 @@ message ActorSnapshotTag {
   // Common resource metadata: name, uid, version, timestamps.
   // +k8s:opaqueType
   ResourceMetadata metadata = 1;
+  // +k8s:opaqueType
   ObjectRef snapshot = 2;
   ActorSnapshotTagScope scope = 3;
 }
@@ -419,10 +432,20 @@ message Atespace {
 
 // ObjectRef references a Substrate resource by its (atespace, name) identity.
 message ObjectRef {
-  // The atespace where the resource lives. Empty if the resource is global-scoped.
+  // The atespace of the referenced resource. This field should be empty if the
+  // target resource is global-scoped, but references to objects in the same
+  // atespace as the referrer must still populate this field.
+  //
+  // References to atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`
+  // References to non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string atespace = 1;
-  // The name of the resource. Required. Unique within an atespace, or globally
-  // unique if the resource is global-scoped.
+
+  // The name of the referenced resource. This field is required.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 2;
 }
 
@@ -491,6 +514,7 @@ message ActorTemplateStatus {
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
   // READY.
+  // +k8s:opaqueType
   ObjectRef golden_snapshot = 3;
 
   // sandbox_assets is the referenced SandboxConfig's content frozen at
@@ -672,6 +696,7 @@ message CreateAtespaceRequest {
 }
 
 message GetAtespaceRequest {
+  // +k8s:opaqueType
   ObjectRef atespace = 1;
 }
 
@@ -695,6 +720,7 @@ message ListAtespacesResponse {
 }
 
 message DeleteAtespaceRequest {
+  // +k8s:opaqueType
   ObjectRef atespace = 1;
 }
 
@@ -706,6 +732,7 @@ message CreateActorTemplateRequest {
 }
 
 message GetActorTemplateRequest {
+  // +k8s:opaqueType
   ObjectRef actor_template = 1;
 }
 
@@ -734,10 +761,12 @@ message ListActorTemplatesResponse {
 }
 
 message DeleteActorTemplateRequest {
+  // +k8s:opaqueType
   ObjectRef actor_template = 1;
 }
 
 message GetActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 }
 
@@ -769,6 +798,7 @@ message UpdateActorRequest {
 }
 
 message SuspendActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 }
 
@@ -777,6 +807,7 @@ message SuspendActorResponse {
 }
 
 message PauseActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 }
 
@@ -785,6 +816,7 @@ message PauseActorResponse {
 }
 
 message ResumeActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
@@ -800,15 +832,18 @@ message ResumeActorResponse {
 }
 
 message DeleteActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
   bool any_state = 2;
 }
 
 message GetActorSnapshotRequest {
+  // +k8s:opaqueType
   ObjectRef actor_snapshot = 1;
 }
 
 message GetActorSnapshotTagRequest {
+  // +k8s:opaqueType
   ObjectRef actor_snapshot_tag = 1;
 }
 
@@ -840,6 +875,7 @@ message UpdateActorSnapshotTagRequest {
 }
 
 message DeleteActorSnapshotTagRequest {
+  // +k8s:opaqueType
   ObjectRef actor_snapshot_tag = 1;
 }
 
@@ -884,6 +920,7 @@ message ListWorkersResponse {
 
 message GetWorkerRequest {
   // The Worker to fetch. atespace is always empty; Workers are global-scoped.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 }
 
@@ -909,6 +946,7 @@ message UpdateWorkerRequest {
 
 message DeleteWorkerRequest {
   // The Worker to deregister.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 
   // Optional per-delete preconditions.
@@ -917,6 +955,7 @@ message DeleteWorkerRequest {
 
 message DrainWorkerRequest {
   // The Worker to mark as terminating.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 }
 
@@ -1014,6 +1053,7 @@ message ActorAssignment {
   // ActorTemplates are Kubernetes CRDs rather than Substrate API resources, so
   // this stays a kube reference.
   KubeNamespacedObjectRef actor_template = 1;
+  // +k8s:opaqueType
   ObjectRef actor = 2;
   string actor_uid = 3;
 }
@@ -1101,6 +1141,7 @@ message MintCertRequest {
   // This is the one caller that recovers a Worker name from a pod certificate:
   // the atelet has only the worker Pod's identity to go on. Everywhere else the
   // name is opaque and must be carried, not reconstructed.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.

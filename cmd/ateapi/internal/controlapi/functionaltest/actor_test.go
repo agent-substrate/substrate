@@ -693,7 +693,7 @@ func TestUpdateActor(t *testing.T) {
 	_, err = tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
 		Actor: updatedActor,
 	})
-	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor_template is immutable")
+	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor.actor_template: Invalid value: null: field is immutable")
 }
 
 // TestUpdateActor_Preconditions verifies the required version and uid guards

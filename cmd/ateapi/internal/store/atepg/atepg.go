@@ -628,18 +628,6 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 	return out, nil
 }
 
-// validateUpdateActorMutation reports whether an actor mutation changed fields
-// that are immutable for the lifetime of the stored actor.
-func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) error {
-	if stored, mutated := storedActor.GetActorTemplate(), mutatedActor.GetActorTemplate(); !proto.Equal(stored, mutated) {
-		return fmt.Errorf("actor_template is immutable: mutation changed it from %v to %v", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetSourceSnapshotTag(), mutatedActor.GetSourceSnapshotTag(); !proto.Equal(stored, mutated) {
-		return fmt.Errorf("source_snapshot_tag is immutable: mutation changed it from %v to %v", stored, mutated)
-	}
-	return nil
-}
-
 func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
@@ -672,9 +660,6 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
 	if err := mutate(dbActor); err != nil {
 		return nil, err
-	}
-	if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
-		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.

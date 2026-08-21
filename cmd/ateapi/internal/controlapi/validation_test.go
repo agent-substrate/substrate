@@ -471,3 +471,217 @@ func TestValidateResourceMetadataNameAndAtespaceFormat(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateObjectRef(t *testing.T) {
+	valid := func(mutate func(*ateapipb.ObjectRef)) *ateapipb.ObjectRef {
+		r := &ateapipb.ObjectRef{
+			Atespace: "as",
+			Name:     "nm",
+		}
+		if mutate != nil {
+			mutate(r)
+		}
+		return r
+	}
+
+	tests := []struct {
+		name string
+		ref  *ateapipb.ObjectRef
+		want field.ErrorList
+	}{{
+		"valid",
+		valid(nil),
+		nil,
+	}, {
+		"valid atespace: empty",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "" }),
+		nil,
+	}, {
+		"valid atespace: alphabetic",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "myatespace" }),
+		nil,
+	}, {
+		"valid atespace: dashes",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my-ate-space" }),
+		nil,
+	}, {
+		"valid atespace: repeat dashes",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my---ate---space" }),
+		nil,
+	}, {
+		"valid atespace: alphanumeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my-123-atespace" }),
+		nil,
+	}, {
+		"valid atespace: leading numeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "123-atespace" }),
+		nil,
+	}, {
+		"valid atespace: trailing numeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my-123" }),
+		nil,
+	}, {
+		"valid atespace: fully numeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "123" }),
+		nil,
+	}, {
+		"valid atespace: long",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = strings.Repeat("x", 63) }),
+		nil,
+	}, {
+		"invalid atespace: uppercase",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "MYATESPACE" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: leading dash",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "-atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: trailing dash",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my-" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: dots",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my.atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: underscores",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my_atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: bang",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my!atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: at",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my@atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: pound",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my#atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: dollar",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my$atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: percent",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my%%atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: caret",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my^atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: ampersand",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my&atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: star",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = "my*atespace" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid atespace: too long",
+		valid(func(r *ateapipb.ObjectRef) { r.Atespace = strings.Repeat("x", 64) }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"missing name",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "" }),
+		field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		"valid name: alphabetic",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "myname" }),
+		nil,
+	}, {
+		"valid name: dashes",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my-na-me" }),
+		nil,
+	}, {
+		"valid name: repeat dashes",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my---na---me" }),
+		nil,
+	}, {
+		"valid name: alphanumeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my-123-name" }),
+		nil,
+	}, {
+		"invalid name: leading numeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "123-name" }),
+		nil,
+	}, {
+		"invalid name: trailing numeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my-123" }),
+		nil,
+	}, {
+		"invalid name: fully numeric",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "123" }),
+		nil,
+	}, {
+		"valid name: long",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = strings.Repeat("x", 63) }),
+		nil,
+	}, {
+		"invalid name: uppercase",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "MYNAME" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: leading dash",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "-name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: trailing dash",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my-" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: dots",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my.name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: underscores",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my_name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: bang",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my!name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: at",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my@name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: pound",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my#name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: dollar",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my$name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: percent",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my%%name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: caret",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my^name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: ampersand",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my&name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: star",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = "my*name" }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid name: too long",
+		valid(func(r *ateapipb.ObjectRef) { r.Name = strings.Repeat("x", 64) }),
+		field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_ObjectRef(context.Background(), op, nil, tt.ref, nil))
+		})
+	}
+}

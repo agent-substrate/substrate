@@ -49,6 +49,7 @@ func IsValidResourceName(name string) bool {
 
 // ValidateObjectRef checks that the object reference is well-formed and that
 // each of its components is a valid resource name.
+// TODO: EOL this when DV is fully implemented
 func ValidateObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
 	if ref == nil {
 		return nil
