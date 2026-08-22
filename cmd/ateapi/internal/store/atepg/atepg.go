@@ -228,7 +228,7 @@ func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.Res
 	return nil
 }
 
-func setUpdateMetadata(oldMeta, newMeta *ateapipb.ResourceMetadata) {
+func setUpdateMetadata(newMeta, oldMeta *ateapipb.ResourceMetadata) {
 	newMeta.Uid = oldMeta.Uid
 	newMeta.Version = oldMeta.Version + 1
 	newMeta.CreateTime = oldMeta.CreateTime
@@ -655,15 +655,13 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
 		return nil, err
 	}
-	//FIXME: the mutate function has to do a clone to call validation,
-	//       so this is redundant. Can we get rid of one?
-	actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
+	oldMeta := proto.CloneOf(dbActor.Metadata)
 	if err := mutate(dbActor); err != nil {
 		return nil, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	setUpdateMetadata(actorBeforeMutation.Metadata, dbActor.Metadata)
+	setUpdateMetadata(dbActor.Metadata, oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {
