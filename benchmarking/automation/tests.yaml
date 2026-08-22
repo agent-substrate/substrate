@@ -35,6 +35,12 @@
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
+#   workerWaitTimeout
+#                  Optional (default "300s", set by workloads/deploy.sh).
+#                  Go duration for the wait after the WorkerPool deploy for
+#                  the ateom worker pods to become ready. Raise it for
+#                  large workerCount fleets whose image pulls or scheduling
+#                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-router=agentgateway"]

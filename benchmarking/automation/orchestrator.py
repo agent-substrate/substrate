@@ -328,7 +328,10 @@ def teardown_microvm_deps() -> None:
 
 
 def deploy_workloads(
-    worker_count: int = 1, sandbox_class: str = "gvisor", actor_memory: str = ""
+    worker_count: int = 1,
+    sandbox_class: str = "gvisor",
+    actor_memory: str = "",
+    wait_timeout: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -342,6 +345,9 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout.
+    if wait_timeout:
+        cmd += ["--wait-timeout", wait_timeout]
     run(cmd)
     # Block until ActorTemplates are Ready
     run(
@@ -528,6 +534,7 @@ def main() -> None:
                     test.get("workerCount", 1),
                     sandbox_class,
                     test.get("actorMemory", ""),
+                    test.get("workerWaitTimeout", ""),
                 )
                 try:
                     status = run_test(
