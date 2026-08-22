@@ -47,7 +47,7 @@ var actorSnapshotTagScopeNames = func() []string {
 	return names
 }()
 
-func (s *Service) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActorSnapshotRequest) (*ateapipb.ActorSnapshot, error) {
+func (s *RPCService) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActorSnapshotRequest) (*ateapipb.ActorSnapshot, error) {
 	if errs := validateGetActorSnapshotRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -74,7 +74,7 @@ func validateGetActorSnapshotRequest(req *ateapipb.GetActorSnapshotRequest) fiel
 	return errs
 }
 
-func (s *Service) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
+func (s *RPCService) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	if errs := validateGetActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -101,7 +101,7 @@ func validateGetActorSnapshotTagRequest(req *ateapipb.GetActorSnapshotTagRequest
 	return errs
 }
 
-func (s *Service) ListActorSnapshots(ctx context.Context, req *ateapipb.ListActorSnapshotsRequest) (*ateapipb.ListActorSnapshotsResponse, error) {
+func (s *RPCService) ListActorSnapshots(ctx context.Context, req *ateapipb.ListActorSnapshotsRequest) (*ateapipb.ListActorSnapshotsResponse, error) {
 	if errs := validateListActorSnapshotsRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -128,7 +128,7 @@ func validateListActorSnapshotsRequest(req *ateapipb.ListActorSnapshotsRequest) 
 	return errs
 }
 
-func (s *Service) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
+func (s *RPCService) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	if errs := validateCreateActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -176,7 +176,7 @@ func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagR
 	return errs
 }
 
-func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
+func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -232,7 +232,7 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 	return errs
 }
 
-func (s *Service) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.DeleteActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
+func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.DeleteActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	if errs := validateDeleteActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}

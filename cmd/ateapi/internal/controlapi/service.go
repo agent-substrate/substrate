@@ -28,8 +28,9 @@ import (
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// Service implements ateapipb.Control
-type Service struct {
+// RPCService implements ateapipb.ControlServer.  This is the user-facing RPC
+// interface.
+type RPCService struct {
 	ateapipb.UnimplementedControlServer
 	persistence           serviceStore
 	workerCache           *workercache.Cache
@@ -44,15 +45,15 @@ type Service struct {
 	volumePlugins         map[string]volume.VolumePluginControlPlane
 }
 
-var _ ateapipb.ControlServer = (*Service)(nil)
+var _ ateapipb.ControlServer = (*RPCService)(nil)
 
 // VolumePluginRegistry defines the interface for dynamic CSI plugin resolution.
 type VolumePluginRegistry interface {
 	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
 }
 
-// NewService creates a service. instruments may be nil; the record helpers no-op.
-func NewService(
+// NewRPCService creates a RPC service. instruments may be nil; the record helpers no-op.
+func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
 	actorTemplateLister listersv1alpha1.ActorTemplateLister,
@@ -64,8 +65,8 @@ func NewService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
-) *Service {
-	s := &Service{
+) *RPCService {
+	s := &RPCService{
 		persistence:           persistence,
 		workerCache:           workerCache,
 		actorTemplateLister:   actorTemplateLister,
@@ -106,7 +107,7 @@ type serviceStore interface {
 }
 
 // GetPlugin retrieves a CSI volume plugin by driver name, dynamically discovering it if not present.
-func (s *Service) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
+func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
 	s.mu.RLock()
 	plugin, ok := s.volumePlugins[driverName]
 	s.mu.RUnlock()

@@ -76,7 +76,7 @@ var (
 
 type testContext struct {
 	mr                  *miniredis.Miniredis
-	service             *controlapi.Service
+	service             *controlapi.RPCService
 	client              ateapipb.ControlClient
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
@@ -103,7 +103,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 // setupTestWithVolumePlugins is setupTest with the default mock volume plugin
 // replaced by plugins, keyed by driver name. Tests that need a failure-injecting
-// plugin pass it here rather than swapping it into the running Service, so each
+// plugin pass it here rather than swapping it into the running RPCService, so each
 // test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
@@ -191,7 +191,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 			mockDriverName: mockPlugin,
 		}
 	}
-	service := controlapi.NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
+	service := controlapi.NewRPCService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))

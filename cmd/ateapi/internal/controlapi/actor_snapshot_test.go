@@ -202,7 +202,7 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 func TestCreateActorSnapshotTag_MissingSnapshotIsNotFound(t *testing.T) {
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	s := &Service{persistence: persistence}
+	s := &RPCService{persistence: persistence}
 
 	_, err := s.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
@@ -258,7 +258,7 @@ func TestUpdateActorSnapshotTag(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.stored.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag1"}
-			svc, stored := serviceWithActorSnapshotTag(t, tt.stored)
+			svc, stored := rpcServiceWithActorSnapshotTag(t, tt.stored)
 
 			tt.req.Metadata = stored.GetMetadata()
 			if tt.req.GetSnapshot() == nil {
@@ -290,7 +290,7 @@ func TestUpdateActorSnapshotTag(t *testing.T) {
 // leaving scope unset is rejected.
 func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 	ctx := context.Background()
-	svc, stored := serviceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
+	svc, stored := rpcServiceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag1"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 	})
@@ -321,7 +321,7 @@ func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 // creation.
 func TestCreateActorSnapshotTag_RejectsUnsetScope(t *testing.T) {
 	ctx := context.Background()
-	svc, stored := serviceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
+	svc, stored := rpcServiceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag1"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
@@ -337,9 +337,9 @@ func TestCreateActorSnapshotTag_RejectsUnsetScope(t *testing.T) {
 	}
 }
 
-// serviceWithActorSnapshotTag seeds an ActorSnapshot and a tag pointing at it
-// in a miniredis-backed store, and returns a Service over it.
-func serviceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag) (*Service, *ateapipb.ActorSnapshotTag) {
+// rpcServiceWithActorSnapshotTag seeds an ActorSnapshot and a tag pointing at it
+// in a miniredis-backed store, and returns a RPCService over it.
+func rpcServiceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag) (*RPCService, *ateapipb.ActorSnapshotTag) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
@@ -357,7 +357,7 @@ func serviceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag) (
 	if err != nil {
 		t.Fatalf("Failed to CreateActorSnapshotTag: %v", err)
 	}
-	return &Service{persistence: persistence}, created
+	return &RPCService{persistence: persistence}, created
 }
 
 // TestUpdateActorSnapshotTag_DeleteRecreateRace checks that an update is not
@@ -405,7 +405,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &Service{persistence: racing}
+	svc := &RPCService{persistence: racing}
 
 	// The client asserts "only update the tag with uid A". Its version guard is
 	// satisfied by B as well, because re-tagging resets the version to 1: the
@@ -469,7 +469,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 			}
 		},
 	}
-	svc := &Service{persistence: racing}
+	svc := &RPCService{persistence: racing}
 
 	originalTag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err = svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{

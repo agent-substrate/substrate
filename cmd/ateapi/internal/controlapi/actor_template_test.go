@@ -172,7 +172,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &Service{persistence: persistence}
+	s := &RPCService{persistence: persistence}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -202,7 +202,7 @@ func TestCreateActorTemplate(t *testing.T) {
 // guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &Service{persistence: persistence}
+	s := &RPCService{persistence: persistence}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {

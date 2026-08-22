@@ -48,7 +48,7 @@ func TestCreateActor_AtespaceDeletedAfterPrecheck(t *testing.T) {
 	if err := indexer.Add(&atev1alpha1.ActorTemplate{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "tmpl1"}}); err != nil {
 		t.Fatalf("add ActorTemplate: %v", err)
 	}
-	s := &Service{
+	s := &RPCService{
 		persistence:         &createActorErrorStore{err: store.ErrFailedPrecondition},
 		actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer),
 	}
@@ -405,7 +405,7 @@ func TestUpdateActor(t *testing.T) {
 			tt.stored.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
 			tt.stored.ActorTemplateNamespace = templateNS
 			tt.stored.ActorTemplateName = templateName
-			svc, created := serviceWithActor(t, tt.stored)
+			svc, created := rpcServiceWithActor(t, tt.stored)
 
 			tt.req.Metadata = created.GetMetadata()
 			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: tt.req})
@@ -486,7 +486,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &Service{persistence: racing}
+	svc := &RPCService{persistence: racing}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -555,7 +555,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &Service{persistence: racing}
+	svc := &RPCService{persistence: racing}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
@@ -607,9 +607,9 @@ func withSelector(labels map[string]string) func(*ateapipb.UpdateActorRequest) {
 	}
 }
 
-// serviceWithActor seeds one actor in a miniredis-backed store and returns a
-// Service over it.
-func serviceWithActor(t *testing.T, actor *ateapipb.Actor) (*Service, *ateapipb.Actor) {
+// rpcServiceWithActor seeds one actor in a miniredis-backed store and returns a
+// RPCService over it.
+func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ateapipb.Actor) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
@@ -626,7 +626,7 @@ func serviceWithActor(t *testing.T, actor *ateapipb.Actor) (*Service, *ateapipb.
 	if err != nil {
 		t.Fatalf("Failed to CreateActor: %v", err)
 	}
-	return &Service{persistence: persistence}, created
+	return &RPCService{persistence: persistence}, created
 }
 
 func TestValidateDeleteActorRequest(t *testing.T) {

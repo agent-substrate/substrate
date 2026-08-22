@@ -34,7 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
+func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
 	if errs := validateCreateActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -112,7 +112,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
-func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
+func (s *RPCService) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
 	tag, err := s.persistence.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
@@ -204,7 +204,7 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
+func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
 	if errs := validateGetActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -231,7 +231,7 @@ func validateGetActorRequest(req *ateapipb.GetActorRequest) field.ErrorList {
 	return errs
 }
 
-func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	if errs := validateListActorsRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -262,7 +262,7 @@ func validateListActorsRequest(req *ateapipb.ListActorsRequest) field.ErrorList 
 	return errs
 }
 
-func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
+func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
 	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -324,7 +324,7 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
+func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
 	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -366,7 +366,7 @@ func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
+func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
 	if errs := validatePauseActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -401,7 +401,7 @@ func validatePauseActorRequest(req *ateapipb.PauseActorRequest) field.ErrorList 
 	return errs
 }
 
-func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
 	if errs := validateResumeActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -436,7 +436,7 @@ func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
 	if errs := validateSuspendActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}

@@ -194,7 +194,7 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	sm := controlapi.NewService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
 	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, *actorIDCAPoolFile, persistence, workerCache)
 	debugSrv := debugapi.NewService(persistence)
@@ -229,7 +229,7 @@ func main() {
 		),
 	)
 	reflection.Register(mux)
-	ateapipb.RegisterControlServer(mux, sm)
+	ateapipb.RegisterControlServer(mux, controlSrv)
 	ateapipb.RegisterActorIdentityServer(mux, actorIdentitySrv)
 	ateapipb.RegisterDebugServer(mux, debugSrv)
 

@@ -25,7 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
+func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
 	if errs := validateListWorkersRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -51,22 +51,22 @@ func validateListWorkersRequest(req *ateapipb.ListWorkersRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest) (*ateapipb.Worker, error) {
+func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest) (*ateapipb.Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "GetWorker is not implemented yet")
 }
 
-func (s *Service) CreateWorker(ctx context.Context, req *ateapipb.CreateWorkerRequest) (*ateapipb.Worker, error) {
+func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorkerRequest) (*ateapipb.Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "CreateWorker is not implemented yet")
 }
 
-func (s *Service) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorkerRequest) (*ateapipb.Worker, error) {
+func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorkerRequest) (*ateapipb.Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "UpdateWorker is not implemented yet")
 }
 
-func (s *Service) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
+func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "DeleteWorker is not implemented yet")
 }
 
-func (s *Service) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
+func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "DrainWorker is not implemented yet")
 }
