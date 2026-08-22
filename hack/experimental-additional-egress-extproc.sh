@@ -55,45 +55,11 @@ additional_egress_extproc_endpoint() {
 # The Envoy cluster the additional ext_proc filter dials.
 readonly ADDITIONAL_EGRESS_EXTPROC_CLUSTER="additional_egress_ext_proc"
 
-# patch_atenet_egress_manifest writes the egress manifest to stdout with the
-# #ATE_MITM_EXTPROC_FILTER and #ATE_MITM_EXTPROC_CLUSTER marker comments in
-# manifests/ate-install/atenet-egress-with-sdsmint.yaml replaced by an ext_proc
-# filter -- and the cluster it dials.
-# Only reached when --experimental-additional-egress-extproc-service is set;
-# without it the file is deployed as committed.
-#
-# Both blocks are heredocs below rather than files under manifests/ate-install,
-# because neither is a manifest: they are fragments of an Envoy bootstrap that
-# only mean anything spliced into one. Kept as files they would also sit in the
-# path of the directory-wide `-f manifests/ate-install` that the apply and
-# delete paths use, which reads whatever .yaml it finds there.
-#
-# Marker comments rather than a Kustomize patch or a YAML tool for the same
-# reason the two variants are whole files: the thing being edited is Envoy's
-# bootstrap, which lives as one inline string inside a ConfigMap, so nothing
-# that understands Kubernetes YAML can reach into it. Markers keep the
-# insertion points visible in the manifest itself instead of encoding them as
-# line numbers or structural guesses in this script.
-patch_atenet_egress_manifest() {
-  local manifest
-  manifest="$(atenet_egress_manifest)"
+# Note: the heredoc sections are are written at column zero; the awk in
+# patch_atenet_egress_manifest will re-indent to the right column.
 
-  # Only the sdsmint manifest carries the markers. Refuse rather than apply an
-  # unpatched manifest: silently ignoring the flag would deploy a gateway with
-  # no additional checkpoint on it while the install reported success.
-  if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
-    echo "Error: --experimental-additional-egress-extproc-service requires --experimental-use-sdsmint" >&2
-    return 1
-  fi
-
-  local endpoint address port server_name
-  endpoint="$(additional_egress_extproc_endpoint "${ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE}")" || return 1
-  read -r address port server_name <<<"${endpoint}"
-
-  # Both blocks are written at column zero; awk below re-indents each to the
-  # marker it replaces, so the depth they nest to is the manifest's to decide.
-  local filter_block cluster_block
-  filter_block="$(cat <<EOF
+emit_additional_egress_extproc_filter() {
+  cat <<EOF
 # Added by hack/install-ate.sh
 # --experimental-additional-egress-extproc-service=${ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE}.
 # Spliced over each #ATE_MITM_EXTPROC_FILTER marker in
@@ -126,9 +92,16 @@ patch_atenet_egress_manifest() {
       disallow_system: true
       disallow_is_error: true
 EOF
-)" || return 1
+}
 
-  cluster_block="$(cat <<EOF
+# Arguments:
+#
+# $1 = address to dial
+# $2 = port
+# $3 = server_name to verify the server certificate against
+emit_additional_egress_extproc_cluster() {
+  local address="$1" port="$2" server_name="$3"
+  cat <<EOF
 # Added by hack/install-ate.sh
 # --experimental-additional-egress-extproc-service=${ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE}.
 # Spliced over the #ATE_MITM_EXTPROC_CLUSTER marker in
@@ -184,26 +157,55 @@ EOF
               address: ${address}
               port_value: ${port}
 EOF
-)" || return 1
+}
 
-  # One per HTTP filter chain in mitm_listener.
-  #
-  # mitm_listener has three chains, not two. The passthrough chain is a
-  # tcp_proxy: no http_filters to hold an ext_proc filter, and no request to
-  # authorize, since an opaque stream carries neither Host nor SNI. Traffic
-  # there leaves with only the CONNECT checkpoint's IP:port decision behind it,
-  # flag or no flag. That is a property of the passthrough chain rather than
-  # something this count can enforce, so it is named here instead of guarded.
+# patch_atenet_egress_manifest writes the egress manifest to stdout with the
+# #ATE_MITM_EXTPROC_FILTER and #ATE_MITM_EXTPROC_CLUSTER marker comments in
+# manifests/ate-install/atenet-egress-with-sdsmint.yaml replaced by an ext_proc
+# filter -- and the cluster it dials.
+#
+# Only used by--experimental-additional-egress-extproc-service.
+patch_atenet_egress_manifest() {
+  local manifest
+  manifest="$(atenet_egress_manifest)"
+
+  # Only the sdsmint manifest carries the markers. Refuse rather than apply an
+  # unpatched manifest: silently ignoring the flag would deploy a gateway with
+  # no additional checkpoint on it while the install reported success.
+  if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
+    echo "Error: --experimental-additional-egress-extproc-service requires --experimental-use-sdsmint" >&2
+    return 1
+  fi
+
+  local endpoint address port server_name
+  endpoint="$(additional_egress_extproc_endpoint "${ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE}")" || return 1
+  read -r address port server_name <<<"${endpoint}"
+
+  local filter_block cluster_block
+  filter_block="$(emit_additional_egress_extproc_filter)" || return 1
+  cluster_block="$(emit_additional_egress_extproc_cluster \
+    "${address}" "${port}" "${server_name}")" || return 1
+
   local expected_filter_markers=2
 
   # Anchored to the start of the line so that prose mentioning a marker -- the
   # mitm_listener comment in the manifest names both of them -- is not itself
   # replaced by a config block.
-  awk -v filter="${filter_block}" -v cluster="${cluster_block}" \
-      -v want_filters="${expected_filter_markers}" '
+  #
+  # Pass ATE_EXTPROC_... as env vars in ENVIRON to work around differences
+  # between gawk and BSD awk.
+  ATE_EXTPROC_FILTER_BLOCK="${filter_block}" \
+  ATE_EXTPROC_CLUSTER_BLOCK="${cluster_block}" \
+  awk -v want_filters="${expected_filter_markers}" '
+    BEGIN {
+      filter  = ENVIRON["ATE_EXTPROC_FILTER_BLOCK"]
+      cluster = ENVIRON["ATE_EXTPROC_CLUSTER_BLOCK"]
+    }
+
     /^[ \t]*#ATE_MITM_EXTPROC_FILTER/  { splice(filter);  filters++;  next }
     /^[ \t]*#ATE_MITM_EXTPROC_CLUSTER/ { splice(cluster); clusters++; next }
     { print }
+
     END {
       if (filters != want_filters || clusters != 1) {
         printf("Error: expected %d #ATE_MITM_EXTPROC_FILTER and 1 #ATE_MITM_EXTPROC_CLUSTER marker in %s, found %d and %d\n",
@@ -211,12 +213,10 @@ EOF
         exit 1
       }
     }
+
     # Prints block at the indentation of the marker line being replaced. The
-    # heredocs above are written at column zero, so the depth each one nests to
-    # is whatever the manifest gives its marker: the filter chains and the
-    # cluster list sit at different depths, and neither has to be restated in
-    # the heredoc or here.
-    function splice(block,   indent, lines, n, i) {
+    # heredocs above are written at column zero.
+    function splice(block, indent, lines, n, i) {
       match($0, /^[ \t]*/)
       indent = substr($0, 1, RLENGTH)
       n = split(block, lines, "\n")
