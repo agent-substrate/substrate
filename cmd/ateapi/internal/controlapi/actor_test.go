@@ -620,6 +620,10 @@ func TestUpdateActor(t *testing.T) {
 			tt.stored.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
 			tt.stored.ActorTemplateNamespace = templateNS
 			tt.stored.ActorTemplateName = templateName
+			tt.stored.Status = &ateapipb.ActorStatus{
+				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			}
+
 			svc, created := rpcServiceWithActor(t, tt.stored)
 
 			tt.req.Metadata = created.GetMetadata()
@@ -638,6 +642,9 @@ func TestUpdateActor(t *testing.T) {
 			tt.want.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Version: 2}
 			tt.want.ActorTemplateNamespace = templateNS
 			tt.want.ActorTemplateName = templateName
+			tt.want.Status = &ateapipb.ActorStatus{
+				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			}
 			if diff := cmp.Diff(tt.want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 				t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
 			}

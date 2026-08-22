@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/reflect/protorange"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -109,11 +110,8 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 	// This is an update request, so the UID and version must be set.  When
 	// those become optional or when we have nested subfield tags, we can drop
 	// this.
-	if actor.Metadata.Uid == "" {
-		errs = append(errs, field.Required(field.NewPath("actor", "metadata", "uid"), ""))
-	}
-	if actor.Metadata.Version == 0 {
-		errs = append(errs, field.Required(field.NewPath("actor", "metadata", "version"), ""))
-	}
+	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "uid"), &actor.Metadata.Uid, nil)...)
+	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "version"), &actor.Metadata.Version, nil)...)
+
 	return errs
 }

@@ -667,37 +667,34 @@ type ResourceMetadata struct {
 	// This field is ignored during create operations and used as precondition
 	// for update operations.
 	//
-	// +k8s:ifDisabled(validateOutput)=+k8s:optional
-	// +k8s:ifEnabled(validateOutput)=+k8s:required
-	// +k8s:ifEnabled(validateOutput)=+k8s:immutable
+	// +k8s:optional
 	// +k8s:format=k8s-uuid
+	// +k8s:immutable
 	Uid string `protobuf:"bytes,3,opt,name=uid,proto3" json:"uid,omitempty"`
 	// version is increased on every mutation.
 	//
 	// This field is ignored during create operations and used as precondition
 	// for update operations.
 	//
-	// +k8s:ifDisabled(validateOutput)=+k8s:optional
-	// +k8s:ifEnabled(validateOutput)=+k8s:required
-	// +k8s:alpha(since: "0.0")=+k8s:ifEnabled(validateOutput)=+k8s:monotonic # TODO: get rid of alpha prefix
-	// +k8s:ifEnabled(validateOutput)=+k8s:update=NoUnset
+	// +k8s:optional
+	// +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
 	// +k8s:minimum=1
+	// +k8s:update=NoUnset
 	Version int64 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
 	// create_time is the time the resource was created.
 	//
 	// This field is ignored on input.
 	//
-	// +k8s:ifDisabled(validateOutput)=+k8s:optional
-	// +k8s:ifEnabled(validateOutput)=+k8s:required
-	// +k8s:ifEnabled(validateOutput)=+k8s:immutable
+	// +k8s:optional
+	// +k8s:immutable
 	// TODO: validate that this is a valid timestamp
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	// update_time is the time the resource was last updated.
 	//
 	// This field is ignored on input.
 	//
-	// +k8s:ifDisabled(validateOutput)=+k8s:optional
-	// +k8s:ifEnabled(validateOutput)=+k8s:required
+	// +k8s:optional
+	// +k8s:update=NoUnset
 	// TODO: validate that this is a valid timestamp
 	// TODO: validate that UpdateTime >= CreateTime
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
@@ -898,8 +895,7 @@ type Actor struct {
 	// status is the system-managed state of the Actor. It is updated by the
 	// server and ignored on input. It is always present in output.
 	//
-	// +k8s:ifDisabled(validateOutput)=+k8s:optional
-	// +k8s:ifEnabled(validateOutput)=+k8s:required
+	// +k8s:optional
 	Status        *ActorStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

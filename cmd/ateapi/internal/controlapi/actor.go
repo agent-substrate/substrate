@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -197,7 +198,7 @@ func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace s
 
 func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
+	op := operation.Operation{Type: operation.Create}
 	errs := Validate_CreateActorRequest(ctx, op, nil, req, nil)
 	errs = append(errs, validateNoUnknownFields(req.Actor, field.NewPath("actor"))...)
 	return errs
@@ -349,7 +350,7 @@ func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
-	op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
+	op := operation.Operation{Type: operation.Create}
 	errs := Validate_UpdateActorRequest(ctx, op, nil, req, nil)
 	errs = append(errs, validateNoUnknownFields(req.Actor, field.NewPath("actor"))...)
 	return errs
@@ -500,8 +501,15 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorL
 	return errs
 }
 
-func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, validateOutput bool) field.ErrorList {
+func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update, Options: map[string]bool{"validateOutput": validateOutput}}
-	return Validate_Actor(ctx, op, fldPath, newVal, oldVal)
+	op := operation.Operation{Type: operation.Update}
+	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
+	if requireStatus {
+		// Status is optional in the schema, but is actually required to be set
+		// by the server.  If it was specified, it was already validated above,
+		// but if it was not specified we need to flag that as an error.
+		errs = append(errs, validate.RequiredPointer(ctx, op, fldPath.Child("status"), newVal.GetStatus(), nil)...)
+	}
+	return errs
 }

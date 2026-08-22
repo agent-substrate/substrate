@@ -48,11 +48,9 @@ func TestValidateResourceMetadataCreate(t *testing.T) {
 
 	// Focus this test on fields other than atespace and name.
 	tests := []struct {
-		name         string
-		obj          *ateapipb.ResourceMetadata
-		want         field.ErrorList
-		wantOnInput  field.ErrorList // validateOutput = false
-		wantOnOutput field.ErrorList // validateOutput = true
+		name string
+		obj  *ateapipb.ResourceMetadata
+		want field.ErrorList
 	}{{
 		name: "valid",
 		obj:  valid(),
@@ -64,10 +62,9 @@ func TestValidateResourceMetadataCreate(t *testing.T) {
 		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.Name = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
 	}, {
-		name:         "unspecified uid",
-		obj:          valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "" }),
-		wantOnInput:  nil,
-		wantOnOutput: field.ErrorList{field.Required(field.NewPath("uid"), "")},
+		name: "unspecified uid",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "" }),
+		want: nil,
 	}, {
 		name: "invalid uid: close but not valid",
 		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "aaaaaaaa-bbbbcccc-dddd-eeeeeeeeeeee" }),
@@ -77,10 +74,9 @@ func TestValidateResourceMetadataCreate(t *testing.T) {
 		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "not a uid" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		name:         "unspecified version",
-		obj:          valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 0 }),
-		wantOnInput:  nil,
-		wantOnOutput: field.ErrorList{field.Required(field.NewPath("version"), "")},
+		name: "unspecified version",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 0 }),
+		want: nil,
 	}, {
 		name: "valid version: large",
 		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = math.MaxInt64 }),
@@ -89,30 +85,19 @@ func TestValidateResourceMetadataCreate(t *testing.T) {
 		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = -1 }),
 		want: field.ErrorList{field.Invalid(field.NewPath("version"), nil, "").WithOrigin("minimum")},
 	}, {
-		name:         "unspecified createTime",
-		obj:          valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime = nil }),
-		wantOnInput:  nil,
-		wantOnOutput: field.ErrorList{field.Required(field.NewPath("create_time"), "")},
+		name: "unspecified createTime",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime = nil }),
+		want: nil,
 	}, {
-		name:         "unspecified updateTime",
-		obj:          valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = nil }),
-		wantOnInput:  nil,
-		wantOnOutput: field.ErrorList{field.Required(field.NewPath("update_time"), "")},
+		name: "unspecified updateTime",
+		obj:  valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = nil }),
+		want: nil,
 	}}
 	for _, tt := range tests {
-		t.Run(tt.name+"_validateOutput_false", func(t *testing.T) {
-			obj := proto.CloneOf(tt.obj) // avoid internal mutations
-			want := append(tt.want, tt.wantOnInput...)
-			op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": false}}
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, want, Validate_ResourceMetadata(context.Background(), op, nil, obj, nil))
-		})
-		t.Run(tt.name+"_validateOutput_true", func(t *testing.T) {
-			obj := proto.CloneOf(tt.obj) // avoid internal mutations
-			want := append(tt.want, tt.wantOnOutput...)
-			op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": true}}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, want, Validate_ResourceMetadata(context.Background(), op, nil, obj, nil))
+			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, tt.obj, nil))
 		})
 	}
 }
@@ -122,153 +107,108 @@ func TestValidateResourceMetadataUpdate(t *testing.T) {
 
 	// Focus this test on fields other than atespace and name.
 	tests := []struct {
-		name         string
-		oldObj       *ateapipb.ResourceMetadata // should always be valid
-		newObj       *ateapipb.ResourceMetadata
-		want         field.ErrorList
-		wantOnInput  field.ErrorList // validateOutput = false
-		wantOnOutput field.ErrorList // validateOutput = true
+		name   string
+		oldObj *ateapipb.ResourceMetadata // should always be valid
+		newObj *ateapipb.ResourceMetadata
+		want   field.ErrorList
 	}{{
 		name:   "valid",
 		oldObj: valid(),
 		newObj: valid(),
 	}, {
-		name:         "atespace: empty -> non-empty",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "" }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "present" }),
-		wantOnInput:  field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
-		wantOnOutput: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
+		name:   "atespace: empty -> non-empty",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "" }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "present" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:         "atespace: non-empty -> empty",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "present" }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "" }),
-		wantOnInput:  field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
-		wantOnOutput: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
+		name:   "atespace: non-empty -> empty",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "present" }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:         "atespace: changed",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "value-1" }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "value-2" }),
-		wantOnInput:  field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
-		wantOnOutput: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
+		name:   "atespace: changed",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "value-1" }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Atespace = "value-2" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("immutable")},
 	}, {
 		name:   "name: unset",
 		oldObj: valid(),
 		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Name = "" }),
-		wantOnInput: field.ErrorList{
-			field.Required(field.NewPath("name"), ""),
-			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("immutable"),
-		},
-		wantOnOutput: field.ErrorList{
+		want: field.ErrorList{
 			field.Required(field.NewPath("name"), ""),
 			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("immutable"),
 		},
 	}, {
-		name:         "name: changed",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Name = "value-1" }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Name = "value-2" }),
-		wantOnInput:  field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("immutable")},
-		wantOnOutput: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("immutable")},
+		name:   "name: changed",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Name = "value-1" }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Name = "value-2" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:        "uid: unset",
-		oldObj:      valid(),
-		newObj:      valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "" }),
-		wantOnInput: nil, // optional on input
-		wantOnOutput: field.ErrorList{
-			field.Required(field.NewPath("uid"), ""),
-			field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("immutable"),
-		},
+		name:   "uid: unset",
+		oldObj: valid(),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:         "uid: changed to valid",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "11111111-2222-3333-4444-555555555555" }),
-		wantOnInput:  nil, // is a precondition on input, so can be different
-		wantOnOutput: field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("immutable")},
+		name:   "uid: changed to valid",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "11111111-2222-3333-4444-555555555555" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:         "uid: changed to invalid",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "not a uid" }),
-		wantOnInput:  field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("format=k8s-uuid")},
-		wantOnOutput: field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("immutable")},
+		name:   "uid: changed to invalid",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Uid = "not a uid" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:        "version: unset",
-		oldObj:      valid(),
-		newObj:      valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 0 }),
-		wantOnInput: nil, // optional on input
-		wantOnOutput: field.ErrorList{
-			field.Required(field.NewPath("version"), ""),
-			field.Invalid(field.NewPath("version"), nil, "").WithOrigin("update"),
-		},
+		name:   "version: unset",
+		oldObj: valid(),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 0 }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("version"), nil, "").WithOrigin("update")},
 	}, {
-		name:         "version: changed to valid",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 123 }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 456 }),
-		wantOnInput:  nil, // is a precondition on input, so can be different
-		wantOnOutput: nil,
+		name:   "version: changed to valid",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 123 }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 456 }),
+		want:   nil,
 	}, {
-		name:        "version: changed non-monotonically",
-		oldObj:      valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 456 }),
-		newObj:      valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 123 }),
-		wantOnInput: nil,
-		wantOnOutput: field.ErrorList{
+		name:   "version: changed non-monotonically",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 456 }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 123 }),
+		want: field.ErrorList{
 			field.Invalid(field.NewPath("version"), nil, "").WithOrigin("monotonic"),
 		},
 	}, {
 		name:   "version: changed to invalid",
 		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = 456 }),
 		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.Version = -1 }),
-		wantOnInput: field.ErrorList{
-			field.Invalid(field.NewPath("version"), nil, "").WithOrigin("minimum"),
-		},
-		wantOnOutput: field.ErrorList{
+		want: field.ErrorList{
 			field.Invalid(field.NewPath("version"), nil, "").WithOrigin("monotonic"),
 			field.Invalid(field.NewPath("version"), nil, "").WithOrigin("minimum"),
 		},
 	}, {
-		name:        "create_time: unset",
-		oldObj:      valid(),
-		newObj:      valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime = nil }),
-		wantOnInput: nil, // ignored on input
-		wantOnOutput: field.ErrorList{
-			field.Required(field.NewPath("create_time"), ""),
-			field.Invalid(field.NewPath("create_time"), nil, "").WithOrigin("immutable"),
-		},
+		name:   "create_time: unset",
+		oldObj: valid(),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime = nil }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("create_time"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:         "create_time: changed",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime.Seconds = 123 }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime.Seconds = 456 }),
-		wantOnInput:  nil, // ignored on input
-		wantOnOutput: field.ErrorList{field.Invalid(field.NewPath("create_time"), nil, "").WithOrigin("immutable")},
+		name:   "create_time: changed",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime.Seconds = 123 }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.CreateTime.Seconds = 456 }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("create_time"), nil, "").WithOrigin("immutable")},
 	}, {
-		name:        "update_time: unset",
-		oldObj:      valid(),
-		newObj:      valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = nil }),
-		wantOnInput: nil, // ignored on input
-		wantOnOutput: field.ErrorList{
-			field.Required(field.NewPath("update_time"), ""),
-		},
+		name:   "update_time: unset",
+		oldObj: valid(),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime = nil }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("update_time"), nil, "").WithOrigin("update")},
 	}, {
-		name:         "update_time: changed to valid",
-		oldObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 123 }),
-		newObj:       valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 456 }),
-		wantOnInput:  nil, // ignored on input
-		wantOnOutput: nil,
+		name:   "update_time: changed to valid",
+		oldObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 123 }),
+		newObj: valid(func(rm *ateapipb.ResourceMetadata) { rm.UpdateTime.Seconds = 456 }),
+		want:   nil,
 	}}
 	for _, tt := range tests {
-		t.Run(tt.name+"_validateInput", func(t *testing.T) {
-			oldObj := proto.CloneOf(tt.oldObj) // avoid internal mutations
-			newObj := proto.CloneOf(tt.newObj) // avoid internal mutations
-			want := append(tt.want, tt.wantOnInput...)
-			op := operation.Operation{Type: operation.Update, Options: map[string]bool{"validateOutput": false}}
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Update}
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, want, Validate_ResourceMetadata(context.Background(), op, nil, newObj, oldObj))
-		})
-		t.Run(tt.name+"_validateOutput", func(t *testing.T) {
-			oldObj := proto.CloneOf(tt.oldObj) // avoid internal mutations
-			newObj := proto.CloneOf(tt.newObj) // avoid internal mutations
-			want := append(tt.want, tt.wantOnOutput...)
-			op := operation.Operation{Type: operation.Update, Options: map[string]bool{"validateOutput": true}}
-			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
-			matcher.Test(t, want, Validate_ResourceMetadata(context.Background(), op, nil, newObj, oldObj))
+			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, tt.newObj, tt.oldObj))
 		})
 	}
 }
@@ -465,7 +405,7 @@ func TestValidateResourceMetadataNameAndAtespaceFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			obj := proto.CloneOf(tt.obj) // avoid internal mutations
-			op := operation.Operation{Type: operation.Create, Options: map[string]bool{"validateOutput": true}}
+			op := operation.Operation{Type: operation.Create}
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, obj, nil))
 		})

@@ -181,10 +181,9 @@ message ResourceMetadata {
   // This field is ignored during create operations and used as precondition
   // for update operations.
   //
-  // +k8s:ifDisabled(validateOutput)=+k8s:optional
-  // +k8s:ifEnabled(validateOutput)=+k8s:required
-  // +k8s:ifEnabled(validateOutput)=+k8s:immutable
+  // +k8s:optional
   // +k8s:format=k8s-uuid
+  // +k8s:immutable
   string uid = 3;
 
   // version is increased on every mutation.
@@ -192,20 +191,18 @@ message ResourceMetadata {
   // This field is ignored during create operations and used as precondition
   // for update operations.
   //
-  // +k8s:ifDisabled(validateOutput)=+k8s:optional
-  // +k8s:ifEnabled(validateOutput)=+k8s:required
-  // +k8s:alpha(since: "0.0")=+k8s:ifEnabled(validateOutput)=+k8s:monotonic # TODO: get rid of alpha prefix
-  // +k8s:ifEnabled(validateOutput)=+k8s:update=NoUnset
+  // +k8s:optional
+  // +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
   // +k8s:minimum=1
+  // +k8s:update=NoUnset
   int64 version = 4;
 
   // create_time is the time the resource was created.
   //
   // This field is ignored on input.
   //
-  // +k8s:ifDisabled(validateOutput)=+k8s:optional
-  // +k8s:ifEnabled(validateOutput)=+k8s:required
-  // +k8s:ifEnabled(validateOutput)=+k8s:immutable
+  // +k8s:optional
+  // +k8s:immutable
   // TODO: validate that this is a valid timestamp
   google.protobuf.Timestamp create_time = 5;
 
@@ -213,8 +210,8 @@ message ResourceMetadata {
   //
   // This field is ignored on input.
   //
-  // +k8s:ifDisabled(validateOutput)=+k8s:optional
-  // +k8s:ifEnabled(validateOutput)=+k8s:required
+  // +k8s:optional
+  // +k8s:update=NoUnset
   // TODO: validate that this is a valid timestamp
   // TODO: validate that UpdateTime >= CreateTime
   google.protobuf.Timestamp update_time = 6;
@@ -289,8 +286,7 @@ message Actor {
   // status is the system-managed state of the Actor. It is updated by the
   // server and ignored on input. It is always present in output.
   //
-  // +k8s:ifDisabled(validateOutput)=+k8s:optional
-  // +k8s:ifEnabled(validateOutput)=+k8s:required
+  // +k8s:optional
   ActorStatus status = 7;
 }
 
