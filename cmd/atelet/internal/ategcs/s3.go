@@ -16,15 +16,11 @@ package ategcs
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 const (
@@ -69,20 +65,6 @@ func NewS3Client(client *s3.Client) ObjectStorage {
 // straight into the upload, overlapping compression with the network. Never called:
 // its presence is the signal.
 func (s *s3Client) supportsStreamingPut() {}
-
-func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
-	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(object),
-	})
-	if err != nil {
-		if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
-			return nil, fmt.Errorf("%w: Failed to get S3 Bucket:%q, Object:%q", ateerrors.ReasonFailedGetExternalObject, bucket, object)
-		}
-		return nil, err
-	}
-	return output.Body, nil
-}
 
 func (s *s3Client) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {
 	//nolint:staticcheck // SA1019: see the note on s3Client.
