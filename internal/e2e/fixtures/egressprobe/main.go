@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command egressprobe drives the egress gateway's MITM leg from inside the
-// cluster and reports the certificate it was served, so an e2e suite can assert
-// on what sdsmint actually minted.
+// Command egressprobe drives the egress gateway from inside the cluster with a
+// credential of the caller's choosing, and reports how far the attempt got:
+// which hop refused it, or the certificate it was ultimately served.
+//
+// It exists as a pod rather than as a client in the test process because the
+// credentials worth testing -- a pod's own workload identity, a leaf for an
+// actor that does not exist -- are only obtainable, or only interesting, from
+// inside the cluster.
 package main
 
 import (
@@ -35,11 +40,10 @@ import (
 )
 
 var (
-	listenAddress        = flag.String("listen", ":8080", "Address the probe's HTTP API listens on.")
-	gatewayAddress       = flag.String("gateway-address", "atenet-egress.ate-system.svc:443", "host:port of the egress gateway's CONNECT front door.")
-	credentialBundlePath = flag.String("credential-bundle", "/run/actor-identity/credential-bundle.pem", "PEM credential bundle presented as the client certificate to the gateway.")
-	trustBundlePath      = flag.String("trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to verify the gateway's serving certificate.")
-	handshakeTimeout     = flag.Duration("handshake-timeout", 20*time.Second, "Budget for one CONNECT plus inner handshake.")
+	listenAddress    = flag.String("listen", ":8080", "Address the probe's HTTP API listens on.")
+	gatewayAddress   = flag.String("gateway-address", "atenet-egress.ate-system.svc:443", "host:port of the egress gateway's CONNECT front door.")
+	trustBundlePath  = flag.String("trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to verify the gateway's serving certificate.")
+	handshakeTimeout = flag.Duration("handshake-timeout", 20*time.Second, "Budget for one CONNECT plus inner handshake.")
 )
 
 // tunnelDestination is the CONNECT authority. atunnel takes this from
@@ -104,13 +108,15 @@ func handshake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Which credential to present. The default is the actor identity the suite
-	// minted; a test that is asserting how the gateway treats some OTHER
-	// credential names its path here rather than needing a second pod, since
-	// the choice is made per handshake and nothing is cached across them.
+	// Which credential to present. Required rather than defaulted: the
+	// credential IS the variable every caller turns, and no one path is the
+	// obvious default now that the pod mounts several. Naming it per request is
+	// also what lets one pod serve every case, since nothing is cached across
+	// handshakes.
 	credential := r.URL.Query().Get("credential-bundle")
 	if credential == "" {
-		credential = *credentialBundlePath
+		http.Error(w, "missing credential-bundle query parameter", http.StatusBadRequest)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), *handshakeTimeout)

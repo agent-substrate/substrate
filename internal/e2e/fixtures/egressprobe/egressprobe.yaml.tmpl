@@ -12,16 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The egress probe used by internal/e2e/suites/sdsmint. ${NAMESPACE} is
+# The egress probe used by internal/e2e/suites/egressauthz. ${NAMESPACE} is
 # substituted by the suite with the randomized namespace it created, so the
 # probe is torn down with that namespace and leaves nothing behind.
-#
-# A plain Pod, not an actor: the suite is testing the gateway's MITM leg, and
-# running the probe itself inside an actor would make a snapshot or restore
-# failure look like an sdsmint failure. The suite does create one actor, but
-# only for its identity -- the certificate mounted below is minted for it, and
-# the actor's own workload is never contacted.
-
 apiVersion: v1
 kind: Pod
 metadata:
@@ -65,8 +58,6 @@ spec:
       capabilities:
         drop: ["ALL"]
     volumeMounts:
-    - name: "actor-identity"
-      mountPath: "/run/actor-identity"
     - name: "actor-identity-unknown"
       mountPath: "/run/actor-identity-unknown"
     - name: "podidentity"
@@ -74,9 +65,6 @@ spec:
     - name: "servicedns-ca"
       mountPath: "/run/servicedns.podcert.ate.dev"
   volumes:
-  - name: "actor-identity"
-    secret:
-      secretName: egressprobe-actor-identity
   - name: "actor-identity-unknown"
     secret:
       secretName: egressprobe-unknown-actor

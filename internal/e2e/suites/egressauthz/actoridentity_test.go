@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sdsmint
+package egressauthz
 
 import (
 	"context"
@@ -22,10 +22,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"fmt"
 	"net/url"
 	"path"
-	"sync"
 	"testing"
 	"time"
 
@@ -35,20 +33,22 @@ import (
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // The gateway's front door requires a client certificate signed by the
 // actor-identity CA, and its ext_proc sidecar then looks the certified actor up
 // in the control plane. Getting through it therefore needs both halves: a leaf
-// this pool signs, and an actor the ate API agrees is running.
+// this pool signs, and an actor the ate API agrees is running. The suite mints
+// the first half and never supplies the second, which is the whole of
+// TestGatewayRefusesAnUnknownActor.
 const (
 	actorIDCASecret    = "actor-id-ca-pool"
 	actorIDCASecretKey = "pool"
 
-	// The atespace the suite's actor lives in. Fixed rather than randomized so
-	// a leaked actor from an aborted run is easy to find and delete.
-	probeAtespace = "ate-sdsmint-e2e"
+	// The atespace named in the credential below. No such atespace is created
+	// -- nothing looks it up until ext_proc does, and ext_proc is meant to come
+	// back empty-handed.
+	probeAtespace = "ate-egressauthz-e2e"
 
 	// actorCertificateLifetime matches what ateapi's MintCert issues. Nothing
 	// here depends on the exact value -- the suite runs in minutes -- but a
@@ -56,11 +56,8 @@ const (
 	// gateway rather than reproduce it.
 	actorCertificateLifetime = time.Hour
 
-	// Where the probe pod finds the credentials the suite mints for it. Kept in
-	// step with egressprobe.yaml.tmpl and the --credential-bundle default in
-	// the probe.
-	actorCredentialSecret = "egressprobe-actor-identity"
-
+	// Where the probe pod finds the credential the suite mints for it. Kept in
+	// step with egressprobe.yaml.tmpl.
 	unknownActorCredentialSecret = "egressprobe-unknown-actor"
 	unknownActorCredentialPath   = "/run/actor-identity-unknown/credential-bundle.pem"
 
@@ -71,85 +68,6 @@ const (
 	// show the gateway refusing it.
 	podIdentityCredentialPath = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 )
-
-// probeActor is the identity the probe authenticates to the gateway as.
-type probeActor struct {
-	atespace string
-	name     string
-	uid      string
-}
-
-func (a *probeActor) identity() *substratex509.ActorIdentity {
-	return &substratex509.ActorIdentity{
-		Atespace:  a.atespace,
-		ActorName: a.name,
-		ActorUid:  a.uid,
-		Purpose:   substratex509.ActorIdentityPurposeAtunnel,
-	}
-}
-
-// liveActor returns the one actor the whole suite shares.
-var liveActor = sync.OnceValues(createLiveActor)
-
-func createLiveActor() (*probeActor, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-	defer cancel()
-
-	clients := e2e.GetClients()
-	tmpl := e2e.CounterFixture()
-	name := fmt.Sprintf("sdsmint-probe-%d", time.Now().UnixNano())
-	ref := &ateapipb.ObjectRef{Atespace: probeAtespace, Name: name}
-
-	// CreateActor requires the atespace to exist first; a second run finds it
-	// already there, which is not an error.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: probeAtespace}},
-	})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: probeAtespace, Name: name},
-		ActorTemplateNamespace: tmpl.Namespace,
-		ActorTemplateName:      tmpl.Name,
-	}}); err != nil {
-		return nil, fmt.Errorf("creating actor %s/%s from template %s/%s: %w (deploy the fixture with %s)",
-			probeAtespace, name, tmpl.Namespace, tmpl.Name, err, tmpl.DeployWith)
-	}
-	e2e.RegisterSuiteCleanup(func() {
-		// DeleteActor requires the actor to be suspended first. Both are
-		// best-effort: a run that could not reach the API here has already
-		// failed louder somewhere else.
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: ref})
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: ref})
-	})
-
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref, Boot: true}); err != nil {
-		return nil, fmt.Errorf("resuming actor %s/%s: %w", probeAtespace, name, err)
-	}
-
-	deadline := time.Now().Add(4 * time.Minute)
-	var lastState ateapipb.ActorState
-	for time.Now().Before(deadline) {
-		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
-		if err == nil {
-			lastState = actor.GetStatus().GetState()
-			if lastState == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-				uid := actor.GetMetadata().GetUid()
-				if uid == "" {
-					return nil, fmt.Errorf("actor %s/%s is running but has no UID", probeAtespace, name)
-				}
-				return &probeActor{atespace: probeAtespace, name: name, uid: uid}, nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("waiting for actor %s/%s to run: %w", probeAtespace, name, ctx.Err())
-		case <-time.After(2 * time.Second):
-		}
-	}
-	return nil, fmt.Errorf("actor %s/%s never reached ACTOR_STATE_RUNNING (last state %v); a saturated worker pool is the usual cause",
-		probeAtespace, name, lastState)
-}
 
 // actorIdentityCA returns the CA that signs actor certificates, straight from
 // the secret ateapi signs with.
@@ -229,32 +147,18 @@ func writeCredentialSecret(t *testing.T, ctx context.Context, ns, name string, b
 	}
 }
 
-// provisionProbeCredentials mints everything the probe pod mounts: the
-// credential of the live actor, and one for an actor that does not exist. Both
-// are signed by the real CA, so the difference between them is exactly the
-// control-plane check and nothing else. Which one a handshake presents is
-// chosen per request, which is what lets the whole suite share one pod.
-func provisionProbeCredentials(t *testing.T, ctx context.Context, ns string) *probeActor {
+// provisionProbeCredentials mints the one credential the probe pod mounts: a
+// leaf the real actor-identity CA signed, naming an actor the control plane has
+// never heard of.
+func provisionProbeCredentials(t *testing.T, ctx context.Context, ns string) {
 	t.Helper()
 
-	actor, err := liveActor()
-	if err != nil {
-		t.Fatalf("preparing the actor the probe authenticates as: %v", err)
-	}
-	t.Logf("probe authenticates as actor %s/%s (uid %s)", actor.atespace, actor.name, actor.uid)
-
-	ca := actorIdentityCA(t, ctx)
-	writeCredentialSecret(t, ctx, ns, actorCredentialSecret, mintActorCredential(t, ca, actor.identity()))
-
-	// Same CA, same shape, an actor the control plane has never heard of. The
-	// name is scoped to the probe's namespace so a stray record cannot collide
-	// with anything.
-	writeCredentialSecret(t, ctx, ns, unknownActorCredentialSecret, mintActorCredential(t, ca, &substratex509.ActorIdentity{
+	// The name is scoped to the probe's namespace so a stray record cannot
+	// collide with anything.
+	writeCredentialSecret(t, ctx, ns, unknownActorCredentialSecret, mintActorCredential(t, actorIdentityCA(t, ctx), &substratex509.ActorIdentity{
 		Atespace:  probeAtespace,
 		ActorName: "no-such-actor-" + ns,
 		ActorUid:  "00000000-0000-0000-0000-000000000000",
 		Purpose:   substratex509.ActorIdentityPurposeAtunnel,
 	}))
-
-	return actor
 }
