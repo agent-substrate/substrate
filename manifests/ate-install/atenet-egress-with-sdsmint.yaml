@@ -129,6 +129,30 @@ data:
                       - upgrade_type: CONNECT
                         connect_config: {}
               http_filters:
+              # The actor's identity, carried across the CONNECT/MITM boundary.
+              # Envoy terminates the CONNECT, so the tunnelled request is a
+              # separate transaction: nothing set here as a header reaches
+              # mitm_listener, and a header sent from inside the tunnel is a
+              # channel the actor controls end to end, which would let one actor
+              # name another. Filter state is the only sound carrier, and this
+              # value comes from the peer certificate Envoy already verified
+              # against the actor-identity CA above.
+              - name: envoy.filters.http.set_filter_state
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
+                  on_request_headers:
+                  - object_key: ate.actor.identity
+                    factory_key: envoy.string
+                    shared_with_upstream: ONCE
+                    # Nothing downstream may overwrite an authenticated identity.
+                    read_only: true
+                    skip_if_empty: true
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DOWNSTREAM_PEER_URI_SAN%"
+                      # Without this an absent SAN renders as "-", which is a
+                      # non-empty string and fails open at whatever reads it.
+                      omit_empty_values: true
               # Actor-identity authorization: on every egress CONNECT, ext_proc
               # reads the actor certificate out of x-forwarded-client-cert,
               # re-verifies it against the actor-identity CA, pulls the
@@ -203,6 +227,17 @@ data:
       # protocol lands on an HTTP connection manager that parses the first bytes
       # of the stream as a request line, finds no request, and drops the
       # connection with nothing in the access log to say why.
+      #
+      # The two HTTP chains carry an #ATE_MITM_EXTPROC_FILTER marker, and the
+      # cluster list a matching #ATE_MITM_EXTPROC_CLUSTER. They are inert
+      # comments until hack/install-ate.sh is run with
+      # --experimental-additional-egress-extproc-service, which replaces each
+      # with a generated block.
+      #
+      # The passthrough chain carries no marker. It is a tcp_proxy, so there is
+      # no HTTP filter chain to put one in, and an opaque stream has no request
+      # to authorize -- which is the limit of what that chain can be policed on,
+      # not an oversight here.
       # ---------------------------------------------------------------------
       - name: mitm_listener
         stat_prefix: mitm
@@ -258,6 +293,7 @@ data:
                     json_format:
                       leg: mitm
                       time: "%START_TIME%"
+                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
                       sni: "%REQUESTED_SERVER_NAME%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
@@ -315,6 +351,7 @@ data:
                       # SSE or long-poll response needs to survive at all.
                       timeout: 0s
               http_filters:
+              #ATE_MITM_EXTPROC_FILTER -- see the mitm_listener comment above.
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
@@ -385,6 +422,7 @@ data:
                     json_format:
                       leg: cleartext
                       time: "%START_TIME%"
+                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
                       path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
@@ -409,6 +447,7 @@ data:
                       cluster: egress_forward_proxy_cleartext
                       timeout: 0s
               http_filters:
+              #ATE_MITM_EXTPROC_FILTER -- Don't modify this line.
               # Same reasoning as the TLS chain: resolve from the request's own
               # Host, so the name that was policed is the name that is dialled.
               - name: envoy.filters.http.dynamic_forward_proxy
@@ -460,6 +499,17 @@ data:
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
         connect_timeout: 1s
+        # Copies every filter state object shared with the upstream onto the
+        # internal listener's downstream connection. Two objects ride this hop,
+        # both set on the CONNECT leg above: ate.actor.identity, which the MITM
+        # access logs and the optional ext_proc filter read, and
+        # original_dst_address, which egress_tcp_passthrough dials.
+        #
+        # Without this neither reaches mitm_listener, and nothing reports it:
+        # the request proxies and every read resolves to the zero value, which
+        # looks exactly like the filters above not running. The wrapped socket
+        # is required and is raw_buffer because there is no TLS on this hop --
+        # the tunnelled TLS is terminated on mitm_listener.
         transport_socket:
           name: envoy.transport_sockets.internal_upstream
           typed_config:
@@ -642,6 +692,8 @@ data:
         type: ORIGINAL_DST
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
+
+      #ATE_MITM_EXTPROC_CLUSTER -- Don't modify this line.
 ---
 apiVersion: apps/v1
 kind: Deployment

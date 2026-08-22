@@ -47,6 +47,10 @@ source "${ROOT}"/hack/install-demo-multi-template.sh
 source "${ROOT}"/hack/install-demo-parking.sh
 source "${ROOT}"/hack/install-demo-autoscaled-workerpool.sh
 
+# Include the optional ext_proc filter on the egress gateway's decrypted leg,
+# behind --experimental-additional-egress-extproc-service.
+source "${ROOT}"/hack/experimental-additional-egress-extproc.sh
+
 # ANSI color codes for prettier output
 COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'
@@ -75,6 +79,9 @@ function usage() {
   echo "Experiments:"
   echo ""
   echo "  --experimental-use-sdsmint             Deploy the egress gateway with per-SNI certificate minting (experimental)"
+  echo "  --experimental-additional-egress-extproc-service NS/SVC:PORT"
+  echo "                                         Run an additional ext_proc authorization filter, served by that Service."
+  echo "                                         Requires --experimental-use-sdsmint. (experimental)"
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -261,10 +268,40 @@ atenet_egress_manifest() {
 
 render_atenet_egress_manifest() {
   if [[ "$(atenet_router)" == "agentgateway" ]]; then
+    # The markers live inside Envoy's bootstrap, so there is nowhere here to
+    # put the filter. Refuse for the same reason patch_atenet_egress_manifest
+    # refuses a non-sdsmint manifest: ignoring the flag would report a
+    # successful install of a gateway that has no additional checkpoint on it.
+    if additional_egress_extproc_enabled; then
+      echo "Error: --experimental-additional-egress-extproc-service requires --atenet-router=envoy" >&2
+      return 1
+    fi
     kubectl kustomize manifests/ate-install/agentgateway-egress \
       --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+  elif additional_egress_extproc_enabled; then
+    patch_atenet_egress_manifest | run_ko resolve -f -
   else
     run_ko resolve -f "$(atenet_egress_manifest)"
+  fi
+}
+
+# apply_atenet_egress deploys the egress gateway.
+apply_atenet_egress() {
+  local manifests=""
+  manifests="$(render_atenet_egress_manifest)"
+
+  # Whether it is already running has to be settled before the apply: a patched
+  # bootstrap arrives as a ConfigMap change, and an otherwise unchanged
+  # Deployment will not pick that up on its own.
+  local running=false
+  if run_kubectl -n ate-system get deployment/atenet-egress >/dev/null 2>&1; then
+    running=true
+  fi
+
+  echo "${manifests}" | run_kubectl apply -f -
+
+  if [[ "${running}" == "true" ]] && additional_egress_extproc_enabled; then
+    run_kubectl -n ate-system rollout restart deployment/atenet-egress
   fi
 }
 
@@ -652,9 +689,7 @@ deploy_ate_system() {
   # --experimental-use-sdsmint composes with every overlay instead of needing a
   # variant of each.
   ensure_egress_mitm_ca_pool_secret
-  local egress_manifests=""
-  egress_manifests="$(render_atenet_egress_manifest)"
-  echo "${egress_manifests}" | run_kubectl apply -f -
+  apply_atenet_egress
 
   log_step "Waiting for ATE system components to be ready..."
   case "$(store_backend)" in
@@ -752,9 +787,7 @@ deploy_atenet() {
   echo "${router_manifest}" | run_kubectl apply -f -
 
   ensure_egress_mitm_ca_pool_secret
-  local egress_manifests=""
-  egress_manifests="$(render_atenet_egress_manifest)"
-  echo "${egress_manifests}" | run_kubectl apply -f -
+  apply_atenet_egress
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
@@ -963,6 +996,16 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ATE_ATENET_ROUTER="${prescan_args[$((i + 1))]}"
       ;;
     --experimental-use-sdsmint) ATE_EXPERIMENTAL_USE_SDSMINT=true ;;
+    --experimental-additional-egress-extproc-service=*)
+      ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE="${prescan_args[i]#*=}"
+      ;;
+    --experimental-additional-egress-extproc-service)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --experimental-additional-egress-extproc-service requires <namespace>/<service>:<port>" >&2
+        exit 1
+      fi
+      ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE="${prescan_args[$((i + 1))]}"
+      ;;
     --store-backend=*) ATE_INSTALL_STORE_BACKEND="${prescan_args[i]#*=}" ;;
     --store-backend)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1064,6 +1107,8 @@ while [[ "$#" -gt 0 ]]; do
     # Captured in the pre-scan above; matched here only so the `*)` branch does
     # not reject it as an unknown option.
     --experimental-use-sdsmint) ;;
+    --experimental-additional-egress-extproc-service) shift ;;
+    --experimental-additional-egress-extproc-service=*) ;;
     --store-backend=*) ATE_INSTALL_STORE_BACKEND="${1#*=}" ;;
     --store-backend)
       shift
