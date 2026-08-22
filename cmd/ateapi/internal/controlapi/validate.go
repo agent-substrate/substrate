@@ -82,19 +82,45 @@ func toGRPCInternalError(errs field.ErrorList) error {
 	return status.Error(codes.Internal, errs.ToAggregate().Error())
 }
 
+// scrubResourceMetadataForCreate removes fields that should not be set by the
+// user when creating a resource.
+func scrubResourceMetadataForCreate(in *ateapipb.ResourceMetadata) {
+	if in == nil {
+		return // validation will flag it
+	}
+	in.Uid = ""         // will be set later
+	in.Version = 0      // will be set later
+	in.CreateTime = nil // will be set later
+	in.UpdateTime = nil // will be set later
+}
+
+// scrubResourceMetadataForUpdate removes fields that should not be set by the
+// user when updating a resource.
+func scrubResourceMetadataForUpdate(in *ateapipb.ResourceMetadata) {
+	if in == nil {
+		return // validation will flag it
+	}
+	// in.Uid and in.Version are preconditions, so we don't scrub them.
+	in.CreateTime = nil // will be set later
+	in.UpdateTime = nil // will be set later
+}
+
+// ateDeepEqual compares two values of any type, using proto.Equal if both are
+// proto messages, and reflect.DeepEqual otherwise.  This is called by
+// declarative validation's generated code.
 func ateDeepEqual[T any](a, b T) bool {
-	if pa, pb := asProtoMessage(a), asProtoMessage(b); pa != nil && pb != nil {
+	asProto := func(x any) proto.Message {
+		pm, ok := x.(proto.Message)
+		if !ok {
+			return nil
+		}
+		return pm
+	}
+
+	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
 		return proto.Equal(pa, pb)
 	}
 	return reflect.DeepEqual(a, b)
-}
-
-func asProtoMessage(x any) proto.Message {
-	pm, ok := x.(proto.Message)
-	if !ok {
-		return nil
-	}
-	return pm
 }
 
 // This exists only because nested subfield tags are not supported yet.
@@ -104,8 +130,12 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 	}
 
 	// TODO: Once we drop the fieldmask, we can do a full validation of the
-	// input actor and don't need this.
+	// input actor and don't need these.  Until then, opaqueType limits what DV
+	// can do to just ensuring that the actor.metadata field is specified.
 	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
+	if actor.Metadata.Atespace == "" {
+		errs = append(errs, field.Required(fldPath.Child("metadata", "atespace"), ""))
+	}
 
 	// This is an update request, so the UID and version must be set.  When
 	// those become optional or when we have nested subfield tags, we can drop

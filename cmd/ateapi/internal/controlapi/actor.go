@@ -129,27 +129,6 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	return stored, nil
 }
 
-// FIXME: put this in a common place for all resources.
-func scrubResourceMetadataForCreate(in *ateapipb.ResourceMetadata) {
-	if in == nil {
-		return // validation will flag it
-	}
-	in.Uid = ""         // will be set later
-	in.Version = 0      // will be set later
-	in.CreateTime = nil // will be set later
-	in.UpdateTime = nil // will be set later
-}
-
-// FIXME: put this in a common place for all resources.
-func scrubResourceMetadataForUpdate(in *ateapipb.ResourceMetadata) {
-	if in == nil {
-		return // validation will flag it
-	}
-	// in.Uid and in.Version are preconditions, so we don't scrub them.
-	in.CreateTime = nil // will be set later
-	in.UpdateTime = nil // will be set later
-}
-
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.

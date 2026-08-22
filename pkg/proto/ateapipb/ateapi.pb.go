@@ -3342,9 +3342,9 @@ type UpdateActorRequest struct {
 	// TODO: Once we drop the fieldmask, we can drop these 2
 	// +k8s:opaqueType # updates are patch-like and can be sparse
 	// +k8s:subfield(metadata)=+k8s:required
-	// +k8s:customValidation
 	// TODO: When nested subfields are enabled, use that for actor.metadata.uid
-	// TODO: When nested subfields are enabled, use that for actor.metadata.version
+	// and version, and drop this.
+	// +k8s:customValidation
 	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
