@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ipfamily"
 	"github.com/agent-substrate/substrate/internal/resources"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -50,7 +51,6 @@ type Controller struct {
 // Run the DNS orchestration loop until ctx is canceled.
 func (c *Controller) Run(ctx context.Context) error {
 	slog.InfoContext(ctx, "DNS Controller started", slog.Duration("interval", c.Interval), slog.String("corefile", c.CorefilePath))
-	slog.InfoContext(ctx, "Using template", "template", corefileTemplate)
 
 	ticker := time.NewTicker(c.Interval)
 	defer ticker.Stop()
@@ -81,8 +81,10 @@ func (c *Controller) reconcile(ctx context.Context) error {
 		return fmt.Errorf("failed to get atenet-router service: %w", err)
 	}
 
-	routerIP := routerSvc.Spec.ClusterIP
-	if routerIP == "" || routerIP == "None" {
+	// Both families, not just Spec.ClusterIP: on an IPv6-only cluster the sole
+	// ClusterIP is a v6 address, and the zone has to publish it as an AAAA.
+	routerV4, routerV6 := ipfamily.ClusterIPsByFamily(routerSvc)
+	if routerV4 == "" && routerV6 == "" {
 		slog.WarnContext(ctx, "atenet-router service has no ClusterIP yet, waiting...")
 		return nil
 	}
@@ -104,7 +106,7 @@ func (c *Controller) reconcile(ctx context.Context) error {
 	}
 
 	// 3. Reconcile CoreDNS Corefile on shared volume
-	if err := c.reconcileCoreDNSConfig(ctx, routerIP); err != nil {
+	if err := c.reconcileCoreDNSConfig(ctx, routerV4, routerV6); err != nil {
 		return fmt.Errorf("failed to reconcile CoreDNS config file: %w", err)
 	}
 
@@ -116,13 +118,13 @@ func (c *Controller) reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (c *Controller) reconcileCoreDNSConfig(ctx context.Context, routerIP string) error {
-	expectedCorefile := makeCoreFile(routerIP)
+func (c *Controller) reconcileCoreDNSConfig(ctx context.Context, routerV4, routerV6 string) error {
+	expectedCorefile := makeCoreFile(routerV4, routerV6)
 
 	// Read Corefile from local shared volume path to see if it needs updating
 	corefileBytes, err := os.ReadFile(c.CorefilePath)
 	if err == nil && string(corefileBytes) == expectedCorefile {
-		slog.DebugContext(ctx, "CoreDNS Corefile is up-to-date", slog.String("routerIP", routerIP))
+		slog.DebugContext(ctx, "CoreDNS Corefile is up-to-date", slog.String("routerIPv4", routerV4), slog.String("routerIPv6", routerV6))
 		return nil
 	}
 
@@ -130,7 +132,7 @@ func (c *Controller) reconcileCoreDNSConfig(ctx context.Context, routerIP string
 	if err := os.WriteFile(c.CorefilePath, []byte(expectedCorefile), 0644); err != nil {
 		return fmt.Errorf("failed to write updated Corefile to %s: %w", c.CorefilePath, err)
 	}
-	slog.InfoContext(ctx, "CoreDNS Corefile updated", slog.String("routerIP", routerIP))
+	slog.InfoContext(ctx, "CoreDNS Corefile updated", slog.String("routerIPv4", routerV4), slog.String("routerIPv6", routerV6))
 
 	// Signal CoreDNS process to reload
 	if err := c.Reloader.Reload(ctx); err != nil {
