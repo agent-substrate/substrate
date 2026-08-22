@@ -36,6 +36,8 @@ type dataplaneHealthCheck struct {
 // untouched, so atunnel always authorizes by the actor's own DNS name --
 // ingress.New needs no per-dataplane routing mode.
 
+// healthCheck dials IPv4 loopback, which is why the admin socket in
+// manifests/ate-install/atenet-router.yaml needs ipv4_compat.
 func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	switch r {
 	case atenetRouterEnvoy:

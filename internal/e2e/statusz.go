@@ -51,7 +51,7 @@ func NewStatuszClient(ctx context.Context) (*StatuszClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, routerStatusPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, RouterNamespace, RouterService, routerStatusPort)
 	if err != nil {
 		return nil, err
 	}
