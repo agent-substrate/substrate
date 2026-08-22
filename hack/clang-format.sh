@@ -16,9 +16,13 @@
 
 set -o errexit -o nounset -o pipefail
 
+# Release URLs and SHA-256 checksums come from the PyPI JSON API:
+# https://pypi.org/pypi/clang-format/json
+# A version bump must update both the hashed URL path and platform tag for
+# each wheel.
 CLANG_FORMAT_VERSION="22.1.8"
 
-ROOT="$(git rev-parse --show-toplevel)"
+ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
 INSTALL_DIR="${ROOT}/bin/clang-format-install/${CLANG_FORMAT_VERSION}"
 CLANG_FORMAT_BIN="${INSTALL_DIR}/clang-format"
 
