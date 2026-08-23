@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -33,6 +34,35 @@ import (
 )
 
 const networkingAtespace = "networking-e2e"
+
+// egressFixture returns the egress demo the egress tests build their actors
+// from, for the sandbox class under test and the egress gateway variant
+// deployed.
+//
+// Deploy the one matching the lane:
+//
+//	hack/install-ate-kind.sh --deploy-demo-egress                     # passthrough, gVisor
+//	hack/install-ate-kind.sh --deploy-demo-egress-microvm             # passthrough, micro-VM
+//	hack/install-ate-kind.sh --deploy-demo-egress-mitm                # sdsmint, gVisor
+//	hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm        # sdsmint, micro-VM
+func egressFixture() e2e.Fixture {
+	// E2E_EGRESS_MITM selects the egress gateway variant.
+	if os.Getenv("E2E_EGRESS_MITM") == "" {
+		return e2e.EgressFixture()
+	}
+	if e2e.IsMicroVM() {
+		return e2e.Fixture{
+			Namespace:  "ate-demo-egress-microvm-mitm",
+			Name:       "egress-microvm-mitm",
+			DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm",
+		}
+	}
+	return e2e.Fixture{
+		Namespace:  "ate-demo-egress-mitm",
+		Name:       "egress-mitm",
+		DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress-mitm",
+	}
+}
 
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
@@ -60,7 +90,7 @@ func TestActorDirectAccess(t *testing.T) {
 // asserts the gateway is deployed and that it did not reject the Actor.
 func TestActorEgress(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "egress", e2e.EgressFixture())
+	actorName, _ := createAndResumeActor(t, ctx, "egress", egressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -79,7 +109,7 @@ func TestActorEgress(t *testing.T) {
 // between the Actor and the origin.
 func TestActorEgressHTTPS(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "egress-https", e2e.EgressFixture())
+	actorName, _ := createAndResumeActor(t, ctx, "egress-https", egressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -128,7 +158,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 	// resumed Actor idling in the cluster waiting for a destination.
 	target := e2e.DeployServerPod(t, ctx, httpTarget)
 
-	actorName, _ := createAndResumeActor(t, ctx, "egress-port", e2e.EgressFixture())
+	actorName, _ := createAndResumeActor(t, ctx, "egress-port", egressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 

@@ -133,6 +133,21 @@ jobs:
         E2E_EGRESS_MITM: "1"
         E2E_SANDBOX_CLASS: microvm
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
+    - name: Deploy MITM egress demo
+      # The networking suite's egress tests need a fixture that trusts the
+      # CA used by sdsmint.
+      run: |
+        hack/install-ate-kind.sh --deploy-demo-egress-mitm
+        hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm
+    - name: Run E2E tests (networking, MITM egress)
+      env:
+        E2E_EGRESS_MITM: "1"
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color
+    - name: Run E2E tests (networking, MITM egress, micro-VM)
+      env:
+        E2E_EGRESS_MITM: "1"
+        E2E_SANDBOX_CLASS: microvm
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
       run: |

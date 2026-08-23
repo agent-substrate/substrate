@@ -22,6 +22,12 @@ ATE_DEMOS+=(demo-egress) # register demo-egress
 # can be installed side by side (the networking suite runs against whichever the
 # sandbox class under test selects).
 ATE_DEMOS+=(demo-egress-microvm) # register demo-egress-microvm
+# The MITM variants are separate demos for the same reason, plus one of their
+# own: they project the egress gateway trust bundle, which only resolves on an
+# sdsmint install, so they cannot be part of the demos a passthrough install
+# deploys.
+ATE_DEMOS+=(demo-egress-mitm)         # register demo-egress-mitm
+ATE_DEMOS+=(demo-egress-microvm-mitm) # register demo-egress-microvm-mitm
 
 demo-egress_cmdline() {
   case "${1}" in
@@ -38,6 +44,28 @@ demo-egress-microvm_cmdline() {
   case "${1}" in
     --deploy-demo-egress-microvm) demo-egress-microvm_deploy ;;
     --delete-demo-egress-microvm) demo-egress-microvm_delete ;;
+    *)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+demo-egress-mitm_cmdline() {
+  case "${1}" in
+    --deploy-demo-egress-mitm) demo-egress-mitm_deploy ;;
+    --delete-demo-egress-mitm) demo-egress-mitm_delete ;;
+    *)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+demo-egress-microvm-mitm_cmdline() {
+  case "${1}" in
+    --deploy-demo-egress-microvm-mitm) demo-egress-microvm-mitm_deploy ;;
+    --delete-demo-egress-microvm-mitm) demo-egress-microvm-mitm_delete ;;
     *)
       return 1
       ;;
@@ -88,5 +116,59 @@ demo-egress-microvm_delete() {
   log_step "demo-egress-microvm_delete"
   delete_demo_actors ate-demo-egress-microvm egress-microvm
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm.yaml.tmpl \
+    | run_kubectl delete --ignore-not-found -f -
+}
+
+demo-egress-mitm_usage() {
+  echo "  Needs an sdsmint install (--deploy-atenet --experimental-use-sdsmint): the actors"
+  echo "  project the egress gateway trust bundle, which does not resolve otherwise."
+}
+
+demo-egress-mitm_deploy() {
+  log_step "demo-egress-mitm_deploy"
+  ensure_crds
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-mitm.yaml.tmpl \
+    | run_ko apply -f -
+
+  log_step "Waiting for MITM egress demo to be ready..."
+  run_kubectl rollout status deployment/egress-mitm -n ate-demo-egress-mitm --timeout=300s
+  # The golden snapshot only becomes Ready once an actor starts, and an actor
+  # whose trust bundle does not resolve never does — so a timeout here is the
+  # symptom of a missing sdsmint install (see demo-egress-mitm_usage).
+  run_kubectl wait --for=condition=Ready actortemplate/egress-mitm \
+    -n ate-demo-egress-mitm --timeout=300s
+}
+
+demo-egress-mitm_delete() {
+  log_step "demo-egress-mitm_delete"
+  delete_demo_actors ate-demo-egress-mitm egress-mitm
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-mitm.yaml.tmpl \
+    | run_kubectl delete --ignore-not-found -f -
+}
+
+demo-egress-microvm-mitm_usage() {
+  echo "  Needs hack/install-microvm-deps.sh --install to have run (cluster-wide microvm SandboxConfig),"
+  echo "  and an sdsmint install (--deploy-atenet --experimental-use-sdsmint) for the trust bundle."
+}
+
+demo-egress-microvm-mitm_deploy() {
+  log_step "demo-egress-microvm-mitm_deploy"
+  ensure_crds
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm-mitm.yaml.tmpl \
+    | run_ko apply -f -
+
+  log_step "Waiting for micro-VM MITM egress demo to be ready..."
+  run_kubectl rollout status deployment/egress-microvm-mitm \
+    -n ate-demo-egress-microvm-mitm --timeout=300s
+  # A micro-VM golden is a cloud-hypervisor cold boot plus a checkpoint, on
+  # nested KVM in CI, so it needs a longer budget than the gVisor one above.
+  run_kubectl wait --for=condition=Ready actortemplate/egress-microvm-mitm \
+    -n ate-demo-egress-microvm-mitm --timeout=600s
+}
+
+demo-egress-microvm-mitm_delete() {
+  log_step "demo-egress-microvm-mitm_delete"
+  delete_demo_actors ate-demo-egress-microvm-mitm egress-microvm-mitm
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm-mitm.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }
