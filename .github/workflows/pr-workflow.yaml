@@ -164,12 +164,27 @@ jobs:
       if: failure()
       run: |
         kubectl --context kind-kind get workerpool,pods -A -o wide || true
+        echo "=== node ==="
+        kubectl --context kind-kind describe node kind-control-plane 2>/dev/null | sed -n '/^Conditions:/,/^Addresses:/p' || true
+        # An OOM kill and a SIGKILL from a cancelled context both surface as
+        # `signal: killed`. A record here confirms an OOM; its absence does not
+        # rule one out, so read it with the context state ateom now reports.
+        # Grepped, not tailed: the kill line scrolls off a busy ring buffer.
+        echo "=== dmesg: OOM (kind node) ==="
+        docker exec kind-control-plane sh -c "dmesg | grep -Ei 'oom|out of memory|killed process|memory cgroup' | tail -50" 2>/dev/null || true
+        echo "=== dmesg: tail (kind node) ==="
+        docker exec kind-control-plane sh -c 'dmesg | tail -50' 2>/dev/null || true
+        echo "=== events ==="
+        kubectl --context kind-kind get events -A --sort-by=.lastTimestamp 2>/dev/null | tail -60 || true
+        # Extra args per caller: the control plane runs for the whole job so its
+        # tail is enough, while a worker's failure line is buried by routine
+        # output -- and on a restart it is in the previous container's log.
         dump() {
-          echo "=== logs: $1/$2 ==="
-          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
+          echo "=== logs: $1/$2 ${*:3} ==="
+          kubectl --context kind-kind logs -n "$1" "$2" --all-containers "${@:3}" 2>/dev/null || true
         }
         for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
-          dump ate-system "$p"
+          dump ate-system "$p" --tail=300
         done
         # Every worker pod in any namespace: the demo pools plus the e2e suites'
         # randomly-named per-test namespaces, which the suites keep on failure.
@@ -177,4 +192,9 @@ jobs:
         # (and, for a micro-VM worker, the guest console tail) live.
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
-          | while read -r ns name; do dump "$ns" "$name"; done
+          | while read -r ns name; do
+              dump "$ns" "$name"
+              dump "$ns" "$name" --previous
+              echo "=== describe: $ns/$name ==="
+              kubectl --context kind-kind describe pod -n "$ns" "$name" 2>/dev/null || true
+            done
