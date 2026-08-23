@@ -31,13 +31,16 @@ import (
 )
 
 func TestValidateCreateActorRequest(t *testing.T) {
+	// This test verifies validation of user input for creation.  Since status
+	// is scrubbed on input, we don't need to test the status field here, other
+	// than that it is optional. TestValidateActorUpdate covers status
+	// validation and updates.
 	validActor := func(mutate func(*ateapipb.Actor)) *ateapipb.CreateActorRequest {
 		a := &ateapipb.Actor{
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
 			ActorTemplate:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status:                 nil, // scrubbed on input
 		}
 		if mutate != nil {
 			mutate(a)
@@ -154,16 +157,6 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		}),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "source_snapshot_tag", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"unspecified actor.status",
-		validActor(func(a *ateapipb.Actor) { a.Status = nil }),
-		nil,
-	}, {
-		"specified actor.status",
-		validActor(func(a *ateapipb.Actor) {
-			a.Status = &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}
-		}),
-		nil, // ignored on input
-	}, {
 		"valid worker_selector",
 		validActor(func(a *ateapipb.Actor) {
 			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
@@ -197,6 +190,16 @@ func TestValidateCreateActorRequest(t *testing.T) {
 			a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}}
 		}),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "worker_selector", "match_labels").Key("tier"), "not valid!", "").WithOrigin("format=k8s-label-value")},
+	}, {
+		"unspecified actor.status",
+		validActor(func(a *ateapipb.Actor) { a.Status = nil }),
+		nil, // optional
+	}, {
+		"valid actor.status",
+		validActor(func(a *ateapipb.Actor) {
+			a.Status = &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}
+		}),
+		nil, // ignored on input
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -206,6 +209,9 @@ func TestValidateCreateActorRequest(t *testing.T) {
 }
 
 func TestValidateActorUpdate(t *testing.T) {
+	// This test validates input and output fields, including status.  It also
+	// tests updates to all fields.  This is where the majority of validation
+	// test cases should live.
 	validInput := func(mutate func(*ateapipb.Actor)) *ateapipb.Actor {
 		a := &ateapipb.Actor{
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
@@ -227,6 +233,20 @@ func TestValidateActorUpdate(t *testing.T) {
 			mutate(a)
 		}
 		return a
+	}
+	validWorkerAssignment := func(mutate func(*ateapipb.WorkerAssignment)) *ateapipb.WorkerAssignment {
+		wa := &ateapipb.WorkerAssignment{
+			Worker:          &ateapipb.ObjectRef{Name: "worker"},
+			WorkerNamespace: "ns",
+			WorkerPool:      "pool",
+			WorkerPod:       "pod",
+			WorkerPodUid:    "12345678-1234-1234-1234-123456789abc",
+			WorkerPodIp:     "1.2.3.4",
+		}
+		if mutate != nil {
+			mutate(wa)
+		}
+		return wa
 	}
 
 	tests := []struct {
@@ -312,6 +332,26 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(func(a *ateapipb.Actor) { a.ActorTemplate = &ateapipb.ObjectRef{Atespace: "as2", Name: "nm2"} }),
 		field.ErrorList{field.Invalid(field.NewPath("actor_template"), nil, "").WithOrigin("immutable")},
 	}, {
+		"worker_selector with nil match_labels",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
+		field.ErrorList{field.Invalid(field.NewPath("worker_selector"), nil, "one of").WithOrigin("union")},
+	}, {
+		"add actor.source_snapshot_tag",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = &ateapipb.ObjectRef{} }),
+		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+	}, {
+		"clear actor.source_snapshot_tag",
+		validInput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = &ateapipb.ObjectRef{} }),
+		validOutput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = nil }),
+		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+	}, {
+		"change actor.source_snapshot_tag",
+		validInput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = &ateapipb.ObjectRef{Atespace: "as1", Name: "nm1"} }),
+		validOutput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = &ateapipb.ObjectRef{Atespace: "as2", Name: "nm2"} }),
+		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+	}, {
 		"unspecified actor.status",
 		validInput(func(a *ateapipb.Actor) { a.Status = &ateapipb.ActorStatus{} }),
 		validOutput(func(a *ateapipb.Actor) { a.Status = nil }),
@@ -393,6 +433,103 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = &ateapipb.ObjectRef{Atespace: "as1", Name: "nm1"} }),
 		validOutput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = &ateapipb.ObjectRef{Atespace: "as2", Name: "nm2"} }),
 		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+	}, {
+		"unspecified actor.status.worker_assignment",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Status.WorkerAssignment = nil }),
+		nil,
+	}, {
+		"set valid actor.status.worker_assignment, IPv4",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = validWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "1.2.3.4" })
+		}),
+		nil,
+	}, {
+		"set valid actor.status.worker_assignment, IPv6",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = validWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPodIp = "1234::5678" })
+		}),
+		nil,
+	}, {
+		"clear actor.status.worker_assignment",
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = validWorkerAssignment(nil)
+		}),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = nil
+		}),
+		nil,
+	}, {
+		"modify actor.status.worker_assignment",
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = validWorkerAssignment(nil)
+		}),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = validWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPod = "pod2" })
+		}),
+		field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment"), nil, "").WithOrigin("update")},
+	}, {
+		"empty actor.status.worker_assignment",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{}
+		}),
+		field.ErrorList{
+			field.Required(field.NewPath("status", "worker_assignment", "worker"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "worker_namespace"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "worker_pool"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "worker_pod"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_uid"), ""),
+			field.Required(field.NewPath("status", "worker_assignment", "worker_pod_ip"), ""),
+		},
+	}, {
+		"invalid actor.status.worker_assignment",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Atespace: "not-allowed", Name: "bad value"},
+				WorkerNamespace: "invalid namespace",
+				WorkerPool:      "invalid pool",
+				WorkerPod:       "invalid pod",
+				WorkerPodUid:    "invalid UUID",
+				WorkerPodIp:     "invalid IP",
+			}
+		}),
+		field.ErrorList{
+			field.Forbidden(field.NewPath("status", "worker_assignment", "worker", "atespace"), ""),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker", "name"), nil, "").WithOrigin("format=k8s-short-name"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_namespace"), nil, "").WithOrigin("format=k8s-short-name"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pool"), nil, "").WithOrigin("format=k8s-long-name"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod"), nil, "").WithOrigin("format=k8s-long-name"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid"),
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+		},
+	}, {
+		// because we have manual IP format validation, let's be sure
+		"invalid actor.status.worker_assignment_worker_pod_ip: leading 0s",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = validWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+				wa.WorkerPodIp = "001.002.003.004"
+			})
+		}),
+		field.ErrorList{
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+		},
+	}, {
+		// because we have manual IP format validation, let's be sure
+		"invalid actor.status.worker_assignment_worker_pod_ip: non-canonical",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment = validWorkerAssignment(func(wa *ateapipb.WorkerAssignment) {
+				wa.WorkerPodIp = "0012::0034"
+			})
+		}),
+		field.ErrorList{
+			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
+		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -473,6 +610,10 @@ func TestValidateListActorsRequest(t *testing.T) {
 }
 
 func TestValidateUpdateActorRequest(t *testing.T) {
+	// This test verifies validation of user input for update.  Since status
+	// is scrubbed on input, we don't need to test the status field here, other
+	// than that it is optional. TestValidateActorUpdate covers status
+	// validation and updates.
 	tests := []struct {
 		name string
 		req  *ateapipb.UpdateActorRequest

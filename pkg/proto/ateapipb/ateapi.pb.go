@@ -990,6 +990,9 @@ type ActorStatus struct {
 	State ActorState `protobuf:"varint,1,opt,name=state,proto3,enum=ateapi.ActorState" json:"state,omitempty"`
 	// worker_assignment points at the worker currently hosting this Actor.
 	// Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+	//
+	// +k8s:optional
+	// +k8s:update=NoModify # can be set and cleared, but not changed in place
 	WorkerAssignment       *WorkerAssignment `protobuf:"bytes,2,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`
 	InProgressSnapshotName string            `protobuf:"bytes,3,opt,name=in_progress_snapshot_name,json=inProgressSnapshotName,proto3" json:"in_progress_snapshot_name,omitempty"`
 	// The latest durable snapshot created for this Actor.
@@ -1177,17 +1180,34 @@ type WorkerAssignment struct {
 	// readers on a hot path do not have to fetch the Worker at all.
 	//
 	// Workers are global-scoped, so this carries no atespace.
-	// +k8s:opaqueType
+	//
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	// +k8s:required
 	Worker *ObjectRef `protobuf:"bytes,6,opt,name=worker,proto3" json:"worker,omitempty"`
 	// worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	WorkerNamespace string `protobuf:"bytes,1,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
 	// worker_pool is the name of the WorkerPool the worker belongs to.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-long-name
 	WorkerPool string `protobuf:"bytes,2,opt,name=worker_pool,json=workerPool,proto3" json:"worker_pool,omitempty"`
 	// worker_pod is the name of the Kubernetes pod hosting the Actor.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-long-name
 	WorkerPod string `protobuf:"bytes,3,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
 	// worker_pod_uid is the Kubernetes UID of worker_pod.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-uuid
 	WorkerPodUid string `protobuf:"bytes,4,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
 	// worker_pod_ip is the IP of worker_pod.
+	//
+	// +k8s:required
+	// +k8s:customValidation # until `format=k8s-ip` is supported
 	WorkerPodIp   string `protobuf:"bytes,5,opt,name=worker_pod_ip,json=workerPodIp,proto3" json:"worker_pod_ip,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

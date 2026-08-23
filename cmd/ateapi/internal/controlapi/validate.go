@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -144,4 +145,9 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "version"), &actor.Metadata.Version, nil)...)
 
 	return errs
+}
+
+// This is needed because DV doesn't have a standard format for IP addresses yet.
+func ValidateCustom_WorkerAssignment_WorkerPodIp(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validation.IsValidIP(fldPath, *value)
 }

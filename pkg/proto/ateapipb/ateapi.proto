@@ -313,6 +313,9 @@ message ActorStatus {
 
   // worker_assignment points at the worker currently hosting this Actor.
   // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
   string in_progress_snapshot_name = 3;
@@ -365,22 +368,39 @@ message WorkerAssignment {
   // readers on a hot path do not have to fetch the Worker at all.
   //
   // Workers are global-scoped, so this carries no atespace.
-  // +k8s:opaqueType
+  //
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:required
   ObjectRef worker = 6;
 
   // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string worker_namespace = 1;
 
   // worker_pool is the name of the WorkerPool the worker belongs to.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string worker_pool = 2;
 
   // worker_pod is the name of the Kubernetes pod hosting the Actor.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string worker_pod = 3;
 
   // worker_pod_uid is the Kubernetes UID of worker_pod.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string worker_pod_uid = 4;
 
   // worker_pod_ip is the IP of worker_pod.
+  //
+  // +k8s:required
+  // +k8s:customValidation # until `format=k8s-ip` is supported
   string worker_pod_ip = 5;
 }
 
