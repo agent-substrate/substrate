@@ -36,6 +36,12 @@ import (
 // tests can assert they are cleared when the actor crashes.
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
+
+	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
+	if _, err := st.CreateAtespace(ctx, atespace); err != nil {
+		t.Fatalf("Failed to CreateAtespace: %v", err)
+	}
+
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status: &ateapipb.ActorStatus{
@@ -90,6 +96,9 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 // already cleared, e.g. by a prior release.
 func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
+	if _, err := st.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status: &ateapipb.ActorStatus{
@@ -457,6 +466,9 @@ func TestCrashActor_Metrics(t *testing.T) {
 				WorkerPodUid:    "pod-uid-1",
 			},
 		},
+	}
+	if _, err := st.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actor.Metadata.Atespace}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("CreateActor: %v", err)

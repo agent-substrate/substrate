@@ -247,6 +247,14 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	t.Helper()
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
+
+	atespace := &ateapipb.Atespace{
+		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace},
+	}
+	if _, err := st.CreateAtespace(ctx, atespace); err != nil {
+		t.Fatalf("seed atespace: %v", err)
+	}
+
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		Status:                 &ateapipb.ActorStatus{State: f.state},

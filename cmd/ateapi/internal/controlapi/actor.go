@@ -72,15 +72,6 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	atespace := in.GetMetadata().GetAtespace()
 	name := in.GetMetadata().GetName()
 
-	// The atespace must already exist.
-	exists, err := s.persistence.AtespaceExists(ctx, atespace)
-	if err != nil {
-		return nil, fmt.Errorf("while checking atespace: %w", err)
-	}
-	if !exists {
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
-	}
-
 	// Volume creation is completed asynchronously after the actor is recorded.
 	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
 	if err != nil {

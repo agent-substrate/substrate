@@ -149,9 +149,6 @@ type Interface interface {
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 
-	// AtespaceExists reports whether the atespace object exists.
-	AtespaceExists(ctx context.Context, name string) (bool, error)
-
 	// Lists atespaces.
 	ListAtespaces(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Atespace], error)
 

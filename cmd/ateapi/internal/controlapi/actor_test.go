@@ -43,10 +43,6 @@ func (s *createActorErrorStore) CreateActor(context.Context, *ateapipb.Actor) (*
 	return nil, s.err
 }
 
-func (s *createActorErrorStore) AtespaceExists(context.Context, string) (bool, error) {
-	return true, nil
-}
-
 func TestCreateActor_AtespaceDeletedAfterPrecheck(t *testing.T) {
 	const ns = "ns-create-atespace-race"
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
@@ -429,6 +425,11 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
 
+	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
+	if _, err := persistence.CreateAtespace(ctx, atespace); err != nil {
+		t.Fatalf("seed CreateAtespace: %v", err)
+	}
+
 	// Actor A: what the client reads, and what its uid precondition names.
 	// Freshly created, so it sits at version 1.
 	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
@@ -516,6 +517,10 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
 
+	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
+	if _, err := persistence.CreateAtespace(ctx, atespace); err != nil {
+		t.Fatalf("seed CreateAtespace: %v", err)
+	}
 	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
@@ -605,6 +610,14 @@ func serviceWithActor(t *testing.T, actor *ateapipb.Actor) (*Service, *ateapipb.
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
+
+	atespace := &ateapipb.Atespace{
+		Metadata: &ateapipb.ResourceMetadata{Name: actor.Metadata.Atespace},
+	}
+	_, err := persistence.CreateAtespace(context.Background(), atespace)
+	if err != nil {
+		t.Fatalf("Failed to CreateAtespace: %v", err)
+	}
 
 	created, err := persistence.CreateActor(context.Background(), actor)
 	if err != nil {

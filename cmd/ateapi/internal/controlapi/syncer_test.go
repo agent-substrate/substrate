@@ -262,6 +262,9 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 		t.Fatalf("worker row not materialised: %v", err)
 	}
 	actorName := "actor-orphan"
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-orphan"}}); err != nil {
+		t.Fatalf("create atespace: %v", err)
+	}
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorName, Atespace: "team-orphan"}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
@@ -582,6 +585,11 @@ func TestReconcileDeadWorker(t *testing.T) {
 
 	ns, pool, pod := "ns-rdw", "pool1", "worker-rdw"
 	atespace, actorID := "team-rdw", "actor-rdw"
+
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
@@ -637,6 +645,11 @@ func TestReconcileDeadWorker_IgnoresStaleIncarnationAssignment(t *testing.T) {
 
 	ns, pool, pod, uid := "ns-rdw", "pool1", "worker-rdw", "uid-rdw"
 	atespace, actorID := "team-rdw", "actor-rdw"
+
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
@@ -729,6 +742,11 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	// An orphan worker (no pod) whose actor is still RUNNING must be cleaned up.
 	const orphanUID = "22222222-2222-2222-2222-222222222222"
 	atespace, actorID := "team-recon", "actor-recon"
+
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
@@ -957,6 +975,11 @@ func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 			s := &WorkerPoolSyncer{persistence: persistence}
 
 			atespace, actorID := "team-status", "actor-status"
+
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
+				t.Fatalf("CreateAtespace() failed: %v", err)
+			}
+
 			createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 				Metadata:               &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace},
 				ActorTemplateNamespace: ns,

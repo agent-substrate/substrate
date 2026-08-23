@@ -1448,21 +1448,6 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 		}
 	})
 
-	t.Run("AtespaceExists", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if ok, err := s.AtespaceExists(ctx, "team-a"); err != nil || ok {
-			t.Fatalf("AtespaceExists before create = (%v, %v), want (false, nil)", ok, err)
-		}
-		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
-			t.Fatalf("CreateAtespace failed: %v", err)
-		}
-		if ok, err := s.AtespaceExists(ctx, "team-a"); err != nil || !ok {
-			t.Fatalf("AtespaceExists after create = (%v, %v), want (true, nil)", ok, err)
-		}
-	})
-
 	t.Run("ListAtespaces", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

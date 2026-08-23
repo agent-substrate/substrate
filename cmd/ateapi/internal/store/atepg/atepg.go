@@ -190,14 +190,6 @@ func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.A
 	return out, nil
 }
 
-func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
-	var exists bool
-	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = $1)`, name).Scan(&exists); err != nil {
-		return false, fmt.Errorf("checking atespace existence: %w", err)
-	}
-	return exists, nil
-}
-
 func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
