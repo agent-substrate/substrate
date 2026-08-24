@@ -330,11 +330,11 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 	}
 
 	actor, actorRef, reason, err := s.authorizeWithWorker(ctx, worker, caller, req)
-	if err != nil {
-		return nil, resources.ActorRef{}, err // Internal error (e.g., actor lookup failed)
-	}
-	if reason == "" {
+	if err == nil {
 		return actor, actorRef, nil // Success!
+	}
+	if !errors.Is(err, errAssignmentMismatch) {
+		return nil, resources.ActorRef{}, err // Internal error (e.g., actor lookup failed)
 	}
 
 	// Read-through: re-check the authoritative worker from the store on denial.
@@ -349,10 +349,10 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 
 	actor, actorRef, retryReason, retryErr := s.authorizeWithWorker(ctx, fresh, caller, req)
 	if retryErr != nil {
+		if errors.Is(retryErr, errAssignmentMismatch) {
+			return nil, resources.ActorRef{}, s.denyMint(ctx, caller, req, retryReason)
+		}
 		return nil, resources.ActorRef{}, retryErr
-	}
-	if retryReason != "" {
-		return nil, resources.ActorRef{}, s.denyMint(ctx, caller, req, retryReason)
 	}
 
 	slog.InfoContext(ctx, "ActorIdentity: authorized via store read-through; worker cache was stale",
@@ -367,22 +367,24 @@ func (s *Server) denyMint(ctx context.Context, caller *ateletCaller, req *ateapi
 	return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
 }
 
-// authorizeWithWorker returns a (reason string) instead of calling denyMint directly.
-// If reason is non-empty, the authorization failed.
+var errAssignmentMismatch = errors.New("assignment mismatch")
+
+// authorizeWithWorker returns errAssignmentMismatch and a reason string if the authorization failed
+// due to an assignment mismatch, indicating the caller may want to refetch the worker and retry.
 func (s *Server) authorizeWithWorker(ctx context.Context, worker *ateapipb.Worker, caller *ateletCaller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, string, error) {
 	if worker.GetNodeName() != caller.nodeName {
-		return nil, resources.ActorRef{}, "worker is hosted on a different node", nil
+		return nil, resources.ActorRef{}, "worker is hosted on a different node", errAssignmentMismatch
 	}
 
 	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
 	if actorRef == (resources.ActorRef{}) {
-		return nil, resources.ActorRef{}, "worker has no actor assignment", nil
+		return nil, resources.ActorRef{}, "worker has no actor assignment", errAssignmentMismatch
 	}
 
 	actor, err := s.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, resources.ActorRef{}, "assigned actor not found", nil
+			return nil, resources.ActorRef{}, "assigned actor not found", errAssignmentMismatch
 		}
 		slog.ErrorContext(ctx, "ActorIdentity: failed to read actor", slog.Any("actor", actorRef), slog.Any("err", err))
 		return nil, resources.ActorRef{}, "", status.Error(codes.Internal, "failed to look up actor")
@@ -401,10 +403,10 @@ func (s *Server) authorizeWithWorker(ctx context.Context, worker *ateapipb.Worke
 		return nil, resources.ActorRef{}, "", status.Error(codes.FailedPrecondition, "actor has no worker assigned")
 	}
 	if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
-		return nil, resources.ActorRef{}, "worker is no longer assigned to this actor incarnation", nil
+		return nil, resources.ActorRef{}, "worker is no longer assigned to this actor incarnation", errAssignmentMismatch
 	}
 	if assignment.GetWorker().GetName() != worker.GetMetadata().GetName() {
-		return nil, resources.ActorRef{}, "actor no longer points to the requesting worker", nil
+		return nil, resources.ActorRef{}, "actor no longer points to the requesting worker", errAssignmentMismatch
 	}
 	return actor, actorRef, "", nil
 }
