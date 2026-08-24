@@ -139,9 +139,9 @@ func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.V
 //
 // Methods on this service should hold most of the logic.
 type ServiceImpl struct {
-	// FIXME: name this field and explicitly pass-thru each method, to prevent
-	// accidentally satisfying methods we need to trap
-	store.Interface
+	// This field is explicitly named to prevent accidentally satisfying
+	// methods we need to trap.
+	store store.Interface
 
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	storageClassLister  storagev1listers.StorageClassLister
@@ -157,9 +157,19 @@ func newServiceImpl(
 	storageClassLister storagev1listers.StorageClassLister,
 ) *ServiceImpl {
 	s := &ServiceImpl{
-		Interface:           persistence,
+		store:               persistence,
 		actorTemplateLister: actorTemplateLister,
 		storageClassLister:  storageClassLister,
 	}
 	return s
+}
+
+// Pass-through.
+func (s *ServiceImpl) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
+	return s.store.AcquireLease(ctx, key)
+}
+
+// Pass-through.
+func (s *ServiceImpl) DebugClearAll(ctx context.Context) error {
+	return s.store.DebugClearAll(ctx)
 }

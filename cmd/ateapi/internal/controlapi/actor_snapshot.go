@@ -47,6 +47,11 @@ var actorSnapshotTagScopeNames = func() []string {
 	return names
 }()
 
+func (s *ServiceImpl) CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error) {
+	// TODO: implement this
+	return s.store.CreateActorSnapshot(ctx, snapshot)
+}
+
 func (s *RPCService) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActorSnapshotRequest) (*ateapipb.ActorSnapshot, error) {
 	if errs := validateGetActorSnapshotRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -59,6 +64,11 @@ func (s *RPCService) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActo
 		return nil, fmt.Errorf("while getting actor snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+func (s *ServiceImpl) GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error) {
+	// TODO: implement this
+	return s.store.GetActorSnapshot(ctx, snapshotRef)
 }
 
 func validateGetActorSnapshotRequest(req *ateapipb.GetActorSnapshotRequest) field.ErrorList {
@@ -88,6 +98,11 @@ func (s *RPCService) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetA
 	return tag, nil
 }
 
+func (s *ServiceImpl) GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+	// TODO: implement this
+	return s.store.GetActorSnapshotTag(ctx, tagRef)
+}
+
 func validateGetActorSnapshotTagRequest(req *ateapipb.GetActorSnapshotTagRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -110,6 +125,11 @@ func (s *RPCService) ListActorSnapshots(ctx context.Context, req *ateapipb.ListA
 		return nil, mapListError(fmt.Errorf("while listing actor snapshots: %w", err))
 	}
 	return &ateapipb.ListActorSnapshotsResponse{ActorSnapshots: page.Items, NextPageToken: page.NextPageToken}, nil
+}
+
+func (s *ServiceImpl) ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error) {
+	// TODO: implement this
+	return s.store.ListActorSnapshots(ctx, atespace, opts)
 }
 
 func validateListActorSnapshotsRequest(req *ateapipb.ListActorSnapshotsRequest) field.ErrorList {
@@ -150,6 +170,11 @@ func (s *RPCService) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.C
 		return nil, fmt.Errorf("while tagging actor snapshot: %w", err)
 	}
 	return tag, nil
+}
+
+func (s *ServiceImpl) CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+	// TODO: implement this
+	return s.store.CreateActorSnapshotTag(ctx, snapshotRef, tag)
 }
 
 func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagRequest) field.ErrorList {
@@ -219,6 +244,11 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 	return storedTag, nil
 }
 
+func (s *ServiceImpl) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+	// TODO: implement this
+	return s.store.UpdateActorSnapshotTag(ctx, tagRef, precondition, mutate)
+}
+
 func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -250,6 +280,11 @@ func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.D
 		return nil, fmt.Errorf("while deleting actor snapshot tag: %w", err)
 	}
 	return tag, nil
+}
+
+func (s *ServiceImpl) DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+	// TODO: implement this
+	return s.store.DeleteActorSnapshotTag(ctx, tagRef)
 }
 
 func validateDeleteActorSnapshotTagRequest(req *ateapipb.DeleteActorSnapshotTagRequest) field.ErrorList {

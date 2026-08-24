@@ -44,6 +44,11 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersR
 	}, nil
 }
 
+func (s *ServiceImpl) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	// TODO: implement this
+	return s.store.ListWorkers(ctx, opts)
+}
+
 func validateListWorkersRequest(req *ateapipb.ListWorkersRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -71,6 +76,11 @@ func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerReque
 	return worker, nil
 }
 
+func (s *ServiceImpl) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
+	// TODO: implement this
+	return s.store.GetWorker(ctx, name)
+}
+
 func validateGetWorkerRequest(req *ateapipb.GetWorkerRequest) field.ErrorList {
 	var fldPath *field.Path
 	return resources.ValidateGlobalObjectRef(req.GetWorker(), fldPath.Child("worker"))
@@ -95,6 +105,11 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 		return nil, fmt.Errorf("while creating worker: %w", err)
 	}
 	return created, nil
+}
+
+func (s *ServiceImpl) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
+	// TODO: implement this
+	return s.store.CreateWorker(ctx, worker)
 }
 
 func validateCreateWorkerRequest(req *ateapipb.CreateWorkerRequest) field.ErrorList {
@@ -129,6 +144,11 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorke
 		toUpdate.Metadata = metadata
 		return nil
 	})
+}
+
+func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	// TODO: implement this
+	return s.store.UpdateWorker(ctx, name, precondition, mutate)
 }
 
 func validateUpdateWorkerRequest(req *ateapipb.UpdateWorkerRequest) field.ErrorList {
@@ -167,6 +187,11 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorke
 		return nil, fmt.Errorf("while deleting worker: %w", err)
 	}
 	return worker, nil
+}
+
+func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {
+	// TODO: implement this
+	return s.store.DeleteWorker(ctx, name, pre)
 }
 
 func validateDeleteWorkerRequest(req *ateapipb.DeleteWorkerRequest) field.ErrorList {
@@ -327,4 +352,9 @@ func validateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 	}
 
 	return errs
+}
+
+func (s *ServiceImpl) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
+	// TODO: implement this
+	return s.store.WatchWorkers(ctx)
 }

@@ -115,7 +115,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.Interface.CreateActor(ctx, outActor)
+	stored, err := s.store.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
@@ -133,7 +133,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
 func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
-	tag, err := s.Interface.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
+	tag, err := s.store.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -197,6 +197,11 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest
 	return actor, nil
 }
 
+func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	// TODO: implement this
+	return s.store.GetActor(ctx, actorRef)
+}
+
 func validateGetActorRequest(req *ateapipb.GetActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -223,6 +228,11 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		Actors:        page.Items,
 		NextPageToken: page.NextPageToken,
 	}, nil
+}
+
+func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+	// TODO: implement this
+	return s.store.ListActors(ctx, atespace, opts)
 }
 
 func validateListActorsRequest(req *ateapipb.ListActorsRequest) field.ErrorList {
@@ -280,7 +290,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 }
 
 func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
-	storedActor, err := s.Interface.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
 		// Apply the mutation function to the stored value.
 		oldVal := proto.CloneOf(toUpdate)
 		if err := mutate(toUpdate); err != nil {
@@ -359,6 +369,11 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	}
 
 	return deleted, nil
+}
+
+func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	// TODO: implement this
+	return s.store.DeleteActor(ctx, actorRef)
 }
 
 func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) field.ErrorList {

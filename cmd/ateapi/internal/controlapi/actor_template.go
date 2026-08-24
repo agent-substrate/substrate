@@ -65,6 +65,11 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	return stored, nil
 }
 
+func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.CreateActorTemplate(ctx, template)
+}
+
 func validateCreateActorTemplateRequest(req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -158,6 +163,11 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActo
 	return template, nil
 }
 
+func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.GetActorTemplate(ctx, templateRef)
+}
+
 func validateGetActorTemplateRequest(req *ateapipb.GetActorTemplateRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -184,6 +194,11 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListA
 		ActorTemplates: page.Items,
 		NextPageToken:  page.NextPageToken,
 	}, nil
+}
+
+func (s *ServiceImpl) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+	// TODO: implement this
+	return s.store.ListActorTemplates(ctx, atespace, opts)
 }
 
 func validateListActorTemplatesRequest(req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
@@ -222,6 +237,11 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.Dele
 	return deleted, nil
 }
 
+func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.DeleteActorTemplate(ctx, templateRef)
+}
+
 func validateDeleteActorTemplateRequest(req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -255,4 +275,9 @@ func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorLi
 	}
 
 	return errs
+}
+
+func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
 }

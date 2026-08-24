@@ -47,7 +47,7 @@ func (s *ServiceImpl) CreateAtespace(ctx context.Context, inAtespace *ateapipb.A
 	// no further processing or status, but if there were, we would do it here
 
 	// Save the data in the storage layer.
-	stored, err := s.Interface.CreateAtespace(ctx, inAtespace)
+	stored, err := s.store.CreateAtespace(ctx, inAtespace)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Atespace %s already exists", inAtespace.Metadata.Name)
@@ -75,7 +75,7 @@ func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceR
 }
 
 func (s *ServiceImpl) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
-	atespace, err := s.Interface.GetAtespace(ctx, name)
+	atespace, err := s.store.GetAtespace(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)
 	} else if err != nil {
@@ -108,7 +108,7 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 
 func (s *ServiceImpl) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
 	opts.PageSize = effectivePageSize(opts.PageSize)
-	page, err := s.Interface.ListAtespaces(ctx, opts)
+	page, err := s.store.ListAtespaces(ctx, opts)
 	if err != nil {
 		return page, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))
 	}
@@ -130,7 +130,7 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAte
 }
 
 func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
-	deleted, err := s.Interface.DeleteAtespace(ctx, name)
+	deleted, err := s.store.DeleteAtespace(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)
