@@ -38,10 +38,10 @@ import (
 )
 
 // TestTCPOriginalDestinationPreservesErrno covers the failure path on an
-// ordinary connection that no REDIRECT rule touched. The IPv4 lookup misses
-// and reports ENOENT; that error must reach the caller. Retrying the IPv6
-// option on an AF_INET socket would replace it with EOPNOTSUPP, which says
-// nothing about why the lookup failed.
+// ordinary connection that no REDIRECT rule touched. Each IPv4 lookup misses
+// and reports ENOENT; that error must reach the caller. A dual-stack listener
+// receives the IPv4 connection with a v4-mapped local address, so it must also
+// select the IPv4 option.
 //
 // It runs in a fresh namespace because conntrack tracks loopback in any
 // namespace that has nftables rules — including the one Docker runs in — and a
@@ -49,38 +49,57 @@ import (
 func TestTCPOriginalDestinationPreservesErrno(t *testing.T) {
 	roottest.Require(t, "CAP_SYS_ADMIN for a network namespace with no conntrack hooks")
 
-	ns := newTestNetNS(t)
-	if err := ateomnet.NetNSDo(context.Background(), ns, func(context.Context) error {
-		loopback, err := netlink.LinkByName("lo")
-		if err != nil {
-			return err
-		}
-		if err := netlink.LinkSetUp(loopback); err != nil {
-			return err
-		}
+	for _, test := range []struct {
+		name          string
+		listenNetwork string
+		listenAddress string
+	}{
+		{name: "IPv4", listenNetwork: "tcp4", listenAddress: "127.0.0.1:0"},
+		// An unspecified "tcp" listener is a dual-stack AF_INET6 socket on
+		// Linux. A tcp4 client reaches it through a v4-mapped local address,
+		// so TCPOriginalDestination must select the IPv4 socket option via
+		// local.IP.To4(), rather than the listener's socket domain.
+		{name: "dual-stack v4-mapped", listenNetwork: "tcp", listenAddress: ":0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ns := newTestNetNS(t)
+			if err := ateomnet.NetNSDo(context.Background(), ns, func(context.Context) error {
+				loopback, err := netlink.LinkByName("lo")
+				if err != nil {
+					return err
+				}
+				if err := netlink.LinkSetUp(loopback); err != nil {
+					return err
+				}
 
-		listener, err := net.Listen("tcp4", "127.0.0.1:0")
-		if err != nil {
-			return err
-		}
-		defer listener.Close()
-		client, err := net.DialTimeout("tcp4", listener.Addr().String(), time.Second)
-		if err != nil {
-			return err
-		}
-		defer client.Close()
-		server, err := listener.Accept()
-		if err != nil {
-			return err
-		}
-		defer server.Close()
+				listener, err := net.Listen(test.listenNetwork, test.listenAddress)
+				if err != nil {
+					return err
+				}
+				defer listener.Close()
+				_, port, err := net.SplitHostPort(listener.Addr().String())
+				if err != nil {
+					return err
+				}
+				client, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", port), time.Second)
+				if err != nil {
+					return err
+				}
+				defer client.Close()
+				server, err := listener.Accept()
+				if err != nil {
+					return err
+				}
+				defer server.Close()
 
-		if _, err := TCPOriginalDestination(server); !errors.Is(err, unix.ENOENT) {
-			return fmt.Errorf("want the IPv4 lookup's ENOENT, got %w", err)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+				if _, err := TCPOriginalDestination(server); !errors.Is(err, unix.ENOENT) {
+					return fmt.Errorf("want the IPv4 lookup's ENOENT, got %w", err)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

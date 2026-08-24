@@ -18,7 +18,6 @@ package atunnel
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -54,13 +53,11 @@ func TCPOriginalDestination(conn net.Conn) (string, error) {
 	var sockoptErr error
 	var destination string
 	if err := rawConn.Control(func(fd uintptr) {
-		destination, sockoptErr = originalIPv4Destination(fd)
-		// A pure-IPv6 socket leaves the inet addresses zeroed, so the IPv4
-		// conntrack lookup always misses with ENOENT. That is the redirected
-		// IPv6 connection, and the only case worth retrying.
-		if isIPv6 && errors.Is(sockoptErr, unix.ENOENT) {
+		if isIPv6 {
 			destination, sockoptErr = originalIPv6Destination(fd)
+			return
 		}
+		destination, sockoptErr = originalIPv4Destination(fd)
 	}); err != nil {
 		return "", fmt.Errorf("atunnel: accessing TCP socket: %w", err)
 	}
