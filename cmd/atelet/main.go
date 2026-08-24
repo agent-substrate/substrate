@@ -536,7 +536,7 @@ func initSnapshotSizeMetric() error {
 	snapshotSizeBytes, err = otel.Meter("atelet").Int64Histogram(
 		"atelet.snapshot.size",
 		metric.WithUnit("By"),
-		metric.WithDescription("On-disk size in bytes of each snapshot image written during checkpoint: the blocks the filesystem allocated, not the length the file reports. The two differ for the micro-VM memory image, which is sparse — see allocatedBytes."),
+		metric.WithDescription("On-disk size in bytes of each snapshot image written during checkpoint."),
 
 		metric.WithExplicitBucketBoundaries(
 			1e6, 5e6, 1e7, 2.5e7, 5e7, 1e8, 2.5e8, 5e8, 1e9, 2e9, 5e9, 1e10,

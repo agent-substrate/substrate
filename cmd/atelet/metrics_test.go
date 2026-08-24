@@ -451,6 +451,18 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 	}
 }
 
+// patternBytes returns a byte slice of length n filled with a repeating
+// non-zero byte pattern. This ensures test data is incompressible and cannot
+// be quietly treated as zero-blocks or sparse holes by copy-on-write or
+// compressing filesystems.
+func patternBytes(n int64) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(i%251 + 1)
+	}
+	return b
+}
+
 // sparseImage writes a file shaped like the micro-VM memory image: created at
 // the guest's full RAM size, with only a small prefix ever written. Returns its
 // path, its apparent length, and how much was actually written.
@@ -467,7 +479,7 @@ func sparseImage(t *testing.T) (path string, apparent, written int64) {
 		t.Fatalf("create sparse image: %v", err)
 	}
 	defer f.Close()
-	if _, err := f.Write(make([]byte, written)); err != nil {
+	if _, err := f.Write(patternBytes(written)); err != nil {
 		t.Fatalf("write sparse image prefix: %v", err)
 	}
 	if err := f.Truncate(apparent); err != nil {
@@ -509,7 +521,7 @@ func TestAllocatedBytesAgreesWithLengthForADenseImage(t *testing.T) {
 	const size = 64 << 10
 
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, make([]byte, size), 0o600); err != nil {
+	if err := os.WriteFile(path, patternBytes(size), 0o600); err != nil {
 		t.Fatalf("write dense image: %v", err)
 	}
 	fi, err := os.Stat(path)
