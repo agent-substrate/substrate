@@ -405,14 +405,6 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 	return out, nil
 }
 
-func (p *Persistence) ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error) {
-	var exists bool
-	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM actor_templates WHERE atespace = $1 AND name = $2)`, templateRef.Atespace, templateRef.Name).Scan(&exists); err != nil {
-		return false, fmt.Errorf("checking actor template existence: %w", err)
-	}
-	return exists, nil
-}
-
 func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
 	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
 		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)

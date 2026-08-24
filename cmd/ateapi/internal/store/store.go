@@ -172,9 +172,6 @@ type Interface interface {
 	// Fetches an ActorTemplate by reference. Returns ErrNotFound if missing.
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 
-	// ActorTemplateExists reports whether the ActorTemplate exists.
-	ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error)
-
 	// Lists ActorTemplates in an atespace, or across all atespaces when
 	// atespace is empty.
 	ListActorTemplates(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorTemplate], error)

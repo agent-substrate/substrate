@@ -777,9 +777,6 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 			t.Errorf("CreateActorTemplate mutated its input: %v", input.GetMetadata())
 		}
 		templateRef := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
-		if exists, err := s.ActorTemplateExists(ctx, templateRef); err != nil || !exists {
-			t.Fatalf("ActorTemplateExists = (%v, %v), want (true, nil)", exists, err)
-		}
 		gotTemplate, err := s.GetActorTemplate(ctx, templateRef)
 		if err != nil {
 			t.Fatalf("GetActorTemplate failed: %v", err)
