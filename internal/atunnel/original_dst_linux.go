@@ -88,6 +88,9 @@ func originalIPv6Destination(fd uintptr) (string, error) {
 }
 
 func getOriginalDestination(fd uintptr, level, option int, addr unsafe.Pointer, addrSize uintptr) unix.Errno {
+	// getsockopt treats size as both input and output. Callers provide the exact
+	// size of RawSockaddrInet4 (16 bytes) or RawSockaddrInet6 (28 bytes), which
+	// the kernel validates before writing the original destination into addr.
 	size := uint32(addrSize)
 	_, _, errno := unix.Syscall6(
 		unix.SYS_GETSOCKOPT,
