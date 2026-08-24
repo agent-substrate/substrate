@@ -12,34 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Micro-VM (kata + cloud-hypervisor) variant of the MITM egress demo, so the
-# networking suite's egress tests run against the sdsmint gateway on both
-# sandbox classes. Delivery of the projected bundle into the sandbox is what
-# differs by class — a read-only bind for gVisor, the unified virtio-fs share
-# for the guest here — so the projection is worth proving on both.
+# Micro-VM (kata + cloud-hypervisor) variant of the egress demo, so the
+# networking suite's egress tests run against both sandbox classes. The actor's
+# outbound TCP is redirected into atunnel by nftables in the ateom
+# (prepareActorEgress), which the micro-VM ateom implements the same way the
+# gVisor one does — this fixture is what proves it end to end.
 #
-# As in egress-mitm.yaml.tmpl, this REQUIRES an sdsmint install
-# (--experimental-use-sdsmint).
-#
-# Kept in step with egress-microvm.yaml.tmpl; the deltas are the names, the
-# projected trust bundle, and the two SSL_CERT_* variables. The cluster-wide
-# `microvm` SandboxConfig referenced below by name is installed by
-# hack/install-microvm-deps.sh.
+# Kept in step with egress.yaml.tmpl; the deltas are the runtime fields and the
+# sandbox size. The cluster-wide `microvm` SandboxConfig referenced below by
+# name is installed by hack/install-microvm-deps.sh.
 
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ate-demo-egress-microvm-mitm
+  name: ate-demo-egress-microvm
 
 ---
 
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
-  name: egress-microvm-mitm
-  namespace: ate-demo-egress-microvm-mitm
+  name: egress-microvm
+  namespace: ate-demo-egress-microvm
   labels:
-    workload: egress-microvm-mitm
+    workload: egress-microvm
 spec:
   replicas: 2
   sandboxClass: microvm
@@ -56,38 +52,17 @@ spec:
 apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
-  name: egress-microvm-mitm
-  namespace: ate-demo-egress-microvm-mitm
+  name: egress-microvm
+  namespace: ate-demo-egress-microvm
 spec:
   # Must match the WorkerPool's sandboxClass: a snapshot is not portable across
   # sandbox classes, so only pools of the same class are eligible to run this
   # template's actors.
   sandboxClass: microvm
-  volumes:
-  - name: system-info
-    systemInfo:
-      dataSources:
-      # The trust anchors for the per-SNI leaves the MITM egress gateway mints.
-      # Only allowlisted bundle names resolve; this is the one supported today.
-      - trustBundle:
-          name: egress-mitm.ate.dev
-          path: trust-bundle.pem
   containers:
   - name: egress
     image: ko://github.com/agent-substrate/substrate/demos/egress
     command: ["/ko-app/egress"]
-    # Both variables, for the reason egress-mitm.yaml.tmpl spells out:
-    # SSL_CERT_FILE replaces the default cert file list but not the default cert
-    # DIRECTORY scan, so SSL_CERT_DIR has to point at the projection too for the
-    # anchor set to be exactly the gateway CA.
-    env:
-    - name: SSL_CERT_FILE
-      value: /run/ate/trust-bundle.pem
-    - name: SSL_CERT_DIR
-      value: /run/ate
-    volumeMounts:
-    - name: system-info
-      mountPath: /run/ate   # the bundle lands at /run/ate/trust-bundle.pem
     readyz:
       httpGet:
         path: /readyz
@@ -103,8 +78,8 @@ spec:
       memory: 512Mi
   workerSelector:
     matchLabels:
-      workload: egress-microvm-mitm
+      workload: egress-microvm
   snapshotsConfig:
     onPause: Full
     onCommit: Full
-    location: gs://${BUCKET_NAME}/ate-demo-egress-microvm-mitm/
+    location: gs://${BUCKET_NAME}/ate-demo-egress-microvm/
