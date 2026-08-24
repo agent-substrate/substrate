@@ -40,6 +40,7 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	discoverygrpc "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
@@ -829,6 +830,55 @@ func TestXdsServer_BuildOriginalDstCluster_UsesMetadataKey(t *testing.T) {
 	}
 }
 
+// TestXdsServer_ActorClusterProtocolOptions pins where downstream-protocol
+// mirroring is allowed: only on the mTLS atunnel leg, where atunnel guards
+// HTTP/1.1-only actors by downgrading non-gRPC HTTP/2 (see
+// atunnel.protocolMirrorTransport). The legacy plaintext cluster dials the
+// actor directly with no such guard, so it must carry no protocol options at
+// all — Envoy's implicit HTTP/1.1.
+func TestXdsServer_ActorClusterProtocolOptions(t *testing.T) {
+	x := NewXdsServer(18000)
+
+	if opts := x.buildOriginalDstCluster().GetTypedExtensionProtocolOptions(); len(opts) != 0 {
+		t.Errorf("legacy plaintext actor cluster has protocol options %v, want none (implicit HTTP/1.1)", opts)
+	}
+
+	x.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem", "spiffe://ate.dev/")
+	cluster := x.buildOriginalDstCluster()
+	ts := cluster.GetTransportSocket()
+	if ts == nil {
+		t.Fatal("mTLS actor cluster is missing its transport socket")
+	}
+	// The upstream TLS context must NOT set alpn_protocols: with
+	// use_downstream_protocol_config, Envoy already offers the single ALPN
+	// matching each connection pool's protocol. A static ["h2","http/1.1"]
+	// list would override that, and Go's atunnel server (which negotiates by
+	// server preference) would pick h2 on connections belonging to the
+	// HTTP/1.1 pool, breaking it.
+	upstreamTls := &tlsv3.UpstreamTlsContext{}
+	if err := ts.GetTypedConfig().UnmarshalTo(upstreamTls); err != nil {
+		t.Fatalf("Failed to unmarshal UpstreamTlsContext: %v", err)
+	}
+	if alpn := upstreamTls.GetCommonTlsContext().GetAlpnProtocols(); len(alpn) != 0 {
+		t.Errorf("upstream TLS context ALPN = %v, want none (per-pool ALPN comes from use_downstream_protocol_config)", alpn)
+	}
+	raw, ok := cluster.GetTypedExtensionProtocolOptions()[httpProtocolOptionsName]
+	if !ok {
+		t.Fatalf("mTLS actor cluster is missing %q protocol options", httpProtocolOptionsName)
+	}
+	protoOpts := &httpv3.HttpProtocolOptions{}
+	if err := raw.UnmarshalTo(protoOpts); err != nil {
+		t.Fatalf("Failed to unmarshal HttpProtocolOptions: %v", err)
+	}
+	downstream := protoOpts.GetUseDownstreamProtocolConfig()
+	if downstream == nil {
+		t.Fatalf("mTLS actor cluster protocol options = %v, want use_downstream_protocol_config", protoOpts)
+	}
+	if downstream.GetHttp2ProtocolOptions() == nil {
+		t.Error("use_downstream_protocol_config must enable HTTP/2 so gRPC keeps trailers on the atunnel leg")
+	}
+}
+
 // TestXdsServer_BuildRoutes_DerivesTargetPortHeader covers the fix for atunnel
 // needing the target port as a real header (it can't read Envoy's dynamic
 // metadata directly): rather than ext_proc building that header mutation
@@ -1053,5 +1103,59 @@ func TestSnapshotVersionsUniqueAcrossRestarts(t *testing.T) {
 			t.Fatalf("version %q reused after restart; Envoy holding that version would not receive the new config", v)
 		}
 		seen[v] = true
+	}
+}
+
+// downstreamTLS extracts the DownstreamTlsContext from a listener's first
+// filter chain.
+func downstreamTLS(t *testing.T, raw any) *tlsv3.DownstreamTlsContext {
+	t.Helper()
+	l := raw.(*listenerv3.Listener)
+	dtc := &tlsv3.DownstreamTlsContext{}
+	if err := l.GetFilterChains()[0].GetTransportSocket().GetTypedConfig().UnmarshalTo(dtc); err != nil {
+		t.Fatalf("Failed to unmarshal DownstreamTlsContext: %v", err)
+	}
+	return dtc
+}
+
+func TestXdsServer_HttpsH2ALPN(t *testing.T) {
+	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+
+	snapshotListeners := func(t *testing.T, h2 bool) map[string]any {
+		t.Helper()
+		server := NewXdsServer(18000)
+		server.SetConfig(8085, 50053, "127.0.0.1")
+		server.SetTlsConfig(8443, certPath)
+		server.SetConnectPorts(0, 8444)
+		server.SetHttpsH2(h2)
+		if err := server.UpdateSnapshot(); err != nil {
+			t.Fatalf("UpdateSnapshot failed: %v", err)
+		}
+		res, err := server.snapshot.GetSnapshot(NodeID)
+		if err != nil {
+			t.Fatalf("Failed to get snapshot: %v", err)
+		}
+		listeners := map[string]any{}
+		for name, l := range res.(*cachev3.Snapshot).GetResources(resourcev3.ListenerType) {
+			listeners[name] = l
+		}
+		return listeners
+	}
+
+	// Default: no ALPN anywhere
+	listeners := snapshotListeners(t, false)
+	if alpn := downstreamTLS(t, listeners[IngressHTTPSListener]).GetCommonTlsContext().GetAlpnProtocols(); len(alpn) != 0 {
+		t.Errorf("HTTPS listener ALPN with knob off = %v, want none", alpn)
+	}
+
+	// Enabled: the HTTPS listener offers h2 then http/1.1; the CONNECT-TLS
+	// listener stays untouched.
+	listeners = snapshotListeners(t, true)
+	alpn := downstreamTLS(t, listeners[IngressHTTPSListener]).GetCommonTlsContext().GetAlpnProtocols()
+	if len(alpn) != 2 || alpn[0] != "h2" || alpn[1] != "http/1.1" {
+		t.Errorf("HTTPS listener ALPN with knob on = %v, want [h2 http/1.1]", alpn)
+	}
+	if alpn := downstreamTLS(t, listeners["connect_terminate_tls"]).GetCommonTlsContext().GetAlpnProtocols(); len(alpn) != 0 {
+		t.Errorf("CONNECT-TLS listener ALPN = %v, want none regardless of the knob", alpn)
 	}
 }

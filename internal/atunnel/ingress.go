@@ -126,7 +126,7 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := newProtocolMirrorTransport()
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(cfg.Upstream)
@@ -181,6 +181,65 @@ func NewServer(cfg Config) (*Server, error) {
 	return s, nil
 }
 
+// isGRPC reports whether an incoming HTTP request conforms to the gRPC over
+// HTTP/2 specification: HTTP/2 framing, POST method, and a Content-Type of
+// "application/grpc" (optionally with a "+<subtype>" or ";<parameters>").
+// Notably this excludes gRPC-Web that works over HTTP/1.1.
+// See https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#requests
+func isGRPC(r *http.Request) bool {
+	if r.ProtoMajor != 2 || r.Method != http.MethodPost {
+		return false
+	}
+	ct := strings.ToLower(r.Header.Get("Content-Type"))
+	const base = "application/grpc"
+	if ct == base {
+		return true
+	}
+	if strings.HasPrefix(ct, base) {
+		switch ct[len(base)] {
+		case '+', ';':
+			return true
+		}
+	}
+	return false
+}
+
+// protocolMirrorTransport picks the actor-leg protocol per request. gRPC goes
+// out as prior-knowledge h2c, since it needs HTTP/2 trailers and full-duplex
+// streaming; everything else is translated to HTTP/1.1 even if it arrived over
+// HTTP/2 at the edge. This is to not break previous logic so an HTTP/1.1-only actor keeps working whatever the
+// client negotiated.
+type protocolMirrorTransport struct {
+	h1, h2c *http.Transport
+}
+
+func newProtocolMirrorTransport() protocolMirrorTransport {
+	h1 := http.DefaultTransport.(*http.Transport).Clone()
+	h2c := http.DefaultTransport.(*http.Transport).Clone()
+	protocols := new(http.Protocols)
+	protocols.SetUnencryptedHTTP2(true)
+	h2c.Protocols = protocols
+	return protocolMirrorTransport{h1: h1, h2c: h2c}
+}
+
+func (t protocolMirrorTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if isGRPC(r) {
+		return t.h2c.RoundTrip(r)
+	}
+	return t.h1.RoundTrip(r)
+}
+
+// CloseIdleConnections keeps Deactivate's idle-connection cleanup working:
+// closeIdleUpstreamConnections discovers it through a duck-typed interface
+// assertion that silently returns false if the method disappears, so pin it
+// at compile time.
+var _ interface{ CloseIdleConnections() } = protocolMirrorTransport{}
+
+func (t protocolMirrorTransport) CloseIdleConnections() {
+	t.h1.CloseIdleConnections()
+	t.h2c.CloseIdleConnections()
+}
+
 func loadCredentialBundle(path string) (*tls.Certificate, error) {
 	pemBytes, err := os.ReadFile(path)
 	if err != nil {
@@ -202,9 +261,15 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 // separate listener so ordinary actor ingress remains a request proxy, while
 // the router can use this listener for a bidirectional tunnel.
 func (s *Server) ServeConnect(ctx context.Context, lis net.Listener) error {
-	// Keep ALPN confined to the CONNECT listener. The established ingress
-	// listener is explicitly HTTP/1.1 in the router's upstream cluster, while
-	// the CONNECT listener supports either HTTP/1.1 or HTTP/2.
+	// Offer both protocols explicitly, matching the ingress listener (whose
+	// ServeTLS advertises h2 and http/1.1 by default). The router's actor
+	// cluster mirrors the downstream protocol, so either can arrive here.
+	// The tunnel itself relays opaque bytes, so protocolMirrorTransport's
+	// gRPC-only gate does not apply to CONNECT traffic — and that is the
+	// point: this listener is the basis of the planned tunnel-based ingress,
+	// where ordinary actor traffic arrives here as a spliced tunnel and all
+	// protocol decisions move to the router's route config, leaving atunnel
+	// with no request parsing at all.
 	tlsConfig := s.tlsConfig.Clone()
 	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
 	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), tlsConfig)

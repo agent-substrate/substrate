@@ -129,6 +129,11 @@ const defaultExtProcMaxRequests = 2048
 // does not silently stretch every shutdown past terminationGracePeriodSeconds.
 // Operators who raise --route-timeout and want such turns to survive a drain
 // must raise --drain-timeout (and the grace period) explicitly.
+//
+// TODO(liorlieberman): this ceiling also cuts off gRPC server-streaming and
+// bidi RPCs longer than 10s, so streaming gRPC effectively requires raising
+// --route-timeout today. We need to fix it so streaming works without
+// inflating the timeout for all workloads.
 const defaultRouteTimeout = 10 * time.Second
 
 // envoyDefaultStreamIdleTimeout is the stream idle timeout Envoy applies when
@@ -161,6 +166,9 @@ type XdsServer struct {
 	connectPlainTextPort int
 	connectTLSPort       int
 	certPath             string
+	// httpsH2 offers HTTP/2 via ALPN on the HTTPS ingress listener,
+	// enabling gRPC to actors over TLS. See SetHttpsH2.
+	httpsH2 bool
 
 	// Upstream (actor-facing) mTLS. When upstreamCredentialBundlePath is set, the
 	// ORIGINAL_DST actor cluster dials the actor's in-worker atunnel ingress
@@ -295,6 +303,17 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	}
 	x.httpsPort = httpsPort
 	x.certPath = certPath
+}
+
+// SetHttpsH2 controls whether the HTTPS ingress listener offers HTTP/2 via
+// ALPN. Off, the listener advertises no protocols and clients fall back to
+// HTTP/1.1, matching historical behavior; on, gRPC (which requires a
+// negotiated "h2") can reach actors over TLS, while HTTP/1.1 clients still
+// negotiate http/1.1.
+func (x *XdsServer) SetHttpsH2(enabled bool) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.httpsH2 = enabled
 }
 
 // otlpDefaultPort is the OTLP/gRPC default port, used when the collector
@@ -759,19 +778,21 @@ func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 
 	if ts := x.buildUpstreamTransportSocket(); ts != nil {
 		cluster.TransportSocket = ts
-		// The atunnel ingress server terminates TLS and reverse-proxies to the
-		// actor over HTTP/1.1.
-		httpOpts := newAny(&httpv3.HttpProtocolOptions{
-			UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
-				ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
-					ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
-						HttpProtocolOptions: &corev3.Http1ProtocolOptions{},
+		// Mirror the downstream protocol to atunnel so HTTP/2 requests stay
+		// HTTP/2 and gRPC keeps trailers and streaming end to end. atunnel
+		// gates its own actor leg: it forwards HTTP/2 only for gRPC and
+		// downgrades everything else, so an HTTP/2 client cannot break an
+		// HTTP/1.1-only actor. Without upstream mTLS there is no atunnel leg
+		// to carry HTTP/2, so that mode keeps Envoy's implicit HTTP/1.1.
+		cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{
+			httpProtocolOptionsName: newAny(&httpv3.HttpProtocolOptions{
+				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_UseDownstreamProtocolConfig{
+					UseDownstreamProtocolConfig: &httpv3.HttpProtocolOptions_UseDownstreamHttpConfig{
+						HttpProtocolOptions:  &corev3.Http1ProtocolOptions{},
+						Http2ProtocolOptions: &corev3.Http2ProtocolOptions{},
 					},
 				},
-			},
-		})
-		cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{
-			httpProtocolOptionsName: httpOpts,
+			}),
 		}
 	}
 
@@ -1170,9 +1191,12 @@ func (x *XdsServer) buildListener() *listenerv3.Listener {
 // socket shared by every TLS-terminating listener: it serves the SDS-fetched
 // certificate at HTTPSCertSecretName (see buildTlsSecret), which UpdateSnapshot
 // includes whenever any TLS listener (HTTPS or CONNECT-TLS) is configured.
-func buildDownstreamTlsTransportSocket() *corev3.TransportSocket {
+// alpnProtocols, when non-empty, is offered during the handshake; empty
+// advertises nothing, leaving clients on HTTP/1.1.
+func buildDownstreamTlsTransportSocket(alpnProtocols []string) *corev3.TransportSocket {
 	tlsConfig := &tlsv3.DownstreamTlsContext{
 		CommonTlsContext: &tlsv3.CommonTlsContext{
+			AlpnProtocols: alpnProtocols,
 			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
 				{
 					Name: HTTPSCertSecretName,
@@ -1198,6 +1222,13 @@ func buildDownstreamTlsTransportSocket() *corev3.TransportSocket {
 func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	hcm := x.buildHcm("ingress_https", true)
 
+	// gRPC requires a negotiated "h2"; http/1.1 keeps plain HTTPS clients
+	// working alongside it.
+	var alpn []string
+	if x.httpsH2 {
+		alpn = []string{"h2", "http/1.1"}
+	}
+
 	return &listenerv3.Listener{
 		Name: IngressHTTPSListener,
 		Address: &corev3.Address{
@@ -1221,7 +1252,7 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 						},
 					},
 				},
-				TransportSocket: buildDownstreamTlsTransportSocket(),
+				TransportSocket: buildDownstreamTlsTransportSocket(alpn),
 			},
 		},
 	}
@@ -1287,7 +1318,10 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 						},
 					},
 				},
-				TransportSocket: buildDownstreamTlsTransportSocket(),
+				// No ALPN: CONNECT-TLS clients speak HTTP/1.1 CONNECT
+				// today, and the HTTPS h2 knob deliberately leaves this
+				// listener alone.
+				TransportSocket: buildDownstreamTlsTransportSocket(nil),
 			},
 		},
 	}

@@ -615,3 +615,125 @@ func tlsHandshake(serverConfig, clientConfig *tls.Config) (serverErr, clientErr 
 	serverErr = <-done
 	return serverErr, clientErr
 }
+
+func TestIsGRPC(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		protoMajor  int
+		method      string
+		contentType string
+		want        bool
+	}{
+		{name: "grpc", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc", want: true},
+		{name: "grpc+proto", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc+proto", want: true},
+		{name: "grpc with params", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc;charset=utf-8", want: true},
+		{name: "uppercase content type", protoMajor: 2, method: http.MethodPost, contentType: "Application/GRPC", want: true},
+		{name: "uppercase with subtype", protoMajor: 2, method: http.MethodPost, contentType: "APPLICATION/GRPC+PROTO", want: true},
+		{name: "grpc-web is not grpc", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc-web+proto", want: false},
+		{name: "grpc content type over http/1.1", protoMajor: 1, method: http.MethodPost, contentType: "application/grpc", want: false},
+		{name: "non-POST", protoMajor: 2, method: http.MethodGet, contentType: "application/grpc", want: false},
+		{name: "plain h2 json", protoMajor: 2, method: http.MethodPost, contentType: "application/json", want: false},
+		{name: "no content type", protoMajor: 2, method: http.MethodPost, contentType: "", want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(tt.method, "http://actor/", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.ProtoMajor = tt.protoMajor
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			if got := isGRPC(req); got != tt.want {
+				t.Errorf("isGRPC() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// mirrorBackend starts a backend speaking the given protocols and returns its
+// address plus a channel yielding the protocol each request arrived with.
+func mirrorBackend(t *testing.T, h1, h2c bool) (addr string, protoSeen chan string) {
+	t.Helper()
+	protoSeen = make(chan string, 1)
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(h1)
+	protocols.SetUnencryptedHTTP2(h2c)
+	backend := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			protoSeen <- r.Proto
+		}),
+		Protocols: protocols,
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go backend.Serve(lis)
+	t.Cleanup(func() { backend.Close() })
+	return lis.Addr().String(), protoSeen
+}
+
+// TestProtocolMirrorTransport verifies the upstream leg's protocol choice:
+// only gRPC (HTTP/2 + POST + application/grpc*) goes out as cleartext
+// prior-knowledge HTTP/2, preserving the trailers and streaming it needs;
+// everything else — including non-gRPC requests that arrived over HTTP/2 —
+// is sent as HTTP/1.1, so an HTTP/1.1-only actor keeps working no matter
+// what protocol the client spoke at the edge.
+func TestProtocolMirrorTransport(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		backendH1   bool
+		backendH2C  bool
+		protoMajor  int
+		method      string
+		contentType string
+		want        string
+		wantErr     bool
+	}{
+		// HTTP/1.1-only backend: the common actor. Every non-gRPC shape must
+		// reach it as HTTP/1.1, whatever the client negotiated with the edge.
+		{name: "h1 GET to h1-only actor", backendH1: true, protoMajor: 1, method: http.MethodGet, want: "HTTP/1.1"},
+		{name: "h2 GET downgraded for h1-only actor", backendH1: true, protoMajor: 2, method: http.MethodGet, want: "HTTP/1.1"},
+		{name: "h2 POST json downgraded for h1-only actor", backendH1: true, protoMajor: 2, method: http.MethodPost, contentType: "application/json", want: "HTTP/1.1"},
+		{name: "grpc-web stays h1 for h1-only actor", backendH1: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc-web+proto", want: "HTTP/1.1"},
+		// gRPC to an actor that can't speak h2c must fail loudly (the proxy
+		// surfaces it as 502) rather than silently fall back to HTTP/1.1,
+		// which would strip the trailers gRPC needs.
+		{name: "grpc to h1-only actor fails", backendH1: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc", wantErr: true},
+		// gRPC actor (h2c-capable): gRPC stays HTTP/2 end to end.
+		{name: "grpc to grpc actor", backendH1: true, backendH2C: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc", want: "HTTP/2.0"},
+		{name: "grpc+proto to grpc actor", backendH1: true, backendH2C: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc+proto", want: "HTTP/2.0"},
+		// Mixed traffic to the same h2c-capable actor still downgrades
+		// non-gRPC, mirroring what a browser or curl sends.
+		{name: "h2 GET downgraded even for h2c-capable actor", backendH1: true, backendH2C: true, protoMajor: 2, method: http.MethodGet, want: "HTTP/1.1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			addr, protoSeen := mirrorBackend(t, tt.backendH1, tt.backendH2C)
+			transport := newProtocolMirrorTransport()
+			req, err := http.NewRequest(tt.method, "http://"+addr+"/", http.NoBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.ProtoMajor = tt.protoMajor
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			res, err := transport.RoundTrip(req)
+			if tt.wantErr {
+				if err == nil {
+					res.Body.Close()
+					t.Fatal("RoundTrip succeeded, want an error (no silent HTTP/1.1 fallback for gRPC)")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			res.Body.Close()
+			if got := <-protoSeen; got != tt.want {
+				t.Errorf("upstream saw %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
