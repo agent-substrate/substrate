@@ -87,7 +87,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// missing.)
 	e2e.EnsureEgressTrustBundle(t, ctx, clients)
 
-	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm")
+	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
 	waitForGolden(t, ctx, clients)
 
 	const id = "probe-mitm"

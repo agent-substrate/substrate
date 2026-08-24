@@ -157,6 +157,8 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 		"${WORKERPOOL_RUNTIME}":     "",
 		"${TEMPLATE_SANDBOX_CLASS}": "",
 		"${TEMPLATE_RESOURCES}":     "",
+		// Off unless the caller opts in; see WithTrustBundle.
+		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
 	if !IsMicroVM() {
 		return inline, blocks

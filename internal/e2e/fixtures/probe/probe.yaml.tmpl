@@ -57,12 +57,9 @@ ${TEMPLATE_SANDBOX_CLASS}
             path: atespace
           - field: uid
             path: actor-uid
-      # The name must be on atelet's supported-bundle allowlist. DeployProbe
-      # ensures the bundle exists before applying this template: actors fail
-      # to start while it is missing.
-      - trustBundle:
-          name: egress-mitm.ate.dev
-          path: trust-bundle.pem
+      # Only for suites that pass WithTrustBundle: the bundle is a cluster
+      # singleton, so a suite that merely needs a probe must not depend on it.
+${TEMPLATE_TRUST_BUNDLE}
   containers:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe

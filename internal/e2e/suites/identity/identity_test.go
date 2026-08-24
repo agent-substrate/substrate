@@ -79,7 +79,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// ensures a bundle EXISTS): the assertions below compare the projected
 	// file against this run's CA, and rotation later replaces it again.
 	wantTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust")
-	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity")
+	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity", e2e.WithTrustBundle())
 	golden := waitForGolden(t, ctx, clients)
 
 	// Two distinct actors from the same golden snapshot.
