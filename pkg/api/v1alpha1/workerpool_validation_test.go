@@ -16,6 +16,7 @@ package v1alpha1
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -73,6 +74,13 @@ func TestWorkerPoolValidation(t *testing.T) {
 		name: "valid template",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.Template = &WorkerPoolPodTemplate{
+				Labels: map[string]WorkerPoolLabelValue{
+					"project":                    "agent-substrate",
+					"policy.example.com/profile": "sandbox_host",
+				},
+				Annotations: map[string]string{
+					"policy.example.com/exemption": "sandbox-host",
+				},
 				NodeSelector: map[string]string{"workload": "substrate"},
 				Tolerations: []corev1.Toleration{{
 					Key:      "gpu",
@@ -92,6 +100,77 @@ func TestWorkerPoolValidation(t *testing.T) {
 			}
 		},
 		wantErr: false,
+	}, {
+		name: "invalid worker label key",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: map[string]WorkerPoolLabelValue{"bad key": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "label keys must be valid Kubernetes qualified names",
+	}, {
+		name: "invalid worker label value",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: map[string]WorkerPoolLabelValue{"project": "bad value"}}
+		},
+		wantErr: true,
+		errMsg:  "spec.template.labels.project in body should match",
+	}, {
+		name: "reserved ate.dev label",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: map[string]WorkerPoolLabelValue{"ate.dev/custom": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "ate.dev and its subdomains are reserved",
+	}, {
+		name: "reserved ate.dev subdomain label",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: map[string]WorkerPoolLabelValue{"policy.ate.dev/exemption": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "ate.dev and its subdomains are reserved",
+	}, {
+		name: "reserved ate.dev annotation",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Annotations: map[string]string{"ate.dev/custom": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "ate.dev and its subdomains are reserved",
+	}, {
+		name: "reserved ate.dev subdomain annotation",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Annotations: map[string]string{"policy.ate.dev/exemption": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "ate.dev and its subdomains are reserved",
+	}, {
+		name: "invalid worker annotation key",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{Annotations: map[string]string{"bad key": "value"}}
+		},
+		wantErr: true,
+		errMsg:  "annotation keys must be valid Kubernetes qualified names",
+	}, {
+		name: "too many worker labels",
+		mutate: func(wp *WorkerPool) {
+			labels := make(map[string]WorkerPoolLabelValue, 65)
+			for i := range 65 {
+				labels[fmt.Sprintf("label-%d", i)] = "value"
+			}
+			wp.Spec.Template = &WorkerPoolPodTemplate{Labels: labels}
+		},
+		wantErr: true,
+		errMsg:  "spec.template.labels: Too many",
+	}, {
+		name: "too many worker annotations",
+		mutate: func(wp *WorkerPool) {
+			annotations := make(map[string]string, 65)
+			for i := range 65 {
+				annotations[fmt.Sprintf("annotation-%d", i)] = "value"
+			}
+			wp.Spec.Template = &WorkerPoolPodTemplate{Annotations: annotations}
+		},
+		wantErr: true,
+		errMsg:  "spec.template.annotations: Too many",
 	}, {
 		name: "too many tolerations",
 		mutate: func(wp *WorkerPool) {
@@ -178,5 +257,34 @@ func TestWorkerPoolValidation(t *testing.T) {
 				_ = k8sClient.Delete(ctx, wp)
 			}
 		})
+	}
+}
+
+func TestWorkerPoolReservedMetadataUpdate(t *testing.T) {
+	ctx := context.Background()
+	wp := &WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-reserved-metadata-update",
+			Namespace: "default",
+		},
+		Spec: WorkerPoolSpec{
+			Replicas:   1,
+			AteomImage: "example.com/ateom:latest",
+		},
+	}
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, wp) })
+
+	wp.Spec.Template = &WorkerPoolPodTemplate{
+		Annotations: map[string]string{"security.ate.dev/exemption": "value"},
+	}
+	err := k8sClient.Update(ctx, wp)
+	if err == nil {
+		t.Fatal("update unexpectedly accepted a reserved annotation")
+	}
+	if want := "ate.dev and its subdomains are reserved"; !strings.Contains(err.Error(), want) {
+		t.Errorf("wrong error:\n  wanted: %q\n     got: %q", want, err.Error())
 	}
 }

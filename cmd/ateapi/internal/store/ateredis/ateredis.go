@@ -343,7 +343,10 @@ func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapi
 	return nil
 }
 
-func (s *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+func (s *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	dbKey := actorTemplateDBKey(templateRef)
 	for range updateMaxAttempts {
 		var dbTemplate *ateapipb.ActorTemplate
@@ -361,6 +364,12 @@ func (s *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 			currentTemplate := &ateapipb.ActorTemplate{}
 			if err := protojson.Unmarshal(currentVal, currentTemplate); err != nil {
 				return fmt.Errorf("in protojson.Unmarshal: %w", err)
+			}
+
+			// A failed precondition is final: a retry would re-read the very state that failed it.
+			if err := precondition.Check(currentTemplate.GetMetadata()); err != nil {
+				abortErr = err
+				return err
 			}
 
 			// Snapshot the stored state before handing the template to mutate.
@@ -749,7 +758,10 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 // transaction.
 const updateActorSnapshotTagMaxAttempts = 5
 
-func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	tagKey := actorSnapshotTagDBKey(atespace, name)
 	for range updateActorSnapshotTagMaxAttempts {
 		var dbTag *ateapipb.ActorSnapshotTag
@@ -767,6 +779,12 @@ func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 			currentTag := &ateapipb.ActorSnapshotTag{}
 			if err := protojson.Unmarshal(currentVal, currentTag); err != nil {
 				return fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
+			}
+
+			// A failed precondition is final: a retry would re-read the very state that failed it.
+			if err := precondition.Check(currentTag.GetMetadata()); err != nil {
+				abortErr = err
+				return err
 			}
 
 			// Snapshot the stored state before handing the tag to mutate.
@@ -1020,7 +1038,10 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 // read-modify-write after a concurrent writer invalidates the transaction.
 const updateMaxAttempts = 5
 
-func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	dbKey := actorDBKey(actorRef)
 	for range updateMaxAttempts {
 		var dbActor *ateapipb.Actor
@@ -1038,6 +1059,12 @@ func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			currentActor := &ateapipb.Actor{}
 			if err := protojson.Unmarshal(currentVal, currentActor); err != nil {
 				return fmt.Errorf("in protojson.Unmarshal: %w", err)
+			}
+
+			// A failed precondition is final: a retry would re-read the very state that failed it.
+			if err := precondition.Check(currentActor.GetMetadata()); err != nil {
+				abortErr = err
+				return err
 			}
 
 			// Snapshot the stored state before handing the actor to mutate.

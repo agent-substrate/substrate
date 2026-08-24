@@ -43,7 +43,7 @@ const (
 // sizingNamespace is where deploySizedProbe applies the fixture, and the
 // atespace its actor lives in. Suffixed per sandbox class (see
 // e2e.FixtureName) so the two lanes' fixtures never collide.
-var sizingNamespace = e2e.FixtureName("ate-e2e-sizing")
+var sizingNamespace = e2e.FixtureName("ate-e2e") + "-sizing"
 
 // resourcesResponse mirrors the /resources endpoint of the probe fixture.
 type resourcesResponse struct {
@@ -121,7 +121,7 @@ func deploySizedProbe(t *testing.T, bucket string) {
 
 	// One manifest, rendered for the sandbox class under test (mirrors the
 	// identity suite).
-	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl", bucket)
+	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl", bucket, "sizing")
 
 	// Build/push the probe image and apply through the repo's pinned ko. See the
 	// identity suite's deployProbe for why KO_CONFIG_PATH and the trailing
@@ -178,7 +178,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	})
 
 	// Resume from the golden snapshot (the restore path, not --boot).
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }

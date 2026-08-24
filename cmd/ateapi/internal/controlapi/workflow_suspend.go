@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -41,10 +42,16 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	var actor *ateapipb.Actor
 	var actorTemplate *atev1alpha1.ActorTemplate
 	var wireSnapshotScope string
+	// Set just before finalize; nil until then, so earlier exits label
+	// themselves from the record they hold.
+	var finalAttrs []attribute.KeyValue
 
 	defer func() {
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err,
-			lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)...)
+		attrs := finalAttrs
+		if attrs == nil {
+			attrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
+		}
+		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err, attrs...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
@@ -60,7 +67,8 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		// Fully suspended already: FinalizeSuspended commits SUSPENDED and the
 		// cleared worker assignment in a single update, so there is nothing
-		// left to do.
+		// left to do. This success reports no pool, and cannot: the previous
+		// attempt released the worker, so the record names none (#957).
 		return actor, nil
 	}
 	// Decided before marking: once SUSPENDING is committed, the loaded status
@@ -82,6 +90,9 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	if err = w.ensureVolumesDetached(lockCtx, actor, actorTemplate, "DetachVolumes", ateattr.OperationSuspend); err != nil {
 		return nil, err
 	}
+	// FinalizeSuspended clears the WorkerAssignment the labels read, so snapshot
+	// them here, as crash.go does for the crash counter.
+	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
 	if finalized, err = w.ensureSuspendedFinalized(lockCtx, actorRef, actorTemplate); err != nil {
 		return nil, err
@@ -137,12 +148,12 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if _, err := inProgressSnapshotURI(actorTemplate, actorRef.Atespace, name); err != nil {
 		return nil, err
 	}
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 		toUpdate.Status.InProgressSnapshotSourceActorVersion = toUpdate.GetMetadata().GetVersion()
 		toUpdate.Status.InProgressSnapshotName = name
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -342,29 +353,10 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		return nil, err
 	}
 
-	// 1. Free the worker (if the actor has one and it hasn't been freed yet)
-	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		workerPod := assignment.GetWorkerPod()
-
-		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
-		if err != nil {
-			if !errors.Is(err, store.ErrNotFound) {
-				return nil, fmt.Errorf("while getting worker for release: %w", err)
-			}
-			slog.WarnContext(ctx, "Worker already gone during finalize suspend, skipping release", "worker", workerPod)
-		} else {
-			// Only free it if it still belongs to us
-			if wass := worker.GetStatus().GetAssignment(); wass != nil {
-				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
-					worker.Status.Assignment = nil
-					if err := w.store.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
-						if errors.Is(err, store.ErrVersionConflict) {
-							return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-						}
-						return nil, err
-					}
-				}
-			}
+	// 1. Free the worker (if it hasn't been freed yet)
+	if latestActor.GetStatus().GetWorkerAssignment() != nil {
+		if _, err := releaseWorker(ctx, w.store, latestActor); err != nil {
+			return nil, err
 		}
 
 		// Re-fetch the actor now that the worker is freed.
@@ -404,7 +396,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			return nil, err
 		}
 	}
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		if snapshotName != "" {
 			toUpdate.Status.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snapshotName}
@@ -414,7 +406,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.LocalSnapshotInfo = nil
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

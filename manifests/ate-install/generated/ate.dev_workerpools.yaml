@@ -100,9 +100,41 @@ spec:
                   SandboxClass is used.
                 type: string
               template:
-                description: Template holds optional pod scheduling and resource settings
-                  for worker pods.
+                description: Template holds optional metadata, scheduling, and resource
+                  settings for worker workloads.
                 properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Annotations are added to the generated Deployment and worker pods. Keys
+                      in the ate.dev domain and its subdomains are reserved for controllers.
+                    maxProperties: 64
+                    type: object
+                    x-kubernetes-validations:
+                    - message: ate.dev and its subdomains are reserved
+                      rule: self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))
+                    - message: annotation keys must be valid Kubernetes qualified
+                        names
+                      rule: self.all(key, !format.qualifiedName().validate(key).hasValue())
+                  labels:
+                    additionalProperties:
+                      description: |-
+                        WorkerPoolLabelValue is a Kubernetes label value for generated worker
+                        workloads.
+                      maxLength: 63
+                      pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                      type: string
+                    description: |-
+                      Labels are added to the generated Deployment and worker pods. Keys in
+                      the ate.dev domain and its subdomains are reserved for controllers.
+                    maxProperties: 64
+                    type: object
+                    x-kubernetes-validations:
+                    - message: ate.dev and its subdomains are reserved
+                      rule: self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))
+                    - message: label keys must be valid Kubernetes qualified names
+                      rule: self.all(key, !format.qualifiedName().validate(key).hasValue())
                   nodeAffinity:
                     description: |-
                       NodeAffinity scheduling rules for the worker pods. Mapped to

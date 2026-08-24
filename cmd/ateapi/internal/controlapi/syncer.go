@@ -89,7 +89,7 @@ type WorkerPoolSyncer struct {
 // WorkerPoolSyncer and nothing more.
 type workerPoolSyncerStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
@@ -505,7 +505,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, name st
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
-	_, err = s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	_, err = s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		toUpdate.Status.WorkerAssignment = nil
 		// Both in-progress checkpoints die with the worker: the durable one was
@@ -513,7 +513,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, name st
 		toUpdate.Status.InProgressSnapshotName = ""
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		return nil
-	}))
+	})
 
 	if err == nil && !wasAlreadyCrashed {
 		recordActorCrash(ctx, crashAttrs)

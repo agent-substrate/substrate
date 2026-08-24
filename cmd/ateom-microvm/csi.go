@@ -20,12 +20,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -64,19 +60,8 @@ func (s *AteomService) stageCsiVolumes(ctx context.Context, actorUID string) err
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking CSI volumes dir %q: %w", src, err)
 	}
-	dst := filepath.Join(kata.SharedDir(actorUID), "csi")
-	// Drop any stale mount first (lazy if busy), then ensure clean mountpoint.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return fmt.Errorf("creating %q: %w", dst, err)
-	}
-	cmd := exec.CommandContext(ctx, "mount", "--bind", src, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting CSI volumes at %q: %w (%s)", dst, err, strings.TrimSpace(stderr.String()))
+	if err := kata.BindIntoShare(ctx, src, actorUID, "csi"); err != nil {
+		return fmt.Errorf("while binding CSI volumes into the shared tree: %w", err)
 	}
 	return nil
 }

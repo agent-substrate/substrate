@@ -38,6 +38,7 @@ const (
 	Ateom_RestoreWorkload_FullMethodName        = "/ateom.Ateom/RestoreWorkload"
 	Ateom_GetWorkloadStats_FullMethodName       = "/ateom.Ateom/GetWorkloadStats"
 	Ateom_GetActiveWorkloadStats_FullMethodName = "/ateom.Ateom/GetActiveWorkloadStats"
+	Ateom_TerminateWorkload_FullMethodName      = "/ateom.Ateom/TerminateWorkload"
 )
 
 // AteomClient is the client API for Ateom service.
@@ -120,6 +121,9 @@ type AteomClient interface {
 	// it is a pure read, safe on a timer, and does not touch the lifecycle
 	// mutex.
 	GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error)
+	// TerminateWorkload stops and deletes container workloads and cleans up
+	// network and bundle overlays on ateom.
+	TerminateWorkload(ctx context.Context, in *TerminateWorkloadRequest, opts ...grpc.CallOption) (*TerminateWorkloadResponse, error)
 }
 
 type ateomClient struct {
@@ -174,6 +178,16 @@ func (c *ateomClient) GetActiveWorkloadStats(ctx context.Context, in *GetActiveW
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetActiveWorkloadStatsResponse)
 	err := c.cc.Invoke(ctx, Ateom_GetActiveWorkloadStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) TerminateWorkload(ctx context.Context, in *TerminateWorkloadRequest, opts ...grpc.CallOption) (*TerminateWorkloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TerminateWorkloadResponse)
+	err := c.cc.Invoke(ctx, Ateom_TerminateWorkload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +274,9 @@ type AteomServer interface {
 	// it is a pure read, safe on a timer, and does not touch the lifecycle
 	// mutex.
 	GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error)
+	// TerminateWorkload stops and deletes container workloads and cleans up
+	// network and bundle overlays on ateom.
+	TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error)
 	mustEmbedUnimplementedAteomServer()
 }
 
@@ -284,6 +301,9 @@ func (UnimplementedAteomServer) GetWorkloadStats(context.Context, *GetWorkloadSt
 }
 func (UnimplementedAteomServer) GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActiveWorkloadStats not implemented")
+}
+func (UnimplementedAteomServer) TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TerminateWorkload not implemented")
 }
 func (UnimplementedAteomServer) mustEmbedUnimplementedAteomServer() {}
 func (UnimplementedAteomServer) testEmbeddedByValue()               {}
@@ -396,6 +416,24 @@ func _Ateom_GetActiveWorkloadStats_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Ateom_TerminateWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TerminateWorkloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).TerminateWorkload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_TerminateWorkload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).TerminateWorkload(ctx, req.(*TerminateWorkloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Ateom_ServiceDesc is the grpc.ServiceDesc for Ateom service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -422,6 +460,10 @@ var Ateom_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetActiveWorkloadStats",
 			Handler:    _Ateom_GetActiveWorkloadStats_Handler,
+		},
+		{
+			MethodName: "TerminateWorkload",
+			Handler:    _Ateom_TerminateWorkload_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

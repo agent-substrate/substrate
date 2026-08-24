@@ -148,6 +148,7 @@ spec:
         - --sharding-application-name=podcertificate-controller
         - --service-dns-ca-pool=/run/ca-state/service-dns-pool.json
         - --pod-identity-ca-pool=/run/ca-state/pod-identity-pool.json
+        - --workers-per-signer=$(WORKERS_PER_SIGNER)
         env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -161,6 +162,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
+        - name: WORKERS_PER_SIGNER
+          value: "1"
         volumeMounts:
         - name: "ca-state"
           mountPath: "/run/ca-state"

@@ -187,10 +187,10 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	in := req.GetTag()
 	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
 
-	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.WithPrecondition(in, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -200,6 +200,9 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
+		}
+		if errors.Is(err, store.ErrPreconditionRequired) {
+			return nil, status.Errorf(codes.InvalidArgument, "while updating actor snapshot tag %s/%s: %v", atespace, name, err)
 		}
 		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)
 	}
@@ -216,7 +219,7 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 		return field.ErrorList{field.Required(tagPath, "")}
 	}
 
-	errs = append(errs, resources.ValidateResourceMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
+	errs = append(errs, resources.ValidateUpdateMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
 
 	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorSnapshotTagMutableFields, field.NewPath("update_mask"))...)
 

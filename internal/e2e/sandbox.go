@@ -130,6 +130,11 @@ func TemplateReadyTimeout(t *testing.T) time.Duration {
 // the test's temp dir and returns that path. Both an apply and a later delete
 // can then consume the same file, with no shell involved.
 //
+// name distinguishes the caller (by convention its suite name) and is appended
+// to ${FIXTURE_SUFFIX}: suite packages run as concurrent processes, so each
+// caller must get its own copy of a fixture or one suite's cleanup deletes it
+// out from under another.
+//
 // One template serves both sandbox classes so the two variants of a fixture
 // cannot drift apart. Templates carry two kinds of ${...} placeholder:
 //
@@ -139,7 +144,7 @@ func TemplateReadyTimeout(t *testing.T) time.Duration {
 //     the whole line with it — the same trick hack/install-demo-counter.sh
 //     plays with `sed /.../d`. Requiring the placeholder to be the whole line
 //     is what lets a comment mention one without being deleted.
-func RenderFixtureManifest(t *testing.T, relPath, bucket string) string {
+func RenderFixtureManifest(t *testing.T, relPath, bucket, name string) string {
 	t.Helper()
 	root, err := FindRepoRoot()
 	if err != nil {
@@ -150,7 +155,7 @@ func RenderFixtureManifest(t *testing.T, relPath, bucket string) string {
 		t.Fatalf("reading fixture manifest %s: %v", relPath, err)
 	}
 
-	inline, blocks := fixtureSubstitutions(bucket)
+	inline, blocks := fixtureSubstitutions(bucket, name)
 	var out []string
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		if value, isBlock := blocks[strings.TrimSpace(line)]; isBlock {
@@ -175,13 +180,13 @@ func RenderFixtureManifest(t *testing.T, relPath, bucket string) string {
 // fixtureSubstitutions is the placeholder set the internal/e2e/fixtures
 // manifest templates carry, split into the inline and whole-line-block kinds
 // RenderFixtureManifest treats differently.
-func fixtureSubstitutions(bucket string) (inline, blocks map[string]string) {
+func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string) {
 	inline = map[string]string{
 		"${BUCKET_NAME}": bucket,
 		"${ATEOM_IMAGE}": "ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor",
 		// The manifest-side half of FixtureName: it suffixes the fixture's
 		// namespace, and with it the snapshot prefix underneath.
-		"${FIXTURE_SUFFIX}": "",
+		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
 		"${WORKERPOOL_RUNTIME}":     "",
@@ -193,7 +198,7 @@ func fixtureSubstitutions(bucket string) (inline, blocks map[string]string) {
 	}
 
 	inline["${ATEOM_IMAGE}"] = "ko://github.com/agent-substrate/substrate/cmd/ateom-microvm"
-	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM
+	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
 	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs. A
 	// micro-VM WorkerPool has to name it: it is deliberately not the class
 	// default, so a missing or stale one fails loudly.

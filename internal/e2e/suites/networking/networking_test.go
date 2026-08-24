@@ -238,7 +238,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, temp
 		_, _ = clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef})
 	})
 
-	resumeResponse, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	resumeResponse, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef})
 	if err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}

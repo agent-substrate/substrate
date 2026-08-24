@@ -88,33 +88,11 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy multi-share snapshots repoint each tag", func(t *testing.T) {
-		// Ordered with the rootfs share last to catch a rewrite that assumes it
-		// comes first, which would hand the guest the wrong filesystem.
-		dir := writeSnapshotConfig(t, []map[string]any{
-			{"tag": "ateDurable", "socket": "/run/vc/vm/golden/virtiofsd-durable.sock"},
-			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
-		})
-		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
-			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
-		}
-		got := readFsSockets(t, dir)
-		if got[kata.FsTag] != kata.VirtiofsdSocketPath(id) {
-			t.Errorf("%s socket = %q, want %q", kata.FsTag, got[kata.FsTag], kata.VirtiofsdSocketPath(id))
-		}
-		if got["ateDurable"] != kata.DurableVirtiofsdSocketPath(id) {
-			t.Errorf("ateDurable socket = %q, want %q", got["ateDurable"], kata.DurableVirtiofsdSocketPath(id))
-		}
-		if got[kata.FsTag] == got["ateDurable"] {
-			t.Error("both shares were pointed at the same socket")
-		}
-	})
-
 	t.Run("unknown tag is an error", func(t *testing.T) {
-		// "ateUpper" is the retired third share's tag: it never appears in
-		// snapshots this code produces, and one showing up must fail loudly
-		// rather than be silently repointed.
-		for _, tag := range []string{"somethingElse", "ateUpper"} {
+		// "ateUpper", "ateDurable", and "ateCSI" are retired multi-share tags:
+		// they never appear in snapshots this code produces, and one showing up
+		// must fail loudly rather than be silently repointed.
+		for _, tag := range []string{"somethingElse", "ateUpper", "ateDurable", "ateCSI"} {
 			dir := writeSnapshotConfig(t, []map[string]any{
 				{"tag": tag, "socket": "/run/vc/vm/golden/other.sock"},
 			})

@@ -65,18 +65,11 @@ func (m Mode) ServesIngress() bool { return m != ModeEgress }
 // ServesEgress reports whether this mode answers egress CONNECTs.
 func (m Mode) ServesEgress() bool { return m != ModeIngress }
 
-// authConfig holds the router's client-auth settings for dialing ateapi.
-// AteapiCAFile always verifies ateapi's serving cert (the servicedns trust
-// bundle in-cluster). By default the router presents AteapiClientCertPath
-// (the podidentity credential bundle) as its client cert; with
-// AteapiUseTokenAuth it sends a Bearer token from AteapiTokenFile instead and
-// the cert path is ignored.
+// authConfig holds the router's mTLS settings for dialing ateapi.
 type authConfig struct {
-	AteapiUseTokenAuth   bool
 	AteapiCAFile         string
 	AteapiClientCertPath string
 	AteapiServerName     string
-	AteapiTokenFile      string
 }
 
 // routerConfig holds deployment setup and endpoint options for the router node instance.

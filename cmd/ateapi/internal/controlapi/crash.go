@@ -82,7 +82,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	// the counter itself is emitted only after the transition commits.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName, reason)
 
-	_, err = st.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 
 		// InProgressSnapshotName and InProgressLocalSnapshotName are kept for
@@ -90,7 +90,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		// ActorSnapshot or to LocalSnapshotInfo.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
-	}))
+	})
 	if err != nil {
 		return fmt.Errorf("while marking actor crashed: %w", err)
 	}
@@ -107,7 +107,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 // an actor.
 type crashActorStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
 }

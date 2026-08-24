@@ -25,7 +25,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: ate-e2e-caps${FIXTURE_SUFFIX}
+  name: ate-e2e${FIXTURE_SUFFIX}
 
 ---
 
@@ -33,7 +33,7 @@ apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
   name: caps
-  namespace: ate-e2e-caps${FIXTURE_SUFFIX}
+  namespace: ate-e2e${FIXTURE_SUFFIX}
   labels:
     workload: caps
 spec:
@@ -51,7 +51,7 @@ apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
   name: caps-default
-  namespace: ate-e2e-caps${FIXTURE_SUFFIX}
+  namespace: ate-e2e${FIXTURE_SUFFIX}
 spec:
 ${TEMPLATE_SANDBOX_CLASS}
   containers:
@@ -79,7 +79,7 @@ apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
   name: caps-exact
-  namespace: ate-e2e-caps${FIXTURE_SUFFIX}
+  namespace: ate-e2e${FIXTURE_SUFFIX}
 spec:
 ${TEMPLATE_SANDBOX_CLASS}
   containers:

@@ -37,15 +37,3 @@ func ConsoleLogPath(id string) string { return filepath.Join(VMDir(id), "console
 // SerialLogPath is where the emulated UART is captured. Only wired up in debug mode,
 // where it carries the early-boot messages hvc0 is too late to see.
 func SerialLogPath(id string) string { return filepath.Join(VMDir(id), "serial.log") }
-
-// DurableVirtiofsdSocketPath is the vhost-user-fs socket for the actor's writable
-// durable-dir share, served by a second virtiofsd alongside the rootfs share's.
-func DurableVirtiofsdSocketPath(id string) string {
-	return filepath.Join(VMDir(id), "virtiofsd-durable.sock")
-}
-
-// CsiVirtiofsdSocketPath is the vhost-user-fs socket for the actor's writable
-// CSI volumes share.
-func CsiVirtiofsdSocketPath(id string) string {
-	return filepath.Join(VMDir(id), "virtiofsd-csi.sock")
-}

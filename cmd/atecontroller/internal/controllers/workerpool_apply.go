@@ -72,6 +72,18 @@ const (
 // are declared here. otel, when it carries an endpoint, is propagated to the
 // ateom container so it pushes telemetry to that collector.
 func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings) *appsv1ac.DeploymentApplyConfiguration {
+	labels := map[string]string{}
+	annotations := map[string]string{}
+	if wp.Spec.Template != nil {
+		for key, value := range wp.Spec.Template.Labels {
+			labels[key] = string(value)
+		}
+		for key, value := range wp.Spec.Template.Annotations {
+			annotations[key] = value
+		}
+	}
+	labels["ate.dev/worker-pool"] = wp.Name
+
 	containerAC := corev1ac.Container().
 		WithName("ateom").
 		WithImage(wp.Spec.AteomImage).
@@ -157,6 +169,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 
 	return appsv1ac.Deployment(wp.Name, wp.Namespace).
+		WithLabels(labels).
+		WithAnnotations(annotations).
 		WithOwnerReferences(metav1ac.OwnerReference().
 			WithAPIVersion(atev1alpha1.GroupVersion.String()).
 			WithKind("WorkerPool").
@@ -169,9 +183,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithSelector(metav1ac.LabelSelector().
 				WithMatchLabels(map[string]string{"ate.dev/worker-pool": wp.Name})).
 			WithTemplate(corev1ac.PodTemplateSpec().
-				WithLabels(map[string]string{
-					"ate.dev/worker-pool": wp.Name,
-				}).
+				WithLabels(labels).
+				WithAnnotations(annotations).
 				WithSpec(podSpecAC)))
 }
 

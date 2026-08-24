@@ -40,7 +40,7 @@ var fixtureManifests = []string{
 // a WorkerPool that never gets a micro-VM worker.
 func renderFixture(t *testing.T, relPath string) (*v1alpha1.WorkerPool, *v1alpha1.ActorTemplate) {
 	t.Helper()
-	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket"))
+	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket", "render"))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
 	}
@@ -135,7 +135,7 @@ func TestRenderFixtureManifest_MicroVM(t *testing.T) {
 			if template.Spec.Resources.Limits.Memory().IsZero() {
 				t.Errorf("ActorTemplate declares no memory limit, so the guest would boot at the kata default: %+v", template.Spec.Resources)
 			}
-			if want := "-microvm/"; !strings.HasSuffix(template.Spec.SnapshotsConfig.Location, want) {
+			if want := "-microvm-render/"; !strings.HasSuffix(template.Spec.SnapshotsConfig.Location, want) {
 				t.Errorf("ActorTemplate snapshot location = %q, want it to end with %q",
 					template.Spec.SnapshotsConfig.Location, want)
 			}

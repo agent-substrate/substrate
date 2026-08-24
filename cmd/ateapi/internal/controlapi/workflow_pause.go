@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -39,10 +40,16 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	var actor *ateapipb.Actor
 	var actorTemplate *atev1alpha1.ActorTemplate
 	var wireSnapshotScope string
+	// Set just before finalize; nil until then, so earlier exits label
+	// themselves from the record they hold.
+	var finalAttrs []attribute.KeyValue
 
 	defer func() {
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err,
-			lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)...)
+		attrs := finalAttrs
+		if attrs == nil {
+			attrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
+		}
+		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err, attrs...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
@@ -58,6 +65,8 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		// Fully paused already: FinalizePaused commits PAUSED and the cleared
 		// worker assignment in a single update, so there is nothing left to do.
+		// This success reports no pool, and cannot: the previous attempt
+		// released the worker, so the record names none (#957).
 		return actor, nil
 	}
 	var marked *ateapipb.Actor
@@ -74,6 +83,9 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	if err = w.ensureVolumesDetached(lockCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
 		return nil, err
 	}
+	// FinalizePaused clears the WorkerAssignment the labels read, so snapshot
+	// them here, as crash.go does for the crash counter.
+	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
 	if finalized, err = w.ensurePausedFinalized(lockCtx, actorRef, actorTemplate); err != nil {
 		return nil, err
@@ -121,11 +133,11 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	}
 
 	snapshotName := resources.NewSnapshotName()
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
 		toUpdate.Status.InProgressLocalSnapshotName = snapshotName
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -263,7 +275,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		latestActor.Status.State = newState
 		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 
-		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
+		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 			toUpdate.Status.State = newState
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
 			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
@@ -279,7 +291,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			}
 			toUpdate.Status.WorkerAssignment = nil
 			return nil
-		}))
+		})
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
 			recordActorCrash(ctx, crashAttrs)
 		}

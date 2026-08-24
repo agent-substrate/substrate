@@ -137,6 +137,106 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			},
 		},
 		{
+			name: "converts Image volume and mounts",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
+						{Name: "agent", VolumeSource: atev1alpha1.VolumeSource{Image: &atev1alpha1.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}}},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "home", MountPath: "/home/user"},
+								{Name: "agent", MountPath: "/ate"},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name:   "home",
+						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
+					},
+					{
+						Name:   "agent",
+						Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "home", MountPath: "/home/user"},
+							{Name: "agent", MountPath: "/ate"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "converts trustBundle data sources carrying the name for node-side resolution",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{
+							Name: "system-info",
+							VolumeSource: atev1alpha1.VolumeSource{
+								SystemInfo: &atev1alpha1.SystemInfoVolumeSource{
+									DataSources: []atev1alpha1.SystemInfoDataSource{
+										{TrustBundle: &atev1alpha1.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"}},
+									},
+								},
+							},
+						},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "system-info", MountPath: "/run/substrate/certs"},
+							},
+						},
+					},
+				},
+			},
+			// The NAME crosses the wire; atelet resolves it against its
+			// allowlist and ClusterTrustBundle informer at write time.
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name: "system-info",
+						Source: &ateletpb.Volume_SystemInfo{
+							SystemInfo: &ateletpb.SystemInfoVolume{
+								DataSources: []*ateletpb.SystemInfoDataSource{
+									{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
+										TrustBundle: &ateletpb.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"},
+									}},
+								},
+							},
+						},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "system-info", MountPath: "/run/substrate/certs"},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "skips non-DurableDir volumes",
 			template: &atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},

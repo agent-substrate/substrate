@@ -71,13 +71,13 @@ func ValidateObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.Error
 	return errs
 }
 
-// ValidateResourceMetadataRef checks the metadata a mutating request uses to
-// name the resource it acts on: atespace and name identify the resource and
-// are required, while uid and version are optional preconditions. It does not
-// check the server-managed timestamps, which clients may not set. Unlike
-// ValidateObjectRef, nil metadata is an error rather than a no-op: a request
-// that names no resource cannot be served.
-func ValidateResourceMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field.Path) field.ErrorList {
+// ValidateUpdateMetadataRef checks the metadata an update request uses to name
+// the resource it acts on. All four fields are required: atespace and name
+// identify the resource, and uid and version guard the incarnation and revision
+// the update was written against.  It does not check the server-managed timestamps,
+// which clients may not set. Unlike ValidateObjectRef, nil metadata is an error
+// rather than a no-op: a request that names no resource cannot be served.
+func ValidateUpdateMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
 
 	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val == "" {
@@ -92,11 +92,15 @@ func ValidateResourceMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field
 		errs = append(errs, ValidateResourceName(val, fldPath)...)
 	}
 
-	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val != "" {
+	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
 		errs = append(errs, ValidateUUID(val, fldPath)...)
 	}
 
-	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val < 0 {
+	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val == 0 {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else if val < 0 {
 		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
 	}
 

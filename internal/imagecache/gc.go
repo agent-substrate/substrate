@@ -166,24 +166,33 @@ func (s *Store) InUse() (RootSet, error) {
 	return rs, errors.Join(errs...)
 }
 
-// addSpecRoots roots one bundle spec's image digest, layers, and exact
-// layer-set signature.
+// addSpecRoots roots one bundle spec's image digests (including image volume
+// images), layers, and exact layer-set signatures.
 func addSpecRoots(rs *RootSet, spec *OverlaySpec, bundle string, dbg bool) {
-	if spec.ImageDigest != "" {
-		rs.ImageDigests[spec.ImageDigest] = true
+	addImageRoots(rs, spec.ImageDigest, spec.Layers, bundle, dbg)
+	for _, vol := range spec.ImageVolumes {
+		addImageRoots(rs, vol.ImageDigest, vol.Layers, bundle+"/volumes/"+vol.Name, dbg)
+	}
+}
+
+// addImageRoots roots one image's digest, layer hexes, and exact layer-set
+// signature.
+func addImageRoots(rs *RootSet, digest string, layers []string, bundle string, dbg bool) {
+	if digest != "" {
+		rs.ImageDigests[digest] = true
 		if dbg {
 			slog.Debug("Image cache root-set: bundle roots image",
 				slog.String("bundle", bundle),
-				slog.String("digest", spec.ImageDigest),
-				slog.Int("layers", len(spec.Layers)))
+				slog.String("digest", digest),
+				slog.Int("layers", len(layers)))
 		}
-	} else if len(spec.Layers) > 0 && dbg {
+	} else if len(layers) > 0 && dbg {
 		slog.Debug("Image cache root-set: digestless bundle roots layers only",
 			slog.String("bundle", bundle),
-			slog.Int("layers", len(spec.Layers)))
+			slog.Int("layers", len(layers)))
 	}
-	hexes := make([]string, 0, len(spec.Layers))
-	for _, layerDir := range spec.Layers {
+	hexes := make([]string, 0, len(layers))
+	for _, layerDir := range layers {
 		hex := filepath.Base(layerDir)
 		rs.LayerHexes[hex] = true
 		hexes = append(hexes, hex)

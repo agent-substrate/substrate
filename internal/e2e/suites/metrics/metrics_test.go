@@ -321,7 +321,7 @@ func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)

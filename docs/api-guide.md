@@ -14,17 +14,28 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `ateomImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family for the pool: `gvisor` (default) or `microvm`. Drives the worker pod shape (e.g. KVM device mounts, node placement) and which `SandboxConfig`s are eligible. |
 | `sandboxConfigName` | `string` | Optional. Name of a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) providing the sandbox binaries and pause image. If empty, the cluster default `SandboxConfig` for the pool's `sandboxClass` is used. |
-| `template` | `WorkerPoolPodTemplate` | **Optional.** Pod scheduling and resource settings for worker pods. |
+| `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
 
-| Field | Type | Pod mapping |
+| Field | Type | Workload mapping |
 | :--- | :--- | :--- |
+| `labels` | `map[string]string` | Generated Deployment and `spec.template.metadata.labels` (max 64) |
+| `annotations` | `map[string]string` | Generated Deployment and `spec.template.metadata.annotations` (max 64) |
 | `nodeSelector` | `map[string]string` | `spec.nodeSelector` |
 | `tolerations` | `[]Toleration` | `spec.tolerations` (max 16) |
 | `priorityClassName` | `string` | `spec.priorityClassName` |
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 | `resources` | `ResourceRequirements` | `spec.containers[].resources` |
+
+Keys in `ate.dev/` and its subdomains (for example, `policy.ate.dev/`) are
+reserved for controllers and cannot be set in `template.labels` or
+`template.annotations`. Metadata keys and label values must follow Kubernetes
+syntax.
+
+`template.labels` and `template.annotations` only configure Kubernetes workload
+metadata; they do not affect actor scheduling. Actor selectors match
+`WorkerPool.metadata.labels`, not `WorkerPool.spec.template.labels`.
 
 #### Worker Capacity (`spec.template.resources`)
 
@@ -46,6 +57,11 @@ metadata:
 spec:
   replicas: 10
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    labels:
+      project: agent-platform
+    annotations:
+      policy.example.com/exemption: sandbox-host
   # sandboxClass defaults to gvisor; the pool resolves to the cluster's default
   # gvisor SandboxConfig unless sandboxConfigName is set.
 ```
@@ -209,6 +225,30 @@ spec:
 ```
 
 The values are delivered as files on a read-only per-actor bind mount, not environment variables, precisely so they carry the correct values after a resume from a shared snapshot — an env var (or a file baked into the image) would be frozen at the snapshot-source actor's values, since it lives in the checkpointed process memory, and would therefore be identical for every actor restored from that snapshot. The metadata fields themselves are fixed for the actor's lifetime, so workloads may cache them; future data sources that rotate (identity tokens and certificates) must be re-read at time of use.
+
+#### trustBundle
+The trustBundle data source projects the trust anchors of a named trust bundle to a single PEM file — inspired by the [Kubernetes clusterTrustBundle projected volume source](https://kubernetes.io/docs/concepts/storage/projected-volumes/#clustertrustbundle), but source-neutral: the name selects a bundle substrate knows how to fetch, and where it is fetched from is a deployment concern, not part of the API.
+
+Supported names are allowlisted. Today the only supported bundle is `egress-mitm.ate.dev` — the egress gateway CA bundle — resolved from the [ClusterTrustBundle](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles) (`certificates.k8s.io/v1beta1`) that atecontroller's reconciler derives from the `egress-mitm-ca-pool` Secret in the `ate-system` namespace. A configurable backend registry may widen the allowlist later.
+
+```yaml
+spec:
+  volumes:
+  - name: trust
+    systemInfo:
+      dataSources:
+      - trustBundle:
+          name: egress-mitm.ate.dev
+          path: ca.pem
+  containers:
+  - name: main
+    # ...
+    volumeMounts:
+    - name: trust
+      mountPath: /run/substrate/certs   # the actor reads /run/substrate/certs/ca.pem
+```
+
+atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer dynamic refresh will later hang off) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated, with block headers stripped and the anchors deliberately shuffled — order carries no meaning, so consumers must not depend on it. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if the name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates. Bundle contents are re-resolved on every Run/Restore.
 
 ### Container Fields
 
@@ -410,7 +450,17 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); `actor_template_namespace` and `actor_template_name` select the `ActorTemplate`.
-*   **Response:** `CreateActorResponse` containing the initialized `Actor` object.
+*   **Response:** the initialized `Actor`.
+
+#### `UpdateActor`
+Changes mutable fields on an existing actor.
+*   **Request:** `UpdateActorRequest`
+    *   `actor`: `Actor` — `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions.
+    *   `update_mask`: **required**, and must list only mutable paths (currently just `worker_selector`). `*` is not accepted, and fields outside the mask are left untouched.
+*   **Response:** the updated `Actor`.
+*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the mask is missing/empty/names an immutable path; `ABORTED` if either guard no longer matches the stored resource.
+
+Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 
 #### `ResumeActor`
 Activates a suspended actor by restoring it onto a physical worker.
@@ -426,10 +476,11 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`.
 
 #### `DeleteActor`
-Removes an actor from the registry.
-*   **Constraints:** Only actors in `ACTOR_STATE_SUSPENDED` can be deleted.
+Removes an actor from the registry and cleans up associated resources.
 *   **Request:** `DeleteActorRequest`
-*   **Response:** `DeleteActorResponse` (empty).
+    *   `actor`: `ObjectRef` of the actor to delete. Delete takes no preconditions today, so it is last-writer-wins.
+    *   `any_state`: (Optional) If `true`, allows deleting the actor from any state (e.g. `RUNNING`, `PAUSED`), terminating active workloads, detaching volumes, and releasing worker allocations. By default (`false`), only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` (or already `ACTOR_STATE_DELETING`) can be deleted.
+*   **Response:** the deleted `Actor`, as it was immediately before removal.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.

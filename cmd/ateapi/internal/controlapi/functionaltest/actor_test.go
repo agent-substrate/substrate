@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -31,6 +32,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -609,7 +611,7 @@ func TestUpdateActor_Success(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	toUpdate, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
@@ -620,16 +622,10 @@ func TestUpdateActor_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
+	toUpdate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 
 	updateResp, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-			WorkerSelector: &ateapipb.Selector{
-				MatchLabels: map[string]string{"tier": "paid"},
-			},
-			// Output-only fields outside the mask are ignored.
-			Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
-		},
+		Actor:      toUpdate,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	})
 	if err != nil {
@@ -659,7 +655,60 @@ func TestUpdateActor_Success(t *testing.T) {
 	}
 }
 
-// TestUpdateActor_Preconditions verifies the optional version and uid guards
+// TestUpdateActor_IgnoresUnmaskedFields verifies the server applies only the
+// paths named in update_mask: fields the request leaves unset are preserved
+// rather than cleared, and output-only fields the client sets are ignored.
+func TestUpdateActor_IgnoresUnmaskedFields(t *testing.T) {
+	ns := namespaceForTest("ns-update-unmasked")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	created, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "free"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	updateResp, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			// Guards and the masked field only. actor_template_namespace and
+			// actor_template_name are left unset deliberately.
+			Metadata: created.GetMetadata(),
+			WorkerSelector: &ateapipb.Selector{
+				MatchLabels: map[string]string{"tier": "paid"},
+			},
+			// Output-only and outside the mask: ignored, not applied.
+			Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	wantActor := &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "paid"},
+		},
+	}
+	if diff := cmp.Diff(wantActor, updateResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestUpdateActor_Preconditions verifies the required version and uid guards
 // carried in the embedded resource's metadata.
 func TestUpdateActor_Preconditions(t *testing.T) {
 	ns := namespaceForTest("ns-update-preconditions")
@@ -708,31 +757,36 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	if uid == staleUID {
 		t.Fatalf("recreated actor reused uid %s, want a fresh one", uid)
 	}
+	// No preconditions
+	_, err := update(&ateapipb.ResourceMetadata{}, "blind")
+	assertGrpcError(t, err, codes.InvalidArgument, "[actor.metadata.uid: Required value, actor.metadata.version: Required value]")
+
 	// The uid from the deleted lifecycle must be rejected, even though the
-	// atespace/name it was observed under still resolves.
-	_, err := update(&ateapipb.ResourceMetadata{Uid: staleUID}, "other-lifecycle")
+	// atespace/name it was observed under still resolves and the version it
+	// guards on matches the recreated actor's.
+	_, err = update(&ateapipb.ResourceMetadata{Uid: staleUID, Version: staleVersion}, "other-lifecycle")
 	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("actor %s/%s not found with uid %s", testAtespace, testActorID, staleUID))
 
-	// An unguarded update is last-writer-wins, and moves the resource past the
-	// version observed above.
-	unguarded, err := update(&ateapipb.ResourceMetadata{}, "free")
+	// Both guards matching the observed state: the update goes through, and
+	// moves the resource past the version observed above.
+	first, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, "free")
 	if err != nil {
-		t.Fatalf("UpdateActor(no guards) failed: %v", err)
+		t.Fatalf("UpdateActor(matching guards) failed: %v", err)
 	}
-	currentVersion := unguarded.GetMetadata().GetVersion()
+	currentVersion := first.GetMetadata().GetVersion()
 	if currentVersion <= staleVersion {
 		t.Fatalf("version = %d, want greater than %d after an update", currentVersion, staleVersion)
 	}
-	if got := unguarded.GetWorkerSelector().GetMatchLabels()["tier"]; got != "free" {
+	if got := first.GetWorkerSelector().GetMatchLabels()["tier"]; got != "free" {
 		t.Errorf("worker_selector[tier] = %q, want free", got)
 	}
 
 	// The version observed before that write is now stale: rejected rather than
 	// silently overwriting the concurrent change.
-	_, err = update(&ateapipb.ResourceMetadata{Version: staleVersion}, "stale")
+	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, "stale")
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 
-	// Both uid and version matching the observed state: the update goes through.
+	// Guarding on the version the last write produced succeeds again.
 	updated, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, "paid")
 	if err != nil {
 		t.Fatalf("UpdateActor(matching guards) failed: %v", err)
@@ -745,7 +799,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	}
 
 	// The guard the client just satisfied is now stale in turn.
-	_, err = update(&ateapipb.ResourceMetadata{Version: currentVersion}, "free")
+	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, "free")
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 }
 
@@ -755,7 +809,13 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "does-not-exist"}},
+		Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{
+			Atespace: testAtespace,
+			Name:     "does-not-exist",
+			// Well-formed guards to pass preconditions validation
+			Uid:     "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+			Version: 1,
+		}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	})
 	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
@@ -767,24 +827,21 @@ func TestUpdateActor_StampsFullSpanIdentity(t *testing.T) {
 	defer tc.cleanup()
 	createTemplate(t, tc, ns)
 
-	if _, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+	toUpdate, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 			ActorTemplateNamespace: ns,
 			ActorTemplateName:      "tmpl1",
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed CreateActor: %v", err)
 	}
+	toUpdate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"env": "prod"}}
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
 		if _, err := tc.service.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-				WorkerSelector: &ateapipb.Selector{
-					MatchLabels: map[string]string{"env": "prod"},
-				},
-			},
+			Actor:      toUpdate,
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 		}); err != nil {
 			t.Fatalf("UpdateActor: %v", err)
@@ -810,7 +867,13 @@ func TestUpdateActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
 		if _, err := tc.service.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
-			Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}},
+			Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     testActorID,
+				// Well-formed guards to pass preconditions validation
+				Uid:     "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+				Version: 1,
+			}},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 		}); status.Code(err) != codes.NotFound {
 			t.Fatalf("UpdateActor(missing) error = %v, want code NotFound", err)
@@ -899,16 +962,17 @@ func TestDeleteActor_Crashed(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	created, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
-	}}); err != nil {
+	}})
+	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
-	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, func(toUpdate *ateapipb.Actor) error {
+	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		return nil
 	}); err != nil {
@@ -2034,11 +2098,9 @@ func TestSuspendActor(t *testing.T) {
 	}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("cross-atespace CreateActor status = %v, want FailedPrecondition", status.Code(err))
 	}
+	tagged.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	updated, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-		},
+		Tag:        tagged,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})
 	if err != nil || updated.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
@@ -2290,11 +2352,13 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 	}
 	tc.fakeAtelet.FailRun = nil
 
+	current, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	current.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "b"}}
 	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "b"}},
-		},
+		Actor:      current,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
@@ -2507,13 +2571,9 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 		t.Fatalf("expected actor to first resume onto worker-a, got worker_assignment.worker_pod=%q", got)
 	}
 
+	getResp.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "b"}}
 	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-			WorkerSelector: &ateapipb.Selector{
-				MatchLabels: map[string]string{"tier": "b"},
-			},
-		},
+		Actor:      getResp,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
@@ -2715,7 +2775,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("expected state CRASHED, got %v", getResp.GetStatus().GetState())
+		t.Errorf("expected status CRASHED, got %v", getResp.GetStatus())
 	}
 	if getResp.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("expected worker_assignment to be cleared, got %v", getResp.GetStatus().GetWorkerAssignment())
@@ -2975,4 +3035,106 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if got := worker.GetNodeName(); got != "node2" {
 		t.Errorf("worker-2 node = %q, want node2", got)
 	}
+}
+
+// TestLifecycleOpPoolAttributesOnSuccess is the regression test for #957: a
+// successful suspend and pause must stamp the pool they ran on. Both recorded
+// the histogram from a defer that read the finalized record, whose assignment
+// the finalize step had already cleared, so the pair landed only on failures.
+func TestLifecycleOpPoolAttributesOnSuccess(t *testing.T) {
+	tests := []struct {
+		name string
+		op   string
+		// run performs the operation on an actor that is already RUNNING.
+		run func(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef)
+	}{
+		{
+			name: "suspend",
+			op:   ateattr.OperationSuspend,
+			run: func(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef) {
+				t.Helper()
+				if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actor}); err != nil {
+					t.Fatalf("SuspendActor failed: %v", err)
+				}
+			},
+		},
+		{
+			name: "pause",
+			op:   ateattr.OperationPause,
+			run: func(t *testing.T, tc *testContext, actor *ateapipb.ObjectRef) {
+				t.Helper()
+				if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: actor}); err != nil {
+					t.Fatalf("PauseActor failed: %v", err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-lifecycle-pool-" + tt.name)
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
+
+			createTemplate(t, tc, ns)
+			createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+			actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+			if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.GetAtespace(), Name: actorRef.GetName()},
+				ActorTemplateNamespace: ns,
+				ActorTemplateName:      "tmpl1",
+			}}); err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+			if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+				t.Fatalf("ResumeActor failed: %v", err)
+			}
+
+			tt.run(t, tc, actorRef)
+
+			attrs := lifecycleOpAttributes(t, tc, tt.op)
+			if got, ok := attrs.Value(ateattr.WorkerPoolNamespaceKey); !ok || got.AsString() != ns {
+				t.Errorf("%s = %q (present: %v), want %q", ateattr.WorkerPoolNamespaceKey, got.AsString(), ok, ns)
+			}
+			if got, ok := attrs.Value(ateattr.WorkerPoolNameKey); !ok || got.AsString() != "pool1" {
+				t.Errorf("%s = %q (present: %v), want %q", ateattr.WorkerPoolNameKey, got.AsString(), ok, "pool1")
+			}
+			// error.type's absence marks a success, so its presence would mean the
+			// datapoint under test is not the happy path.
+			if _, ok := attrs.Value(ateattr.ErrorTypeKey); ok {
+				t.Errorf("%s is set on the %s datapoint, want the successful operation", ateattr.ErrorTypeKey, tt.op)
+			}
+		})
+	}
+}
+
+// lifecycleOpAttributes returns the attribute set of the single
+// ate.actor.lifecycle.operation.duration datapoint recorded for op.
+func lifecycleOpAttributes(t *testing.T, tc *testContext, op string) attribute.Set {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := tc.metricReader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	var got []attribute.Set
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "ate.actor.lifecycle.operation.duration" {
+				continue
+			}
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok {
+				t.Fatalf("%s data type = %T, want a float64 histogram", m.Name, m.Data)
+			}
+			for _, dp := range hist.DataPoints {
+				if v, ok := dp.Attributes.Value(ateattr.ActorOperationNameKey); ok && v.AsString() == op {
+					got = append(got, dp.Attributes)
+				}
+			}
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("datapoints for %s = %d (%v), want exactly one", op, len(got), got)
+	}
+	return got[0]
 }

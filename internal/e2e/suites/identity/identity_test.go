@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -32,16 +31,15 @@ import (
 
 const probeTemplate = "probe"
 
-// probeNamespace is where deployProbe applies the fixture, and the atespace its
-// actors live in. Suffixed per sandbox class (see e2e.FixtureName) so the two
-// lanes' fixtures never collide: they run one after the other, and this
-// namespace is deleted by the test that created it.
-var probeNamespace = e2e.FixtureName("ate-e2e-probe")
+// probeNamespace is the suite's own probe fixture namespace, and the atespace
+// its actors live in.
+var probeNamespace string
 
 type whoamiResponse struct {
 	File     string `json:"file"`
 	Atespace string `json:"atespace"`
 	UID      string `json:"uid"`
+	Trust    string `json:"trust"`
 	Hostname string `json:"hostname"`
 	// Held is the actor id read through a file descriptor the probe opened at
 	// startup and holds across checkpoints — the snapshot therefore carries an
@@ -77,7 +75,11 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	deployProbe(t, env["BUCKET_NAME"])
+	// Own the pool's contents before the fixture deploys (DeployProbe only
+	// ensures a bundle EXISTS): the assertions below compare the projected
+	// file against this run's CA, and rotation later replaces it again.
+	wantTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust")
+	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity")
 	golden := waitForGolden(t, ctx, clients)
 
 	// Two distinct actors from the same golden snapshot.
@@ -120,6 +122,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q: /run/ate/atespace = %q, want %q (probe read error: %q)", id, got.Atespace, probeNamespace, got.Error)
 		}
 
+		// The projected trust bundle must be this run's pool CA, as published
+		// by the reconciler and sanitized by atelet (byte-identical here: the
+		// reconciler emits clean CERTIFICATE blocks; junk-tolerant
+		// sanitization is pinned by the resolve and pemutil unit tests).
+		if got.Trust != wantTrust {
+			t.Errorf("actor %q: /run/ate/trust-bundle.pem = %q, want the sanitized bundle %q (probe read error: %q)", id, got.Trust, wantTrust, got.Error)
+		}
+
 		// The projected UID must match the control plane's authoritative view
 		// of this actor, and be distinct per actor even though both actors
 		// were seeded from the same golden snapshot.
@@ -140,13 +150,21 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// calls above deliberately seeded the guest state a suspend records — the
 	// held fd from probe startup plus the freshly indexed file inodes — and the
 	// resume regenerates every file underneath that state.
+	//
+	// The trust bundle is rotated first, so the same cycle also proves the
+	// "bundle contents refresh on every Run/Restore" semantic end to end: the
+	// resumed actor must observe the NEW sanitized contents at the same path.
+	// (Live propagation to running actors, without a resume, is #932 PR 2;
+	// until then a running actor's file is the bundle as of its last
+	// Run/Restore.)
+	rotatedTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", id, err)
 	}
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q (after suspend): %v", id, err)
 	}
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
@@ -163,6 +181,9 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	}
 	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
 		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
+	}
+	if got.Trust != rotatedTrust {
+		t.Errorf("after suspend/resume: /run/ate/trust-bundle.pem = %q, want the rotated sanitized bundle %q (probe read error: %q)", got.Trust, rotatedTrust, got.Error)
 	}
 }
 
@@ -193,45 +214,6 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 		time.Sleep(1 * time.Second)
 	}
 	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, want)
-}
-
-func deployProbe(t *testing.T, bucket string) {
-	t.Helper()
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-
-	// One manifest, rendered for the sandbox class under test, so both apply and
-	// delete consume the same file without any shell involved.
-	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe.yaml.tmpl", bucket)
-
-	// Build/push the probe image and apply the manifest through the repo's
-	// pinned ko (hack/run-tool.sh ko); CI does not install ko on PATH, and every
-	// other deploy in this repo goes through this wrapper. The trailing
-	// `-- --context=...` mirrors run_ko in hack/install-ate.sh: ko's apply
-	// subcommand forwards args after `--` to kubectl. KO_CONFIG_PATH is
-	// required because ko resolves .ko.yaml from its working directory, which
-	// is the test's package dir, not the repo root; without it the build
-	// silently loses defaultPlatforms (and produces amd64-only images that
-	// cannot run on arm64 nodes).
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
-	t.Cleanup(func() {
-		// Deletion needs no image build, so go straight to kubectl (matching
-		// demo-counter_delete in hack/install-demo-counter.sh). `ko delete`
-		// rejects this arg shape ("you may not specify resource arguments as
-		// well").
-		delArgs := []string{"delete", "--ignore-not-found", "-f", manifest}
-		if e2e.KubeContext != "" {
-			delArgs = append([]string{"--context=" + e2e.KubeContext}, delArgs...)
-		}
-		e2e.RunCmd(t, "kubectl", delArgs...)
-	})
 }
 
 func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) string {
@@ -283,7 +265,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	})
 
 	// Resume from the golden snapshot (the restore path, not --boot).
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
