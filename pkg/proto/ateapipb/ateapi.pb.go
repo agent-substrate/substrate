@@ -1528,7 +1528,9 @@ func (x *ActorSnapshotTag) GetScope() ActorSnapshotTagScope {
 type Atespace struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: name, uid, version, timestamps.
-	// +k8s:opaqueType
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Metadata      *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2760,6 +2762,8 @@ func (x *AssetFile) GetSha256() string {
 type CreateAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The atespace to create.
+	//
+	// +k8s:required
 	Atespace      *Atespace `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2804,7 +2808,8 @@ func (x *CreateAtespaceRequest) GetAtespace() *Atespace {
 
 type GetAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:opaqueType
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2852,9 +2857,15 @@ type ListAtespacesRequest struct {
 	// Requested page size; the server may return fewer, or occasionally
 	// slightly more. If unspecified, defaults to a server-chosen value;
 	// values above 1000 are coerced to 1000.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
 	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	// Pagination token from a previous ListAtespaces response.
 	// Omit or leave empty for the first request.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=256
 	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2960,7 +2971,8 @@ func (x *ListAtespacesResponse) GetNextPageToken() string {
 
 type DeleteAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:opaqueType
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -449,7 +449,9 @@ message ActorSnapshotTag {
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
   // Common resource metadata: name, uid, version, timestamps.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ResourceMetadata metadata = 1;
 }
 
@@ -715,11 +717,14 @@ message AssetFile {
 
 message CreateAtespaceRequest {
   // The atespace to create.
+  //
+  // +k8s:required
   Atespace atespace = 1;
 }
 
 message GetAtespaceRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
 }
 
@@ -727,10 +732,16 @@ message ListAtespacesRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 1;
 
   // Pagination token from a previous ListAtespaces response.
   // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 2;
 }
 
@@ -743,7 +754,8 @@ message ListAtespacesResponse {
 }
 
 message DeleteAtespaceRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
 }
 

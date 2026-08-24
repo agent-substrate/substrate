@@ -152,6 +152,7 @@ func ValidateGlobalUpdateMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *f
 // Unlike ValidateObjectRef, and like ValidateUpdateMetadataRef, nil is an
 // error rather than a no-op: every global ref in the API names the resource a
 // request acts on, and a request that names nothing cannot be served.
+// TODO: EOL this when DV is fully implemented
 func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
 	if ref == nil {
 		return field.ErrorList{field.Required(fldPath, "")}
