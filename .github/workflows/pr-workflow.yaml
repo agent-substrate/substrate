@@ -32,6 +32,14 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        # Full history: merge-target-branch.sh needs a merge base.
+        fetch-depth: 0
+    - name: Merge target branch
+      if: github.event_name == 'pull_request'
+      env:
+        TARGET_BRANCH: ${{ github.base_ref }}
+      run: hack/merge-target-branch.sh
     - name: Setup Go
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
@@ -52,6 +60,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        # Full history: merge-target-branch.sh needs a merge base.
+        fetch-depth: 0
+    # Before the cache step below, so its hashFiles key covers the merged tree.
+    - name: Merge target branch
+      if: github.event_name == 'pull_request'
+      env:
+        TARGET_BRANCH: ${{ github.base_ref }}
+      run: hack/merge-target-branch.sh
     - name: Setup Go
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
