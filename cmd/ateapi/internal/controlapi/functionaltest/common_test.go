@@ -135,9 +135,6 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	syncer := controlapi.NewWorkerPoolSyncer(persistence, workerInformer, workerPoolLister)
-	syncer.Start(ctx)
-
 	workerFactory.Start(ctx.Done())
 	ateletFactory.Start(ctx.Done())
 	substrateInformerFactory.Start(ctx.Done())
@@ -458,9 +455,14 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name s
 	}
 }
 
-// createWorkerPod creates a worker pod and waits for the syncer to mirror it
-// into the store and the worker cache. It returns the name of the resulting
+// createWorkerPod creates a worker pod, registers the matching Worker, and
+// waits for it to reach the worker cache. It returns the name of the resulting
 // Worker, which is the key to look it up by.
+//
+// Both halves are needed: the Worker record is what the scheduler places actors
+// on, and the pod is what the atelet dialer resolves to reach one. In a real
+// cluster the syncer in ate-controller derives the first from the second; here
+// the test writes both, building the Worker exactly as the syncer would.
 func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) string {
 	t.Helper()
 	pod := &corev1.Pod{
@@ -489,21 +491,29 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		t.Fatalf("failed to update worker pod status: %v", err)
 	}
 
-	// Wait for worker to be registered via API
-	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		resp, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
-		if err != nil {
-			return false, nil // Retry on API error
-		}
-		for _, w := range resp.GetWorkers() {
-			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == name {
-				return true, nil
-			}
-		}
-		return false, nil
-	})
+	// The WorkerPool supplies the fields the syncer copies off it. Read it from
+	// the lister the service itself uses, so a pool the informer has not caught
+	// up on fails here rather than producing a Worker the scheduler will not
+	// match.
+	pool, err := tc.workerPoolLister.WorkerPools(ns).Get(poolName)
 	if err != nil {
-		t.Fatalf("failed to wait for worker to be registered: %v", err)
+		t.Fatalf("failed to get WorkerPool %s/%s: %v", ns, poolName, err)
+	}
+	if _, err := tc.client.CreateWorker(context.Background(), &ateapipb.CreateWorkerRequest{
+		Worker: &ateapipb.Worker{
+			// Workers are global-scoped and named after the pod UID.
+			Metadata:        &ateapipb.ResourceMetadata{Name: string(createdPod.UID)},
+			WorkerNamespace: ns,
+			WorkerPool:      poolName,
+			WorkerPod:       name,
+			WorkerPodUid:    string(createdPod.UID),
+			Ip:              "127.0.0.1",
+			NodeName:        nodeName,
+			SandboxClass:    string(pool.Spec.SandboxClass),
+			Labels:          pool.GetLabels(),
+		},
+	}); err != nil {
+		t.Fatalf("failed to register worker: %v", err)
 	}
 
 	// Wait for the worker to appear in worker cache.
@@ -616,21 +626,22 @@ func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 		t.Fatalf("failed to delete worker pod %s: %v", name, err)
 	}
 
-	// Wait for worker to be removed from API
-	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		resp, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
-		if err != nil {
-			return false, nil // Retry on API error
-		}
-		for _, w := range resp.GetWorkers() {
-			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == name {
-				return false, nil // Still there
-			}
-		}
-		return true, nil // Gone!
-	})
+	// Deregister the Worker, as the syncer would once it saw the pod go. The
+	// Worker is named after the pod UID, but the caller only has the pod name,
+	// so it is found by the pod fields it carries.
+	resp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
 	if err != nil {
-		t.Fatalf("failed to wait for worker to be removed: %v", err)
+		t.Fatalf("failed to list workers: %v", err)
+	}
+	for _, w := range resp.GetWorkers() {
+		if w.GetWorkerNamespace() != ns || w.GetWorkerPod() != name {
+			continue
+		}
+		if _, err := tc.client.DeleteWorker(context.Background(), &ateapipb.DeleteWorkerRequest{
+			Worker: &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
+		}); err != nil {
+			t.Fatalf("failed to deregister worker %s: %v", w.GetMetadata().GetName(), err)
+		}
 	}
 
 	err = wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {

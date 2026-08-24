@@ -41,6 +41,7 @@ type RPCService struct {
 	workerPoolLister      listersv1alpha1.WorkerPoolLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	actorWorkflow         *ActorWorkflow
+	workerWorkflow        *WorkerWorkflow
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
@@ -81,6 +82,7 @@ func NewRPCService(
 		volumePlugins:         volumePlugins,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
 
@@ -109,7 +111,6 @@ type serviceStore interface {
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
-	DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
