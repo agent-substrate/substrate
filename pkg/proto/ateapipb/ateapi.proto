@@ -749,12 +749,6 @@ message UpdateActorSnapshotTagRequest {
   // update.
   // tag.metadata.version and tag.metadata.uid are required preconditions
   ActorSnapshotTag tag = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - scope
-  google.protobuf.FieldMask update_mask = 2;
 }
 
 message DeleteActorSnapshotTagRequest {

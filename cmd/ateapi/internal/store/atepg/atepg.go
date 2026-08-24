@@ -1035,7 +1035,7 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		return nil, err
 	}
 	if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, dbTag); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.

@@ -22,7 +22,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -33,7 +32,6 @@ import (
 func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 	// validUID is a well-formed uid to pass validation.
 	const validUID = "2a5f8c1e-9b3d-4f7a-8e6c-1d0b4a7f2e93"
-	mutableFields := []string{"scope"}
 	scopes := []string{
 		ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE.String(),
 		ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED.String(),
@@ -52,13 +50,12 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: nil,
 		},
 		{
 			name:      "missing tag",
-			req:       &ateapipb.UpdateActorSnapshotTagRequest{UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}}},
+			req:       &ateapipb.UpdateActorSnapshotTagRequest{},
 			wantError: field.ErrorList{field.Required(field.NewPath("tag"), "")},
 		},
 		{
@@ -68,7 +65,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Name: "tag1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Required(field.NewPath("tag", "metadata", "atespace"), "")},
 		},
@@ -79,7 +75,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "tag1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "metadata", "atespace"), "NS1", "")},
 		},
@@ -90,7 +85,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Required(field.NewPath("tag", "metadata", "name"), "")},
 		},
@@ -101,7 +95,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "TAG1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "metadata", "name"), "TAG1", "")},
 		},
@@ -112,7 +105,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Required(field.NewPath("tag", "metadata", "uid"), "")},
 		},
@@ -123,7 +115,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: "not-a-uuid", Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "metadata", "uid"), "not-a-uuid", "")},
 		},
@@ -134,7 +125,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Required(field.NewPath("tag", "metadata", "version"), "")},
 		},
@@ -145,7 +135,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: -1},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "metadata", "version"), int64(-1), "")},
 		},
@@ -157,7 +146,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{
 				field.Required(field.NewPath("tag", "metadata", "uid"), ""),
@@ -165,66 +153,11 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "missing update_mask",
-			req: &ateapipb.UpdateActorSnapshotTagRequest{
-				Tag: &ateapipb.ActorSnapshotTag{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
-					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-				},
-			},
-			wantError: field.ErrorList{field.Required(field.NewPath("update_mask"), "")},
-		},
-		{
-			name: "empty update_mask",
-			req: &ateapipb.UpdateActorSnapshotTagRequest{
-				Tag: &ateapipb.ActorSnapshotTag{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
-					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-				},
-				UpdateMask: &fieldmaskpb.FieldMask{},
-			},
-			wantError: field.ErrorList{field.Required(field.NewPath("update_mask"), "")},
-		},
-		{
-			name: "wildcard update_mask",
-			req: &ateapipb.UpdateActorSnapshotTagRequest{
-				Tag: &ateapipb.ActorSnapshotTag{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
-					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"*"}},
-			},
-			wantError: field.ErrorList{field.NotSupported(field.NewPath("update_mask"), "*", mutableFields)},
-		},
-		{
-			name: "output-only field in update_mask",
-			req: &ateapipb.UpdateActorSnapshotTagRequest{
-				Tag: &ateapipb.ActorSnapshotTag{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
-					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.version"}},
-			},
-			wantError: field.ErrorList{field.NotSupported(field.NewPath("update_mask"), "metadata.version", mutableFields)},
-		},
-		{
-			name: "immutable field in update_mask",
-			req: &ateapipb.UpdateActorSnapshotTagRequest{
-				Tag: &ateapipb.ActorSnapshotTag{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
-					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"snapshot"}},
-			},
-			wantError: field.ErrorList{field.NotSupported(field.NewPath("update_mask"), "snapshot", mutableFields)},
-		},
-		{
 			name: "unset tag.scope",
 			req: &ateapipb.UpdateActorSnapshotTagRequest{
 				Tag: &ateapipb.ActorSnapshotTag{
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Required(field.NewPath("tag", "scope"), "")},
 		},
@@ -235,7 +168,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.Required(field.NewPath("tag", "scope"), "")},
 		},
@@ -246,7 +178,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: nil,
 		},
@@ -257,7 +188,6 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: validUID, Version: 7},
 					Scope:    ateapipb.ActorSnapshotTagScope(7),
 				},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 			},
 			wantError: field.ErrorList{field.NotSupported(field.NewPath("tag", "scope"), "7", scopes)},
 		},
@@ -286,27 +216,43 @@ func TestCreateActorSnapshotTag_MissingSnapshotIsNotFound(t *testing.T) {
 	}
 }
 
-func TestUpdateActorSnapshotTag_FieldMasks(t *testing.T) {
+func TestUpdateActorSnapshotTag(t *testing.T) {
 	tests := []struct {
-		name      string
-		stored    *ateapipb.ActorSnapshotTag
-		req       *ateapipb.ActorSnapshotTag
-		maskPaths []string
-		want      *ateapipb.ActorSnapshotTag
+		name     string
+		stored   *ateapipb.ActorSnapshotTag
+		req      *ateapipb.ActorSnapshotTag
+		want     *ateapipb.ActorSnapshotTag
+		wantCode codes.Code
 	}{
 		{
-			name:      "mask publishes an atespace-scoped tag",
-			stored:    &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
-			req:       &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED},
-			maskPaths: []string{"scope"},
-			want:      &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED},
+			name:   "publishes an atespace-scoped tag",
+			stored: &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
+			req:    &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED},
+			want:   &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED},
 		},
 		{
-			name:      "mask unpublishes a published tag",
-			stored:    &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED},
-			req:       &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
-			maskPaths: []string{"scope"},
-			want:      &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
+			name:   "unpublishes a published tag",
+			stored: &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED},
+			req:    &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
+			want:   &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
+		},
+		{
+			name:   "immutable snapshot cant be unset",
+			stored: &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
+			req: &ateapipb.ActorSnapshotTag{
+				Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				Snapshot: &ateapipb.ObjectRef{},
+			},
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:   "immutable snapshot cant be updated",
+			stored: &ateapipb.ActorSnapshotTag{Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE},
+			req: &ateapipb.ActorSnapshotTag{
+				Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				Snapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "some-other-snapshot"},
+			},
+			wantCode: codes.InvalidArgument,
 		},
 	}
 	for _, tt := range tests {
@@ -315,13 +261,18 @@ func TestUpdateActorSnapshotTag_FieldMasks(t *testing.T) {
 			svc, stored := serviceWithActorSnapshotTag(t, tt.stored)
 
 			tt.req.Metadata = stored.GetMetadata()
-			// Sent but not in the mask - must be ignored.
-			tt.req.Snapshot = &ateapipb.ObjectRef{Atespace: testAtespace, Name: "some-other-snapshot"}
+			if tt.req.GetSnapshot() == nil {
+				tt.req.Snapshot = stored.GetSnapshot()
+			}
 
-			updated, err := svc.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-				Tag:        tt.req,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: tt.maskPaths},
-			})
+			updated, err := svc.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{Tag: tt.req})
+
+			if tt.wantCode != codes.OK {
+				if code := status.Code(err); code != tt.wantCode {
+					t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code %v", err, code, tt.wantCode)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("UpdateActorSnapshotTag failed: %v", err)
 			}
@@ -335,8 +286,8 @@ func TestUpdateActorSnapshotTag_FieldMasks(t *testing.T) {
 	}
 }
 
-// TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish checks that masking
-// scope without populating it is rejected.
+// TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish checks that an update
+// leaving scope unset is rejected.
 func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 	ctx := context.Background()
 	svc, stored := serviceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
@@ -345,11 +296,10 @@ func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 	})
 
 	// The guards are the ones the client read, so the rejection can only come
-	// from the masked-but-unset scope.
+	// from the unset scope.
 	stored.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED
 	_, err := svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        stored,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+		Tag: stored,
 	})
 	if code := status.Code(err); code != codes.InvalidArgument {
 		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code InvalidArgument", err, code)
@@ -462,8 +412,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 	// uid is the only thing that can tell the two lifecycles apart.
 	originalTag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err = svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        originalTag,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+		Tag: originalTag,
 	})
 	if code := status.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code Aborted: the tag holding uid %s was deleted mid-update",
@@ -524,8 +473,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 
 	originalTag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err = svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        originalTag,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+		Tag: originalTag,
 	})
 	if code := status.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
