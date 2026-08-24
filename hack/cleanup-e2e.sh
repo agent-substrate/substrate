@@ -16,13 +16,16 @@
 
 set -o errexit -o nounset -o pipefail
 
-# Deletes the namespaces a failed e2e run left behind.
+# Deletes the cluster state an e2e run leaves behind.
 #
 # A failed suite keeps its namespaces so the worker pods — and the ateom logs
 # inside them, which is where an actor failure is actually explained — survive
 # long enough to read (see RetainNamespaces in internal/e2e/namespace.go).
 # Nothing reclaims them afterwards, and each holds a WorkerPool's worth of
 # running pods, so run this once the logs have served their purpose.
+#
+# The egress CA pool Secret goes too: every probe suite shares it, so no single
+# test may own it (see ReplaceEgressTrustPool in internal/e2e/trustbundle.go).
 #
 # This deletes EVERY e2e namespace in the cluster, so don't run it while a suite
 # is running.
@@ -38,10 +41,14 @@ if [[ -n "${KUBECTL_CONTEXT:-}" ]]; then
   kubectl_args+=("--context=${KUBECTL_CONTEXT}")
 fi
 
+# Dropping the pool makes atecontroller delete the ClusterTrustBundle every
+# probe actor projects, so this must not run mid-suite.
+kubectl ${kubectl_args[@]+"${kubectl_args[@]}"} delete secret -n ate-system egress-mitm-ca-pool --ignore-not-found
+
 # The label CreateNamespace stamps on every namespace the suites create.
 selector="ate.dev/e2e"
 
-leftover="$(kubectl "${kubectl_args[@]}" get namespaces -l "${selector}" -o name)"
+leftover="$(kubectl ${kubectl_args[@]+"${kubectl_args[@]}"} get namespaces -l "${selector}" -o name)"
 if [[ -z "${leftover}" ]]; then
   echo "No leftover e2e namespaces."
   exit 0
@@ -49,4 +56,4 @@ fi
 
 echo "Deleting leftover e2e namespaces:"
 echo "${leftover}"
-kubectl "${kubectl_args[@]}" delete namespaces -l "${selector}" --ignore-not-found
+kubectl ${kubectl_args[@]+"${kubectl_args[@]}"} delete namespaces -l "${selector}" --ignore-not-found

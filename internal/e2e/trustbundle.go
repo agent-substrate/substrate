@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // Constants of atecontroller's EgressMITMTrustReconciler (#946): the CA pool
@@ -44,36 +45,60 @@ const (
 	egressCAPoolSecretKey  = "pool"
 )
 
-// EnsureEgressTrustBundle makes sure the egress trust bundle exists: if the
-// CA pool Secret is absent it provisions one (registering cleanup), then
-// waits until the reconciler-published bundle is non-empty. DeployProbe calls
-// this because the probe template projects the bundle and every actor —
-// including the fixture's golden boot — fails closed while it is missing; a
-// suite that needs to OWN the pool's contents (the identity suite's
-// deterministic assertions and rotation) uses ReplaceEgressTrustPool first,
-// which this then leaves untouched.
+// EnsureEgressTrustBundle creates the CA pool only when absent, then waits for
+// its trust bundle. It never replaces the pool because probe suites share it.
 func EnsureEgressTrustBundle(t *testing.T, ctx context.Context, clients *Clients) {
 	t.Helper()
-	_, err := clients.K8s.CoreV1().Secrets(egressCAPoolNamespace).Get(ctx, egressCAPoolSecretName, metav1.GetOptions{})
+	ensureEgressTrustBundle(t, ctx, clients.K8s)
+}
+
+func ensureEgressTrustBundle(t *testing.T, ctx context.Context, k8s kubernetes.Interface) {
+	t.Helper()
+	_, err := k8s.CoreV1().Secrets(egressCAPoolNamespace).Get(ctx, egressCAPoolSecretName, metav1.GetOptions{})
 	if err == nil {
-		waitForEgressTrustBundle(t, ctx, clients, "")
+		waitForEgressTrustBundle(t, ctx, k8s, "")
 		return
 	}
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("reading CA pool secret %s/%s: %v", egressCAPoolNamespace, egressCAPoolSecretName, err)
 	}
-	ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-trust")
+	secret, _ := newEgressTrustPool(t, "ate-e2e-trust")
+	if _, err := k8s.CoreV1().Secrets(egressCAPoolNamespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("creating CA pool secret %s/%s: %v", egressCAPoolNamespace, egressCAPoolSecretName, err)
+	}
+	waitForEgressTrustBundle(t, ctx, k8s, "")
 }
 
-// ReplaceEgressTrustPool creates or replaces the egress CA pool with a fresh
-// single-CA pool (the shape `kubectl-ate admin make-ca-pool` creates for the
-// egress MITM CA), waits for the reconciler to publish the derived bundle,
-// and returns the PEM of the new CA's root certificate — exactly what a
-// trustBundle projection must then deliver. cn keeps successive pools
-// distinguishable in failure output. Cleanup deletes the Secret, whereupon
-// the reconciler deletes the bundle; create-or-replace keeps reruns
-// self-healing after a failed prior run.
+// ReplaceEgressTrustPool installs a fresh single-CA pool and waits for its
+// trust bundle. It deliberately leaves cleanup to hack/cleanup-e2e.sh because
+// concurrently running probe suites share the pool.
 func ReplaceEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients, cn string) string {
+	t.Helper()
+	return replaceEgressTrustPool(t, ctx, clients.K8s, cn)
+}
+
+func replaceEgressTrustPool(t *testing.T, ctx context.Context, k8s kubernetes.Interface, cn string) string {
+	t.Helper()
+	secret, wantPEM := newEgressTrustPool(t, cn)
+
+	if _, err := k8s.CoreV1().Secrets(egressCAPoolNamespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("creating CA pool secret %s/%s: %v", egressCAPoolNamespace, egressCAPoolSecretName, err)
+		}
+		existing, getErr := k8s.CoreV1().Secrets(egressCAPoolNamespace).Get(ctx, egressCAPoolSecretName, metav1.GetOptions{})
+		if getErr != nil {
+			t.Fatalf("reading existing CA pool secret: %v", getErr)
+		}
+		existing.Data = secret.Data
+		if _, err := k8s.CoreV1().Secrets(egressCAPoolNamespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			t.Fatalf("updating CA pool secret: %v", err)
+		}
+	}
+	waitForEgressTrustBundle(t, ctx, k8s, wantPEM)
+	return wantPEM
+}
+
+func newEgressTrustPool(t *testing.T, cn string) (*corev1.Secret, string) {
 	t.Helper()
 	ca, err := localca.GenerateCA(localca.GenerateOptions{ID: "mitm", CommonName: cn, KeyType: localca.KeyTypeECDSAP256})
 	if err != nil {
@@ -85,32 +110,10 @@ func ReplaceEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients,
 	}
 	wantPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.RootCertificate.Raw}))
 
-	secret := &corev1.Secret{
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: egressCAPoolNamespace, Name: egressCAPoolSecretName},
 		Data:       map[string][]byte{egressCAPoolSecretKey: poolBytes},
-	}
-	if _, err := clients.K8s.CoreV1().Secrets(egressCAPoolNamespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			t.Fatalf("creating CA pool secret %s/%s: %v", egressCAPoolNamespace, egressCAPoolSecretName, err)
-		}
-		existing, getErr := clients.K8s.CoreV1().Secrets(egressCAPoolNamespace).Get(ctx, egressCAPoolSecretName, metav1.GetOptions{})
-		if getErr != nil {
-			t.Fatalf("reading existing CA pool secret: %v", getErr)
-		}
-		existing.Data = secret.Data
-		if _, err := clients.K8s.CoreV1().Secrets(egressCAPoolNamespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-			t.Fatalf("updating CA pool secret: %v", err)
-		}
-		// The replacer takes over an existing pool without adopting its
-		// cleanup: whoever created it registered one already.
-		waitForEgressTrustBundle(t, ctx, clients, wantPEM)
-		return wantPEM
-	}
-	t.Cleanup(func() {
-		_ = clients.K8s.CoreV1().Secrets(egressCAPoolNamespace).Delete(context.Background(), egressCAPoolSecretName, metav1.DeleteOptions{})
-	})
-	waitForEgressTrustBundle(t, ctx, clients, wantPEM)
-	return wantPEM
+	}, wantPEM
 }
 
 // waitForEgressTrustBundle polls the reconciler-owned bundle until its
@@ -119,12 +122,12 @@ func ReplaceEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients,
 // apiserver while atelet resolves from its informer cache, but the suites'
 // start/resume latency dwarfs watch delivery — if a rotated-bundle
 // assertion ever flakes, this lag is the first suspect.
-func waitForEgressTrustBundle(t *testing.T, ctx context.Context, clients *Clients, want string) {
+func waitForEgressTrustBundle(t *testing.T, ctx context.Context, k8s kubernetes.Interface, want string) {
 	t.Helper()
 	var last string
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		ctb, err := clients.K8s.CertificatesV1beta1().ClusterTrustBundles().Get(ctx, EgressTrustBundleObjectName, metav1.GetOptions{})
+		ctb, err := k8s.CertificatesV1beta1().ClusterTrustBundles().Get(ctx, EgressTrustBundleObjectName, metav1.GetOptions{})
 		if err == nil {
 			if got := ctb.Spec.TrustBundle; got == want || (want == "" && got != "") {
 				return
