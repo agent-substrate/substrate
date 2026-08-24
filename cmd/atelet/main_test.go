@@ -679,7 +679,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 
 	t.Run("good asset is cached", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &AteomHerder{anonymousObjectStore: fakeObjectStorage{data: content}}
 		path, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
@@ -696,7 +696,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 	t.Run("over-cap asset rejected, cache not written", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = 4 // content is longer than this
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &AteomHerder{anonymousObjectStore: fakeObjectStorage{data: content}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
@@ -713,7 +713,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &AteomHerder{anonymousObjectStore: fakeObjectStorage{data: content}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
@@ -729,9 +729,9 @@ func TestFetchAssetStreaming(t *testing.T) {
 	t.Run("missing object is terminal", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
-		// The ategcs clients tag a missing object with ReasonFailedGetExternalObject.
+		// Storage backends tag a missing object with ReasonFailedGetExternalObject.
 		notFound := fmt.Errorf("%w: no such object", ateerrors.ReasonFailedGetExternalObject)
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
+		s := &AteomHerder{anonymousObjectStore: fakeObjectStorage{err: notFound}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if !errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
 			t.Errorf("missing-object error not tagged terminal: %v", err)
@@ -749,8 +749,8 @@ func TestFetchAssetStreaming(t *testing.T) {
 	t.Run("malformed url is terminal", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open, which
+		s := &AteomHerder{anonymousObjectStore: fakeObjectStorage{data: content}}
+		// Invalid percent-escape: url.Parse rejects it inside objectstorage.Open, which
 		// tags the failure with ReasonInvalidObjectURL.
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
 		if !errors.Is(err, ateerrors.ReasonInvalidObjectURL) {
@@ -761,7 +761,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 	t.Run("network error stays untagged (retriable)", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
+		s := &AteomHerder{anonymousObjectStore: fakeObjectStorage{err: errors.New("connection refused")}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted a failing open")
@@ -1181,7 +1181,7 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 		"bucket/golden-root/snapshots/ate-golden/golden-1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
 		"bucket/golden-root/snapshots/ate-golden/golden-1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
 	}}
-	s := &AteomHerder{gcsClient: store}
+	s := &AteomHerder{objectStore: store}
 
 	dstDir := t.TempDir()
 	err := s.downloadCombinedCheckpoint(context.Background(),
@@ -1674,7 +1674,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 	t.Run("matching scope uploads all files", func(t *testing.T) {
 		store := &recordingObjectStorage{}
-		s := &AteomHerder{gcsClient: store}
+		s := &AteomHerder{objectStore: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
 			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
@@ -1699,7 +1699,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 	t.Run("microvm full capture uploads durable tar alone as data", func(t *testing.T) {
 		store := &recordingObjectStorage{}
-		s := &AteomHerder{gcsClient: store}
+		s := &AteomHerder{objectStore: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
 			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
@@ -1727,7 +1727,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 
 	t.Run("gvisor full capture cannot become data yet", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+		s := &AteomHerder{objectStore: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "gvisor",
@@ -1745,7 +1745,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 
 	t.Run("microvm full capture without durable tar has no data", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+		s := &AteomHerder{objectStore: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
@@ -1763,7 +1763,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 
 	t.Run("unknown sandbox class cannot convert", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+		s := &AteomHerder{objectStore: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "mystery",
@@ -1781,7 +1781,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 
 	t.Run("data capture cannot become full", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+		s := &AteomHerder{objectStore: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
@@ -1798,7 +1798,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 	t.Run("manifest without scope is rejected", func(t *testing.T) {
 		store := &recordingObjectStorage{}
-		s := &AteomHerder{gcsClient: store}
+		s := &AteomHerder{objectStore: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
@@ -1824,7 +1824,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		store := &recordingObjectStorage{objects: map[string][]byte{
 			"bucket/root/snapshots/ate-demo/snap-1/manifest.json": []byte(`{"sandboxClass":"microvm"}`),
 		}}
-		s := &AteomHerder{gcsClient: store}
+		s := &AteomHerder{objectStore: store}
 
 		if _, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
@@ -1832,7 +1832,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 
 	t.Run("gone locally and remotely crashes the actor", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+		s := &AteomHerder{objectStore: &recordingObjectStorage{}}
 
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
 		if got := status.Code(err); got != codes.DataLoss {
@@ -1847,7 +1847,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 
 	t.Run("upload failure is a plain retryable error", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: errors.New("boom")}}
+		s := &AteomHerder{objectStore: &recordingObjectStorage{putErr: errors.New("boom")}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
 			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
