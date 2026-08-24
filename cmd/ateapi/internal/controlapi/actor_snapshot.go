@@ -22,11 +22,11 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -176,10 +176,6 @@ func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagR
 	return errs
 }
 
-// actorSnapshotTagMutableFields lists the ActorSnapshotTag field paths a client
-// may name in an UpdateActorSnapshotTag update_mask.
-var actorSnapshotTagMutableFields = fieldmask.NewMutableFields("scope")
-
 func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -188,10 +184,20 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
 
 	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
-		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
+		// Metadata is a server-owned field.
+		metadata := toUpdate.GetMetadata()
+		// Reset + merge from the input tag.
+		// TODO: Drop unknwown fields from the input actor.
+		proto.Reset(toUpdate)
+		proto.Merge(toUpdate, in)
+		// Restore metadata from the server.
+		toUpdate.Metadata = metadata
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrImmutableField) {
+			return nil, status.Errorf(codes.InvalidArgument, "while updating actor snapshot tag %s/%s: %v", atespace, name, err)
+		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
@@ -220,8 +226,6 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 	}
 
 	errs = append(errs, resources.ValidateUpdateMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
-
-	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorSnapshotTagMutableFields, field.NewPath("update_mask"))...)
 
 	errs = append(errs, validateActorSnapshotTagScope(tag.GetScope(), tagPath.Child("scope"))...)
 

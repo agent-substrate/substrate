@@ -57,6 +57,14 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplNamespace, tmplN
 // opts mutate the actor before it is stored.
 func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplNamespace, tmplName string, actorState ateapipb.ActorState, opts ...func(*ateapipb.Actor)) {
 	t.Helper()
+
+	atespace := &ateapipb.Atespace{
+		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace},
+	}
+	if _, err := st.CreateAtespace(ctx, atespace); err != nil {
+		t.Fatalf("seed atespace: %v", err)
+	}
+
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status:                 &ateapipb.ActorStatus{State: actorState},

@@ -21,7 +21,6 @@ import (
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // tagActorSnapshot points tagName at snapshotRef with atespace scope.
@@ -64,8 +63,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	update := func(meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
 		meta.Atespace, meta.Name = testAtespace, tagName
 		return tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-			Tag:        &ateapipb.ActorSnapshotTag{Metadata: meta, Scope: scope},
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+			Tag: &ateapipb.ActorSnapshotTag{Metadata: meta, Snapshot: snapshotRef, Scope: scope},
 		})
 	}
 
@@ -146,7 +144,6 @@ func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
 			},
 			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})
 	assertGrpcError(t, err, codes.NotFound, "ActorSnapshot tag test-atespace/does-not-exist not found")
 }

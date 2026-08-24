@@ -12,6 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fieldmasktestpb
+package grpcechopb
 
-//go:generate bash -c "../../../hack/protoc.sh --plugin=protoc-gen-go=$(bash ../../../hack/run-tool.sh --print-bin-path protoc-gen-go) --go_out=paths=source_relative:. fieldmasktest.proto"
+//go:generate bash -c "../../../hack/protoc.sh --plugin=protoc-gen-go=$(bash ../../../hack/run-tool.sh --print-bin-path protoc-gen-go) --plugin=protoc-gen-go-grpc=$(bash ../../../hack/run-tool.sh --print-bin-path protoc-gen-go-grpc) --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. grpcecho.proto"

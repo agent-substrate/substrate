@@ -58,6 +58,10 @@ var (
 	// ErrPreconditionRequired indicates an update was called with a precondition
 	// missing either guard (uid or version). Blind writes are not accepted.
 	ErrPreconditionRequired = errors.New("persistence: precondition required")
+
+	// ErrImmutableField indicates an update's mutation changed a field that is
+	// immutable for the lifetime of the stored object.
+	ErrImmutableField = errors.New("persistence: immutable field")
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
@@ -91,7 +95,8 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, or the mutate's error verbatim otherwise.
+	// exhausted, ErrImmutableField if the mutated actor changed a field that is
+	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
@@ -135,7 +140,8 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, or the mutate's error verbatim otherwise.
+	// exhausted, ErrImmutableField if the mutated tag changed a field that is
+	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
@@ -148,9 +154,6 @@ type Interface interface {
 
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
-
-	// AtespaceExists reports whether the atespace object exists.
-	AtespaceExists(ctx context.Context, name string) (bool, error)
 
 	// Lists atespaces.
 	ListAtespaces(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Atespace], error)

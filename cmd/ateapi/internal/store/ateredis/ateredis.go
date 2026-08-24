@@ -57,6 +57,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -173,9 +175,9 @@ func (s *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.A
 	return atespace, nil
 }
 
-// AtespaceExists reports whether the atespace object exists. This is a plain
+// atespaceExists reports whether the atespace object exists. This is a plain
 // EXISTS check and is NOT atomic with respect to a concurrent DeleteAtespace.
-func (s *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
+func (s *Persistence) atespaceExists(ctx context.Context, name string) (bool, error) {
 	n, err := s.rdb.Exists(ctx, atespaceDBKey(name)).Result()
 	if err != nil {
 		return false, fmt.Errorf("while checking atespace existence: %w", err)
@@ -282,6 +284,14 @@ func actorTemplateScanPattern(atespace string) string {
 }
 
 func (s *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+	// The atespace must already exist.  This is non-atomic must be fixed if we
+	// keep the redis implementation.
+	if exists, err := s.atespaceExists(ctx, template.Metadata.Atespace); err != nil {
+		return nil, fmt.Errorf("while checking atespace: %w", err)
+	} else if !exists {
+		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", template.Metadata.Atespace)
+	}
+
 	dbKey := actorTemplateDBKey(resources.ActorTemplateRefFromActorTemplate(template))
 
 	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
@@ -594,6 +604,14 @@ func (s *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 }
 
 func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	// The atespace must already exist.  This is non-atomic must be fixed if we
+	// keep the redis implementation.
+	if exists, err := s.atespaceExists(ctx, actor.Metadata.Atespace); err != nil {
+		return nil, fmt.Errorf("while checking atespace: %w", err)
+	} else if !exists {
+		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", actor.Metadata.Atespace)
+	}
+
 	dbKey := actorDBKey(resources.ActorRefFromActor(actor))
 
 	// Clone so we don't stomp the caller's copy, then attach fresh server-owned
@@ -793,8 +811,8 @@ func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 				return err
 			}
 			if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, currentTag); err != nil {
-				abortErr = err
-				return err
+				abortErr = fmt.Errorf("%w: %w", store.ErrImmutableField, err)
+				return abortErr
 			}
 			// The stored metadata is authoritative; derive the next metadata
 			// from it, discarding whatever mutate made of it.
@@ -1029,6 +1047,12 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
 		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
+	if stored, mutated := storedActor.GetActorTemplate(), mutatedActor.GetActorTemplate(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("actor_template is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetSourceSnapshotTag(), mutatedActor.GetSourceSnapshotTag(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("source_snapshot_tag is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
 	return nil
 }
 
@@ -1073,8 +1097,8 @@ func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 				return err
 			}
 			if err := validateUpdateActorMutation(actorBeforeMutation, currentActor); err != nil {
-				abortErr = err
-				return err
+				abortErr = fmt.Errorf("%w: %w", store.ErrImmutableField, err)
+				return abortErr
 			}
 			// The stored metadata is authoritative; derive the next metadata
 			// from it, discarding whatever mutate made of it.

@@ -453,12 +453,11 @@ Registers a new logical actor in the system.
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`
-Changes mutable fields on an existing actor.
+Replaces the mutable fields of an existing actor with the ones in the request.
 *   **Request:** `UpdateActorRequest`
-    *   `actor`: `Actor` — `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions.
-    *   `update_mask`: **required**, and must list only mutable paths (currently just `worker_selector`). `*` is not accepted, and fields outside the mask are left untouched.
+    *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `actor_template_namespace`, `actor_template_name`, `actor_template` and `source_snapshot_tag` are immutable.
 *   **Response:** the updated `Actor`.
-*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the mask is missing/empty/names an immutable path; `ABORTED` if either guard no longer matches the stored resource.
+*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `ABORTED` if either guard no longer matches the stored resource.
 
 Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 

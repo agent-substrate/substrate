@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sdsmint
+package egressauthz
 
 import (
 	"os"
@@ -21,8 +21,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/e2e"
 )
 
-// Setup runs before the suite. The probe is per-test, because it lives in the
-// randomized namespace the test creates, so there is nothing to do here.
+// Setup runs before the suite. The probe is created on first use, in the
+// randomized namespace the suite creates, so there is nothing to do here.
 func Setup() {}
 
 // Teardown runs after the suite.

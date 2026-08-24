@@ -24,7 +24,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 var (
@@ -192,10 +191,7 @@ func updateActorSnapshotTagScope(ctx context.Context, client actorSnapshotTagCli
 	}
 	tag.Scope = scope
 
-	resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        tag,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
-	})
+	resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{Tag: tag})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update actor snapshot tag: %w", err)
 	}

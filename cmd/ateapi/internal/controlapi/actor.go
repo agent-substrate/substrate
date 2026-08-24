@@ -22,13 +22,13 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -71,15 +71,6 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 
 	atespace := in.GetMetadata().GetAtespace()
 	name := in.GetMetadata().GetName()
-
-	// The atespace must already exist.
-	exists, err := s.persistence.AtespaceExists(ctx, atespace)
-	if err != nil {
-		return nil, fmt.Errorf("while checking atespace: %w", err)
-	}
-	if !exists {
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
-	}
 
 	// Volume creation is completed asynchronously after the actor is recorded.
 	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
@@ -271,13 +262,6 @@ func validateListActorsRequest(req *ateapipb.ListActorsRequest) field.ErrorList 
 	return errs
 }
 
-// actorMutableFields lists the Actor field paths a client may name in an
-// UpdateActor update_mask.
-var actorMutableFields = fieldmask.NewMutableFields(
-	"worker_selector",
-	"worker_selector.match_labels",
-)
-
 func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
 	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -287,10 +271,21 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	setSpanActorRefAttributes(ctx, actorRef)
 
 	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
-		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
+		// Status and Metadata are server-owned fields.
+		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
+		// Reset + merge from the input actor.
+		// TODO: Drop unknwown fields from the input actor.
+		proto.Reset(toUpdate)
+		proto.Merge(toUpdate, in)
+		// Restore status and metadata from the server.
+		toUpdate.Status = status
+		toUpdate.Metadata = metadata
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrImmutableField) {
+			return nil, status.Errorf(codes.InvalidArgument, "while updating actor %s: %v", actorRef, err)
+		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
@@ -321,8 +316,6 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 	}
 
 	errs = append(errs, resources.ValidateUpdateMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
-
-	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorMutableFields, fldPath.Child("update_mask"))...)
 
 	if selector := actor.GetWorkerSelector(); selector != nil {
 		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)

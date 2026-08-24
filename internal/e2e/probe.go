@@ -14,11 +14,7 @@
 
 package e2e
 
-import (
-	"context"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 // ProbeName is the name of the probe fixture's WorkerPool and ActorTemplate,
 // inside the namespace DeployProbe returns.
@@ -32,33 +28,14 @@ const ProbeName = "probe"
 func DeployProbe(t *testing.T, bucket, name string) string {
 	t.Helper()
 
-	root, err := FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-
-	// The probe template projects the egress trust bundle, and every actor —
-	// including the fixture's golden boot — fails closed while the bundle is
-	// missing, so make sure it exists whatever suite is deploying.
-	EnsureEgressTrustBundle(t, context.Background(), GetClients())
-
 	// One manifest, rendered for the sandbox class under test, so both apply
 	// and delete consume the same file without any shell involved.
 	manifest := RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe.yaml.tmpl", bucket, name)
+	koApply(t, manifest)
 
-	// Build/push the probe image and apply through the repo's pinned ko; CI
-	// does not install ko on PATH. The trailing `-- --context=...` mirrors
-	// run_ko in hack/install-ate.sh: ko's apply subcommand forwards args after
-	// `--` to kubectl. KO_CONFIG_PATH is required because ko resolves .ko.yaml
-	// from its working directory, which is the test's package dir rather than
-	// the repo root; without it the build silently loses defaultPlatforms and
-	// produces images that cannot run on the cluster's nodes.
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+KubeContext)
-	}
-	RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
+	// Unlike the fixtures that live in a namespace CreateNamespace tears down,
+	// this one installs into a fixed namespace it shares with nothing, so it has
+	// to clean up after itself.
 	t.Cleanup(func() {
 		// Deletion needs no image build, so go straight to kubectl. `ko delete`
 		// rejects this arg shape ("you may not specify resource arguments as

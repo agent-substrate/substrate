@@ -36,14 +36,6 @@ func (s *Service) CreateActorTemplate(ctx context.Context, req *ateapipb.CreateA
 	in := req.GetActorTemplate()
 	templateRef := resources.ActorTemplateRefFromActorTemplate(in)
 
-	exists, err := s.persistence.AtespaceExists(ctx, templateRef.Atespace)
-	if err != nil {
-		return nil, fmt.Errorf("while checking atespace: %w", err)
-	}
-	if !exists {
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", templateRef.Atespace)
-	}
-
 	// Rebuild the template from the client-owned fields only: status is
 	// server-owned and ignored per the CreateActorTemplateRequest contract.
 	template := &ateapipb.ActorTemplate{

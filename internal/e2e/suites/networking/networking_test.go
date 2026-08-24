@@ -97,22 +97,31 @@ func TestActorEgressHTTPS(t *testing.T) {
 }
 
 // fetchThroughEgressActor asks the egress demo Actor to fetch url and returns
-// the status and body it echoes back. Retries a non-200 response for up to
-// 30s: ResumeActor can return before its route reaches atenet-router's xDS
-// snapshot, and a request sent in that window sees a transient 503.
+// the status and body it echoes back.
 func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string) (int, []byte) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]string{"url": url})
 	if err != nil {
 		t.Fatalf("marshaling the fetch request for %s: %v", url, err)
 	}
+	return postThroughEgressActor(t, ctx, router, actorRef, "/", payload)
+}
+
+// postThroughEgressActor POSTs payload to path on the egress demo Actor and
+// returns the status and body it answered with. Retries a non-200 response for
+// up to 30s: ResumeActor can return before its route reaches atenet-router's
+// xDS snapshot, and a request sent in that window sees a transient 503. The
+// retry also rides out an origin that is reachable but not yet answering, which
+// the Actor reports as a 502.
+func postThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string, payload []byte) (int, []byte) {
+	t.Helper()
 
 	const timeout = 30 * time.Second
 	deadline := time.Now().Add(timeout)
 	for {
-		response, err := router.PostJSON(ctx, actorRef, "/", payload)
+		response, err := router.PostJSON(ctx, actorRef, path, payload)
 		if err != nil {
-			t.Fatalf("POST %s to egress Actor through ingress: %v", url, err)
+			t.Fatalf("POST %s to egress Actor through ingress: %v", path, err)
 		}
 		body, err := io.ReadAll(response.Body)
 		response.Body.Close()
@@ -122,7 +131,7 @@ func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.Rout
 		if response.StatusCode == http.StatusOK || time.Now().After(deadline) {
 			return response.StatusCode, body
 		}
-		t.Logf("fetch through egress Actor returned HTTP %d; retrying...", response.StatusCode)
+		t.Logf("POST %s through egress Actor returned HTTP %d; retrying... body: %s", path, response.StatusCode, body)
 		time.Sleep(1 * time.Second)
 	}
 }

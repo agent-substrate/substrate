@@ -56,6 +56,9 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 			InProgressLocalSnapshotName: "local-snap-1",
 		},
 	}
+	if _, err := st.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
@@ -110,6 +113,10 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			defer cleanup()
 			ctx := context.Background()
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+
+			if _, err := st.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}); err != nil {
+				t.Fatalf("CreateAtespace() failed: %v", err)
+			}
 
 			created, err := st.CreateActor(ctx, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
@@ -239,6 +246,11 @@ func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 		w := &ActorWorkflow{store: persistence}
 
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+		if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}); err != nil {
+			t.Fatalf("CreateAtespace() failed: %v", err)
+		}
+
 		actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 			Status:   &ateapipb.ActorStatus{State: seedState},
@@ -274,6 +286,10 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+				t.Fatalf("CreateAtespace() failed: %v", err)
+			}
 
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},

@@ -23,7 +23,6 @@ package atepg
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,21 +35,37 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
+// watchPoolMaxConns sizes the dedicated outbox watch pool: one connection
+// for the WatchWorkers poller, one for the maintenance loop, and one of headroom
+// so a transiently slow poll can never gate a maintenance pass.
+const (
+	watchPoolMaxConns = 3
+	watchPoolMinConns = 1
+)
+
 type Persistence struct {
-	pool    *pgxpool.Pool
-	lockTTL time.Duration
+	pool *pgxpool.Pool
+	// watchPool serves the outbox side only: the WatchWorkers pollers
+	// and the partition-maintenance loop.
+	watchPool             *pgxpool.Pool
+	ownsWatchPool         bool
+	lockTTL               time.Duration
+	pollFailureCloseAfter time.Duration
+	stopMaintenance       context.CancelFunc
+	maintenanceDone       chan struct{}
 }
 
 var _ store.Interface = (*Persistence)(nil)
 
 // Connect opens a pgxpool against dsn, verifies connectivity, and applies the
-// embedded schema. Startup fails if the database cannot be reached.
+// embedded schema. Startup fails if the database cannot be reached. A second,
+// two-connection watch pool (owned by the Persistence, closed by Close) isolates
+// outbox polling and maintenance from write traffic.
 func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -60,22 +75,71 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
 	}
-	p, err := NewPersistence(ctx, pool)
+
+	watchCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("parsing watch pool config: %w", err)
+	}
+	watchCfg.MaxConns = watchPoolMaxConns
+	watchCfg.MinConns = watchPoolMinConns
+	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
+	}
+
+	p, err := newPersistence(ctx, pool, watchPool)
+	if err != nil {
+		watchPool.Close()
 		pool.Close()
 		return nil, err
 	}
+	p.ownsWatchPool = true
 	return p, nil
 }
 
 // NewPersistence wraps an already-open pool, applying the idempotent schema.
-// Callers that already hold a pool (e.g. tests using
-// testcontainers) use this directly instead of Connect.
+// Callers that already hold a pool (e.g. tests using testcontainers) use
+// this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
+	return newPersistence(ctx, pool, pool)
+}
+
+func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
 	if err := applySchema(ctx, pool); err != nil {
 		return nil, err
 	}
-	return &Persistence{pool: pool, lockTTL: defaultLockTTL}, nil
+	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
+	p := &Persistence{pool: pool, watchPool: watchPool, lockTTL: defaultLockTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	// Cover the partition lead before accepting writes; from then on the
+	// maintenance loop keeps partitions ahead of the clock (and the
+	// DEFAULT partition catches writes if it ever falls behind).
+	bootNow, err := p.outboxNow(ctx)
+	if err != nil {
+		stopMaintenance()
+		return nil, err
+	}
+	if err := p.createWorkerOutboxPartitions(ctx, outboxPartitionLeadTimes(bootNow)...); err != nil {
+		stopMaintenance()
+		return nil, err
+	}
+	go func() {
+		defer close(p.maintenanceDone)
+		p.outboxMaintenance(maintenanceCtx)
+	}()
+	return p, nil
+}
+
+// Close stops the outbox maintenance loop and waits for it to exit,
+// then closes the watch pool if Connect created one. It does not close the
+// main pool, which the caller owns.
+func (p *Persistence) Close() {
+	p.stopMaintenance()
+	<-p.maintenanceDone
+	if p.ownsWatchPool {
+		p.watchPool.Close()
+	}
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
@@ -188,14 +252,6 @@ func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.A
 		return nil, fmt.Errorf("unmarshaling atespace: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
-	var exists bool
-	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = $1)`, name).Scan(&exists); err != nil {
-		return false, fmt.Errorf("checking atespace existence: %w", err)
-	}
-	return exists, nil
 }
 
 func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
@@ -537,6 +593,12 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
 		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
+	if stored, mutated := storedActor.GetActorTemplate(), mutatedActor.GetActorTemplate(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("actor_template is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetSourceSnapshotTag(), mutatedActor.GetSourceSnapshotTag(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("source_snapshot_tag is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
 	return nil
 }
 
@@ -572,7 +634,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
@@ -1029,7 +1091,7 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		return nil, err
 	}
 	if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, dbTag); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
@@ -1076,77 +1138,6 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 
 // --- Workers ---
 
-const (
-	// workerChangeChannel is the fixed LISTEN/NOTIFY channel for worker changes.
-	workerChangeChannel = "worker_changes"
-	// maxNotifyPayloadBytes reflects PostgreSQL's NOTIFY payload size limit.
-	// Writes fail rather than silently omit a notification if exceeded.
-	maxNotifyPayloadBytes = 8000
-)
-
-type workerEventEnvelope struct {
-	Type   int    `json:"t"`
-	Worker string `json:"w"` // protojson-encoded Worker
-}
-
-func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) ([]byte, error) {
-	workerJSON, err := protojson.Marshal(worker)
-	if err != nil {
-		return nil, fmt.Errorf("in protojson.Marshal: %w", err)
-	}
-	msg, err := json.Marshal(workerEventEnvelope{Type: int(eventType), Worker: string(workerJSON)})
-	if err != nil {
-		return nil, fmt.Errorf("in json.Marshal: %w", err)
-	}
-	return msg, nil
-}
-
-func unmarshalWorkerEvent(payload string) (store.WorkerEvent, error) {
-	var env workerEventEnvelope
-	if err := json.Unmarshal([]byte(payload), &env); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in json.Unmarshal: %w", err)
-	}
-	worker := &ateapipb.Worker{}
-	if err := protojson.Unmarshal([]byte(env.Worker), worker); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in protojson.Unmarshal: %w", err)
-	}
-	return store.WorkerEvent{Type: store.WorkerEventType(env.Type), Worker: worker}, nil
-}
-
-// writeAndNotify runs fn inside a transaction, then--only if fn reports a
-// change worth notifying--calls pg_notify in the same transaction so
-// delivery happens if and only if the transaction commits.
-func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (notify bool, err error)) error {
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
-	notify, err := fn(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	if notify {
-		payload, err := marshalWorkerEvent(eventType, worker)
-		if err != nil {
-			return fmt.Errorf("marshaling worker event: %w", err)
-		}
-		if len(payload) > maxNotifyPayloadBytes {
-			return fmt.Errorf("worker event payload of %d bytes exceeds PostgreSQL NOTIFY limit of %d bytes", len(payload), maxNotifyPayloadBytes)
-		}
-		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, string(payload)); err != nil {
-			return fmt.Errorf("notifying worker change: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("committing transaction: %w", err)
-	}
-	return nil
-}
-
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
 	// Workers are global-scoped, so the atespace is always empty.
@@ -1157,7 +1148,7 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	err = p.writeAndNotify(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	err = p.writeAndAppendEvent(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
@@ -1208,7 +1199,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	return p.writeAndNotify(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var returned []byte
 		err := tx.QueryRow(ctx, `
 			UPDATE workers
@@ -1237,7 +1228,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 
 func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 	deletedEvent := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-	return p.writeAndNotify(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var protoBytes []byte
 		err := tx.QueryRow(ctx, `
 			DELETE FROM workers
@@ -1245,7 +1236,7 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 			RETURNING proto`, name).Scan(&protoBytes)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				// Idempotent: nothing existed, so nothing to notify either.
+				// Idempotent: nothing existed, so no event to publish either.
 				return false, nil
 			}
 			return false, fmt.Errorf("deleting worker %s: %w", name, err)
@@ -1304,53 +1295,6 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 		nextToken = encodePageToken(kindWorker, "", []string{names[pageSize-1]})
 	}
 	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
-}
-
-// WatchWorkers acquires a dedicated connection (hijacked out of the pool, so
-// it's never handed back for unrelated queries), LISTENs on the fixed
-// worker-change channel, and forwards decoded notifications until the
-// context is cancelled or the caller closes the watch.
-func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
-	watchCtx, cancel := context.WithCancel(ctx)
-
-	poolConn, err := p.pool.Acquire(watchCtx)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("acquiring watch connection: %w", err)
-	}
-	conn := poolConn.Hijack()
-
-	if _, err := conn.Exec(watchCtx, "LISTEN "+workerChangeChannel); err != nil {
-		conn.Close(watchCtx) //nolint:errcheck
-		cancel()
-		return nil, fmt.Errorf("listening for worker changes: %w", err)
-	}
-
-	ch := make(chan store.WorkerEvent, 128)
-	go func() {
-		defer close(ch)
-		defer conn.Close(context.Background()) //nolint:errcheck
-		for {
-			notification, err := conn.WaitForNotification(watchCtx)
-			if err != nil {
-				// Context cancelled (caller closed the watch) or the
-				// connection was lost. Either way, the caller must
-				// re-subscribe; matches ateredis's WatchWorkers contract.
-				return
-			}
-			event, err := unmarshalWorkerEvent(notification.Payload)
-			if err != nil {
-				slog.ErrorContext(ctx, "worker event unmarshal failed; closing watch", slog.Any("err", err))
-				return
-			}
-			select {
-			case ch <- event:
-			case <-watchCtx.Done():
-				return
-			}
-		}
-	}()
-	return store.NewWorkerWatch(ch, cancel), nil
 }
 
 // --- Workflow locks ---
@@ -1509,7 +1453,7 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 // --- Debug ---
 
 func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases`); err != nil {
+	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
 		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil

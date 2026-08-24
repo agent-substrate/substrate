@@ -26,7 +26,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -40,6 +39,7 @@ import (
 var (
 	containerOnce sync.Once
 	containerPool *pgxpool.Pool
+	containerDSN  string
 	containerPG   *postgres.PostgresContainer
 	containerErr  error
 )
@@ -79,6 +79,7 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 			containerErr = err
 			return
 		}
+		containerDSN = dsn
 		pool, err := pgxpool.New(ctx, dsn)
 		if err != nil {
 			containerErr = err
@@ -115,6 +116,7 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 	if err != nil {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}
+	t.Cleanup(p.Close)
 	if err := p.DebugClearAll(ctx); err != nil {
 		t.Fatalf("DebugClearAll failed: %v", err)
 	}
@@ -351,104 +353,6 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 	}
 	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)
-	}
-}
-
-// TestWorkerNotification_OnlyAfterCommit proves the doc's atomicity claim: a
-// worker write's pg_notify shares the write's transaction, so a rolled-back
-// write never notifies, while a committed write always does.
-func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
-	s := setupPostgresStore(t).(*Persistence)
-	ctx := context.Background()
-
-	watch, err := s.WatchWorkers(ctx)
-	if err != nil {
-		t.Fatalf("WatchWorkers failed: %v", err)
-	}
-	defer watch.Close()
-
-	const workerName = "6e4d2f81-b3a9-4c05-8e72-1f9d4a0c7b63"
-	worker := &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
-		WorkerNamespace: "ns",
-		WorkerPool:      "pool",
-		WorkerPod:       "pod",
-		WorkerPodUid:    workerName,
-	}
-	protoBytes, err := proto.Marshal(worker)
-	if err != nil {
-		t.Fatalf("marshaling worker: %v", err)
-	}
-
-	// Write the row and roll back instead of committing: no notification
-	// should ever arrive, proving pg_notify's effect is undone with the rest
-	// of the transaction.
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("Begin failed: %v", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO workers (name, uid, version, proto)
-		VALUES ($1, $2, $3, $4)`,
-		workerName, "rolled-back-uid", int64(1), protoBytes); err != nil {
-		t.Fatalf("insert failed: %v", err)
-	}
-	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, "rolled-back-payload"); err != nil {
-		t.Fatalf("pg_notify failed: %v", err)
-	}
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatalf("Rollback failed: %v", err)
-	}
-
-	select {
-	case event := <-watch.Events:
-		t.Fatalf("received event %+v from a rolled-back transaction; NOTIFY should not survive rollback", event)
-	case <-time.After(500 * time.Millisecond):
-		// Expected: nothing arrives.
-	}
-
-	// The equivalent committed write must notify.
-	if err := s.CreateWorker(ctx, worker); err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-	select {
-	case event := <-watch.Events:
-		if event.Type != store.WorkerEventCreated {
-			t.Errorf("expected WorkerEventCreated, got %v", event.Type)
-		}
-		// CreateWorker assigns the uid, version and timestamps server-side.
-		want := proto.Clone(worker).(*ateapipb.Worker)
-		want.Metadata.Version = 1
-		if diff := cmp.Diff(want, event.Worker, protocmp.Transform(),
-			protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid", "create_time", "update_time")); diff != "" {
-			t.Errorf("event worker mismatch (-want +got):\n%s", diff)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for event from a committed write")
-	}
-}
-
-func TestWatchWorkers_MalformedNotificationClosesWatch(t *testing.T) {
-	s := setupPostgresStore(t).(*Persistence)
-	ctx := context.Background()
-
-	watch, err := s.WatchWorkers(ctx)
-	if err != nil {
-		t.Fatalf("WatchWorkers failed: %v", err)
-	}
-	defer watch.Close()
-
-	if _, err := s.pool.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, "not-json"); err != nil {
-		t.Fatalf("pg_notify failed: %v", err)
-	}
-
-	select {
-	case event, ok := <-watch.Events:
-		if ok {
-			t.Fatalf("received event %+v from malformed notification; want closed watch", event)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for malformed notification to close watch")
 	}
 }
 

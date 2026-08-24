@@ -30,7 +30,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -177,8 +176,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	tagToUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        tagToUpdate,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+		Tag: tagToUpdate,
 	}); err != nil {
 		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)
 	}

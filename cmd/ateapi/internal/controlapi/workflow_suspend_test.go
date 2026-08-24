@@ -37,6 +37,9 @@ import (
 func TestEnsureMarkedSuspending_SnapshotName(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
@@ -77,6 +80,9 @@ func TestEnsureMarkedSuspending_SnapshotName(t *testing.T) {
 func TestEnsureMarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status: &ateapipb.ActorStatus{
@@ -175,6 +181,9 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 		w := &ActorWorkflow{store: persistence}
 
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+		if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}); err != nil {
+			t.Fatalf("CreateAtespace: %v", err)
+		}
 		actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 			Status:   &ateapipb.ActorStatus{State: seedState},
@@ -262,6 +271,10 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+				t.Fatalf("CreateAtespace: %v", err)
+			}
+
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 				Status: &ateapipb.ActorStatus{
@@ -315,6 +328,10 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 
 	const snapshotName = "2026-01-01t00-00-00z-abc"
 	actor := &ateapipb.Actor{
@@ -402,6 +419,10 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+				t.Fatalf("CreateAtespace: %v", err)
+			}
+
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
 				Status: &ateapipb.ActorStatus{
@@ -466,6 +487,10 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 
 	const snapshotName = "2026-01-01t00-00-00z-abc"
 	_, err := persistence.CreateActor(ctx, &ateapipb.Actor{
@@ -594,6 +619,9 @@ func TestEnsureMarkedSuspending_PausedScopeRejection(t *testing.T) {
 			w := &ActorWorkflow{store: persistence}
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}); err != nil {
+				t.Fatalf("CreateAtespace: %v", err)
+			}
 			actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
@@ -628,6 +656,10 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 		persistence := newTestPersistence(t)
 		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
 
+		if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+			t.Fatalf("CreateAtespace: %v", err)
+		}
+
 		created, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 			Status: &ateapipb.ActorStatus{
@@ -656,6 +688,10 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
 		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+
+		if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+			t.Fatalf("CreateAtespace: %v", err)
+		}
 
 		created, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},

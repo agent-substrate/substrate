@@ -16,7 +16,6 @@ syntax = "proto3";
 
 package ateapi;
 
-import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -679,12 +678,6 @@ message UpdateActorRequest {
   // update.
   // actor.metadata.version and actor.metadata.uid are required preconditions.
   Actor actor = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - worker_selector
-  google.protobuf.FieldMask update_mask = 2;
 }
 
 message SuspendActorRequest {
@@ -755,12 +748,6 @@ message UpdateActorSnapshotTagRequest {
   // update.
   // tag.metadata.version and tag.metadata.uid are required preconditions
   ActorSnapshotTag tag = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - scope
-  google.protobuf.FieldMask update_mask = 2;
 }
 
 message DeleteActorSnapshotTagRequest {
@@ -823,13 +810,6 @@ message UpdateWorkerRequest {
   // worker.metadata.version and worker.metadata.uid are optional preconditions
   // and zero values skip the check.
   Worker worker = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - sandbox_class
-  //   - labels
-  google.protobuf.FieldMask update_mask = 2;
 }
 
 message DeleteWorkerRequest {

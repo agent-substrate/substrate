@@ -75,6 +75,9 @@ func (s *lockCountingStore) AcquireLock(ctx context.Context, key string) (*store
 func TestResumeActor_RunningFastPathDoesNotAcquireLock(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 	created, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
@@ -208,6 +211,9 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorkerInBackground(t *testin
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
@@ -342,6 +348,9 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		t.Fatalf("UpdateWorker (concurrent claim): %v", err)
 	}
 
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
 	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
@@ -431,6 +440,9 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 		},
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
+	}
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
 	}
 	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},

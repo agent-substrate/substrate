@@ -211,9 +211,10 @@ Rules:
 
 ### 3.4 Update
 
-*Follows [AIP-134](https://google.aip.dev/134). Diverges on `update_mask` requirement and `*` support.*
+*Follows [AIP-134](https://google.aip.dev/134). Diverges by replacing the resource instead of patching it.*
 
-Updates use a **partial-update model** (equivalent to HTTP PATCH). The mask is always required.
+Updates use a **full-replacement model** (equivalent to HTTP PUT). The resource carried in the request *is* the resource the client wants to exist. Server-managed
+fields are ignored.
 
 ```proto
 rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
@@ -223,29 +224,25 @@ message UpdateActorRequest {
   // actor.metadata.atespace and actor.metadata.name identify which resource to update.
   // actor.metadata.uid and actor.metadata.version are the preconditions the
   // update is written against, and are required.
-  Actor actor = 1;
-
-  // The set of fields to update. Required.
   //
-  // Field paths are relative to the Actor message (e.g., "worker_selector").
-  google.protobuf.FieldMask update_mask = 2;
+  // Every other field of the actor is replaced with what the request carries.
+  // A field the request leaves unset is cleared, so a field that is immutable
+  // and unset is rejected rather than silently dropped.
+  Actor actor = 1;
 }
 ```
+
+Clients update by read-modify-write: `Get` the resource, change the fields they mean to change, and send the whole thing back. The `uid` and `version` guards they echo back make that round trip safe against concurrent writers.
 
 Rules:
 - RPC name **must** begin with `Update` followed by the singular resource name.
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
-- `update_mask` **must** be of type `google.protobuf.FieldMask` and **must** be named `update_mask`.
-- `update_mask` is **required**. An absent or empty mask **must** return `INVALID_ARGUMENT`.
-- `update_mask` may only enumerate **client-mutable** fields. Naming any non-mutable field **must** return `INVALID_ARGUMENT`. Two distinct cases qualify:
-  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`). These are excluded even though some of them (`version`, `update_time`) *do* change — being server-owned, not immutable, is what disqualifies them.
-  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`).
-- The special value `*` is **not supported**. Clients must enumerate the exact fields to update.
+  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
+  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `actor_template_name`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
+- Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
-- The `version` and `uid` fields in the embedded resource's `metadata` are **required** preconditions (see section #7). A request that leaves either unset is a blind write and **must** return `INVALID_ARGUMENT`. They are control fields, not updatable fields, and **must not** be listed in `update_mask`.
-
-**Divergence from AIP-134:** AIP-134 makes `update_mask` optional (omission implies updating all populated fields) and requires support for `*`. Substrate requires an explicit mask.
+- The `version` and `uid` fields in the embedded resource's `metadata` are **required** preconditions (see section #7). A request that leaves either unset is a blind write and **must** return `INVALID_ARGUMENT`. They are control fields the client echoes back as guards, not fields it edits.
 
 ### 3.5 Delete
 
@@ -344,7 +341,7 @@ enum ActorState {
 
 ### 5.2 Field presence (`optional`)
 
-Use the `optional` keyword on a scalar field **only** when null and the zero value (`false`, `0`, `""`) are semantically distinct for that field's meaning. Do not use `optional` universally or as a workaround for update semantics — the required `update_mask` handles that.
+Use the `optional` keyword on a scalar field **only** when null and the zero value (`false`, `0`, `""`) are semantically distinct for that field's meaning. Do not use `optional` universally or as a workaround for update semantics — updates replace the whole resource (section #3.4), so an unset field already has an unambiguous meaning.
 
 ```proto
 // Only if "no priority" is meaningfully different from "priority 0":
@@ -354,7 +351,7 @@ optional int32 priority = 5;
 bool cordoned = 6;
 ```
 
-Because `update_mask` is required, the server always knows which fields the client intends to change. `optional` is reserved for cases where the resource itself has a three-state semantic (set-to-zero, set-to-nonzero, not-set).
+Because an update carries the whole resource, the server always knows what the client intends the resource to look like. `optional` is reserved for cases where the resource itself has a three-state semantic (set-to-zero, set-to-nonzero, not-set).
 
 ---
 
@@ -488,17 +485,16 @@ actor.WorkerSelector = &Selector{MatchLabels: map[string]string{"tier": "paid"}}
 
 // 3. Write it back. actor.metadata already carries the required fields.
 updated, err := client.UpdateActor(ctx, &UpdateActorRequest{
-    Actor:      actor,
-    UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+    Actor: actor,
 })
 ```
 
-- `version` and `uid` are control fields managed by the server, not mutable fields. They **must not** be listed in `update_mask`.
+- `version` and `uid` are control fields managed by the server, not mutable fields. A client echoes them back as guards, it never edits them.
 - Both are **required**: an update that leaves `version` (0) or `uid` ("") unset is rejected with `INVALID_ARGUMENT`. There is no blind by-name update. A client that has not read the resource cannot update it; a client that has read it already holds both values.
 - The requirement is on Update only. Delete's guards stay optional (below), and Create assigns both fields rather than checking them.
 
 - Modify what you read, do not reconstruct it: step 2 above mutates the message the server returned rather than assembling a new `Actor`. 
-   - This matters when the server is newer than the client: a reconstructed message does not contain fields it does not recognize, and any masked field it does not know to populate is silently cleared.
+   - This matters when the server is newer than the client: a reconstructed message does not carry the fields the client does not recognize, and an update that omits an immutable field is rejected rather than silently rewriting it.
 - Do not round-trip a resource through JSON between read and write. `protojson` cannot represent unknown fields. Marshalling silently drops them.    
 - Do not retry `ABORTED` updates at the server side. `ABORTED` means someone else wrote something you have not seen. A blind retry reapplies your change on top of a concurrent change nobody reviewed. Surface the conflict instead.
 

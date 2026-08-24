@@ -317,34 +317,36 @@ func validateWorkerRef(worker *ateapipb.ObjectRef) error {
 // authorizeActor resolves the actor from the authenticated worker and verifies
 // that the worker and actor still point at one another. Actor identity supplied
 // by the requester never participates in this authorization decision.
-// The worker is resolved from cache first (hot path), but denials fall back
-// to the authoritative store to handle watch-delivery lag right after ResumeActor.
+// The worker is resolved from cache first (hot path), but cache misses and
+// denials fall back to the authoritative store to handle watch-delivery lag
+// right after ResumeActor.
 func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, error) {
+	reason := "worker not found"
 	worker, err := s.workers.Worker(req.GetWorker().GetName())
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, resources.ActorRef{}, s.denyMint(ctx, caller, req, "worker not found")
-		}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		slog.ErrorContext(ctx, "ActorIdentity: failed to read worker", slog.Any("err", err))
 		return nil, resources.ActorRef{}, status.Error(codes.Internal, "failed to look up worker")
 	}
-
-	actor, actorRef, reason, err := s.authorizeWithWorker(ctx, worker, caller, req)
 	if err == nil {
-		return actor, actorRef, nil // Success!
-	}
-	if !errors.Is(err, errAssignmentMismatch) {
-		return nil, resources.ActorRef{}, err // Internal error (e.g., actor lookup failed)
+		actor, actorRef, mismatchReason, err := s.authorizeWithWorker(ctx, worker, caller, req)
+		if err == nil {
+			return actor, actorRef, nil
+		}
+		if !errors.Is(err, errAssignmentMismatch) {
+			return nil, resources.ActorRef{}, err // e.g. actor lookup failed
+		}
+		reason = mismatchReason
 	}
 
-	// Read-through: re-check the authoritative worker from the store on denial.
+	// Read-through: re-check the authoritative worker from the store on a
+	// cache miss or assignment mismatch. Only fresh data may authorize, and
+	// only fresh data may deny.
 	fresh, ferr := s.store.GetWorker(ctx, req.GetWorker().GetName())
 	if ferr != nil {
 		if !errors.Is(ferr, store.ErrNotFound) {
 			slog.ErrorContext(ctx, "ActorIdentity: read-through worker lookup failed", slog.Any("err", ferr))
 		}
-		// The original denial stands
-		return nil, resources.ActorRef{}, s.denyMint(ctx, caller, req, reason)
+		return nil, resources.ActorRef{}, s.denyMint(ctx, caller, req, reason) // the cached verdict stands
 	}
 
 	actor, actorRef, retryReason, retryErr := s.authorizeWithWorker(ctx, fresh, caller, req)
@@ -361,10 +363,12 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 }
 
 // denyMint logs the internal reason and returns a uniform PermissionDenied.
+// Denials are deliberately indistinguishable from each other: a caller that
+// is not entitled to a worker should not learn its assignment.
 func (s *Server) denyMint(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest, reason string, args ...any) error {
 	slog.WarnContext(ctx, "ActorIdentity denied: "+reason,
 		append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
-	return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
+	return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor: %s", reason)
 }
 
 var errAssignmentMismatch = errors.New("assignment mismatch")

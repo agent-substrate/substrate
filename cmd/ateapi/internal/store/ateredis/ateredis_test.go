@@ -78,6 +78,10 @@ func TestGetActor_NotFound(t *testing.T) {
 func TestCreateActor_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(testAtespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
@@ -133,6 +137,9 @@ func TestCreateActor_AlreadyExists(t *testing.T) {
 		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(actor.Metadata.Atespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 	_, err := s.CreateActor(ctx, actor)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -157,6 +164,9 @@ func newTestActor(name string) *ateapipb.Actor {
 func TestUpdateActor_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	actor := newTestActor("actor-1")
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(actor.Metadata.Atespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 	created, err := s.CreateActor(ctx, actor)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -199,6 +209,9 @@ func TestUpdateActor_Success(t *testing.T) {
 func TestUpdateActor_MutateErrorAreNotRetried(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	actor := newTestActor("actor-1")
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(actor.Metadata.Atespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 	created, err := s.CreateActor(ctx, actor)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -235,6 +248,9 @@ func TestUpdateActor_DiscardsServerOwnedFieldsEdits(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := newTestActor("actor-1")
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(actor.Metadata.Atespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 	created, err := s.CreateActor(ctx, actor)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -303,6 +319,9 @@ func TestUpdateActor_RejectsImmutableFieldChange(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, s, ctx := setupTest(t)
 			actor := newTestActor("actor-1")
+			if _, err := s.CreateAtespace(ctx, newTestAtespace(actor.Metadata.Atespace)); err != nil {
+				t.Fatalf("CreateAtespace() failed: %v", err)
+			}
 			created, err := s.CreateActor(ctx, actor)
 			if err != nil {
 				t.Fatalf("CreateActor failed: %v", err)
@@ -351,6 +370,9 @@ func (w *watchInterceptor) Watch(ctx context.Context, fn func(*redis.Tx) error, 
 func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	actor := newTestActor("actor-1")
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(actor.Metadata.Atespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 	created, err := s.CreateActor(ctx, actor)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -423,7 +445,11 @@ func TestUpdateActor_NotFound(t *testing.T) {
 func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
-	original, err := s.CreateActor(ctx, newTestActor("actor-1"))
+	a := newTestActor("actor-1")
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(a.Metadata.Atespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+	original, err := s.CreateActor(ctx, a)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
@@ -473,7 +499,11 @@ func TestUpdateActor_RejectsStaleUID(t *testing.T) {
 func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
-	created, err := s.CreateActor(ctx, newTestActor("actor-1"))
+	a := newTestActor("actor-1")
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(a.Metadata.Atespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+	created, err := s.CreateActor(ctx, a)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
@@ -844,6 +874,9 @@ func TestDeleteActor(t *testing.T) {
 				Status:                 &ateapipb.ActorStatus{State: tt.state},
 			}
 
+			if _, err := s.CreateAtespace(ctx, newTestAtespace(testAtespace)); err != nil {
+				t.Fatalf("CreateAtespace(%s) failed: %v", testAtespace, err)
+			}
 			if _, err := s.CreateActor(ctx, actor); err != nil {
 				t.Fatalf("CreateActor failed: %v", err)
 			}
@@ -883,7 +916,6 @@ func TestListActors(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor1 := &ateapipb.Actor{
-
 		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
@@ -901,7 +933,9 @@ func TestListActors(t *testing.T) {
 			LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
 		},
 	}
-
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(testAtespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 	if _, err := s.CreateActor(ctx, actor1); err != nil {
 		t.Fatalf("failed to create actor1: %v", err)
 	}
@@ -1365,6 +1399,10 @@ func TestListActors_Empty(t *testing.T) {
 func TestListActors_Pagination(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
+	if _, err := s.CreateAtespace(ctx, newTestAtespace(testAtespace)); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	for i := 0; i < 5; i++ {
 		actor := &ateapipb.Actor{
 			Metadata:               &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
@@ -1764,6 +1802,13 @@ func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
 func TestListActors_ScopedByAtespace(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace(team-a) failed: %v", err)
+	}
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-b")); err != nil {
+		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
+	}
+
 	mkActor := func(atespace, name string) *ateapipb.Actor {
 		return &ateapipb.Actor{
 			Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
@@ -1886,14 +1931,14 @@ func TestGetAtespace_NotFound(t *testing.T) {
 func TestAtespaceExists(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
-	if ok, err := s.AtespaceExists(ctx, "team-a"); err != nil || ok {
-		t.Fatalf("AtespaceExists before create = (%v, %v), want (false, nil)", ok, err)
+	if ok, err := s.atespaceExists(ctx, "team-a"); err != nil || ok {
+		t.Fatalf("atespaceExists before create = (%v, %v), want (false, nil)", ok, err)
 	}
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if ok, err := s.AtespaceExists(ctx, "team-a"); err != nil || !ok {
-		t.Fatalf("AtespaceExists after create = (%v, %v), want (true, nil)", ok, err)
+	if ok, err := s.atespaceExists(ctx, "team-a"); err != nil || !ok {
+		t.Fatalf("atespaceExists after create = (%v, %v), want (true, nil)", ok, err)
 	}
 }
 
@@ -2061,6 +2106,7 @@ func TestDeleteAtespace_EmptyWhileOtherAtespaceNonEmpty(t *testing.T) {
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-b")); err != nil {
 		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 	}
+
 	// Actor lives ONLY in team-b.
 	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-b"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -2180,6 +2226,11 @@ func TestListActors_MultiMaster_Pagination(t *testing.T) {
 	for shardIdx, sh := range shards {
 		clients = append(clients, sh.client)
 		tempS := &Persistence{rdb: sh.clusterClient}
+
+		if _, err := tempS.CreateAtespace(ctx, newTestAtespace(testAtespace)); err != nil {
+			t.Fatalf("failed to seed atespace: %v", err)
+		}
+
 		for itemIdx := 0; itemIdx < 3; itemIdx++ {
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{
@@ -2465,6 +2516,10 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 func TestActorTemplateLifecycle(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	want := newTestActorTemplate("team-a", "tmpl-a")
 	created, err := s.CreateActorTemplate(ctx, want)
 	if err != nil {
@@ -2516,6 +2571,10 @@ func TestActorTemplateLifecycle(t *testing.T) {
 func TestCreateActorTemplate_AlreadyExists(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
 		t.Fatalf("first CreateActorTemplate failed: %v", err)
 	}
@@ -2534,6 +2593,10 @@ func TestGetActorTemplate_NotFound(t *testing.T) {
 
 func TestActorTemplateExists(t *testing.T) {
 	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
 
 	if ok, err := s.ActorTemplateExists(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); err != nil || ok {
 		t.Fatalf("ActorTemplateExists before create = (%v, %v), want (false, nil)", ok, err)
@@ -2571,6 +2634,10 @@ func TestDeleteActorTemplate_NotFound(t *testing.T) {
 func TestListActorTemplates_Pagination(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace() failed: %v", err)
+	}
+
 	for i := 0; i < 5; i++ {
 		if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", fmt.Sprintf("tmpl-%d", i))); err != nil {
 			t.Fatalf("failed to create template %d: %v", i, err)
@@ -2607,9 +2674,15 @@ func TestActorTemplates_AtespaceIsolation(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	// The same name in two atespaces is two distinct resources.
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace(%s) failed: %v", "team-a", err)
+	}
 	inA, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl"))
 	if err != nil {
 		t.Fatalf("CreateActorTemplate in team-a failed: %v", err)
+	}
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-b")); err != nil {
+		t.Fatalf("CreateAtespace(%s) failed: %v", "team-b", err)
 	}
 	inB, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-b", "tmpl"))
 	if err != nil {
@@ -2646,6 +2719,13 @@ func TestActorTemplates_AtespaceIsolation(t *testing.T) {
 
 func TestListActorTemplates_AtespaceFilter(t *testing.T) {
 	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace(%s) failed: %v", "team-a", err)
+	}
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-b")); err != nil {
+		t.Fatalf("CreateAtespace(%s) failed: %v", "team-b", err)
+	}
 
 	for _, tmpl := range []struct{ atespace, name string }{
 		{"team-a", "tmpl-1"}, {"team-a", "tmpl-2"}, {"team-b", "tmpl-3"},
