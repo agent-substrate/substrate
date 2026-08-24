@@ -56,9 +56,9 @@ const (
 	// gateway rather than reproduce it.
 	actorCertificateLifetime = time.Hour
 
-	// Where the probe pod finds the credentials the suite mints for it. Kept in
-	// step with egressprobe.yaml.tmpl and the --credential-bundle default in
-	// the probe.
+	// Where the probe pod finds the credentials the suite mints for it:
+	// probeServerPod mounts this Secret, and the probe's --credential-bundle
+	// default reads out of that mount.
 	actorCredentialSecret = "egressprobe-actor-identity"
 
 	unknownActorCredentialSecret = "egressprobe-unknown-actor"

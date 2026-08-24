@@ -16,8 +16,6 @@ package e2e
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -136,45 +134,12 @@ func TemplateReadyTimeout(t *testing.T) time.Duration {
 // out from under another.
 //
 // One template serves both sandbox classes so the two variants of a fixture
-// cannot drift apart. Templates carry two kinds of ${...} placeholder:
-//
-//   - inline, substituted wherever they appear (an empty value just disappears);
-//   - block, which must be the entire content of their line. They expand to a
-//     YAML fragment that brings its own indentation, and an empty value takes
-//     the whole line with it — the same trick hack/install-demo-counter.sh
-//     plays with `sed /.../d`. Requiring the placeholder to be the whole line
-//     is what lets a comment mention one without being deleted.
+// cannot drift apart. See renderManifest for the placeholder kinds a template
+// can carry.
 func RenderFixtureManifest(t *testing.T, relPath, bucket, name string) string {
 	t.Helper()
-	root, err := FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-	raw, err := os.ReadFile(filepath.Join(root, relPath))
-	if err != nil {
-		t.Fatalf("reading fixture manifest %s: %v", relPath, err)
-	}
-
 	inline, blocks := fixtureSubstitutions(bucket, name)
-	var out []string
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		if value, isBlock := blocks[strings.TrimSpace(line)]; isBlock {
-			if value != "" {
-				out = append(out, value)
-			}
-			continue
-		}
-		for placeholder, value := range inline {
-			line = strings.ReplaceAll(line, placeholder, value)
-		}
-		out = append(out, line)
-	}
-
-	rendered := strings.TrimSuffix(filepath.Join(t.TempDir(), filepath.Base(relPath)), ".tmpl")
-	if err := os.WriteFile(rendered, []byte(strings.Join(out, "\n")), 0o644); err != nil {
-		t.Fatalf("writing rendered fixture manifest %s: %v", rendered, err)
-	}
-	return rendered
+	return renderManifest(t, relPath, inline, blocks)
 }
 
 // fixtureSubstitutions is the placeholder set the internal/e2e/fixtures

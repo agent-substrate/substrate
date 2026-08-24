@@ -58,8 +58,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -68,6 +66,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/e2e"
@@ -91,6 +90,9 @@ const (
 	leafSkew = 5 * time.Minute
 
 	probeName = "egressprobe"
+	// probePort is the probe's --listen default, which the suite port-forwards
+	// to and the shared server manifest publishes.
+	probePort = 8080
 )
 
 // skipUntilPresubmit disables this suite. Every test here needs the sdsmint
@@ -351,34 +353,18 @@ func sharedProbe(t *testing.T, ctx context.Context) *probeClient {
 // and deploys the probe, waits for it to be ready, and returns a client for it.
 func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	t.Helper()
+	// DeployServerPod checks this too, but only after provisionProbeCredentials
+	// has created an actor and minted certificates against it. Fail on the
+	// missing variable before doing that work.
 	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 	ns := e2e.CreateNamespace(t).Name
 
+	// Before the pod: the Secrets below are mounted, so a pod scheduled ahead of
+	// them sits in ContainerCreating until they appear.
 	provisionProbeCredentials(t, ctx, ns)
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-
-	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/egressprobe/egressprobe.yaml.tmpl"))
-	if err != nil {
-		t.Fatalf("reading egressprobe manifest template: %v", err)
-	}
-	manifest := filepath.Join(t.TempDir(), "egressprobe.yaml")
-	rendered := strings.ReplaceAll(string(tmpl), "${NAMESPACE}", ns)
-	if err := os.WriteFile(manifest, []byte(rendered), 0o644); err != nil {
-		t.Fatalf("writing rendered egressprobe manifest: %v", err)
-	}
-
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
-	waitForProbeReady(t, ctx, ns)
+	e2e.DeployServerPod(t, ctx, probeServerPod(ns))
 
 	config, err := ateclient.LoadConfig(e2e.KubeConfig, e2e.KubeContext)
 	if err != nil {
@@ -388,7 +374,7 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	if err != nil {
 		t.Fatalf("creating k8s client for port-forward: %v", err)
 	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, ns, probeName, 8080)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, ns, probeName, probePort)
 	if err != nil {
 		t.Fatalf("port-forwarding %s/%s: %v", ns, probeName, err)
 	}
@@ -401,40 +387,63 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	}
 }
 
-func waitForProbeReady(t *testing.T, ctx context.Context, ns string) {
-	t.Helper()
-	const timeout = 3 * time.Minute
-	deadline := time.Now().Add(timeout)
-	var lastState string
-	for time.Now().Before(deadline) {
-		pod, err := e2e.GetClients().K8s.CoreV1().Pods(ns).Get(ctx, probeName, metav1.GetOptions{})
-		switch {
-		case err != nil:
-			lastState = err.Error()
-		case portforward.IsPodReady(pod):
-			t.Logf("probe pod %s/%s is ready", ns, probeName)
-			return
-		default:
-			lastState = describeProbeState(pod)
-		}
-		time.Sleep(2 * time.Second)
+// probeServerPod describes the probe: a plain pod holding every credential the
+// suite wants to watch the gateway's front door judge.
+//
+// The mount paths are the probe's own flag defaults and the paths the tests
+// name in handshakeAs, and the Secret names are the ones
+// provisionProbeCredentials writes. Both used to live in a manifest of the
+// probe's own, one file away from the constants they had to agree with.
+func probeServerPod(namespace string) e2e.ServerPod {
+	return e2e.ServerPod{
+		Name:       probeName,
+		Namespace:  namespace,
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe",
+		Port:       probePort,
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "actor-identity", MountPath: "/run/actor-identity"},
+			{Name: "actor-identity-unknown", MountPath: "/run/actor-identity-unknown"},
+			{Name: "podidentity", MountPath: "/run/podidentity.podcert.ate.dev"},
+			{Name: "servicedns-ca", MountPath: "/run/servicedns.podcert.ate.dev"},
+		},
+		Volumes: []corev1.Volume{{
+			// The credential that gets through: an actor-identity leaf the
+			// suite mints off the CA the gateway trusts.
+			Name:         "actor-identity",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: actorCredentialSecret}},
+		}, {
+			// The same shape, for an actor the control plane has never heard
+			// of: it clears the handshake and must be refused by ext_proc.
+			Name:         "actor-identity-unknown",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: unknownActorCredentialSecret}},
+		}, {
+			// The probe's own workload identity -- valid, and not an actor, so
+			// the gateway must refuse it at the handshake.
+			Name: "podidentity",
+			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{{
+					PodCertificate: &corev1.PodCertificateProjection{
+						SignerName:           "podidentity.podcert.ate.dev/identity",
+						KeyType:              "ECDSAP256",
+						CredentialBundlePath: "credential-bundle.pem",
+					},
+				}},
+			}},
+		}, {
+			// Verifies the gateway's serving certificate, so a refusal is the
+			// gateway's decision rather than the probe declining to trust it.
+			Name: "servicedns-ca",
+			VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{{
+					ClusterTrustBundle: &corev1.ClusterTrustBundleProjection{
+						SignerName:    ptr.To("servicedns.podcert.ate.dev/identity"),
+						LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"podcert.ate.dev/canarying": "live"}},
+						Path:          "trust-bundle.pem",
+					},
+				}},
+			}},
+		}},
 	}
-	t.Fatalf("timed out after %v waiting for probe pod %s/%s to become ready: %s", timeout, ns, probeName, lastState)
-}
-
-func describeProbeState(pod *corev1.Pod) string {
-	parts := []string{"phase=" + string(pod.Status.Phase)}
-	for _, cs := range pod.Status.ContainerStatuses {
-		switch {
-		case cs.State.Waiting != nil:
-			parts = append(parts, fmt.Sprintf("%s waiting: %s: %s", cs.Name, cs.State.Waiting.Reason, cs.State.Waiting.Message))
-		case cs.State.Terminated != nil:
-			parts = append(parts, fmt.Sprintf("%s terminated: %s: %s", cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.Message))
-		default:
-			parts = append(parts, fmt.Sprintf("%s running, ready=%t", cs.Name, cs.Ready))
-		}
-	}
-	return strings.Join(parts, "; ")
 }
 
 // handshake asks the probe to complete one inner TLS handshake for sni,
