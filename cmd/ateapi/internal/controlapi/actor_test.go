@@ -389,7 +389,7 @@ func TestUpdateActor(t *testing.T) {
 			req: &ateapipb.Actor{
 				ActorTemplateNamespace: templateNS,
 				ActorTemplateName:      templateName,
-				// Ommitted SourceSnapshotTag
+				// Omitted SourceSnapshotTag
 			},
 			wantCode: codes.InvalidArgument,
 		},

@@ -186,8 +186,8 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		// Metadata is a server-owned field.
 		metadata := toUpdate.GetMetadata()
-		// Reset + merge from the input tag. This operation retains all
-		// unknown fields from the input tag.
+		// Reset + merge from the input tag.
+		// TODO: Drop unknwown fields from the input actor.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, in)
 		// Restore metadata from the server.

@@ -282,8 +282,8 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
-		// Reset + merge from the input actor. This operation retains
-		// all unknown fields from the input actor.
+		// Reset + merge from the input actor.
+		// TODO: Drop unknwown fields from the input actor.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, in)
 		// Restore status and metadata from the server.
