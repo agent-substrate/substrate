@@ -27,6 +27,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -748,6 +749,83 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateSuspendActorRequest(tt.req), tt.want)
+		})
+	}
+}
+
+// TestUpdateActor_RejectsUnknownFields checks that an update carrying a field
+// this binary has no descriptor for is refused.
+// Update replaces the whole object, so a field the server cannot see would
+// otherwise be persisted unexamined.
+func TestUpdateActor_RejectsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		// placeUnknownField attaches the unknown field somewhere in the request's actor.
+		placeUnknownField func(*ateapipb.Actor)
+		// wantPath is where the resulting error points.
+		wantPath *field.Path
+	}{
+		{
+			name:              "at the top level",
+			placeUnknownField: func(a *ateapipb.Actor) { a.ProtoReflect().SetUnknown(unknownField(9999)) },
+			wantPath:          field.NewPath("actor"),
+		},
+		{
+			name:              "nested in metadata",
+			placeUnknownField: func(a *ateapipb.Actor) { a.Metadata.ProtoReflect().SetUnknown(unknownField(9999)) },
+			wantPath:          field.NewPath("actor", "metadata"),
+		},
+		{
+			name: "nested in worker_selector",
+			placeUnknownField: func(a *ateapipb.Actor) {
+				a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+				a.WorkerSelector.ProtoReflect().SetUnknown(unknownField(9999))
+			},
+			wantPath: field.NewPath("actor", "worker_selector"),
+		},
+		{
+			name: "nested in metadata.update_time",
+			placeUnknownField: func(a *ateapipb.Actor) {
+				a.Metadata.UpdateTime.ProtoReflect().SetUnknown(unknownField(9999))
+			},
+			wantPath: field.NewPath("actor", "metadata", "update_time"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, stored := rpcServiceWithActor(t, &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+			})
+
+			in := proto.Clone(stored).(*ateapipb.Actor)
+			tt.placeUnknownField(in)
+
+			_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: in})
+			wantErr := toGRPCStatusError(field.ErrorList{
+				field.Invalid(tt.wantPath, field.OmitValueType{}, ""),
+			})
+			if got, want := status.Code(err), status.Code(wantErr); got != want {
+				t.Fatalf("UpdateActor() error code = %v, want %v (error: %v)", got, want, err)
+			}
+			if got, want := status.Convert(err).Message(), status.Convert(wantErr).Message(); got != want {
+				t.Errorf("UpdateActor() error message = %q, want %q", got, want)
+			}
+
+			// The rejection happens before the store is touched, so the actor
+			// is left exactly as it was.
+			after, err := svc.GetActor(ctx, &ateapipb.GetActorRequest{
+				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
+			})
+			if err != nil {
+				t.Fatalf("GetActor() error = %v", err)
+			}
+			if diff := cmp.Diff(stored, after, protocmp.Transform()); diff != "" {
+				t.Errorf("actor changed despite the rejection (-want +got):\n%s", diff)
+			}
 		})
 	}
 }

@@ -186,8 +186,9 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		// Metadata is a server-owned field.
 		metadata := toUpdate.GetMetadata()
-		// Reset + merge from the input tag.
-		// TODO: Drop unknwown fields from the input actor.
+		// Whole-object replace: clear first, so a field the client left unset is
+		// cleared rather than kept from the stored tag. Merge cannot smuggle in
+		// unknown fields because validation already rejected them.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, in)
 		// Restore metadata from the server.
@@ -224,6 +225,8 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 	if tag == nil {
 		return field.ErrorList{field.Required(tagPath, "")}
 	}
+
+	errs = append(errs, validateNoUnknownFields(tag, tagPath)...)
 
 	errs = append(errs, resources.ValidateUpdateMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
 

@@ -273,8 +273,9 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Actor) error {
 		// Status and Metadata are server-owned fields.
 		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
-		// Reset + merge from the input actor.
-		// TODO: Drop unknwown fields from the input actor.
+		// Whole-object replace: clear first, so a field the client left unset is
+		// cleared rather than kept from the stored actor.
+		// Merge cannot smuggle in unknown fields because validation already rejected them.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, in)
 		// Restore status and metadata from the server.
@@ -314,6 +315,8 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 	if actor == nil {
 		return field.ErrorList{field.Required(actorPath, "")}
 	}
+
+	errs = append(errs, validateNoUnknownFields(actor, actorPath)...)
 
 	errs = append(errs, resources.ValidateUpdateMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
 
