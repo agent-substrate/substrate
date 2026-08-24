@@ -37,7 +37,7 @@ ASLV2_HEADER = [
 ]
 
 def match_copyright(line):
-    match = re.search(r"Copyright\s+(\d{4})\s+Google LLC", line)
+    match = re.search(r"Copyright\s+(\d{4})\s+(?:Google LLC|The Agent Substrate Authors)", line)
     if not match:
         return False
     year = int(match.group(1))
