@@ -115,10 +115,28 @@ func TestRequestParking(t *testing.T) {
 		if !strings.Contains(res.body, "hello from") {
 			t.Errorf("parked request body = %q, want the counter greeting", res.body)
 		}
-		if elapsed >= routerParkBudget+2*time.Second {
-			t.Errorf("parked request served after %v, want inside the %v budget window", elapsed, routerParkBudget)
+		// The budget bounds retries, not a committed resume: a restore that
+		// overshoots the budget under CI contention is served rather than
+		// canceled, so the window allows for the overshoot while staying
+		// under Envoy's ext_proc timeout (budget + 5s).
+		if elapsed >= routerParkBudget+4*time.Second {
+			t.Errorf("parked request served after %v, want inside the %v budget window (+overshoot)", elapsed, routerParkBudget)
 		}
 		t.Logf("parked request served after %v", elapsed)
+
+		// The flake's root cause stranded actors in RESUMING with the worker
+		// claimed (#675): pin that B really converges and a follow-up request
+		// is served warm — a stranded actor would 503 it.
+		waitForActorState(ctx, t, clients, actorB, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		followUp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/")
+		if err != nil {
+			t.Fatalf("follow-up request failed transport-level: %v", err)
+		}
+		followUpBody, _ := io.ReadAll(followUp.Body)
+		followUp.Body.Close()
+		if followUp.StatusCode != http.StatusOK {
+			t.Errorf("follow-up request: status = %d (body %q), want 200 from the resumed actor", followUp.StatusCode, string(followUpBody))
+		}
 
 		// The slot must be released once served.
 		waitForParkedCount(ctx, t, statusz, func(active int) bool { return active == 0 })
