@@ -92,8 +92,12 @@ func TestTCPOriginalDestinationPreservesErrno(t *testing.T) {
 				}
 				defer server.Close()
 
-				if _, err := TCPOriginalDestination(server); !errors.Is(err, unix.ENOENT) {
-					return fmt.Errorf("want the IPv4 lookup's ENOENT, got %w", err)
+				_, lookupErr := TCPOriginalDestination(server)
+				if !errors.Is(lookupErr, unix.ENOENT) {
+					return fmt.Errorf("want the IPv4 lookup's ENOENT, got %v", lookupErr)
+				}
+				if !strings.Contains(lookupErr.Error(), "original IPv4 TCP destination") {
+					return fmt.Errorf("want the error to name the IPv4 lookup, got %v", lookupErr)
 				}
 				return nil
 			}); err != nil {

@@ -62,7 +62,11 @@ func TCPOriginalDestination(conn net.Conn) (string, error) {
 		return "", fmt.Errorf("atunnel: accessing TCP socket: %w", err)
 	}
 	if sockoptErr != nil {
-		return "", fmt.Errorf("atunnel: reading original TCP destination: %w", sockoptErr)
+		family := "IPv4"
+		if isIPv6 {
+			family = "IPv6"
+		}
+		return "", fmt.Errorf("atunnel: reading original %s TCP destination: %w", family, sockoptErr)
 	}
 	return destination, nil
 }
