@@ -162,7 +162,7 @@ The gateway terminates the `CONNECT` and relays opaque TCP, so all of this cross
 failed RPC answers `502` and still carries its gRPC code in the same field.
 
 `internal/e2e/suites/networking` drives this endpoint against the `grpcecho` fixture
-(`internal/e2e/fixtures/grpcecho`, deployed by `e2e.DeployOriginPod` from the shared origin
+(`internal/e2e/fixtures/grpcecho`, deployed by `e2e.DeployServerPod` from the shared server-pod
 manifest) in `TestActorEgressGRPC`; the same fixture, or any h2c gRPC server reachable from the
 cluster, works for a manual run.
 
