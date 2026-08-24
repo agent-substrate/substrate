@@ -62,6 +62,88 @@ func TestSchedulerRecordable(t *testing.T) {
 	}
 }
 
+type lockCountingStore struct {
+	store.Interface
+	acquireCalls int
+}
+
+func (s *lockCountingStore) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
+	s.acquireCalls++
+	return s.Interface.AcquireLock(ctx, key)
+}
+
+func TestResumeActor_RunningFastPathDoesNotAcquireLock(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	created, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+	st := &lockCountingStore{Interface: persistence}
+	w := &ActorWorkflow{store: st}
+
+	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+	if err != nil {
+		t.Fatalf("ResumeActor: %v", err)
+	}
+	if resumed {
+		t.Error("ResumeActor resumed = true, want false")
+	}
+	if !proto.Equal(got, created) {
+		t.Errorf("ResumeActor actor = %v, want %v", got, created)
+	}
+	if st.acquireCalls != 0 {
+		t.Errorf("AcquireLock calls = %d, want 0", st.acquireCalls)
+	}
+}
+
+type updateWorkerErrorStore struct {
+	store.Interface
+	err error
+}
+
+func (s *updateWorkerErrorStore) UpdateWorker(context.Context, *ateapipb.Worker, int64) error {
+	return s.err
+}
+
+func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actor, wc := seedAssignFixture(t, ctx, persistence)
+	st := &updateWorkerErrorStore{Interface: persistence, err: store.ErrNotFound}
+	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}}
+
+	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("assignWorkerAttempt error = %v, want ErrVersionConflict", err)
+	}
+	workers, err := wc.Workers()
+	if err != nil {
+		t.Fatalf("Workers: %v", err)
+	}
+	if len(workers) != 0 {
+		t.Errorf("cached workers after missing claim = %d, want 0", len(workers))
+	}
+}
+
+func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actor, wc := seedAssignFixture(t, ctx, persistence)
+	st := &updateWorkerErrorStore{Interface: persistence, err: store.ErrVersionConflict}
+	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}}
+
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("ensureWorkerAssigned error = %v, want ErrVersionConflict", err)
+	}
+}
+
 func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)

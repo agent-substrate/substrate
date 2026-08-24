@@ -15,10 +15,12 @@
 package ategcs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -26,6 +28,10 @@ import (
 
 type gcsClient struct {
 	client *storage.Client
+	// pool holds extra clients so concurrent upload parts get their own connections;
+	// built on first use by uploadClient.
+	poolOnce sync.Once
+	pool     []*storage.Client
 }
 
 func NewGCSClient(client *storage.Client) ObjectStorage {
@@ -52,32 +58,31 @@ func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.Re
 // the signal.
 func (g *gcsClient) supportsStreamingPut() {}
 
-// uploadChunkSize is how much of a streamed object the GCS client buffers before it
-// starts a request. A resumable upload sends its chunks one after another, each paying
-// a round trip, so an object that spans several chunks pays for several — which for the
-// snapshots we upload is most of the time, because they are small.
-//
-// Measured on a GKE worker node (c3-standard-4, us-central1-f) uploading to the
-// snapshot bucket through this exact streaming path, three runs of a 24 MiB object
-// (the size of an idle micro-VM golden snapshot):
-//
-//	16 MiB (the client default)  425-530 ms
-//	32 MiB                       331-405 ms
-//	64 MiB                       258-314 ms
-//	128 MiB                      350-487 ms
-//
-// 64 MiB covers a typical snapshot in one request and is the floor here; larger only
-// costs buffer. The buffer is per in-flight upload and is capped by the object size, so
-// a small object still costs only its own bytes.
-//
-// This does nothing for large snapshots: past ~100 MiB the transfer itself dominates
-// and a single stream tops out near 100 MiB/s regardless of chunk size (measured
-// 77-107 MiB/s at 300 MiB for every chunk size from 16 to 128 MiB). Getting past that
-// needs several streams — 4-way parallel parts plus a compose reached 233-257 MiB/s —
-// which is a format change, since each part has to be independently produced.
+// uploadChunkSize is how much of a streamed object the GCS client buffers before
+// starting a request. Each chunk costs a round trip, so a snapshot that fits in one
+// chunk pays only one: measured on a GKE worker node, a 24 MiB object took 425-530ms
+// at the 16 MiB default versus 258-314ms at 64 MiB. The buffer is capped by the object
+// size, so small objects still cost only their own bytes.
 const uploadChunkSize = 64 << 20
 
+// PutObject writes reader to the object, in a single request below
+// uploadCompositeMin and as parallel parts above it. The size is not known up front,
+// so this reads that many bytes to find out which case it is, then hands them on.
 func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {
+	head := make([]byte, uploadCompositeMin)
+	n, err := io.ReadFull(reader, head)
+	switch {
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		// The whole object is in hand and fits in one request.
+		return g.putSingle(ctx, bucket, object, bytes.NewReader(head[:n]))
+	case err != nil:
+		return fmt.Errorf("while reading object body: %w", err)
+	}
+	return g.putComposite(ctx, bucket, object, bytes.NewReader(head[:n]), reader)
+}
+
+// putSingle writes the whole body in one resumable request.
+func (g *gcsClient) putSingle(ctx context.Context, bucket, object string, reader io.Reader) error {
 	wc := g.client.Bucket(bucket).Object(object).NewWriter(ctx)
 	wc.ChunkSize = uploadChunkSize
 	// io.Copy reports local read errors; wc.Close() reports the actual

@@ -269,6 +269,23 @@ func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 	}
 }
 
+func TestCreateActorSnapshotTag_MissingSnapshotIsNotFound(t *testing.T) {
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+	s := &Service{persistence: persistence}
+
+	_, err := s.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "latest"},
+			Snapshot: &ateapipb.ObjectRef{Atespace: "team-a", Name: "missing"},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("CreateActorSnapshotTag status = %v, want NotFound (error: %v)", status.Code(err), err)
+	}
+}
+
 func TestUpdateActorSnapshotTag_FieldMasks(t *testing.T) {
 	tests := []struct {
 		name      string

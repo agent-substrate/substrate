@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -117,6 +118,14 @@ func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL
 	return nil
 }
 
+// sparseFilePutter marks a backend that can upload a sparse FILE directly, splitting
+// compression and upload by file range instead of piping one compressed stream into a
+// part splitter. Reports errSparseTooSmall when the file is not worth splitting, in
+// which case the caller falls back to the streaming path.
+type sparseFilePutter interface {
+	PutSparseFile(ctx context.Context, bucket, object string, f *os.File) (writeContentResult, error)
+}
+
 // streamingPutter marks an ObjectStorage whose PutObject accepts a non-seekable
 // streaming body without buffering (e.g. GCS): implementing the interface is the
 // signal, so the marker method is never called. See gcsClient.
@@ -174,6 +183,27 @@ func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content i
 		return fmt.Errorf("while parsing URL: %w", err)
 	}
 	tStart := time.Now()
+	if sp, ok := client.(sparseFilePutter); ok {
+		if f, isFile := content.(*os.File); isFile {
+			res, err := sp.PutSparseFile(ctx, bucket, object, f)
+			switch {
+			case err == nil:
+				slog.InfoContext(ctx, "Compressed zstd upload",
+					slog.String("object", object), slog.Bool("sparse", true),
+					slog.Bool("ranged", true),
+					slog.Int64("logical_bytes", res.logicalBytes),
+					slog.Int64("populated_bytes", res.populatedBytes),
+					slog.Duration("total", time.Since(tStart)))
+				return nil
+			case !errors.Is(err, errSparseTooSmall):
+				return fmt.Errorf("while putting object %q: %w", object, err)
+			}
+			// Too small to split: fall through to the streaming path.
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+		}
+	}
 	if _, ok := client.(streamingPutter); ok {
 		return sendStreamingZstd(ctx, client, bucket, object, content, tStart)
 	}

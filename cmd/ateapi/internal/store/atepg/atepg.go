@@ -169,6 +169,18 @@ func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMet
 	return metadata
 }
 
+// validateProtoMetadataMatchesColumns verifies that the metadata in the database
+// matches the metadata in the proto.
+func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.ResourceMetadata, uid string, version int64) error {
+	if metadata.GetUid() != uid {
+		return fmt.Errorf("%s uid projection %q does not match proto metadata uid %q", resource, uid, metadata.GetUid())
+	}
+	if metadata.GetVersion() != version {
+		return fmt.Errorf("%s version projection %d does not match proto metadata version %d", resource, version, metadata.GetVersion())
+	}
+	return nil
+}
+
 func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }
 
 // isForeignKeyViolation matches both the insert/update-side violation
@@ -192,6 +204,14 @@ func pgErrCode(err error) string {
 	return ""
 }
 
+func pgErrConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
 // --- Atespaces ---
 
 func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
@@ -206,9 +226,9 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	}
 
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO atespaces (name, proto)
-		VALUES ($1, $2)`,
-		name, protoBytes)
+		INSERT INTO atespaces (name, uid, version, proto)
+		VALUES ($1, $2, $3, $4)`,
+		name, dbAtespace.GetMetadata().GetUid(), dbAtespace.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -218,9 +238,9 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	return dbAtespace, nil
 }
 
-func getAtespaceRow(ctx context.Context, q querier, name string) (*ateapipb.Atespace, error) {
+func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -234,10 +254,6 @@ func getAtespaceRow(ctx context.Context, q querier, name string) (*ateapipb.Ates
 	return out, nil
 }
 
-func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
-	return getAtespaceRow(ctx, p.pool, name)
-}
-
 func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
 	var exists bool
 	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = $1)`, name).Scan(&exists); err != nil {
@@ -247,6 +263,10 @@ func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, er
 }
 
 func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Atespace]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindAtespace, "", 1)
 	if err != nil {
@@ -339,9 +359,9 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapip
 	return dbTemplate, nil
 }
 
-func getActorTemplateRow(ctx context.Context, q querier, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -353,10 +373,6 @@ func getActorTemplateRow(ctx context.Context, q querier, templateRef resources.A
 		return nil, fmt.Errorf("unmarshaling actor template: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
-	return getActorTemplateRow(ctx, p.pool, templateRef)
 }
 
 func (p *Persistence) ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error) {
@@ -381,27 +397,24 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor template update: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
+	var currentUID string
+	var currentVersion int64
 	var currentBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actor_templates
-		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`, templateRef.Atespace, templateRef.Name).Scan(&currentBytes); err != nil {
+	if err := p.pool.QueryRow(ctx, `
+			SELECT uid, version, proto FROM actor_templates
+			WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("locking actor template %s for update: %w", templateRef, err)
+		return nil, fmt.Errorf("getting actor template %s for update: %w", templateRef, err)
 	}
 
 	dbTemplate := &ateapipb.ActorTemplate{}
 	if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
 	}
 	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
 		return nil, err
@@ -418,19 +431,27 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE actor_templates SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4`,
-		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name); err != nil {
+	commandTag, err := p.pool.Exec(ctx, `
+			UPDATE actor_templates SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
+		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name, currentUID, currentVersion)
+	if err != nil {
 		return nil, fmt.Errorf("updating actor template %s: %w", templateRef, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor template update: %w", err)
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("updating actor template %s affected %d rows, want 1", templateRef, commandTag.RowsAffected())
 	}
 	return dbTemplate, nil
 }
 
 func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	keyParts := 2
 	if atespace != "" {
@@ -505,13 +526,6 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 		WHERE t.atespace = $1 AND t.name = $2
 		RETURNING t.proto`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		exists, existsErr := p.ActorTemplateExists(ctx, templateRef)
-		if existsErr != nil {
-			return nil, existsErr
-		}
-		if exists {
-			return nil, store.ErrFailedPrecondition
-		}
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
@@ -556,24 +570,20 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	return dbActor, nil
 }
 
-func getActorRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.Actor, error) {
+func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("getting actor %s/%s: %w", atespace, name, err)
+		return nil, fmt.Errorf("getting actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
 	}
 	out := &ateapipb.Actor{}
 	if err := proto.Unmarshal(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	return getActorRow(ctx, p.pool, actorRef.Atespace, actorRef.Name)
 }
 
 // validateUpdateActorMutation reports whether an actor mutation changed fields
@@ -599,27 +609,24 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	atespace, name := actorRef.Atespace, actorRef.Name
-
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor update: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
-	var protoBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actors
-		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`, atespace, name).Scan(&protoBytes); err != nil {
+	var currentUID string
+	var currentVersion int64
+	var currentBytes []byte
+	if err := p.pool.QueryRow(ctx, `
+			SELECT uid, version, proto FROM actors
+			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("locking actor %s/%s for update: %w", atespace, name, err)
+		return nil, fmt.Errorf("getting actor %s/%s for update: %w", atespace, name, err)
 	}
 
 	dbActor := &ateapipb.Actor{}
-	if err := proto.Unmarshal(protoBytes, dbActor); err != nil {
+	if err := proto.Unmarshal(currentBytes, dbActor); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
 	}
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
 		return nil, err
@@ -632,28 +639,26 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure and derive the next revision from the transactionally read actor.
+	// closure and derive the next revision from the state this attempt read.
 	dbActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
 
-	protoBytes, err = proto.Marshal(dbActor)
+	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
-
-	commandTag, err := tx.Exec(ctx, `
-		UPDATE actors
-		SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4`,
-		dbActor.GetMetadata().GetVersion(), protoBytes, atespace, name)
+	commandTag, err := p.pool.Exec(ctx, `
+			UPDATE actors
+			SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
+		dbActor.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
 	}
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor update: %w", err)
 	}
 	return dbActor, nil
 }
@@ -697,9 +702,12 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 }
 
 func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Actor]{}, err
+	}
 	var items []*ateapipb.Actor
 	var nextToken string
-	var err error
 	if atespace != "" {
 		items, nextToken, err = p.listActorsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
 	} else {
@@ -820,9 +828,9 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 		return nil, fmt.Errorf("marshaling actor snapshot: %w", err)
 	}
 	if _, err := p.pool.Exec(ctx, `
-		INSERT INTO actor_snapshots (atespace, name, proto)
-		VALUES ($1, $2, $3)`,
-		atespace, name, protoBytes); err != nil {
+		INSERT INTO actor_snapshots (atespace, name, uid, version, proto)
+		VALUES ($1, $2, $3, $4, $5)`,
+		atespace, name, dbSnapshot.GetMetadata().GetUid(), dbSnapshot.GetMetadata().GetVersion(), protoBytes); err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
 		}
@@ -831,9 +839,9 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 	return dbSnapshot, nil
 }
 
-func getActorSnapshotRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.ActorSnapshot, error) {
+func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
 	var protoBytes []byte
-	if err := q.QueryRow(ctx, `
+	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM actor_snapshots
 		WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -846,10 +854,6 @@ func getActorSnapshotRow(ctx context.Context, q querier, atespace, name string) 
 		return nil, fmt.Errorf("unmarshaling actor snapshot: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
-	return getActorSnapshotRow(ctx, p.pool, atespace, name)
 }
 
 func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
@@ -870,9 +874,12 @@ func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name st
 }
 
 func (p *Persistence) ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.ActorSnapshot]{}, err
+	}
 	var items []*ateapipb.ActorSnapshot
 	var nextToken string
-	var err error
 	if atespace != "" {
 		items, nextToken, err = p.listActorSnapshotsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
 	} else {
@@ -992,18 +999,14 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespa
 		return nil, fmt.Errorf("beginning actor snapshot tag create: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-	if _, err := getActorSnapshotRow(ctx, tx, snapshotAtespace, snapshotName); err != nil {
-		return nil, err
-	}
-
 	var inserted []byte
 	err = tx.QueryRow(ctx, `
 		INSERT INTO actor_snapshot_tags
-		    (atespace, name, snapshot_atespace, snapshot_name, version, proto)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		    (atespace, name, snapshot_atespace, snapshot_name, uid, version, proto)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (atespace, name) DO NOTHING
 		RETURNING proto`, tagAtespace, tagName, snapshotAtespace, snapshotName,
-		dbTag.GetMetadata().GetVersion(), protoBytes).Scan(&inserted)
+		dbTag.GetMetadata().GetUid(), dbTag.GetMetadata().GetVersion(), protoBytes).Scan(&inserted)
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
 			return nil, fmt.Errorf("committing actor snapshot tag create: %w", err)
@@ -1011,7 +1014,14 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespa
 		return dbTag, nil
 	}
 	if isForeignKeyViolation(err) {
-		return nil, store.ErrFailedPrecondition
+		switch pgErrConstraint(err) {
+		case "actor_snapshot_tags_snapshot_fk":
+			return nil, store.ErrNotFound
+		case "actor_snapshot_tags_atespace_fk":
+			return nil, store.ErrFailedPrecondition
+		default:
+			return nil, fmt.Errorf("inserting actor snapshot tag %s/%s violated unknown foreign key %q: %w", tagAtespace, tagName, pgErrConstraint(err), err)
+		}
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("inserting actor snapshot tag %s/%s: %w", tagAtespace, tagName, err)
@@ -1056,27 +1066,24 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor snapshot tag update: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
+	var currentUID string
+	var currentVersion int64
 	var currentBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actor_snapshot_tags
-		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`, atespace, name).Scan(&currentBytes); err != nil {
+	if err := p.pool.QueryRow(ctx, `
+			SELECT uid, version, proto FROM actor_snapshot_tags
+			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("locking actor snapshot tag %s/%s for update: %w", atespace, name, err)
+		return nil, fmt.Errorf("getting actor snapshot tag %s/%s for update: %w", atespace, name, err)
 	}
 
 	dbTag := &ateapipb.ActorSnapshotTag{}
 	if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("actor snapshot tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
 	}
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
 		return nil, err
@@ -1089,26 +1096,26 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		return nil, err
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure and derive the next revision from the transactionally read tag.
+	// closure and derive the next revision from the state this attempt read.
 	dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor snapshot tag: %w", err)
 	}
-	commandTag, err := tx.Exec(ctx, `
-		UPDATE actor_snapshot_tags
-		SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4`,
-		dbTag.GetMetadata().GetVersion(), updatedBytes, atespace, name)
+	commandTag, err := p.pool.Exec(ctx, `
+			UPDATE actor_snapshot_tags
+			SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
+		dbTag.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("updating actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating actor snapshot tag %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor snapshot tag update: %w", err)
 	}
 	return dbTag, nil
 }
@@ -1241,6 +1248,10 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 }
 
 func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Worker]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindWorker, "", 1)
 	if err != nil {
@@ -1297,6 +1308,9 @@ const defaultLockTTL = 30 * time.Second
 func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
 	ttl := p.lockTTL
 	token := uuid.NewString()
+	if err := p.cleanupExpiredLeases(ctx); err != nil {
+		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
+	}
 
 	acquired, err := p.acquireLease(ctx, key, token, ttl)
 	if err != nil {
@@ -1325,6 +1339,13 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 		}
 	}
 	return store.NewLock(leaseCtx, closeFn), nil
+}
+
+func (p *Persistence) cleanupExpiredLeases(ctx context.Context) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE expires_at <= clock_timestamp()`); err != nil {
+		return fmt.Errorf("deleting expired leases: %w", err)
+	}
+	return nil
 }
 
 func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {

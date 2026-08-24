@@ -18,6 +18,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 )
 
 // pageTokenVersion guards against decoding a token produced by an incompatible
@@ -29,12 +31,11 @@ const pageTokenVersion = 1
 type resourceKind string
 
 const (
-	kindAtespace             resourceKind = "atespace"
-	kindActor                resourceKind = "actor"
-	kindActorTemplate        resourceKind = "actor-template"
-	kindActorTemplateVersion resourceKind = "actor-template-version"
-	kindSnapshot             resourceKind = "snapshot"
-	kindWorker               resourceKind = "worker"
+	kindAtespace      resourceKind = "atespace"
+	kindActor         resourceKind = "actor"
+	kindActorTemplate resourceKind = "actor-template"
+	kindSnapshot      resourceKind = "snapshot"
+	kindWorker        resourceKind = "worker"
 )
 
 // pageToken is PostgreSQL's opaque keyset page token. Unlike ateredis's
@@ -61,23 +62,23 @@ func decodePageToken(tokenStr string, wantKind resourceKind, wantScope string, w
 	}
 	b, err := base64.StdEncoding.DecodeString(tokenStr)
 	if err != nil {
-		return pageToken{}, fmt.Errorf("invalid page token: %w", err)
+		return pageToken{}, fmt.Errorf("%w: %v", store.ErrInvalidPageToken, err)
 	}
 	var token pageToken
 	if err := json.Unmarshal(b, &token); err != nil {
-		return pageToken{}, fmt.Errorf("invalid page token: %w", err)
+		return pageToken{}, fmt.Errorf("%w: %v", store.ErrInvalidPageToken, err)
 	}
 	if token.Version != pageTokenVersion {
-		return pageToken{}, fmt.Errorf("invalid page token: unsupported version %d", token.Version)
+		return pageToken{}, fmt.Errorf("%w: unsupported version %d", store.ErrInvalidPageToken, token.Version)
 	}
 	if token.Kind != wantKind {
-		return pageToken{}, fmt.Errorf("invalid page token: for %q, used with %q", token.Kind, wantKind)
+		return pageToken{}, fmt.Errorf("%w: for %q, used with %q", store.ErrInvalidPageToken, token.Kind, wantKind)
 	}
 	if token.Scope != wantScope {
-		return pageToken{}, fmt.Errorf("invalid page token: for scope %q, used with scope %q", token.Scope, wantScope)
+		return pageToken{}, fmt.Errorf("%w: for scope %q, used with scope %q", store.ErrInvalidPageToken, token.Scope, wantScope)
 	}
 	if len(token.Last) != wantKeyParts {
-		return pageToken{}, fmt.Errorf("invalid page token: got %d key parts, want %d", len(token.Last), wantKeyParts)
+		return pageToken{}, fmt.Errorf("%w: got %d key parts, want %d", store.ErrInvalidPageToken, len(token.Last), wantKeyParts)
 	}
 	return token, nil
 }

@@ -83,6 +83,18 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireSnapshotScope)...)
 	}()
 
+	// Routed requests call ResumeActor even when the actor is already running.
+	// Read before taking the distributed lease so that hot-path checks do not
+	// upsert and delete a PostgreSQL lease row. Any state that needs work is read
+	// again under the lock below.
+	actor, err = w.store.GetActor(ctx, actorRef)
+	if err != nil {
+		return nil, false, err
+	}
+	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
+		return actor, false, nil
+	}
+
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
@@ -330,6 +342,9 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return false, attemptErr
 	})
 	if err != nil {
+		if wait.Interrupted(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil, store.ErrVersionConflict
+		}
 		return nil, nil, err
 	}
 	return assignedActor, assignedWorker, nil
@@ -506,6 +521,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.GetMetadata().GetVersion()); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
+			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
+		}
 		return nil, nil, err
 	}
 

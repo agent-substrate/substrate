@@ -108,6 +108,9 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}
+		if errors.Is(err, store.ErrFailedPrecondition) {
+			return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
+		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
@@ -244,7 +247,7 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 
 	page, err := s.persistence.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
-		return nil, fmt.Errorf("while listing actors in db: %w", err)
+		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
 	return &ateapipb.ListActorsResponse{
 		Actors:        page.Items,

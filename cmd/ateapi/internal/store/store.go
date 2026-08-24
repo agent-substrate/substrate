@@ -43,6 +43,13 @@ var (
 	// ErrLockConflict indicates that a distributed lock is already held by another client.
 	ErrLockConflict = errors.New("persistence: lock conflict")
 
+	// ErrInvalidPageToken indicates that a list page token is malformed or was
+	// issued for a different list operation or scope.
+	ErrInvalidPageToken = errors.New("persistence: invalid page token")
+
+	// ErrInvalidPageSize indicates that a negative page size was supplied.
+	ErrInvalidPageSize = errors.New("persistence: invalid page size")
+
 	// ErrUIDConflict indicates a write was guarded on a uid the stored object does
 	// not carry, meaning the name now addresses a different incarnation. Retrying
 	// can never resolve it.
@@ -57,7 +64,8 @@ var (
 type Interface interface {
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
-	// mutated. Returns ErrAlreadyExists if key is taken.
+	// mutated. Returns ErrAlreadyExists if key is taken, or
+	// ErrFailedPrecondition if the actor's atespace does not exist.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
@@ -100,7 +108,9 @@ type Interface interface {
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
 	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
 
-	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
+	// Adds an immutable Atespace-owned tag to an ActorSnapshot. Returns
+	// ErrNotFound if the snapshot does not exist, or ErrFailedPrecondition if
+	// the tag's atespace does not exist.
 	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
 	// Fetches an Atespace-owned tag. Returns ErrNotFound if missing. The tag's
@@ -326,6 +336,22 @@ type ListOptions struct {
 	// PageToken resumes a listing after the page it was issued for. Empty
 	// starts from the first page.
 	PageToken string
+}
+
+// DefaultPageSize is used by store implementations when PageSize is unset.
+const DefaultPageSize int32 = 1000
+
+// NormalizeListOptions applies the store default and rejects invalid sizes.
+// RPC handlers validate user input separately, but store callers also need a
+// safe contract because list implementations use PageSize in slice indexes.
+func NormalizeListOptions(opts ListOptions) (ListOptions, error) {
+	if opts.PageSize < 0 {
+		return ListOptions{}, ErrInvalidPageSize
+	}
+	if opts.PageSize == 0 {
+		opts.PageSize = DefaultPageSize
+	}
+	return opts, nil
 }
 
 // ListResponse is the return value of a List method: the page of items it
