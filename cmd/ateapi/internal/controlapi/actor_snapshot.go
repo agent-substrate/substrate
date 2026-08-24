@@ -51,7 +51,7 @@ func (s *RPCService) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActo
 	if errs := validateGetActorSnapshotRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	snapshot, err := s.persistence.GetActorSnapshot(ctx, req.GetSnapshot().GetAtespace(), req.GetSnapshot().GetName())
+	snapshot, err := s.persistence.GetActorSnapshot(ctx, req.GetActorSnapshot().GetAtespace(), req.GetActorSnapshot().GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -65,7 +65,7 @@ func validateGetActorSnapshotRequest(req *ateapipb.GetActorSnapshotRequest) fiel
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.Snapshot, fldPath.Child("snapshot"); val == nil {
+	if val, fldPath := req.ActorSnapshot, fldPath.Child("actor_snapshot"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
@@ -78,7 +78,7 @@ func (s *RPCService) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetA
 	if errs := validateGetActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tag, err := s.persistence.GetActorSnapshotTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName())
+	tag, err := s.persistence.GetActorSnapshotTag(ctx, req.GetActorSnapshotTag().GetAtespace(), req.GetActorSnapshotTag().GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot tag not found")
 	}
@@ -92,7 +92,7 @@ func validateGetActorSnapshotTagRequest(req *ateapipb.GetActorSnapshotTagRequest
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.Tag, fldPath.Child("tag"); val == nil {
+	if val, fldPath := req.ActorSnapshotTag, fldPath.Child("actor_snapshot_tag"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
@@ -109,7 +109,7 @@ func (s *RPCService) ListActorSnapshots(ctx context.Context, req *ateapipb.ListA
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actor snapshots: %w", err))
 	}
-	return &ateapipb.ListActorSnapshotsResponse{Snapshots: page.Items, NextPageToken: page.NextPageToken}, nil
+	return &ateapipb.ListActorSnapshotsResponse{ActorSnapshots: page.Items, NextPageToken: page.NextPageToken}, nil
 }
 
 func validateListActorSnapshotsRequest(req *ateapipb.ListActorSnapshotsRequest) field.ErrorList {
@@ -180,7 +180,7 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	in := req.GetTag()
+	in := req.GetActorSnapshotTag()
 	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
 
 	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
@@ -219,8 +219,8 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	tag := req.GetTag()
-	tagPath := fldPath.Child("tag")
+	tag := req.GetActorSnapshotTag()
+	tagPath := fldPath.Child("actor_snapshot_tag")
 	if tag == nil {
 		return field.ErrorList{field.Required(tagPath, "")}
 	}
@@ -236,9 +236,9 @@ func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.D
 	if errs := validateDeleteActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tag, err := s.persistence.DeleteActorSnapshotTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName())
+	tag, err := s.persistence.DeleteActorSnapshotTag(ctx, req.GetActorSnapshotTag().GetAtespace(), req.GetActorSnapshotTag().GetName())
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetTag().GetAtespace(), req.GetTag().GetName())
+		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetActorSnapshotTag().GetAtespace(), req.GetActorSnapshotTag().GetName())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while deleting actor snapshot tag: %w", err)
@@ -250,7 +250,7 @@ func validateDeleteActorSnapshotTagRequest(req *ateapipb.DeleteActorSnapshotTagR
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.Tag, fldPath.Child("tag"); val == nil {
+	if val, fldPath := req.ActorSnapshotTag, fldPath.Child("actor_snapshot_tag"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)

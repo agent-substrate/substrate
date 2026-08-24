@@ -238,7 +238,7 @@ func PrintActor(actor *ateapipb.Actor, format string) error {
 // PrintActorSnapshots prints actor snapshots to stdout in the requested format.
 func PrintActorSnapshots(snapshots []*ateapipb.ActorSnapshot, format string) error {
 	if format == "json" || format == "yaml" {
-		return printProto(os.Stdout, &ateapipb.ListActorSnapshotsResponse{Snapshots: snapshots}, format)
+		return printProto(os.Stdout, &ateapipb.ListActorSnapshotsResponse{ActorSnapshots: snapshots}, format)
 	}
 	if format != "table" {
 		return fmt.Errorf("unsupported format %q", format)

@@ -142,7 +142,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatal("suspended Actor has no latest snapshot")
 	}
 	snapshotRef := snapshot
-	if _, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: snapshotRef}); err != nil {
+	if _, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{ActorSnapshot: snapshotRef}); err != nil {
 		t.Fatalf("failed to get ActorSnapshot: %v", err)
 	}
 	listed, err := clients.SubstrateAPI.ListActorSnapshots(ctx, &ateapipb.ListActorSnapshotsRequest{Atespace: demoAtespace})
@@ -150,7 +150,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to list ActorSnapshots: %v", err)
 	}
 	found := false
-	for _, candidate := range listed.GetSnapshots() {
+	for _, candidate := range listed.GetActorSnapshots() {
 		if candidate.GetMetadata().GetName() == snapshot.GetName() {
 			found = true
 			break
@@ -162,7 +162,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 
 	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef})
+		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef})
 	})
 	tagToUpdate, err := clients.SubstrateAPI.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
@@ -176,7 +176,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	tagToUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: tagToUpdate,
+		ActorSnapshotTag: tagToUpdate,
 	}); err != nil {
 		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	validateCounterResponse(t, response, "clone", 2, 2)
 
-	if _, err := clients.SubstrateAPI.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef}); err != nil {
+	if _, err := clients.SubstrateAPI.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef}); err != nil {
 		t.Fatalf("failed to delete ActorSnapshot tag: %v", err)
 	}
 }
@@ -699,7 +699,7 @@ func validateSnapshotContentScope(ctx context.Context, t *testing.T, clients *e2
 		t.Fatal("suspended Actor has no latest snapshot")
 	}
 	snapshot, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{
-		Snapshot: snapRef,
+		ActorSnapshot: snapRef,
 	})
 	if err != nil {
 		t.Fatalf("failed to get ActorSnapshot %q: %v", snapRef.GetName(), err)

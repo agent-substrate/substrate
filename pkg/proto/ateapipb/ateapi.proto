@@ -717,11 +717,11 @@ message DeleteActorRequest {
 }
 
 message GetActorSnapshotRequest {
-  ObjectRef snapshot = 1;
+  ObjectRef actor_snapshot = 1;
 }
 
 message GetActorSnapshotTagRequest {
-  ObjectRef tag = 1;
+  ObjectRef actor_snapshot_tag = 1;
 }
 
 message ListActorSnapshotsRequest {
@@ -731,7 +731,7 @@ message ListActorSnapshotsRequest {
 }
 
 message ListActorSnapshotsResponse {
-  repeated ActorSnapshot snapshots = 1;
+  repeated ActorSnapshot actor_snapshots = 1;
   string next_page_token = 2;
 }
 
@@ -744,14 +744,15 @@ message CreateActorSnapshotTagRequest {
 // The tag keeps its address: the snapshot it points at cannot be changed.
 message UpdateActorSnapshotTagRequest {
   // The tag to update.
-  // tag.metadata.atespace and tag.metadata.name identify which resource to
-  // update.
-  // tag.metadata.version and tag.metadata.uid are required preconditions
-  ActorSnapshotTag tag = 1;
+  // actor_snapshot_tag.metadata.atespace and actor_snapshot_tag.metadata.name
+  // identify which resource to update.
+  // actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
+  // are required preconditions
+  ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
 message DeleteActorSnapshotTagRequest {
-  ObjectRef tag = 1;
+  ObjectRef actor_snapshot_tag = 1;
 }
 
 // DeleteOptions carries per-delete controls. Today it holds optional
