@@ -537,6 +537,12 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
 		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
+	if stored, mutated := storedActor.GetActorTemplate(), mutatedActor.GetActorTemplate(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("actor_template is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetSourceSnapshotTag(), mutatedActor.GetSourceSnapshotTag(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("source_snapshot_tag is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
 	return nil
 }
 
@@ -572,7 +578,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.

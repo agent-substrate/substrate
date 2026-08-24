@@ -679,12 +679,6 @@ message UpdateActorRequest {
   // update.
   // actor.metadata.version and actor.metadata.uid are required preconditions.
   Actor actor = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - worker_selector
-  google.protobuf.FieldMask update_mask = 2;
 }
 
 message SuspendActorRequest {
@@ -918,7 +912,7 @@ message WorkerStatus {
 // "unknown/unset" for that dimension: treated as unconstrained so placement is
 // not blocked (matching the pre-capacity behavior).
 message WorkerCapacity {
-  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
+  int64 cpu_milli = 1; // CPU capacity in millicores (1000 = one core).
   int64 memory_bytes = 2; // Memory capacity in bytes.
 }
 
