@@ -96,6 +96,7 @@ spec:
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
           - --store-backend=@env
           - --postgres-connection-string=@env
+          - --postgres-schema=@env
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem

@@ -221,6 +221,10 @@ default_postgres_connection_string() {
   echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 }
 
+use_bundled_postgres() {
+  [[ "$(store_backend)" == "postgres" && -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" ]]
+}
+
 render_ate_system_manifests() {
   local router=""
   router="$(atenet_router)"
@@ -531,6 +535,7 @@ create_api_server_env_vars() {
   local tls_server_name=""
   local client_cert=""
   local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
+  local postgres_schema="${ATE_API_POSTGRES_SCHEMA:-public}"
   backend="$(store_backend)"
   if [[ "${backend}" == "postgres" && -z "${postgres_connection_string}" ]]; then
     postgres_connection_string="$(default_postgres_connection_string)"
@@ -554,6 +559,7 @@ create_api_server_env_vars() {
     --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
     --from-literal=ATE_API_STORE_BACKEND="${backend}" \
     --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
+    --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }
@@ -672,12 +678,9 @@ deploy_ate_system() {
 
   wait_for_podcertificate_trust_bundles
 
-  # The Kind overlays include Valkey but do not include the opt-in PostgreSQL
-  # manifest. Apply PostgreSQL explicitly when
-  # selected so backend configuration and deployed resources cannot diverge.
-  # Store-specific overlay composition can remove the unused Valkey resources
-  # in a separate change.
-  if [[ "$(store_backend)" == "postgres" ]]; then
+  # The Kind overlays do not include the optional PostgreSQL manifest.
+  # Apply it only when no external connection string is set.
+  if use_bundled_postgres; then
     apply_postgres
   fi
 
@@ -697,7 +700,9 @@ deploy_ate_system() {
       run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout="$(rollout_timeout)"
       ;;
     postgres)
-      run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+      if use_bundled_postgres; then
+        run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+      fi
       ;;
   esac
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"

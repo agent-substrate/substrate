@@ -75,6 +75,7 @@ var (
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	storeBackend             = pflag.String("store-backend", "redis", "The persistence backend to use: redis|postgres.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI), used when --store-backend=postgres.")
+	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
@@ -294,6 +295,7 @@ func loadFlagsFromEnv() {
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
 		{storeBackend, "ATE_API_STORE_BACKEND"},
 		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
+		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -313,6 +315,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-client-cert", *redisClientCert),
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("store-backend", *storeBackend),
+		slog.String("postgres-schema", *postgresSchema),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -358,7 +361,7 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
 		if err == nil {
 			return persistence, nil
 		}

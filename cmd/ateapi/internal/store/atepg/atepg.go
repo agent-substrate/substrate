@@ -62,11 +62,19 @@ type Persistence struct {
 
 var _ store.Interface = (*Persistence)(nil)
 
-// Connect opens a pgxpool against dsn, verifies connectivity, and applies the
-// pending schema migrations. Startup fails if the database cannot be reached.
-// A dedicated watch pool isolates outbox polling and maintenance from writes.
-func Connect(ctx context.Context, dsn string) (*Persistence, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+// Connect opens a pgxpool against dsn, creates schema if necessary, and
+// applies pending schema migrations. A dedicated watch pool isolates outbox
+// polling and maintenance from writes.
+func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
+	if schema == "" {
+		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
+	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
@@ -74,12 +82,12 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
 	}
-
-	watchCfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("parsing watch pool config: %w", err)
+		return nil, fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
 	}
+
+	watchCfg := config.Copy()
 	watchCfg.MaxConns = watchPoolMaxConns
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)

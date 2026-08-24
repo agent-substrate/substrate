@@ -142,6 +142,59 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 	}
 }
 
+func TestConnectUsesConfiguredSchema(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "substrate-test"
+	if _, err := pool.Exec(ctx, `
+		DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+		CREATE TABLE IF NOT EXISTS public.substrate_schema_test_marker (id integer)`); err != nil {
+		t.Fatalf("preparing schema test: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `
+			DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+			DROP TABLE IF EXISTS public.substrate_schema_test_marker`)
+	})
+
+	dsn, err := containerPG.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("getting PostgreSQL connection string: %v", err)
+	}
+	persistence, err := Connect(ctx, dsn+"&search_path=public", schema)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer persistence.pool.Close()
+	defer persistence.Close()
+
+	if _, err := persistence.CreateAtespace(ctx, newTestAtespace("schema-test")); err != nil {
+		t.Fatalf("creating atespace in configured schema: %v", err)
+	}
+
+	for _, table := range []string{"atespaces", "schema_migrations"} {
+		var exists bool
+		if err := persistence.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = $1 AND table_name = $2
+			)`, schema, table).Scan(&exists); err != nil {
+			t.Fatalf("checking %s.%s: %v", schema, table, err)
+		}
+		if !exists {
+			t.Errorf("expected %s.%s to exist", schema, table)
+		}
+	}
+
+	var markerExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.substrate_schema_test_marker') IS NOT NULL`).Scan(&markerExists); err != nil {
+		t.Fatalf("checking unrelated table: %v", err)
+	}
+	if !markerExists {
+		t.Error("migration removed an unrelated table")
+	}
+}
+
 func setupPostgresPersistence(t *testing.T) *Persistence {
 	t.Helper()
 	ctx := context.Background()
