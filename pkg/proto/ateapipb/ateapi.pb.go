@@ -993,21 +993,28 @@ type ActorStatus struct {
 	//
 	// +k8s:optional
 	// +k8s:update=NoModify # can be set and cleared, but not changed in place
-	WorkerAssignment       *WorkerAssignment `protobuf:"bytes,2,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`
-	InProgressSnapshotName string            `protobuf:"bytes,3,opt,name=in_progress_snapshot_name,json=inProgressSnapshotName,proto3" json:"in_progress_snapshot_name,omitempty"`
+	WorkerAssignment *WorkerAssignment `protobuf:"bytes,2,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`
+	// TODO: Add DV (optional, maxLength?)
+	InProgressSnapshotName string `protobuf:"bytes,3,opt,name=in_progress_snapshot_name,json=inProgressSnapshotName,proto3" json:"in_progress_snapshot_name,omitempty"`
 	// The latest durable snapshot created for this Actor.
 	// +k8s:opaqueType
+	// TODO: Add DV (required?)
 	LatestSnapshot *ObjectRef `protobuf:"bytes,4,opt,name=latest_snapshot,json=latestSnapshot,proto3" json:"latest_snapshot,omitempty"`
 	// Node-local state used only while the Actor is paused.
+	// TODO: Add DV (optional, need to recurse into this type)
 	LocalSnapshotInfo *LocalSnapshotInfo `protobuf:"bytes,5,opt,name=local_snapshot_info,json=localSnapshotInfo,proto3" json:"local_snapshot_info,omitempty"`
 	// Actor version captured when the current durable snapshot began.
+	// TODO: Add DV (optional, minimum?)
 	InProgressSnapshotSourceActorVersion int64 `protobuf:"varint,6,opt,name=in_progress_snapshot_source_actor_version,json=inProgressSnapshotSourceActorVersion,proto3" json:"in_progress_snapshot_source_actor_version,omitempty"`
 	// Volumes attached to the actor. These volumes only live as long as the actor.
 	// They are deleted when the actor is deleted.
-	ActorVolumes                []*ExternalVolume `protobuf:"bytes,7,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
-	InProgressLocalSnapshotName string            `protobuf:"bytes,8,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`
+	// TODO: Add DV (optional, need to recurse into this type, immutable?)
+	ActorVolumes []*ExternalVolume `protobuf:"bytes,7,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
+	// TODO: Add DV (optional, maxLength?)
+	InProgressLocalSnapshotName string `protobuf:"bytes,8,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`
 	// How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
 	// the Actor was not created from a snapshot.
+	// TODO: Add DV (optional, need to recurse into this type, immutable?)
 	SourceSnapshot *ActorSourceSnapshotStatus `protobuf:"bytes,9,opt,name=source_snapshot,json=sourceSnapshot,proto3" json:"source_snapshot,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache

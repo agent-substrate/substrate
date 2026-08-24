@@ -318,26 +318,33 @@ message ActorStatus {
   // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
+  // TODO: Add DV (optional, maxLength?)
   string in_progress_snapshot_name = 3;
 
   // The latest durable snapshot created for this Actor.
   // +k8s:opaqueType
+  // TODO: Add DV (required?)
   ObjectRef latest_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
+  // TODO: Add DV (optional, need to recurse into this type)
   LocalSnapshotInfo local_snapshot_info = 5;
 
   // Actor version captured when the current durable snapshot began.
+  // TODO: Add DV (optional, minimum?)
   int64 in_progress_snapshot_source_actor_version = 6;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
+  // TODO: Add DV (optional, need to recurse into this type, immutable?)
   repeated ExternalVolume actor_volumes = 7;
 
+  // TODO: Add DV (optional, maxLength?)
   string in_progress_local_snapshot_name = 8;
 
   // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
   // the Actor was not created from a snapshot.
+  // TODO: Add DV (optional, need to recurse into this type, immutable?)
   ActorSourceSnapshotStatus source_snapshot = 9;
 }
 
