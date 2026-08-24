@@ -1,22 +1,43 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report a bug to help us improve — please include a reproduction case
 
 ---
 
+## Summary
+
+<!-- One sentence describing the bug -->
+
+## Environment
+
+- Substrate version / commit:
+- Kubernetes version (`kubectl version`):
+- Platform (GKE / kind / other):
+- OS / architecture:
+
 ## Expected Behavior
 
+<!-- What should have happened -->
 
 ## Actual Behavior
 
+<!-- What actually happened. Include full error messages, logs, or stack traces -->
 
-## Steps to Reproduce the Problem
+<details>
+<summary>Logs</summary>
+
+```
+paste logs here
+```
+
+</details>
+
+## Steps to Reproduce
 
 1.
-1.
-1.
+2.
+3.
 
-## Specifications
+## Minimal Reproduction
 
-- Version:
-- Platform:
+<!-- Smallest config, manifest, or code snippet that triggers the issue. Reports without a repro case may be closed. -->

@@ -59,6 +59,18 @@ If you are building something that runs *on* Substrate rather than changing
 Substrate itself, see [Integration
 Repositories](docs/integration-repos.md) for where that code should live.
 
+### PR Etiquette
+
+Before opening a pull request, please follow these steps:
+
+1. **File an issue first.** If you've found a bug or want to propose a change, open an issue before writing code. This lets maintainers confirm the problem is real, align on the right fix, and avoid duplicated effort with work already in flight.
+
+2. **Write a clear bug report.** Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md) and include a minimal reproduction case — exact environment, steps to reproduce, what you expected, and what actually happened. Reports without repro steps may be closed.
+
+3. **Reference the issue in your PR.** Every pull request must link to an open issue using `Fixes #<number>`. **PRs with no referenced issue will not be reviewed and may be closed without explanation.**
+
+4. **Discuss the approach before building.** For anything beyond a trivial fix, leave a comment on the issue explaining what you plan to do and wait for a maintainer to signal alignment. This avoids the pain of a rejected PR after significant effort.
+
 ### Sizing PRs for review
 
 We optimize PRs for easy review — large PRs get broken
