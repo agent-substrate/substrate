@@ -22,6 +22,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,14 +33,17 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// The actorMetadata data-source files of the systemInfo volume that
-// probe.yaml.tmpl mounts at /run/ate.
+// The systemInfo volume data-source files that probe.yaml.tmpl mounts at
+// /run/ate: the actorMetadata projections plus a trustBundle
+// projection.
 const (
 	identityFile = "/run/ate/actor-id"
 	atespaceFile = "/run/ate/atespace"
 	uidFile      = "/run/ate/actor-uid"
+	trustFile    = "/run/ate/trust-bundle.pem"
 )
 
 // procStatus is where the kernel reports this process's capability sets. Asking
@@ -170,6 +175,7 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 		"file":     identityFile,
 		"atespace": atespaceFile,
 		"uid":      uidFile,
+		"trust":    trustFile,
 	} {
 		if b, err := os.ReadFile(path); err == nil {
 			resp[key] = string(b)
@@ -287,6 +293,64 @@ func memTotalBytes() (int64, error) {
 	return 0, os.ErrNotExist
 }
 
+// fetch GETs ?url= over the actor's normal egress path and reports the
+// outcome, doing TLS with the trust anchors selected by ?roots=: "bundle"
+// (the default) loads the projected trust bundle at trustFile, "system" uses
+// the image's system roots. TestActorEgressMITMTrust documents why each mode
+// passes or fails. TLS failures land in the "error" field rather than the
+// HTTP status: a verification failure is a result for the suite to assert
+// on, not a broken probe.
+func fetch(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]string{}
+	url := r.URL.Query().Get("url")
+	if url == "" {
+		resp["error"] = "missing url parameter"
+		writeJSON(w, resp)
+		return
+	}
+	roots := r.URL.Query().Get("roots")
+	switch roots {
+	case "", "bundle", "system":
+	default:
+		// Fail closed on typos: silently treating an unknown value as
+		// "bundle" would flip a suite's negative control into a positive
+		// fetch with a misleading failure message.
+		resp["error"] = "unknown roots value " + strconv.Quote(roots) + " (want bundle or system)"
+		writeJSON(w, resp)
+		return
+	}
+	tlsCfg := &tls.Config{}
+	if roots != "system" {
+		b, err := os.ReadFile(trustFile)
+		if err != nil {
+			resp["error"] = "reading trust bundle: " + err.Error()
+			writeJSON(w, resp)
+			return
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(b) {
+			resp["error"] = "no certificates parsed from " + trustFile
+			writeJSON(w, resp)
+			return
+		}
+		tlsCfg.RootCAs = pool
+	}
+	client := &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+	}
+	res, err := client.Get(url)
+	if err != nil {
+		resp["error"] = err.Error()
+		writeJSON(w, resp)
+		return
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, res.Body)
+	resp["status"] = strconv.Itoa(res.StatusCode)
+	writeJSON(w, resp)
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -306,6 +370,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
+	mux.HandleFunc("/fetch", fetch)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/resources", resources)

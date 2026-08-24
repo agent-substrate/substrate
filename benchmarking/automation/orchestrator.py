@@ -305,8 +305,8 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
         TYPES[ttype].validate(t)
 
 
-def deploy_substrate() -> None:
-    run(["hack/install-ate.sh", "--deploy-ate-system"])
+def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
+    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)])
 
 
 def teardown_substrate() -> None:
@@ -328,7 +328,10 @@ def teardown_microvm_deps() -> None:
 
 
 def deploy_workloads(
-    worker_count: int = 1, sandbox_class: str = "gvisor", actor_memory: str = ""
+    worker_count: int = 1,
+    sandbox_class: str = "gvisor",
+    actor_memory: str = "",
+    wait_timeout: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -342,6 +345,9 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout.
+    if wait_timeout:
+        cmd += ["--wait-timeout", wait_timeout]
     run(cmd)
     # Block until ActorTemplates are Ready
     run(
@@ -518,7 +524,7 @@ def main() -> None:
             failure_msg = None
             start_time = time.time()
             try:
-                deploy_substrate()
+                deploy_substrate(test.get("ateArgs", []))
                 TYPES[ttype].pre_test(test)
                 # install-microvm-deps needs the CRDs from deploy_substrate;
                 # deploy_workloads needs the microvm SandboxConfig.
@@ -528,6 +534,7 @@ def main() -> None:
                     test.get("workerCount", 1),
                     sandbox_class,
                     test.get("actorMemory", ""),
+                    test.get("workerWaitTimeout", ""),
                 )
                 try:
                     status = run_test(

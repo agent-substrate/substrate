@@ -1208,6 +1208,16 @@ func TestValidation_Actor(t *testing.T) {
 		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{PageSize: -1})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
+
+	t.Run("ListActors invalid token", func(t *testing.T) {
+		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{PageToken: "%%%"})
+		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
+	})
+
+	t.Run("ListActorSnapshots invalid token", func(t *testing.T) {
+		_, err := tc.client.ListActorSnapshots(context.Background(), &ateapipb.ListActorSnapshotsRequest{PageToken: "%%%"})
+		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
+	})
 }
 
 func TestActorLifecycle_WithExternalVolumes(t *testing.T) {

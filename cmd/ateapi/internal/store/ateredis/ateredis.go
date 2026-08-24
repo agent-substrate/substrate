@@ -439,10 +439,8 @@ func (s *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	return store.ListResponse[*ateapipb.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
-// DeleteActorTemplate deletes an ActorTemplate with no remaining versions.
-// Returns store.ErrNotFound if the template does not exist, or
-// store.ErrFailedPrecondition while any ActorTemplateVersion still names it
-// as parent.
+// DeleteActorTemplate deletes an ActorTemplate.
+// Returns store.ErrNotFound if the template does not exist.
 func (s *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
 	dbKey := actorTemplateDBKey(templateRef)
 
@@ -1183,9 +1181,14 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, opts stor
 
 // listPage SCANs pattern across the redis masters from the page token, feeding key batches to collect and returns the next-page token.
 func (s *Persistence) listPage(ctx context.Context, pattern string, pageSize int32, pageTokenStr string, collect func(ctx context.Context, master *redis.Client, keys []string) (int, error)) (string, error) {
+	normalized, err := store.NormalizeListOptions(store.ListOptions{PageSize: pageSize})
+	if err != nil {
+		return "", err
+	}
+	pageSize = normalized.PageSize
 	token, err := decodePageToken(pageTokenStr)
 	if err != nil {
-		return "", fmt.Errorf("invalid page token: %w", err)
+		return "", fmt.Errorf("%w: %v", store.ErrInvalidPageToken, err)
 	}
 
 	masters, err := s.getSortedMasters(ctx)

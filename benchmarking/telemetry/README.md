@@ -141,6 +141,12 @@ meter reports nothing at all.
 If the meter sheds data, the volume and the cost are both incorrect, and the
 two errors hide each other.
 
+`memory_limiter` and `GOMEMLIMIT` in [`meter.yaml`](meter.yaml) keep a meter
+that reaches its memory limit refusing data, and thus visible in
+`otelcol_receiver_refused_*`, rather than stopped by the kernel. Raise the
+container limit for a larger run: the limiter uses percentages and follows it,
+but `GOMEMLIMIT` is absolute and needs the new value.
+
 To make the meter terminal, delete the two forward pipelines in
 [`meter.yaml`](meter.yaml). Use a terminal meter for a long soak, to keep that
 telemetry out of Cloud Monitoring. The resource values of the managed collector

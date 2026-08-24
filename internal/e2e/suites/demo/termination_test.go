@@ -66,7 +66,7 @@ func TestGracefulWorkerTermination(t *testing.T) {
 	}()
 
 	// Bring the actor up on a worker so it is bound to a pod.
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -177,7 +177,7 @@ func TestGracefulWorkerTerminationTimeout(t *testing.T) {
 	}()
 
 	// Bring the actor up on a worker so it is bound to a pod.
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -264,7 +264,7 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	}()
 
 	// Bring the actor up on a worker so it is bound to a pod.
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)

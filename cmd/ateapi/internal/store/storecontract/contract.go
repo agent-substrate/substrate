@@ -139,7 +139,59 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorTemplateContractTests(t, setup)
 	runActorSnapshotContractTests(t, setup)
 	runLockContractTests(t, setup)
+	runListOptionsContractTests(t, setup)
 	runDebugContractTests(t, setup)
+}
+
+func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("ListOptions_InvalidPageSize", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		calls := []struct {
+			name string
+			call func(store.ListOptions) error
+		}{
+			{"atespaces", func(opts store.ListOptions) error { _, err := s.ListAtespaces(ctx, opts); return err }},
+			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
+			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
+			{"actor snapshots", func(opts store.ListOptions) error { _, err := s.ListActorSnapshots(ctx, "", opts); return err }},
+			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
+		}
+		for _, call := range calls {
+			t.Run(call.name, func(t *testing.T) {
+				if err := call.call(store.ListOptions{PageSize: -1}); !errors.Is(err, store.ErrInvalidPageSize) {
+					t.Errorf("negative PageSize error = %v, want ErrInvalidPageSize", err)
+				}
+				if err := call.call(store.ListOptions{}); err != nil {
+					t.Errorf("zero PageSize error = %v, want nil", err)
+				}
+			})
+		}
+	})
+
+	t.Run("ListOptions_InvalidPageToken", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		calls := []struct {
+			name string
+			call func(store.ListOptions) error
+		}{
+			{"atespaces", func(opts store.ListOptions) error { _, err := s.ListAtespaces(ctx, opts); return err }},
+			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
+			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
+			{"actor snapshots", func(opts store.ListOptions) error { _, err := s.ListActorSnapshots(ctx, "", opts); return err }},
+			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
+		}
+		for _, call := range calls {
+			t.Run(call.name, func(t *testing.T) {
+				if err := call.call(store.ListOptions{PageSize: 1, PageToken: "%%%"}); !errors.Is(err, store.ErrInvalidPageToken) {
+					t.Errorf("malformed PageToken error = %v, want ErrInvalidPageToken", err)
+				}
+			})
+		}
+	})
 }
 
 func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {

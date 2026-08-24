@@ -47,6 +47,8 @@ ACTOR_MEMORY="256Mi"
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
 OTLP_ENDPOINT=""
+# The timeout for waiting for the ateom worker pods to be ready.
+WAIT_TIMEOUT="300s"
 
 usage() {
   echo "Usage: $0 [options]"
@@ -62,6 +64,7 @@ usage() {
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
+  echo "  --wait-timeout DURATION     The timeout for waiting for the ateom workers to be ready (default: 300s)"
   echo "  -h, --help                  Show this help message"
 }
 
@@ -118,6 +121,11 @@ deploy() {
   kubectl delete actortemplate --namespace=benchmark-workloads \
     --all --ignore-not-found
   substitute | hack/run-tool.sh ko apply -f -
+  echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT})..."
+  kubectl wait --for=create deployment/benchmark-ateom \
+    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT}"
+  kubectl rollout status deployment/benchmark-ateom \
+    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT}"
 }
 
 delete() {
@@ -169,6 +177,13 @@ while [[ "$#" -gt 0 ]]; do
     --actor-memory=*)
       ACTOR_MEMORY="${1#*=}"
       ;;
+    --wait-timeout)
+      shift
+      WAIT_TIMEOUT="$1"
+      ;;
+    --wait-timeout=*)
+      WAIT_TIMEOUT="${1#*=}"
+      ;;
     -h|--help)
       usage
       exit 0
@@ -189,6 +204,11 @@ case "${SANDBOX_CLASS}" in
     exit 1
     ;;
 esac
+
+if ! [[ "${WAIT_TIMEOUT}" =~ ^([0-9]+(h|m|s))+$ ]]; then
+  echo "Error: --wait-timeout must be a Go duration like 300s, 10m, or 1h30m, got '${WAIT_TIMEOUT}'" >&2
+  exit 1
+fi
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

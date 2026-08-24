@@ -208,7 +208,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id}})
 	})
 
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: namespace, Name: id},
 	}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)

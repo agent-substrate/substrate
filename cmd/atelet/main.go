@@ -77,8 +77,12 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/lru"
 )
@@ -276,10 +280,22 @@ func main() {
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
+	// Start an informer on the ClusterTrustBundle we care about (currently
+	// only the egress trust bundle). The v1beta1 API is feature-gated: on a
+	// cluster that does not serve it, startup blocks at WaitForCacheSync
+	// below, with the reflector's errors naming the missing API.
+	coreFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 0,
+		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
+			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
+		}))
+	clusterTrustBundleLister := coreFactory.Certificates().V1beta1().ClusterTrustBundles().Lister()
+
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	ateFactory.Start(stopCh)
+	coreFactory.Start(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
+	coreFactory.WaitForCacheSync(stopCh)
 
 	wmService := NewService(
 		ctx,
@@ -290,6 +306,7 @@ func main() {
 		instruments,
 		volPlugins,
 		csiDriverConfigLister,
+		clusterTrustBundleLister,
 	)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
@@ -403,14 +420,15 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer           *AteomDialer
-	imageCache            *imagecache.Store
-	anonGCSClient         ategcs.ObjectStorage
-	gcsClient             ategcs.ObjectStorage
-	instruments           *Instruments
-	mu                    sync.RWMutex
-	volumePlugins         map[string]volume.VolumePluginWorkerPlane
-	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+	ateomDialer              *AteomDialer
+	imageCache               *imagecache.Store
+	anonGCSClient            ategcs.ObjectStorage
+	gcsClient                ategcs.ObjectStorage
+	instruments              *Instruments
+	mu                       sync.RWMutex
+	volumePlugins            map[string]volume.VolumePluginWorkerPlane
+	csiDriverConfigLister    listersv1alpha1.CSIDriverConfigLister
+	clusterTrustBundleLister certlisters.ClusterTrustBundleLister
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -425,15 +443,17 @@ func NewService(
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
+	clusterTrustBundleLister certlisters.ClusterTrustBundleLister,
 ) *AteomHerder {
 	wms := &AteomHerder{
-		ateomDialer:           ateomDialer,
-		imageCache:            imageCache,
-		anonGCSClient:         anonGCSClient,
-		gcsClient:             gcsClient,
-		instruments:           instruments,
-		volumePlugins:         volumePlugins,
-		csiDriverConfigLister: csiDriverConfigLister,
+		ateomDialer:              ateomDialer,
+		imageCache:               imageCache,
+		anonGCSClient:            anonGCSClient,
+		gcsClient:                gcsClient,
+		instruments:              instruments,
+		volumePlugins:            volumePlugins,
+		csiDriverConfigLister:    csiDriverConfigLister,
+		clusterTrustBundleLister: clusterTrustBundleLister,
 	}
 	return wms
 }
@@ -1505,7 +1525,7 @@ func (s *AteomHerder) prepareOCIBundles(
 
 		case *ateletpb.Volume_SystemInfo:
 			volRootHostPath := ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName())
-			if err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, volSrc.SystemInfo); err != nil {
+			if err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, s.clusterTrustBundleLister, volSrc.SystemInfo); err != nil {
 				return fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
 			}
 		}
@@ -1604,13 +1624,25 @@ func (s *AteomHerder) prepareOCIBundles(
 // these files refreshed while the actor runs, not just at Run/Restore — and
 // must keep the per-file rename discipline so visible paths never move.
 // actorMetadata never changes after start, so writing here is enough for it.
-func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) error {
+//
+// TODO(#932): trustBundle projections currently refresh only here, on
+// Run/Restore; live refresh for running actors is PR 2 of that issue.
+func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, ctbLister certlisters.ClusterTrustBundleLister, si *ateletpb.SystemInfoVolume) error {
 	if err := os.MkdirAll(rootPath, 0o755); err != nil {
 		return fmt.Errorf("while creating %q: %w", rootPath, err)
 	}
 
 	for _, dataSourceAny := range si.GetDataSources() {
 		switch dataSource := dataSourceAny.GetDataSource().(type) {
+		case *ateletpb.SystemInfoDataSource_TrustBundle:
+			tb := dataSource.TrustBundle
+			pemBundle, err := resolveTrustBundle(ctbLister, tb.GetName())
+			if err != nil {
+				return fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
+			}
+			if err := writeSystemInfoFile(rootPath, tb.GetPath(), pemBundle); err != nil {
+				return err
+			}
 		case *ateletpb.SystemInfoDataSource_ActorMetadata:
 			for _, item := range dataSource.ActorMetadata.GetItems() {
 				var value string

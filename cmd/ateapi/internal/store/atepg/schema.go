@@ -29,6 +29,8 @@ import (
 const schema = `
 CREATE TABLE IF NOT EXISTS atespaces (
     name   text PRIMARY KEY,
+    uid    text NOT NULL,
+    version bigint NOT NULL,
     proto  bytea NOT NULL
 );
 
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS actors (
     atespace  text NOT NULL
         REFERENCES atespaces(name) ON DELETE RESTRICT,
     name      text NOT NULL,
-    uid       text NOT NULL UNIQUE,
+    uid       text NOT NULL,
     version   bigint NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
@@ -46,7 +48,7 @@ CREATE TABLE IF NOT EXISTS actor_templates (
     atespace  text NOT NULL
         REFERENCES atespaces(name) ON DELETE RESTRICT,
     name      text NOT NULL,
-    uid       text NOT NULL UNIQUE,
+    uid       text NOT NULL,
     version   bigint NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
@@ -55,22 +57,30 @@ CREATE TABLE IF NOT EXISTS actor_templates (
 CREATE TABLE IF NOT EXISTS actor_snapshots (
     atespace  text NOT NULL,
     name      text NOT NULL,
+    uid       text NOT NULL,
+    version   bigint NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
 );
 
 CREATE TABLE IF NOT EXISTS actor_snapshot_tags (
-    atespace           text NOT NULL
-        REFERENCES atespaces(name) ON DELETE RESTRICT,
+    atespace           text NOT NULL,
     name               text NOT NULL,
     snapshot_atespace  text NOT NULL,
     snapshot_name      text NOT NULL,
+    uid                text NOT NULL,
     version            bigint NOT NULL,
     proto              bytea NOT NULL,
     PRIMARY KEY (atespace, name),
-    FOREIGN KEY (snapshot_atespace, snapshot_name)
+    CONSTRAINT actor_snapshot_tags_atespace_fk
+        FOREIGN KEY (atespace) REFERENCES atespaces(name) ON DELETE RESTRICT,
+    CONSTRAINT actor_snapshot_tags_snapshot_fk
+        FOREIGN KEY (snapshot_atespace, snapshot_name)
         REFERENCES actor_snapshots(atespace, name) ON DELETE RESTRICT
 );
+
+CREATE INDEX IF NOT EXISTS actor_snapshot_tags_snapshot_idx
+    ON actor_snapshot_tags (snapshot_atespace, snapshot_name);
 
 -- Workers are global-scoped and named by their Kubernetes pod UID, so name
 -- alone is the primary key.
@@ -86,6 +96,8 @@ CREATE TABLE IF NOT EXISTS leases (
     token       text NOT NULL,
     expires_at  timestamptz NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS leases_expires_at_idx ON leases (expires_at);
 `
 
 // applySchema idempotently creates atepg's tables.

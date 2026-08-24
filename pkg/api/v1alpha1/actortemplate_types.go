@@ -81,14 +81,14 @@ type ActorMetadataItem struct {
 	Field ActorMetadataField `json:"field"`
 
 	// Relative path from the root of the SystemInfo volume at which the
-	// field's value is written. Must be a clean relative Unix path: must not
-	// start or end with '/', and contain no ':', '..', '.', '//', or control
-	// characters.
+	// field's value is written. Must be a clean relative Unix path: it must
+	// not start or end with '/' and must not contain ':', '//', '.' or '..'
+	// segments, or control characters.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=255
-	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: must not start or end with '/', and contain no ':', '..', '.', '//', or control characters"
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: it must not start or end with '/' and must not contain ':', '//', '.' or '..' segments, or control characters"
 	Path string `json:"path"`
 }
 
@@ -109,29 +109,75 @@ type ActorMetadataDataSource struct {
 	Items []ActorMetadataItem `json:"items"`
 }
 
+// TrustBundleDataSource is a SystemInfo volume data source that projects the
+// trust anchors of a named trust bundle to a single PEM file — inspired by
+// the Kubernetes clusterTrustBundle projected volume source, but
+// source-neutral: the name selects a bundle substrate knows how to fetch,
+// and where it is fetched from is a substrate deployment concern, not part
+// of this API (atelet enforces the supported set and resolves the backend).
+//
+// Supported names are allowlisted in atelet. Initially the only supported
+// bundle is "egress-mitm.ate.dev" (the egress gateway CA bundle), resolved
+// from the Kubernetes ClusterTrustBundle (certificates.k8s.io/v1beta1) that
+// atecontroller derives from the egress-mitm-ca-pool; a configurable backend
+// registry may widen this later.
+//
+// The bundle is resolved and sanitized on the node when the actor starts:
+// atelet reads the backing object through a cluster-wide watch and keeps
+// only CERTIFICATE PEM blocks, deduplicated and deliberately shuffled (order
+// carries no meaning); the actor itself never talks to any bundle backend.
+// Starting the actor fails if the named bundle is not on the allowlist, its
+// backend is unavailable in this deployment, or the resolved bundle is
+// missing, empty, or unparseable.
+type TrustBundleDataSource struct {
+	// Name of the trust bundle to project. Must be a bundle name supported
+	// by this deployment (currently only "egress-mitm.ate.dev").
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// Relative path from the root of the SystemInfo volume at which the PEM
+	// bundle is written. Must be a clean relative Unix path: it must not
+	// start or end with '/' and must not contain ':', '//', '.' or '..'
+	// segments, or control characters.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: it must not start or end with '/' and must not contain ':', '//', '.' or '..' segments, or control characters"
+	Path string `json:"path"`
+}
+
 // SystemInfoDataSource is a container allowing you to pick a particular
 // SystemInfo data source.
 //
 // Exactly one member must be set.
 //
-// +kubebuilder:validation:ExactlyOneOf={actorMetadata}
+// +kubebuilder:validation:ExactlyOneOf={actorMetadata,trustBundle}
 type SystemInfoDataSource struct {
 	ActorMetadata *ActorMetadataDataSource `json:"actorMetadata,omitempty"`
+
+	TrustBundle *TrustBundleDataSource `json:"trustBundle,omitempty"`
 }
 
 // Represents a system information volume, which provides files containing
-// substrate-generated per-actor data such as the actor's identity fields
-// (and, in the future, identity JWTs and certificates).
+// substrate-generated per-actor data such as the actor's identity fields,
+// projected trust bundles (and, in the future, identity JWTs and
+// certificates).
 type SystemInfoVolumeSource struct {
 	// DataSources is the list of data sources to place within the SystemInfo
 	// volume.
 	//
-	// At most one actorMetadata entry may appear; this is what keeps file
-	// paths unique across the whole volume (uniqueness within the entry is
-	// enforced on its items).
+	// At most one actorMetadata entry may appear, and file paths must be
+	// unique across all entries (uniqueness within actorMetadata is enforced
+	// on its items).
 	//
-	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:MaxItems=8
 	// +kubebuilder:validation:XValidation:rule="self.filter(x, has(x.actorMetadata)).size() <= 1",message="dataSources must contain at most one actorMetadata entry"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.trustBundle) || self.exists_one(y, has(y.trustBundle) && y.trustBundle.path == x.trustBundle.path))",message="dataSources must not contain duplicate paths"
+	// +kubebuilder:validation:XValidation:rule="!self.exists(x, has(x.trustBundle) && self.exists(y, has(y.actorMetadata) && y.actorMetadata.items.exists(i, i.path == x.trustBundle.path)))",message="dataSources must not contain duplicate paths"
 	DataSources []SystemInfoDataSource `json:"dataSources,omitempty"`
 }
 

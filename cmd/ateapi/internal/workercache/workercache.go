@@ -110,6 +110,16 @@ func (c *Cache) Worker(name string) (*ateapipb.Worker, error) {
 	return worker, nil
 }
 
+// Forget removes a worker that a store write proved no longer exists. The
+// normal delete watch remains authoritative, but this closes the short race in
+// which scheduling selected a worker just after its row was deleted and before
+// the watch event reached the cache.
+func (c *Cache) Forget(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.workers, name)
+}
+
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 	watch, err := c.store.WatchWorkers(ctx)
 	if err != nil {

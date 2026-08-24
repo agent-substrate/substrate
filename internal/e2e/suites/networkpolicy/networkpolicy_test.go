@@ -173,7 +173,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	}()
 
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)

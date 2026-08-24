@@ -16,8 +16,11 @@ package dynconfig
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -140,5 +143,106 @@ func TestFetchValidAndInvalid(t *testing.T) {
 	_, err = Fetch(ctx, ts.URL+"/invalid", Config{})
 	if err == nil {
 		t.Errorf("expected Fetch invalid to fail, got nil")
+	}
+}
+
+// fakeSampler records each probability that StartPoll applies.
+type fakeSampler struct {
+	mu   sync.Mutex
+	seen []float64
+}
+
+func (f *fakeSampler) UpdateProbability(p float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seen = append(f.seen, p)
+}
+
+func (f *fakeSampler) last() (float64, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.seen) == 0 {
+		return -1, 0
+	}
+	return f.seen[len(f.seen)-1], len(f.seen)
+}
+
+// A step of a load shape can change the sample rate and hold the number of
+// users. Locust sends no spawn message for such a step, thus the poll is the
+// only way the new rate reaches the worker.
+func TestStartPollAppliesAChange(t *testing.T) {
+	var probability atomic.Value
+	probability.Store(0.0)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"trace_probability": %v}`, probability.Load())
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	holder := NewHolder(Config{})
+	sampler := &fakeSampler{}
+	StartPoll(ctx, ts.URL, holder, sampler, 10*time.Millisecond, time.Second,
+		func(err error) { t.Errorf("unexpected poll error: %v", err) })
+
+	probability.Store(0.5)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got, _ := sampler.last(); got == 0.5 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := holder.Load().TraceProbability; got != 0.5 {
+		t.Fatalf("holder trace_probability = %v, want 0.5", got)
+	}
+
+	// A value that does not change must not go to the sampler again.
+	_, count := sampler.last()
+	time.Sleep(100 * time.Millisecond)
+	if _, after := sampler.last(); after != count {
+		t.Errorf("sampler got %d more updates with no change", after-count)
+	}
+}
+
+func TestStartPollStopsWithTheContext(t *testing.T) {
+	var hits atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	StartPoll(ctx, ts.URL, NewHolder(Config{}), &fakeSampler{},
+		10*time.Millisecond, time.Second, func(error) {})
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+
+	stopped := hits.Load()
+	time.Sleep(100 * time.Millisecond)
+	if got := hits.Load(); got != stopped {
+		t.Errorf("poll continued after the context stopped: %d -> %d", stopped, got)
+	}
+}
+
+// An interval of zero starts no loop.
+func TestStartPollZeroInterval(t *testing.T) {
+	var hits atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	defer ts.Close()
+
+	StartPoll(context.Background(), ts.URL, NewHolder(Config{}), &fakeSampler{},
+		0, time.Second, func(error) {})
+	time.Sleep(50 * time.Millisecond)
+	if hits.Load() != 0 {
+		t.Errorf("StartPoll with interval 0 made %d requests", hits.Load())
 	}
 }

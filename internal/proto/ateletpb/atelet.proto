@@ -186,9 +186,21 @@ message ActorMetadataDataSource {
   repeated ActorMetadataItem items = 1;
 }
 
+// TrustBundleDataSource projects the trust anchors of a named trust bundle
+// to a file at the given path, relative to the root of the enclosing
+// system-info volume. atelet resolves the name against its supported-bundle
+// allowlist and reads the backing ClusterTrustBundle through its informer at
+// write time, sanitizing kubelet-style; an unsupported name or missing
+// bundle fails the actor start.
+message TrustBundleDataSource {
+  string path = 1;
+  string name = 2;
+}
+
 message SystemInfoDataSource {
   oneof data_source {
     ActorMetadataDataSource actor_metadata = 1;
+    TrustBundleDataSource trust_bundle = 2;
   }
 }
 

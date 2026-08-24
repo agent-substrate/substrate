@@ -35,6 +35,16 @@
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
+#   workerWaitTimeout
+#                  Optional (default "300s", set by workloads/deploy.sh).
+#                  Go duration for the wait after the WorkerPool deploy for
+#                  the ateom worker pods to become ready. Raise it for
+#                  large workerCount fleets whose image pulls or scheduling
+#                  outrun the default.
+#   ateArgs        Optional. List of strings appended verbatim to
+#                  `hack/install-ate.sh --deploy-ate-system` when this
+#                  test's substrate is deployed (e.g. ["--atenet-router=agentgateway"]
+#                  or ["--experimental-use-sdsmint"]).
 #
 # ---- type: locust -----------------------------------------------------------
 #
@@ -43,6 +53,21 @@
 # orchestrator's --dest flag. `file`, `duration` and `users` are required.
 # Optional `flags` is a list of arbitrary strings appended to runner.py's
 # argv; runner.py forwards them to locust verbatim.
+#
+# `file` is one path, or a comma-separated list of paths that locust reads as
+# one test. Give the test first, then each load shape. A shape changes the
+# load while the run continues; the shapes are in benchmarking/locust/shapes/.
+#
+# `--ladder users:duration[:trace_probability],...` with
+# shapes/ladder_shape.py in `file` makes a sweep one run. The shape owns the
+# load and the end of the run, thus locust ignores `-t` and `users` is the
+# count before the first tick only. Keep `duration` at the total of the steps:
+# the orchestrator sizes the Job timeout from it.
+#
+# A step of the ladder that gives a trace probability changes the sample rate
+# when the step starts, and the new rate stays until another step changes it.
+# `--trace-probability` in `flags` is the rate before the first such step.
+# Thus a ladder with no probability in any step keeps the rate of the flag.
 #
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #
@@ -103,6 +128,75 @@ tests:
     flags:
       - "--min-wait-time"
       - "0.5"
+      - "--max-wait-time"
+      - "1.0"
+  # The observability ladder of benchmarking/observability.md. Each entry
+  # runs on glutton, and thus on boomer: Python and gRPC hold each other at
+  # a high number of users, which would make the latency of the load
+  # generator part of the measurement.
+  - name: observability_s0_idle_floor
+    type: locust
+    description: "Observability S0: the telemetry of an idle control plane, 5 minutes"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 5m
+    users: 0
+    workerCount: 10
+    flags:
+      # The floor sends no request, thus locust writes no measurement row and
+      # the result of the run is in the telemetry counts only.
+      - "--allow-empty-stats"
+      - "--ladder"
+      - "0:5m"
+      - "--trace-probability"
+      - "0.1"
+  - name: observability_s1_user_sweep
+    type: locust
+    description: "Observability S1: user sweep 5 -> 10 -> 15, 3 minutes for each step"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 9m
+    users: 5
+    workerCount: 10
+    flags:
+      - "--ladder"
+      - "5:3m,10:3m,15:3m"
+      - "--trace-probability"
+      - "0.1"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: observability_s2_sample_rate_sweep
+    type: locust
+    description: "Observability S2: sample rate 0 -> 0.1 -> 1.0 at 10 users, 3 minutes for each step"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 9m
+    users: 10
+    workerCount: 10
+    flags:
+      - "--ladder"
+      - "10:3m:0,10:3m:0.1,10:3m:1.0"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: observability_s3_soak
+    type: locust
+    description: "Observability S3: 12 users for 10 minutes, 80% of the S1 maximum"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 10m
+    users: 12
+    workerCount: 10
+    flags:
+      - "--ladder"
+      - "12:10m"
+      - "--trace-probability"
+      - "0.1"
+      - "--min-wait-time"
+      - "1.0"
       - "--max-wait-time"
       - "1.0"
   - name: durdir_data_baseline

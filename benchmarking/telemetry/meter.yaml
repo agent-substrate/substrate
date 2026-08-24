@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# telemetry-meter: an OTLP sink that counts the telemetry that substrate sends,
+# telemetry-meter: an OTLP tee that counts the telemetry that substrate sends,
 # for each service that sends it.
 #
 # See benchmarking/telemetry/README.md. Send substrate to
@@ -49,6 +49,15 @@ data:
             endpoint: 0.0.0.0:4318
 
     processors:
+      # Refuse data instead of growing the heap until the kernel stops the
+      # container. otelcol_receiver_refused_*, already in the pass criteria
+      # of a run, counts each refusal. The percentages are of the container
+      # memory limit below.
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 80
+        spike_limit_percentage: 15
+
       # The count connector sends deltas. Each batch has a new start timestamp,
       # and the Prometheus exporter reads a new start timestamp as a reset of
       # the counter. Without deltatocumulative the counters do not accumulate,
@@ -122,19 +131,25 @@ data:
         # The collector sends a copy of the data to each pipeline, and it clones
         # the data because transform/svc changes it. Thus the svc attribute that
         # the count needs does not go to the managed collector.
+        #
+        # memory_limiter is first in each pipeline that reads the receiver.
+        # metrics/counts has no limiter: a refusal there would remove the
+        # measurement of the run.
         traces/count:
           receivers: [otlp]
-          processors: [transform/svc]
+          processors: [memory_limiter, transform/svc]
           exporters: [count]
         traces/forward:
           receivers: [otlp]
+          processors: [memory_limiter]
           exporters: [otlp/managed]
         metrics/count:
           receivers: [otlp]
-          processors: [transform/svc]
+          processors: [memory_limiter, transform/svc]
           exporters: [count]
         metrics/forward:
           receivers: [otlp]
+          processors: [memory_limiter]
           exporters: [otlp/managed]
         metrics/counts:
           receivers: [count]
@@ -172,6 +187,12 @@ spec:
       - name: collector
         image: otel/opentelemetry-collector-contrib:0.152.0
         args: ["--config=/conf/config.yaml"]
+        env:
+        # The Go runtime does not read the cgroup limit; without this it sizes
+        # the heap from the memory of the node. Keep it under the hard limit
+        # of memory_limiter, so the runtime collects before the meter refuses.
+        - name: GOMEMLIMIT
+          value: 3000MiB
         ports:
         - {name: otlp-grpc, containerPort: 4317}
         - {name: otlp-http, containerPort: 4318}

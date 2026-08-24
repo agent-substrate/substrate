@@ -1108,6 +1108,27 @@ func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
 	}
 }
 
+// dualStackAdditionalAddresses returns the IPv6 half of a dual-stack ingress
+// listener, to pair with a primary 0.0.0.0 socket on the same port. Ipv4Compat
+// stays false: clearing IPV6_V6ONLY would collide with that primary.
+func dualStackAdditionalAddresses(port int) []*listenerv3.AdditionalAddress {
+	return []*listenerv3.AdditionalAddress{
+		{
+			Address: &corev3.Address{
+				Address: &corev3.Address_SocketAddress{
+					SocketAddress: &corev3.SocketAddress{
+						Address:    "::",
+						Ipv4Compat: false,
+						PortSpecifier: &corev3.SocketAddress_PortValue{
+							PortValue: uint32(port),
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func (x *XdsServer) buildListener() *listenerv3.Listener {
 	hcm := x.buildHcm("ingress_http", true)
 
@@ -1123,6 +1144,7 @@ func (x *XdsServer) buildListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.ingressPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1182,6 +1204,7 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.httpsPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1213,6 +1236,7 @@ func (x *XdsServer) buildConnectTerminateListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.connectPlainTextPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1246,6 +1270,7 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.connectTLSPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{

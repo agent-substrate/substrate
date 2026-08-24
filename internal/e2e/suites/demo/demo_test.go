@@ -124,7 +124,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("failed to create source Actor: %v", err)
 	}
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
 		t.Fatalf("failed to resume source Actor: %v", err)
 	}
 	waitForActorState(ctx, t, clients, sourceName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
@@ -193,7 +193,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("failed to create Actor from snapshot tag: %v", err)
 	}
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
 		t.Fatalf("failed to resume cloned Actor: %v", err)
 	}
 	waitForActorState(ctx, t, clients, cloneName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
@@ -464,7 +464,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -584,7 +584,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorID)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -613,7 +613,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
@@ -669,7 +669,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
@@ -803,7 +803,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -828,7 +828,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
@@ -883,7 +883,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -907,7 +907,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
@@ -981,7 +981,7 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -1055,7 +1055,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 
 	// 2. Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
@@ -1472,7 +1472,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)

@@ -41,12 +41,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/tarutil"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -115,19 +112,8 @@ func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID string)
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking durable-dir volumes dir %q: %w", src, err)
 	}
-	dst := filepath.Join(kata.SharedDir(actorUID), "durable")
-	// Drop any stale mount first (lazy if busy), then ensure clean mountpoint.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return fmt.Errorf("creating %q: %w", dst, err)
-	}
-	cmd := exec.CommandContext(ctx, "mount", "--bind", src, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting durable-dir volumes at %q: %w (%s)", dst, err, strings.TrimSpace(stderr.String()))
+	if err := kata.BindIntoShare(ctx, src, actorUID, "durable"); err != nil {
+		return fmt.Errorf("while binding durable-dir volumes into the shared tree: %w", err)
 	}
 	return nil
 }

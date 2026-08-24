@@ -195,19 +195,12 @@ func StageImageVolume(ctx context.Context, src, id, cid, volumeName string) erro
 	if cid == "" || volumeName == "" {
 		return fmt.Errorf("StageImageVolume: empty container id or volume name")
 	}
+	if err := BindIntoShare(ctx, src, id, filepath.Join(cid, "volumes", volumeName)); err != nil {
+		return fmt.Errorf("while binding image volume %q into the shared tree: %w", volumeName, err)
+	}
+	// Read-only is this volume type's contract (the image is someone else's,
+	// mounted for its contents); the other subtree consumers stay writable.
 	dst := SharedVolumeDir(id, cid, volumeName)
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return fmt.Errorf("creating shared volume dir %q: %w", dst, err)
-	}
-	cmd := exec.CommandContext(ctx, "mount", "--rbind", src, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting image volume %q -> %q: %w (%s)", src, dst, err, strings.TrimSpace(stderr.String()))
-	}
 	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
 	var roErr strings.Builder
 	ro.Stderr = &roErr
@@ -288,6 +281,50 @@ func UnmountMergedRootfs(restoreID, cid string) {
 	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
 		_ = reaper.Run(exec.Command("umount", "-l", dst))
 	}
+}
+
+// BindIntoShare bind-mounts a host directory at SharedDir(id)/<name>, so the
+// ONE virtiofsd serves it to the guest as a subtree of the kataShared mount
+// (--announce-submounts presents it to the guest as its own filesystem).
+//
+// This is THE pattern for exposing another host directory to the guest — the
+// durable-dir and CSI volumes ride it today: a separate share would otherwise
+// pay for its own virtiofsd (a process, a vhost socket, an fs device in every
+// snapshot config and a restore-time revival of all three) per actor, forever.
+// A bind costs one mount, and teardown already covers it: CleanupSandboxState
+// lazily detaches every mount under the sandbox dir first, and will not remove
+// a dir whose mounts it could not all detach, so the source directory (which
+// may belong to atelet, as the volume dirs do) is never deleted through a live
+// bind. Callers must stage binds before StartVirtiofsd, both to keep
+// the served tree complete from the first request and because find-paths
+// migration re-opens a restored guest's open files by path at reconnect.
+//
+// rel is the mount's path relative to the share root: a top-level name sits
+// beside the per-container <cid>/... entries, so it must not collide with a
+// container id (the durable/csi subtrees); a path inside a container's own
+// subtree (the image volumes' <cid>/volumes/<name>) cannot collide at all.
+func BindIntoShare(ctx context.Context, src, id, rel string) error {
+	if rel == "" {
+		return fmt.Errorf("BindIntoShare: empty share-relative path")
+	}
+	dst := filepath.Join(SharedDir(id), rel)
+	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint.
+	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
+		_ = reaper.Run(exec.Command("umount", "-l", dst))
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("creating share subdir %q: %w", dst, err)
+	}
+	// --rbind, not --bind: a source that is itself a mount (a composed image
+	// volume) comes along either way, but only rbind carries mounts nested
+	// beneath it; for the plain-directory sources it is the same operation.
+	cmd := exec.CommandContext(ctx, "mount", "--rbind", src, dst)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := reaper.Run(cmd); err != nil {
+		return fmt.Errorf("bind-mounting %q into the shared tree at %q: %w (%s)", src, dst, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // ReconstructSharedDirFromImage bind-mounts a container's OCI image rootfs at

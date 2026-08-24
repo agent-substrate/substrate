@@ -43,6 +43,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -133,7 +134,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
 	}
 
-	persistence, err := connectStore(ctx)
+	persistence, err := connectStore(shutdownCtx)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
@@ -331,7 +332,10 @@ func connectStore(ctx context.Context) (store.Interface, error) {
 		if *postgresConnectionString == "" {
 			return nil, fmt.Errorf("--store-backend=postgres requires --postgres-connection-string")
 		}
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		if _, err := pgxpool.ParseConfig(*postgresConnectionString); err != nil {
+			return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+		}
+		persistence, err := connectPostgresWithRetries(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
 		}
@@ -339,6 +343,32 @@ func connectStore(ctx context.Context) (store.Interface, error) {
 	default:
 		return nil, fmt.Errorf("unknown --store-backend %q (want redis|postgres)", *storeBackend)
 	}
+}
+
+var (
+	postgresConnectTries  = 30
+	postgresConnectPeriod = 2 * time.Second
+)
+
+func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
+	var connectErr error
+	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		if err == nil {
+			return persistence, nil
+		}
+		connectErr = err
+		slog.WarnContext(ctx, "Failed to connect to PostgreSQL, retrying...", slog.Int("attempt", attempt), slog.Any("err", err))
+		if attempt == postgresConnectTries {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(postgresConnectPeriod):
+		}
+	}
+	return nil, fmt.Errorf("connect to PostgreSQL after %d attempts: %w", postgresConnectTries, connectErr)
 }
 
 // connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if
