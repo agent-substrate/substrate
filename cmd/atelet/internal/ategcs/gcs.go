@@ -23,18 +23,25 @@ import (
 	"sync"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 )
 
 type gcsClient struct {
 	client *storage.Client
-	// pool holds extra clients so concurrent upload parts get their own connections;
+	// opts are how client was built, so the pool below is built the same way.
+	// A pooled client that authenticates differently from the one that opened
+	// an object fails partway through reading it.
+	opts []option.ClientOption
+	// pool holds extra clients so concurrent parts get their own connections;
 	// built on first use by uploadClient.
 	poolOnce sync.Once
 	pool     []*storage.Client
 }
 
-func NewGCSClient(client *storage.Client) ObjectStorage {
-	return &gcsClient{client: client}
+// NewGCSClient wraps client. opts must be the options client was built with;
+// the pool of extra connections is built from them.
+func NewGCSClient(client *storage.Client, opts ...option.ClientOption) ObjectStorage {
+	return &gcsClient{client: client, opts: opts}
 }
 
 // supportsStreamingPut is the streamingPutter marker: the GCS client's PutObject

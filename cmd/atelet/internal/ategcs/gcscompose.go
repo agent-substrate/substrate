@@ -40,7 +40,7 @@ func (g *gcsClient) uploadClient(ctx context.Context, i int) *storage.Client {
 	g.poolOnce.Do(func() {
 		for range uploadPoolSize {
 			// The clients outlive this call, so they must not hold its cancellation.
-			c, err := storage.NewClient(context.WithoutCancel(ctx))
+			c, err := storage.NewClient(context.WithoutCancel(ctx), g.opts...)
 			if err != nil {
 				slog.WarnContext(ctx, "Falling back to one client for part uploads", slog.Any("err", err))
 				return

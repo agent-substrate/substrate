@@ -245,7 +245,7 @@ func main() {
 
 	var wrappedAnonGCS ategcs.ObjectStorage
 	if anonGCSClient != nil {
-		wrappedAnonGCS = ategcs.NewGCSClient(anonGCSClient)
+		wrappedAnonGCS = ategcs.NewGCSClient(anonGCSClient, option.WithoutAuthentication())
 	}
 
 	var wrappedGCS ategcs.ObjectStorage
