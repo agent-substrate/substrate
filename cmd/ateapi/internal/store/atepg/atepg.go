@@ -67,7 +67,11 @@ var _ store.Interface = (*Persistence)(nil)
 // two-connection watch pool (owned by the Persistence, closed by Close) isolates
 // outbox polling and maintenance from write traffic.
 func Connect(ctx context.Context, dsn string) (*Persistence, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := poolConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
@@ -76,10 +80,10 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
 	}
 
-	watchCfg, err := pgxpool.ParseConfig(dsn)
+	watchCfg, err := poolConfig(dsn)
 	if err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("parsing watch pool config: %w", err)
+		return nil, fmt.Errorf("watch pool: %w", err)
 	}
 	watchCfg.MaxConns = watchPoolMaxConns
 	watchCfg.MinConns = watchPoolMinConns
@@ -97,6 +101,40 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 	}
 	p.ownsWatchPool = true
 	return p, nil
+}
+
+// poolConfig parses dsn into a pool configuration whose TLS material is read
+// from disk again for every new connection.
+//
+// pgx resolves sslcert, sslkey and sslrootcert once, when the connection
+// string is parsed, and pins the result for the life of the pool. The paths in
+// use here are projected pod certificates that the kubelet replaces about
+// every day, so a long-lived process would keep presenting the client
+// certificate it started with, and keep trusting only the CAs it started with,
+// until connections started failing. Re-parsing in BeforeConnect costs one
+// small file read per new connection and picks up every rotation.
+func poolConfig(dsn string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+	}
+	usesTLS := cfg.ConnConfig.TLSConfig != nil
+	for _, fallback := range cfg.ConnConfig.Fallbacks {
+		usesTLS = usesTLS || fallback.TLSConfig != nil
+	}
+	if !usesTLS {
+		return cfg, nil
+	}
+	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+		fresh, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			return fmt.Errorf("re-reading PostgreSQL TLS material: %w", err)
+		}
+		cc.TLSConfig = fresh.TLSConfig
+		cc.Fallbacks = fresh.Fallbacks
+		return nil
+	}
+	return cfg, nil
 }
 
 // NewPersistence wraps an already-open pool, applying the idempotent schema.
