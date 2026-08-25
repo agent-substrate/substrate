@@ -339,49 +339,56 @@ func TestMicroVMDeviceRequestsPreserveTemplateResources(t *testing.T) {
 	}
 }
 
-// TestAteomSecurityContextByClass asserts the gVisor worker runs unprivileged
-// with the explicit capability set while the micro-VM worker stays privileged,
-// and that an empty class defaults to gVisor.
+// TestAteomSecurityContextByClass asserts no worker runs privileged: every class
+// drops ALL capabilities and adds back an explicit set. Only the micro-VM class
+// gives up the runtime's default seccomp profile, and only so virtiofsd can keep
+// its own sandbox. An empty class defaults to gVisor.
 func TestAteomSecurityContextByClass(t *testing.T) {
 	tests := []struct {
-		name           string
-		class          atev1alpha1.SandboxClass
-		wantPrivileged bool
-		wantCaps       bool
+		name     string
+		class    atev1alpha1.SandboxClass
+		wantCaps []corev1.Capability
+		// wantSeccompUnconfined is micro-VM only: virtiofsd's sandbox pivot_root()s,
+		// which the default profile denies.
+		wantSeccompUnconfined bool
 	}{
-		{"gvisor default", "", false, true},
-		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, false, true},
-		{"microvm", atev1alpha1.SandboxClassMicroVM, true, false},
+		{"gvisor default", "", ateomGvisorCapabilities, false},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, ateomGvisorCapabilities, false},
+		{"microvm", atev1alpha1.SandboxClassMicroVM, ateomMicroVMCapabilities, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sc := ateomSecurityContext(tt.class)
-			if sc.Privileged == nil || *sc.Privileged != tt.wantPrivileged {
-				t.Errorf("Privileged = %v, want %v", sc.Privileged, tt.wantPrivileged)
+			if sc.Privileged == nil || *sc.Privileged {
+				t.Errorf("Privileged = %v, want false for every class", sc.Privileged)
 			}
 			if sc.RunAsUser == nil || *sc.RunAsUser != 0 || sc.RunAsGroup == nil || *sc.RunAsGroup != 0 {
 				t.Errorf("RunAsUser/Group = %v/%v, want 0/0", sc.RunAsUser, sc.RunAsGroup)
 			}
-			hasCaps := sc.Capabilities != nil && len(sc.Capabilities.Add) > 0
-			if hasCaps != tt.wantCaps {
-				t.Errorf("has capabilities = %v, want %v", hasCaps, tt.wantCaps)
+			if sc.Capabilities == nil {
+				t.Fatalf("capabilities must be set so the default set is dropped")
 			}
-			if tt.wantCaps {
-				if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
-					t.Errorf("capabilities drop = %v, want [ALL]", sc.Capabilities.Drop)
-				}
-				if diff := cmp.Diff(ateomGvisorCapabilities, sc.Capabilities.Add); diff != "" {
-					t.Errorf("capabilities add mismatch (-want +got):\n%s", diff)
-				}
+			if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+				t.Errorf("capabilities drop = %v, want [ALL]", sc.Capabilities.Drop)
 			}
-			// The gVisor worker runs AppArmor-unconfined (runsc + cgroup remount
-			// need mount); the privileged micro-VM worker leaves it unset.
-			wantAppArmor := tt.wantCaps
-			hasAppArmor := sc.AppArmorProfile != nil &&
-				sc.AppArmorProfile.Type != nil &&
-				*sc.AppArmorProfile.Type == corev1.AppArmorProfileTypeUnconfined
-			if hasAppArmor != wantAppArmor {
-				t.Errorf("AppArmor Unconfined = %v, want %v", hasAppArmor, wantAppArmor)
+			if diff := cmp.Diff(tt.wantCaps, sc.Capabilities.Add); diff != "" {
+				t.Errorf("capabilities add mismatch (-want +got):\n%s", diff)
+			}
+			// Every class mounts inside the worker, which the default AppArmor
+			// profile denies.
+			if sc.AppArmorProfile == nil || sc.AppArmorProfile.Type == nil ||
+				*sc.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
+				t.Errorf("AppArmorProfile = %v, want Unconfined", sc.AppArmorProfile)
+			}
+			// gVisor must keep the runtime default (an unset profile), so the
+			// micro-VM relaxation cannot leak to it.
+			gotSeccompUnconfined := sc.SeccompProfile != nil && sc.SeccompProfile.Type != nil &&
+				*sc.SeccompProfile.Type == corev1.SeccompProfileTypeUnconfined
+			if gotSeccompUnconfined != tt.wantSeccompUnconfined {
+				t.Errorf("seccomp Unconfined = %v, want %v", gotSeccompUnconfined, tt.wantSeccompUnconfined)
+			}
+			if !tt.wantSeccompUnconfined && sc.SeccompProfile != nil {
+				t.Errorf("SeccompProfile = %v, want unset so the runtime default applies", sc.SeccompProfile)
 			}
 		})
 	}

@@ -16,6 +16,7 @@ package controllers
 
 import (
 	"os"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -261,30 +262,58 @@ var ateomGvisorCapabilities = []corev1.Capability{
 	"FOWNER", "CHOWN", "MKNOD", "NET_RAW", "SETFCAP",
 }
 
+// ateomMicroVMCapabilities is the capability set an unprivileged micro-VM worker
+// needs: the gVisor set, which covers the same worker-side work, plus FSETID and
+// DAC_READ_SEARCH for virtiofsd. virtiofsd re-applies a fixed set to its
+// sandboxed child, and the kernel refuses to raise a capability the bounding set
+// omits, so without those two it exits with "can't apply the child capabilities"
+// and the VM never gets its virtio-fs device.
+//
+// The hypervisor devices are not capabilities: they come from atelet's device
+// plugin (see maybeApplyMicroVMPodShape).
+var ateomMicroVMCapabilities = slices.Concat(ateomGvisorCapabilities, []corev1.Capability{
+	"FSETID", "DAC_READ_SEARCH",
+})
+
 // ateomSecurityContext returns the ateom container security context for a sandbox
-// class. The gVisor worker runs unprivileged with an explicit capability set; the
-// micro-VM worker stays privileged because kata + cloud-hypervisor needs broad
-// host access (vhost devices, mounts). An empty class defaults to gVisor.
+// class. Neither class runs privileged; they differ in their capability set and
+// in seccomp. An empty class defaults to gVisor.
 func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
+	// Both runtimes mount inside the worker — runsc pivots root and the worker
+	// remounts /sys/fs/cgroup to nest per-actor cgroups; the micro-VM worker
+	// shares /run/kata-containers and remounts /proc/sys — and the default
+	// AppArmor profile denies mount (enforced on GKE COS and Ubuntu, a no-op on
+	// nodes that do not load AppArmor). A privileged worker got this implicitly;
+	// unprivileged must request it. Replacing Unconfined with a tailored profile
+	// per runtime is a follow-up.
 	sc := corev1ac.SecurityContext().
 		WithRunAsUser(0).
-		WithRunAsGroup(0)
-	if class == atev1alpha1.SandboxClassMicroVM {
-		return sc.WithPrivileged(true)
-	}
-	// runsc mounts and pivots root inside the sandbox, and the worker remounts
-	// /sys/fs/cgroup read-write to nest per-actor cgroups; the default AppArmor
-	// profile denies those mounts (enforced on GKE COS, a no-op on nodes that do
-	// not load AppArmor). A privileged worker got this implicitly; unprivileged
-	// must request it. seccomp stays at the runtime default. Confining runsc with
-	// a tailored AppArmor profile instead of Unconfined is a follow-up.
-	return sc.
+		WithRunAsGroup(0).
 		WithPrivileged(false).
-		WithCapabilities(corev1ac.Capabilities().
-			WithDrop("ALL").
-			WithAdd(ateomGvisorCapabilities...)).
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
+
+	if class == atev1alpha1.SandboxClassMicroVM {
+		// Give up the default seccomp profile so virtiofsd keeps its own sandbox,
+		// which pivot_root()s — a syscall the profile denies whatever capabilities
+		// the worker holds. The trade favors containing the guest: virtiofsd parses
+		// requests from it, so its namespaces are part of the guest-to-host
+		// boundary, while the pod-wide profile mostly confines ateom, which we
+		// trust. Both guest-facing processes confine themselves anyway, virtiofsd
+		// with its own seccomp filter and nine capabilities, cloud-hypervisor with
+		// per-thread filters.
+		return sc.
+			WithCapabilities(corev1ac.Capabilities().
+				WithDrop("ALL").
+				WithAdd(ateomMicroVMCapabilities...)).
+			WithSeccompProfile(corev1ac.SeccompProfile().
+				WithType(corev1.SeccompProfileTypeUnconfined))
+	}
+	// gVisor needs no such relaxation and keeps the runtime default.
+	return sc.
+		WithCapabilities(corev1ac.Capabilities().
+			WithDrop("ALL").
+			WithAdd(ateomGvisorCapabilities...))
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
@@ -321,8 +350,8 @@ func maybeApplyMicroVMPodShape(
 	// scheduler only picks nodes advertising the resource, and atelet advertises
 	// it only where the device exists. That is derived from the node itself,
 	// unlike an ate.dev/sandboxClass label, which is a hand-applied convention
-	// that can be wrong in both directions (a labelled node without KVM takes
-	// pods that then fail at runtime; an unlabelled KVM node is invisible
+	// that can be wrong in both directions (a labeled node without KVM takes
+	// pods that then fail at runtime; an unlabeled KVM node is invisible
 	// capacity). Note this makes the pool depend on atelet having registered:
 	// with no node advertising the resource, workers stay Pending rather than
 	// landing somewhere they cannot run.
