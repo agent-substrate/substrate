@@ -743,7 +743,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	unguarded := proto.Clone(created).(*ateapipb.Actor)
 	unguarded.Metadata.Uid, unguarded.Metadata.Version = "", 0
 	_, err := update(unguarded, "blind")
-	assertGrpcError(t, err, codes.InvalidArgument, "[actor.metadata.uid: Required value, actor.metadata.version: Required value]")
+	assertGrpcError(t, err, codes.InvalidArgument, "while updating actor test-atespace/id1: persistence: precondition required: uid")
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it

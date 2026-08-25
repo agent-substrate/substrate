@@ -303,9 +303,6 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrImmutableField) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating actor %s: %v", actorRef, err)
-		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}

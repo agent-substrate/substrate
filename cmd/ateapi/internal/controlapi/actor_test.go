@@ -580,7 +580,7 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}, {
 		"missing actor.metadata.uid precondition",
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Uid = "" }))),
-		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "uid"), "")},
+		nil,
 	}, {
 		"invalid actor.metadata.uid precondition",
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Uid = "not-a-uuid" }))),
@@ -588,7 +588,7 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}, {
 		"missing actor.metadata.version precondition",
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Version = 0 }))),
-		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "version"), "")},
+		nil,
 	}, {
 		"negative actor.metadata.version precondition",
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Version = -1 }))),
@@ -599,10 +599,7 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 			m.Uid = ""
 			m.Version = 0
 		}))),
-		field.ErrorList{
-			field.Required(field.NewPath("actor", "metadata", "uid"), ""),
-			field.Required(field.NewPath("actor", "metadata", "version"), ""),
-		},
+		nil,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
