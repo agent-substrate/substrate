@@ -87,26 +87,6 @@ type resumeCallResult struct {
 	err      error
 }
 
-// resumeFlight is one in-flight, per-actor resume that concurrent requests
-// share. It replaces a singleflight.Group entry so callers can observe the
-// flight mid-run: parked exposes the park transition, which singleflight's
-// result-only channel cannot.
-type resumeFlight struct {
-	// parked is closed at most once, at the flight's first retryable error —
-	// the moment the flight stops resolving and starts waiting. A caller woken
-	// by it (or attaching after it) must hold a parking-lot slot to keep
-	// waiting. Never closed on the fast path.
-	parked chan struct{}
-	// done is closed exactly once, after result is written and the flight is
-	// deleted from the registry. The write-result-then-close order is what
-	// lets every caller read result without further synchronization; the
-	// delete-then-close order is what keeps a completed flight unjoinable (the
-	// next request for the actor starts a fresh flight).
-	done chan struct{}
-	// result is the shared outcome, written exactly once before done closes.
-	result *resumeCallResult
-}
-
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
 	apiClient ateapipb.ControlClient
@@ -224,7 +204,7 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	r.mu.Lock()
 	f, ok := r.flights[key]
 	if !ok {
-		f = &resumeFlight{parked: make(chan struct{}), done: make(chan struct{})}
+		f = newResumeFlight()
 		r.flights[key] = f
 		go r.runFlight(f, key, actorRef, reqID, callerSpanCtx)
 	}
@@ -263,7 +243,6 @@ func (r *ActorResumer) runFlight(f *resumeFlight, key string, actorRef resources
 
 	var resumeResp *ateapipb.ResumeActorResponse
 	var lastRetryErr error
-	parkedSignaled := false
 
 	err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(context.Context) (bool, error) {
 		var err error
@@ -275,19 +254,20 @@ func (r *ActorResumer) runFlight(f *resumeFlight, key string, actorRef resources
 		}
 
 		if r.retryable(err) {
-			if !parkedSignaled {
-				// The flight stopped resolving and started waiting: from here
-				// on, callers must hold parking-lot slots to keep waiting.
-				// Signaled at most once; only this goroutine closes it.
-				parkedSignaled = true
-				close(f.parked)
-			}
+			f.park()
 			lastRetryErr = err // remember it in case the budget elapses
 			return false, nil  // park: retry until the budget elapses
 		}
 		return false, err
 	})
 
+	r.publish(f, key, flightResult(bgCtx, resumeResp, err, lastRetryErr, reqID))
+}
+
+// flightResult classifies the retry loop's terminal state into the shared
+// result every caller attached to the flight receives. bgCtx is the flight's
+// budget context, consulted only for whether the budget expired.
+func flightResult(bgCtx context.Context, resumeResp *ateapipb.ResumeActorResponse, err, lastRetryErr error, reqID uint64) *resumeCallResult {
 	result := &resumeCallResult{leaderID: reqID}
 	switch {
 	case err == nil:
@@ -312,16 +292,7 @@ func (r *ActorResumer) runFlight(f *resumeFlight, key string, actorRef resources
 	default:
 		result.err = err
 	}
-
-	// Publish in this order: result before done (the channel close is what
-	// makes the write visible to callers), and registry delete before done (so
-	// no caller can attach to a completed flight — the next request for this
-	// actor starts a fresh one, preserving forget-on-completion semantics).
-	f.result = result
-	r.mu.Lock()
-	delete(r.flights, key)
-	r.mu.Unlock()
-	close(f.done)
+	return result
 }
 
 // awaitFlight waits for f's outcome on behalf of one caller. The wait is
@@ -374,34 +345,4 @@ func (r *ActorResumer) enterLot(ctx context.Context) (func(parkOutcome), bool) {
 		return func(parkOutcome) {}, true
 	}
 	return r.lot.enter(ctx)
-}
-
-// callerResult classifies f's completed outcome for one caller. It must only
-// be called after f.done is closed.
-func (f *resumeFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
-	res := f.result
-	if res == nil {
-		return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
-	}
-
-	// On error, return ResumeOutcomeNone ("none") so the failure is tagged
-	// under the 'outcome' label rather than misreported as an activation.
-	if res.err != nil {
-		return nil, ResumeOutcomeNone, res.err
-	}
-
-	// Disambiguate the shared-flight resume outcome:
-	// - ResumeOutcomeNone ("none"): resumed == false, actor was already active/running.
-	// - ResumeOutcomeTriggered ("triggered"): Cold activation leader (resumed == true, caller's reqID == leaderID).
-	// - ResumeOutcomeJoined ("joined"): Cold activation joiner (resumed == true, caller's reqID != leaderID).
-	outcome := ResumeOutcomeNone
-	if res.resumed {
-		if res.leaderID == reqID {
-			outcome = ResumeOutcomeTriggered
-		} else {
-			outcome = ResumeOutcomeJoined
-		}
-	}
-
-	return res.actor, outcome, nil
 }
