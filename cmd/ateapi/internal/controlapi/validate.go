@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/reflect/protorange"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -129,14 +130,13 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 		return nil // handled by DV
 	}
 
-	// TODO: Once we drop the fieldmask, we can do a full validation of the
-	// input actor and don't need these.  Until then, opaqueType limits what DV
-	// can do to just ensuring that the actor.metadata field is specified.
+	// Updates are validated in 2 steps: first the update request and then the
+	// resource itself. DV for the request doesn't descend into the resource
+	// metadata.  Once DV supports nested subfield tags, this can be changed to
+	// something like:
+	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
 	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
-	if actor.Metadata.Atespace == "" {
-		errs = append(errs, field.Required(fldPath.Child("metadata", "atespace"), ""))
-	}
-
+	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &actor.Metadata.Atespace, nil)...)
 	return errs
 }
 
