@@ -18,26 +18,39 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
-
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"slices"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ocispec"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 type runsc struct {
 	path     string
 	actorUID string
-	// size is the actor's declared limits, supplied on the RunWorkload /
-	// RestoreWorkload RPC; ensureContainerCgroupsPath writes it into the OCI spec.
+	// size is the actor's declared limits.
 	size sizing.SandboxSize
+	// durableVolumes are the durable-dir volume names declared to the sandbox.
+	durableVolumes []string
+}
+
+// durableVolumeNames returns the sorted, deduplicated durable-dir volume names
+// mounted by workload containers.
+func durableVolumeNames(spec *ateompb.WorkloadSpec) []string {
+	var names []string
+	for _, c := range spec.GetContainers() {
+		for _, m := range c.GetDurableDirVolumeMounts() {
+			names = append(names, m.GetVolumeName())
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // nvproxyGlobalArgs returns the runsc global flags for GPU sandboxes, enabling
@@ -57,43 +70,20 @@ func nvproxyGlobalArgs() []string {
 	return nil
 }
 
-// ensureContainerCgroupsPath sets the OCI spec's cgroupsPath so runsc creates a
-// per-container cgroup leaf under the worker pod's own cgroup (see
-// setupCgroupDelegation). atelet emits a runtime-agnostic spec with no
-// cgroupsPath; the gVisor ateom fills in its own convention here, mirroring how
-// the micro-VM ateom assigns /ateomchv/<id> in ensureKataCompatibleSpec. The
-// path is colon-free (so runsc uses the cgroupfs driver, not systemd) and
-// absolute, so it resolves under the pod scope in the worker's private cgroup
-// namespace.
-func (r *runsc) ensureContainerCgroupsPath(containerName string) error {
-	specPath := filepath.Join(ateompath.OCIBundlePath(r.actorUID, containerName), "config.json")
-	b, err := os.ReadFile(specPath)
+// shapeSpec loads, shapes for gVisor, and saves the container's OCI spec.
+func (r *runsc) shapeSpec(containerName string) error {
+	bundle := ateompath.OCIBundlePath(r.actorUID, containerName)
+	spec, err := ocispec.Load(bundle)
 	if err != nil {
-		return fmt.Errorf("reading %q: %w", specPath, err)
+		return err
 	}
-	var spec specs.Spec
-	if err := json.Unmarshal(b, &spec); err != nil {
-		return fmt.Errorf("parsing %q: %w", specPath, err)
-	}
-	if spec.Linux == nil {
-		spec.Linux = &specs.Linux{}
-	}
-	if spec.Linux.CgroupsPath == "" {
-		spec.Linux.CgroupsPath = "/" + containerName
-	}
-	// Right-size the per-container cgroup leaf to the actor's declared limits;
-	// runsc applies spec.Linux.Resources when it creates the leaf. gVisor is the
-	// only caller: ateom-microvm sizes the VM itself and applies per-container
-	// limits through the kata-agent instead.
-	r.size.ApplyToOCISpec(&spec)
-	out, err := json.MarshalIndent(&spec, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling %q: %w", specPath, err)
-	}
-	if err := os.WriteFile(specPath, out, 0o600); err != nil {
-		return fmt.Errorf("writing %q: %w", specPath, err)
-	}
-	return nil
+	ocispec.ShapeGVisor(spec, ocispec.GVisorOptions{
+		ActorUID:       r.actorUID,
+		ContainerName:  containerName,
+		DurableVolumes: r.durableVolumes,
+		Size:           r.size,
+	})
+	return ocispec.Save(bundle, spec)
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
@@ -102,8 +92,8 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 
 	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
 
-	if err := r.ensureContainerCgroupsPath(containerName); err != nil {
-		return fmt.Errorf("while setting cgroups path for %q: %w", containerName, err)
+	if err := r.shapeSpec(containerName); err != nil {
+		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
 	}
 
 	args := []string{
@@ -252,8 +242,8 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 
 	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
 
-	if err := r.ensureContainerCgroupsPath(containerName); err != nil {
-		return fmt.Errorf("while setting cgroups path for %q: %w", containerName, err)
+	if err := r.shapeSpec(containerName); err != nil {
+		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
 	}
 
 	restoreArgs := []string{

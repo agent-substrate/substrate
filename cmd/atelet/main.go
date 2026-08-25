@@ -45,6 +45,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -1533,30 +1534,15 @@ func (s *AteomHerder) prepareOCIBundles(
 
 	// Pause container.
 	g.Go(func() error {
-		annotations := map[string]string{
-			"io.kubernetes.cri.container-type": "sandbox",
-			"io.kubernetes.cri.container-name": "pause",
-		}
-		// Declare durable-dir volumes to gVisor. We use the volume name as the
-		// mount hint name to support multiple durable-dir volumes.
-		for _, vol := range spec.GetVolumes() {
-			if vol.GetDurableDir() != nil {
-				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.type", vol.GetName())] = "bind"
-				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.share", vol.GetName())] = "container"
-				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.source", vol.GetName())] = ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
-			}
-		}
-
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.imageCache,
 			actorUID,
-			"pause",
+			ocispec.PauseContainer,
 			pauseImage,
 			[]string{"/pause"},
 			nil,
 			nil,
-			annotations,
 			ateompath.AteomNetNSPath(targetAteomUid),
 			nil, // pause is sandbox infra; it mounts no volumes.
 			nil,
@@ -1585,11 +1571,6 @@ func (s *AteomHerder) prepareOCIBundles(
 				ctr.GetCommand(),
 				ctr.GetArgs(),
 				envs,
-				map[string]string{
-					"io.kubernetes.cri.container-type": "container",
-					"io.kubernetes.cri.sandbox-id":     "pause",
-					"io.kubernetes.cri.container-name": ctr.GetName(),
-				},
 				ateompath.AteomNetNSPath(targetAteomUid),
 				spec.GetVolumes(),
 				ctr.GetVolumeMounts(),
