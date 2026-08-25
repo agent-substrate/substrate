@@ -87,7 +87,7 @@ service Control {
   // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
-  // Create a new Atespace. Substrate-native, stored in PostgreSQL.
+  // Create a new Atespace. Substrate-native, stored in database.
   rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {}
 
   // Get an Atespace by name.
