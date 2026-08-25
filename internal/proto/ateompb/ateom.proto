@@ -99,6 +99,9 @@ service Ateom {
   // mutex.
   rpc GetActiveWorkloadStats(GetActiveWorkloadStatsRequest) returns (GetActiveWorkloadStatsResponse) {}
 
+  // GetWorkloadHealth reports whether the executing workload is still alive.
+  rpc GetWorkloadHealth(GetWorkloadHealthRequest) returns (GetWorkloadHealthResponse) {}
+
   // TerminateWorkload stops and deletes container workloads and cleans up
   // network and bundle overlays on ateom.
   rpc TerminateWorkload(TerminateWorkloadRequest) returns (TerminateWorkloadResponse) {}
@@ -457,4 +460,44 @@ message GetActiveWorkloadStatsResponse {
     WorkloadStatsSample sample = 1;
     NoSampleReason no_sample_reason = 2;
   }
+}
+
+message GetWorkloadHealthRequest {
+  // The actor the caller believes is executing here. Same contract as
+  // GetWorkloadStatsRequest.actor_uid: ateom answers NOT_FOUND on a mismatch
+  // (or when it is available) rather than answering under the requested
+  // actor's identity. Misattribution is worse here than for stats -- it would
+  // let a caller report a different actor's exit as the requested actor's
+  // crash.
+  string actor_uid = 1;
+}
+
+// WorkloadHealth is the liveness of the workload an ateom is executing.
+enum WorkloadHealth {
+  WORKLOAD_HEALTH_UNSPECIFIED = 0;
+  // A workload is executing and has not been observed to exit.
+  WORKLOAD_HEALTH_EXECUTING = 1;
+  // A workload process exited outside of a control-plane teardown: the caller
+  // should report the actor crashed. Terminal for this activation.
+  WORKLOAD_HEALTH_EXITED = 2;
+}
+
+message GetWorkloadHealthResponse {
+  WorkloadHealth health = 1;
+
+  // Identity echo, like WorkloadStatsSample, so the caller holds no
+  // worker-to-actor mapping.
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
+
+  // Which container's process exited and when. Set only for EXITED.
+  string exited_container = 5;
+  int64 exited_at_unix_nano = 6;
+
+  // The exited container's exit code (128+signal when killed by a signal),
+  // when the runtime observed it. Unset when the exit was detected but the
+  // code is unknown (wait lost to the host reaper / dead guest confirmed by
+  // probing), mirroring CRI ContainerStatus.exit_code.
+  optional int32 exit_code = 7;
 }

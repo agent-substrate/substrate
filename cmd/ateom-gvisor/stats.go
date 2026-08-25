@@ -109,11 +109,11 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	if active == nil {
 		return nil, status.Errorf(codes.NotFound, "ateom is available; it is not executing actor %q", req.GetActorUid())
 	}
-	if active.UID != req.GetActorUid() {
-		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.UID, req.GetActorUid())
+	if active.attribution.UID != req.GetActorUid() {
+		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.attribution.UID, req.GetActorUid())
 	}
 
-	sample, err := s.sampleSandbox(active)
+	sample, err := s.sampleSandbox(&active.attribution)
 	if err != nil {
 		// The requested actor is the active one but its cgroup is not there.
 		// Most often that is a poll landing in the boot: the ateom retains the
@@ -132,8 +132,8 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// Re-check that the same workload is still the active one. The read above
 	// holds no lock, so a checkpoint plus a fresh run can complete underneath it,
 	// and the numbers would then belong to an actor other than the one being
-	// reported. Pointer identity is enough: activeActor is stored as a new
-	// pointer on every Run and Restore and never mutated in place, so an
+	// reported. Pointer identity is enough: every Run and Restore stores a
+	// fresh activation and the attribution is never mutated in place, so an
 	// unchanged pointer means no transition happened across the read.
 	//
 	// NOT_FOUND, like the two checks above and for the same reason: the requested
@@ -157,7 +157,7 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD), nil
 	}
 
-	sample, err := s.sampleSandbox(active)
+	sample, err := s.sampleSandbox(&active.attribution)
 	if err != nil {
 		// A missing cgroup is a workload with no numbers yet -- a poll landing
 		// in the boot -- which for a caller with no prior knowledge is as
@@ -187,6 +187,47 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 	}, nil
 }
 
+// GetWorkloadHealth implements ateompb.Ateom/GetWorkloadHealth from the exit
+// monitor's record. Reads only the activation's atomics -- never the sandbox
+// and never s.lock, pinned by TestGetWorkloadHealthDoesNotTakeLock.
+func (s *AteomService) GetWorkloadHealth(ctx context.Context, req *ateompb.GetWorkloadHealthRequest) (*ateompb.GetWorkloadHealthResponse, error) {
+	if req.GetActorUid() == "" {
+		return nil, status.Error(codes.InvalidArgument, "actor_uid is required")
+	}
+
+	// NOT_FOUND for both, same contract as GetWorkloadStats: the requested
+	// actor is not here, and the caller's worker-to-actor mapping wants
+	// re-resolving. No re-check after the load — everything below reads the
+	// one activation's atomics, there is no sampling to race with.
+	active := s.activeActor.Load()
+	if active == nil {
+		return nil, status.Errorf(codes.NotFound, "ateom is available; it is not executing actor %q", req.GetActorUid())
+	}
+	if active.attribution.UID != req.GetActorUid() {
+		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.attribution.UID, req.GetActorUid())
+	}
+
+	resp := &ateompb.GetWorkloadHealthResponse{
+		Health:    ateompb.WorkloadHealth_WORKLOAD_HEALTH_EXECUTING,
+		Atespace:  active.attribution.Ref.Atespace,
+		ActorName: active.attribution.Ref.Name,
+		ActorUid:  active.attribution.UID,
+	}
+	// The record lives on the activation itself, so a late write from a
+	// previous activation's waiter cannot reach it — no fencing needed, even
+	// for a re-activation of the same actor with the same UID.
+	if exited := active.exited.Load(); exited != nil {
+		resp.Health = ateompb.WorkloadHealth_WORKLOAD_HEALTH_EXITED
+		resp.ExitedContainer = exited.container
+		resp.ExitedAtUnixNano = exited.observedAt.UnixNano()
+		if exited.exitCode != nil {
+			code := *exited.exitCode
+			resp.ExitCode = &code
+		}
+	}
+	return resp, nil
+}
+
 // noSample is the discovery read's "nothing to give, and that is normal"
 // answer.
 func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResponse {
@@ -199,7 +240,7 @@ func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResp
 // active. Errors come back raw -- notably fs.ErrNotExist for a cgroup that is
 // not there yet -- because the two RPCs disagree on what that means: an error
 // code for the keyed read, a normal EXECUTING answer for the discovery read.
-// Callers re-check s.activeActor against the pointer they loaded after this
+// Callers re-check s.activeActor against the activation they loaded after this
 // returns; the read holds no lock.
 func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
 	read := s.readSandboxCgroup

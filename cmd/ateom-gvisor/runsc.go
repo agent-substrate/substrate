@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -316,25 +317,50 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	return nil
 }
 
-func (r *runsc) cmdState(ctx context.Context, containerName string) error {
-	reapLock.RLock()
-	defer reapLock.RUnlock()
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+// stateArgs builds the argv for `runsc state <container>`. Factored out so the
+// argument construction can be unit-tested without executing runsc.
+func (r *runsc) stateArgs(containerName string) []string {
+	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
 		"state",
 		containerName,
-	)
+	}
+}
+
+func (r *runsc) cmdState(ctx context.Context, containerName string) error {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	cmd := exec.CommandContext(ctx, r.path, r.stateArgs(containerName)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc state`: %w", err)
 	}
 	return nil
+}
+
+// cmdStateStatus returns the OCI status ("running", "stopped", ...) that
+// `runsc state <container>` reports. Holding reapLock keeps the reaper away
+// from this short-lived child, so — unlike cmdWait — the answer is reliable.
+func (r *runsc) cmdStateStatus(ctx context.Context, containerName string) (string, error) {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	var out bytes.Buffer
+	cmd := exec.CommandContext(ctx, r.path, r.stateArgs(containerName)...)
+	cmd.Stdout = &out
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("while running `runsc state`: %w", err)
+	}
+	var state specs.State
+	if err := json.Unmarshal(out.Bytes(), &state); err != nil {
+		return "", fmt.Errorf("while parsing `runsc state` output: %w", err)
+	}
+	return string(state.Status), nil
 }
 
 // killArgs builds the argv for `runsc kill <container> <signal>`. Factored out
@@ -379,24 +405,45 @@ func (r *runsc) waitArgs(containerName string) []string {
 	}
 }
 
-// cmdWait blocks until the given container's process exits. Used during
-// graceful shutdown to confirm the actor has stopped before ateom exits.
+// cmdWait blocks until the given container's process exits and reports the
+// exit code the wait observed. A nil error means the container exited; a nil
+// code with a nil error means it exited but the code was unreadable.
 //
-// We deliberately DO NOT acquire reapLock here. If we held reapLock.RLock()
-// during this long wait, a pending background reaper write lock (reapLock.Lock())
-// would block, starving any subsequent read lock attempts (like CheckpointWorkload
-// which needs to run runsc checkpoint).
-func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
+// Unlike the other runsc commands, we deliberately DO NOT acquire reapLock
+// here. If we held reapLock.RLock() during this long wait, a pending
+// background reaper write lock (reapLock.Lock()) would block, starving any
+// subsequent read lock attempts (like CheckpointWorkload which needs to run
+// runsc checkpoint). The cost is that the reaper can steal the child's exit
+// status, failing the command with ECHILD while the container still runs.
+// TODO: We can fix this by forking the reap.ReapChildren() call in main.
+func (r *runsc) cmdWait(ctx context.Context, containerName string) (*int32, error) {
 	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
 
+	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, r.path, r.waitArgs(containerName)...)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		// TODO: If the background child reaper collects the runsc wait process before
-		// cmd.Run's own wait finishes, it returns ECHILD. In these cases we return an error
-		// when we shouldn't. We can fix this by forking the reap.ReapChildren() call in main.
-		return fmt.Errorf("while running `runsc wait`: %w", err)
+		return nil, fmt.Errorf("while running `runsc wait`: %w", err)
 	}
-	return nil
+	code, err := parseWaitExitStatus(out.Bytes())
+	if err != nil {
+		slog.WarnContext(ctx, "Container exited but its exit code was unreadable",
+			slog.String("container", containerName), slog.Any("err", err))
+		return nil, nil
+	}
+	return &code, nil
+}
+
+// parseWaitExitStatus extracts the exit code from `runsc wait`'s stdout, a
+// single {"id", "exitStatus"} JSON object (128+signal when signaled).
+func parseWaitExitStatus(out []byte) (int32, error) {
+	var result struct {
+		ID         string `json:"id"`
+		ExitStatus int    `json:"exitStatus"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return 0, fmt.Errorf("while parsing `runsc wait` output: %w", err)
+	}
+	return int32(result.ExitStatus), nil
 }

@@ -61,7 +61,7 @@ import (
 //
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
-func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (resp *ateompb.CheckpointWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -105,6 +105,16 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
 	ra := s.running[actorUID]
+	// The pause and teardown below are intentional; stop the exit monitor
+	// first. An exit recorded before this point is kept — it is the evidence
+	// a checkpoint of the dead workload can never succeed.
+	if ra != nil {
+		ra.stopExitMonitor()
+	}
+	// TODO: a failed checkpoint can leave the guest running (or paused),
+	// unreachable (networking is already deactivated) and now unmonitored;
+	// the failed CheckpointWorkload should tear the workload down and return
+	// a crash-classified error instead of leaving it behind.
 	chSocket := kata.CLHSocketPath(actorUID)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket
@@ -284,6 +294,10 @@ func listFiles(dir string) ([]string, error) {
 // teardownActor stops the ateom-owned CH VMM for an actor. ra may be
 // nil (e.g. ateom restarted and lost in-memory state).
 func (s *AteomService) teardownActor(ctx context.Context, id string, ra *runningActor, client *ch.Client) error {
+	// This teardown is intentional; the exit monitor must not record it.
+	if ra != nil {
+		ra.stopExitMonitor()
+	}
 	// Stop offering the guest to GetWorkloadStats first, before anything below
 	// makes it stop answering. Clearing it here rather than alongside the
 	// attribution is what keeps a poll that lands mid-teardown on the

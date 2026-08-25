@@ -93,6 +93,7 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		if ra == nil {
 			continue
 		}
+		ra.stopExitMonitor()
 		targets = append(targets, drainTarget{id: id, agent: ra.guestAgent, workloadIDs: ra.workloadIDs})
 	}
 

@@ -38,6 +38,7 @@ const (
 	Ateom_RestoreWorkload_FullMethodName        = "/ateom.Ateom/RestoreWorkload"
 	Ateom_GetWorkloadStats_FullMethodName       = "/ateom.Ateom/GetWorkloadStats"
 	Ateom_GetActiveWorkloadStats_FullMethodName = "/ateom.Ateom/GetActiveWorkloadStats"
+	Ateom_GetWorkloadHealth_FullMethodName      = "/ateom.Ateom/GetWorkloadHealth"
 	Ateom_TerminateWorkload_FullMethodName      = "/ateom.Ateom/TerminateWorkload"
 )
 
@@ -121,6 +122,8 @@ type AteomClient interface {
 	// it is a pure read, safe on a timer, and does not touch the lifecycle
 	// mutex.
 	GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error)
+	// GetWorkloadHealth reports whether the executing workload is still alive.
+	GetWorkloadHealth(ctx context.Context, in *GetWorkloadHealthRequest, opts ...grpc.CallOption) (*GetWorkloadHealthResponse, error)
 	// TerminateWorkload stops and deletes container workloads and cleans up
 	// network and bundle overlays on ateom.
 	TerminateWorkload(ctx context.Context, in *TerminateWorkloadRequest, opts ...grpc.CallOption) (*TerminateWorkloadResponse, error)
@@ -178,6 +181,16 @@ func (c *ateomClient) GetActiveWorkloadStats(ctx context.Context, in *GetActiveW
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetActiveWorkloadStatsResponse)
 	err := c.cc.Invoke(ctx, Ateom_GetActiveWorkloadStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) GetWorkloadHealth(ctx context.Context, in *GetWorkloadHealthRequest, opts ...grpc.CallOption) (*GetWorkloadHealthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWorkloadHealthResponse)
+	err := c.cc.Invoke(ctx, Ateom_GetWorkloadHealth_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +287,8 @@ type AteomServer interface {
 	// it is a pure read, safe on a timer, and does not touch the lifecycle
 	// mutex.
 	GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error)
+	// GetWorkloadHealth reports whether the executing workload is still alive.
+	GetWorkloadHealth(context.Context, *GetWorkloadHealthRequest) (*GetWorkloadHealthResponse, error)
 	// TerminateWorkload stops and deletes container workloads and cleans up
 	// network and bundle overlays on ateom.
 	TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error)
@@ -301,6 +316,9 @@ func (UnimplementedAteomServer) GetWorkloadStats(context.Context, *GetWorkloadSt
 }
 func (UnimplementedAteomServer) GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActiveWorkloadStats not implemented")
+}
+func (UnimplementedAteomServer) GetWorkloadHealth(context.Context, *GetWorkloadHealthRequest) (*GetWorkloadHealthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkloadHealth not implemented")
 }
 func (UnimplementedAteomServer) TerminateWorkload(context.Context, *TerminateWorkloadRequest) (*TerminateWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TerminateWorkload not implemented")
@@ -416,6 +434,24 @@ func _Ateom_GetActiveWorkloadStats_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Ateom_GetWorkloadHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkloadHealthRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).GetWorkloadHealth(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_GetWorkloadHealth_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).GetWorkloadHealth(ctx, req.(*GetWorkloadHealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Ateom_TerminateWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TerminateWorkloadRequest)
 	if err := dec(in); err != nil {
@@ -460,6 +496,10 @@ var Ateom_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetActiveWorkloadStats",
 			Handler:    _Ateom_GetActiveWorkloadStats_Handler,
+		},
+		{
+			MethodName: "GetWorkloadHealth",
+			Handler:    _Ateom_GetWorkloadHealth_Handler,
 		},
 		{
 			MethodName: "TerminateWorkload",

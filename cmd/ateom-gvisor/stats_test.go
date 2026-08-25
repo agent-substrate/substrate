@@ -34,12 +34,14 @@ import (
 )
 
 // The lifecycle transitions that maintain s.activeActor — set by RunWorkload and
-// RestoreWorkload, cleared by CheckpointWorkload — have no unit test, because
-// those three RPCs each reach for netlink, runsc, and the worker pod's netns
-// within a few lines of entry and cannot be driven from `go test`. The mapping
-// they use is covered in internal/ateomstats; the transitions are verified end
-// to end. What is testable here is everything GetWorkloadStats does with the
-// result, which is where the polling loop will actually live.
+// RestoreWorkload, cleared by CheckpointWorkload — have no happy-path unit test,
+// because those three RPCs each reach for netlink, runsc, and the worker pod's
+// netns within a few lines of entry and cannot be driven from `go test` (the
+// pre-boot failure window is the exception, pinned by
+// TestFailedActivationDoesNotLinger). The mapping they use is covered in
+// internal/ateomstats; the transitions are verified end to end. What is
+// testable here is everything GetWorkloadStats does with the result, which is
+// where the polling loop will actually live.
 
 var testActor = resources.ActorAttribution{
 	Ref:               resources.ActorRef{Atespace: "space-a", Name: "actor-a"},
@@ -80,7 +82,7 @@ func newStatsService(t *testing.T, files map[string]string) *AteomService {
 
 func TestGetWorkloadStats(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
-	s.activeActor.Store(&testActor)
+	s.activeActor.Store(&activation{attribution: testActor})
 
 	before := time.Now().UnixNano()
 	got, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
@@ -118,8 +120,8 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		name string
 		// files is the fixture sandbox cgroup; nil means the directory is absent.
 		files map[string]string
-		// active is stored into activeActor when non-nil; nil leaves the ateom
-		// "available".
+		// active becomes the stored activation's attribution when non-nil; nil
+		// leaves the ateom "available".
 		active   *resources.ActorAttribution
 		actorUID string
 		want     codes.Code
@@ -176,7 +178,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStatsService(t, tc.files)
 			if tc.active != nil {
-				s.activeActor.Store(tc.active)
+				s.activeActor.Store(&activation{attribution: *tc.active})
 			}
 
 			resp, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: tc.actorUID})
@@ -197,7 +199,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 // assertion.
 func TestGetWorkloadStatsDoesNotTakeLock(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
-	s.activeActor.Store(&testActor)
+	s.activeActor.Store(&activation{attribution: testActor})
 
 	// Stands in for a RunWorkload or CheckpointWorkload in flight, which hold the
 	// lock across their entire bodies.
@@ -221,7 +223,7 @@ func TestAteomServiceStartsAvailable(t *testing.T) {
 
 func TestGetActiveWorkloadStats(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
-	s.activeActor.Store(&testActor)
+	s.activeActor.Store(&activation{attribution: testActor})
 
 	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
@@ -266,7 +268,7 @@ func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 // workers.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 	s := newStatsService(t, nil) // no cgroup directory: a poll landing mid-boot
-	s.activeActor.Store(&testActor)
+	s.activeActor.Store(&activation{attribution: testActor})
 
 	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
@@ -301,9 +303,13 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStatsService(t, healthyCgroup)
-			s.activeActor.Store(&testActor)
+			s.activeActor.Store(&activation{attribution: testActor})
 			s.readSandboxCgroup = func(dir string) (cgroupstats.Sample, error) {
-				s.activeActor.Store(tc.to)
+				if tc.to == nil {
+					s.activeActor.Store(nil)
+				} else {
+					s.activeActor.Store(&activation{attribution: *tc.to})
+				}
 				return cgroupstats.Read(dir)
 			}
 
@@ -326,7 +332,7 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 // exists, so the answer is NOT_FOUND -- its mapping wants re-resolving.
 func TestGetWorkloadStatsTransition(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
-	s.activeActor.Store(&testActor)
+	s.activeActor.Store(&activation{attribution: testActor})
 	s.readSandboxCgroup = func(dir string) (cgroupstats.Sample, error) {
 		s.activeActor.Store(nil)
 		return cgroupstats.Read(dir)

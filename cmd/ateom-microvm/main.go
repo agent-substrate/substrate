@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -47,7 +48,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
@@ -422,22 +422,24 @@ type AteomService struct {
 	// CH it relaunched).
 	running map[string]*runningActor
 
-	// activeActor is the actor whose workload this ateom is currently running,
-	// or nil when it is "available". An ateom serves one actor at a time, so a
-	// single slot is enough; running is keyed by UID for lookup, not because
-	// several actors can be live at once.
+	// activeActor is the current activation — the actor whose workload this
+	// ateom is running plus that activation's exit record — or nil when it is
+	// "available". An ateom serves one actor at a time, so a single slot is
+	// enough; running is keyed by UID for lookup, not because several actors
+	// can be live at once.
 	//
 	// Set by RunWorkload / RestoreWorkload and cleared by CheckpointWorkload, so
 	// it tracks exactly the available/executing state machine described on the
-	// Ateom service. GetWorkloadStats reads it to attribute its sample.
+	// Ateom service. GetWorkloadStats reads it to attribute its sample;
+	// GetWorkloadHealth reads it for the exit record.
 	//
 	// Kept here rather than on runningActor, even though that struct already
 	// exists per actor: runningActor holds processes that do not exist until the
 	// guest is up (chCmd, vfsdCmd, guestAgent), so it cannot be built before the
 	// boot, and an entry in running is what tells CheckpointWorkload a live VM is
-	// there. Attribution has to outlive both of those constraints — it is needed
-	// from the moment the ateom accepts the actor, including for a boot that
-	// never finishes. Same field, same timing, as the gVisor ateom's
+	// there. The activation has to outlive both of those constraints — it is
+	// needed from the moment the ateom accepts the actor, including for a boot
+	// that never finishes. Same field, same timing, as the gVisor ateom's
 	// AteomService.activeActor.
 	//
 	// Atomic for the same reason as there, and it matters at least as much on
@@ -446,7 +448,7 @@ type AteomService struct {
 	// poller through all of them. The writers keep holding lock; the point is the
 	// reader. As there, the type makes a lock-free read possible without making
 	// one happen — GetWorkloadStats must not take lock at all.
-	activeActor atomic.Pointer[resources.ActorAttribution]
+	activeActor atomic.Pointer[activation]
 
 	// guestStats is what GetWorkloadStats measures with: the kata-agent client
 	// and the guest containers to sum. Nil whenever there is no guest to ask —
@@ -454,16 +456,22 @@ type AteomService struct {
 	// activation whose post-restore agent dial failed.
 	//
 	// Separate from activeActor because the two become true at different points:
-	// the attribution is retained from the moment the ateom accepts the actor,
+	// the activation is retained from the moment the ateom accepts the actor,
 	// deliberately including a boot that never finishes, while this can only
-	// exist once the guest is answering. Non-nil here implies activeActor is
-	// set, never the reverse.
+	// exist once the guest is answering. Non-nil here implies activeActor is set,
+	// never the reverse.
 	//
 	// Atomic for the same reason as activeActor, and it is the other half of the
 	// same rule: GetWorkloadStats must not take lock, so it cannot reach into
 	// running for the agent client the way a lifecycle RPC does. Written under
 	// lock like every other transition; the atomic is for the reader.
 	guestStats atomic.Pointer[guestStatsTarget]
+
+	// waitWorkloadExit and guestGone override the exit monitor's agent wait
+	// and its dead-guest confirmation. Only tests set them; nil means the
+	// real implementations.
+	waitWorkloadExit func(ctx context.Context, agent *kata.AgentClient, workloadID string) (int32, error)
+	guestGone        func(ra *runningActor, actorUID string) bool
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)

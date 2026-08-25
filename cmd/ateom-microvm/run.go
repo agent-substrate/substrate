@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -93,6 +94,23 @@ type runningActor struct {
 	// workloadIDs are the guest container ids of this actor's workloads, for the
 	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).
 	workloadIDs []string
+
+	// exitExpected marks the coming workload exits as control-plane-initiated
+	// (checkpoint, terminate, graceful shutdown) so the exit monitor does not
+	// record them as a crash.
+	exitExpected atomic.Bool
+	// exitMonitorCancel stops the exit-monitor waiters.
+	exitMonitorCancel context.CancelFunc
+}
+
+// stopExitMonitor marks the coming exits as expected and cancels the exit
+// waiters. Must run before any control-plane-initiated pause, kill, or
+// teardown of the guest.
+func (ra *runningActor) stopExitMonitor() {
+	ra.exitExpected.Store(true)
+	if ra.exitMonitorCancel != nil {
+		ra.exitMonitorCancel()
+	}
 }
 
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
@@ -292,8 +310,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// boot can take a while and can be retried, and an actor that never reaches
 	// readyz is one whose usage is worth reporting rather than the one case that
 	// reports nothing. The defer drops it again if the boot fails outright.
+	// Storing a fresh activation also discards any exit record on the previous
+	// one (the new activation's exited starts nil), so GetWorkloadHealth cannot
+	// report the new workload as exited while it boots.
 	// Matches ateom-gvisor's RunWorkload.
-	s.activeActor.Store(&attribution)
+	s.activeActor.Store(&activation{attribution: attribution})
 	defer func() {
 		if retErr != nil {
 			s.activeActor.Store(nil)
@@ -610,6 +631,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// the handler polling a connection nobody owns. Same client the forwarding
 	// above reads over — ttrpc multiplexes, and teardownActor ends both.
 	s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: workloadIDs})
+	// The activation RunWorkload stored, so the exit record lands on the one
+	// GetWorkloadHealth reads.
+	s.startExitMonitor(ra, s.activeActor.Load())
 
 	return nil
 }

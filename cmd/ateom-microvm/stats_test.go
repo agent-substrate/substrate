@@ -168,7 +168,7 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 // TestGetWorkloadStatsDoesNotTakeLock holds it.
 func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
 	s := &AteomService{lock: newCancelableMutex()}
-	s.activeActor.Store(&testActor)
+	s.activeActor.Store(&activation{attribution: testActor})
 	s.guestStats.Store(&guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})
 	return s
 }
@@ -335,7 +335,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 			name: "no guest agent connection yet",
 			service: func() *AteomService {
 				s := &AteomService{}
-				s.activeActor.Store(&testActor)
+				s.activeActor.Store(&activation{attribution: testActor})
 				return s
 			},
 			actorUID: "uid-a",
@@ -475,7 +475,7 @@ func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 // workers.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 	s := &AteomService{}
-	s.activeActor.Store(&testActor) // attribution retained, target not published
+	s.activeActor.Store(&activation{attribution: testActor}) // attribution retained, target not published
 
 	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
@@ -513,7 +513,13 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 				"app_ovl": containerStats(1000, 2000, 100, 5000),
 			}}
 			s := newStatsService(agent, "app_ovl")
-			agent.onCall = func() { s.activeActor.Store(tc.to) }
+			agent.onCall = func() {
+				if tc.to == nil {
+					s.activeActor.Store(nil)
+				} else {
+					s.activeActor.Store(&activation{attribution: *tc.to})
+				}
+			}
 
 			got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 			if err != nil {

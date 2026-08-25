@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"slices"
 	"sort"
@@ -307,12 +308,65 @@ type activeRPCInfo struct {
 	cancel context.CancelFunc
 }
 
+// containerProber is the slice of runsc the exit monitor depends on: waiting
+// for a container to exit and confirming its state. *runsc satisfies it; tests
+// substitute a fake to drive the monitor without a sandbox.
+type containerProber interface {
+	cmdWait(ctx context.Context, containerName string) (*int32, error)
+	cmdStateStatus(ctx context.Context, containerName string) (string, error)
+}
+
 // workloadSession captures the in-memory metadata for the workload currently running
 // in the sandbox, so the SIGTERM handler knows which containers to signal and
 // wait on during graceful shutdown. The sandbox runs one workload at a time.
 type workloadSession struct {
 	rcmd       *runsc
+	prober     containerProber
 	containers []string
+
+	// exitExpected marks the coming container exits as control-plane-initiated
+	// (checkpoint, terminate, graceful shutdown), so the exit monitor does not
+	// record them as a crash.
+	exitExpected atomic.Bool
+	// exitMonitorCancel stops the session's exit-monitor waiters.
+	exitMonitorCancel context.CancelFunc
+}
+
+// stopExitMonitor marks the coming exits as expected and cancels the exit
+// waiters. Must run before any control-plane-initiated kill, checkpoint,
+// or delete of the session's containers.
+func (ws *workloadSession) stopExitMonitor() {
+	ws.exitExpected.Store(true)
+	if ws.exitMonitorCancel != nil {
+		ws.exitMonitorCancel()
+	}
+}
+
+// workloadExit records the first container exit the monitor observed outside
+// of an intentional teardown.
+type workloadExit struct {
+	container  string
+	observedAt time.Time
+	// exitCode is nil when the exit was detected but the code is unknown
+	// (`runsc wait` lost to the reaper, death confirmed via `runsc state`).
+	exitCode *int32
+}
+
+// activation is the state born at a Run/Restore and dropped by the
+// Checkpoint/Terminate (or failed-boot cleanup) that ends it. Every
+// activation is a fresh allocation, so pointer identity tells activations
+// apart — the UID cannot, since a checkpoint and re-restore of the same
+// actor keeps it.
+type activation struct {
+	attribution resources.ActorAttribution
+
+	// exited is the first container exit observed outside an intentional
+	// teardown, or nil. First writer wins (CompareAndSwap from nil): the
+	// sandbox dying trips every waiter at once. A stale waiter from an
+	// earlier activation holds that activation's pointer and records there,
+	// so it can never condemn this one. Atomic for the same reason as
+	// AteomService.activeActor: GetWorkloadHealth reads it without taking lock.
+	exited atomic.Pointer[workloadExit]
 }
 
 type cancelableMutex struct {
@@ -366,14 +420,16 @@ type AteomService struct {
 	// egressGatewayTrustBundlePath verifies the remote gateway's serving cert.
 	egressGatewayTrustBundlePath string
 
-	// activeActor is the actor whose workload this ateom is currently running,
-	// or nil when it is "available". An ateom serves one actor at a time, so a
-	// single slot is enough (the micro-VM ateom holds the same field, set and
-	// cleared at the same points).
+	// activeActor is the current activation — the actor whose workload this
+	// ateom is running plus that activation's exit record — or nil when it is
+	// "available". An ateom serves one actor at a time, so a single slot is
+	// enough (the micro-VM ateom holds the same field, set and cleared at the
+	// same points).
 	//
 	// Set by RunWorkload / RestoreWorkload and cleared by CheckpointWorkload, so
 	// it tracks exactly the available/executing state machine described on the
-	// Ateom service. GetWorkloadStats reads it to attribute its sample.
+	// Ateom service. GetWorkloadStats reads it to attribute its sample;
+	// GetWorkloadHealth reads it for the exit record.
 	//
 	// Atomic rather than guarded by lock, unlike every other RPC-visible field
 	// here. The three writers already hold lock for their whole bodies and keep
@@ -382,13 +438,15 @@ type AteomService struct {
 	// full duration of each -- going quiet during exactly the phases whose usage
 	// is most interesting -- and holding it across the read would put a
 	// CheckpointWorkload behind telemetry instead. The field is only ever
-	// assigned or cleared as a whole pointer, never mutated in place, which is
-	// exactly what atomic.Pointer is for.
+	// assigned or cleared as a whole pointer, never mutated in place (the
+	// activation's exited slot has its own atomic), which is exactly what
+	// atomic.Pointer is for.
 	//
 	// The type makes a lock-free read possible; it does not make one happen.
 	// GetWorkloadStats must not take lock at all, including around the cgroup
-	// read it does with the value. TestGetWorkloadStatsDoesNotTakeLock pins that.
-	activeActor atomic.Pointer[resources.ActorAttribution]
+	// read it does with the value. TestGetWorkloadStatsDoesNotTakeLock and
+	// TestGetWorkloadHealthDoesNotTakeLock pin that.
+	activeActor atomic.Pointer[activation]
 
 	// shuttingDown is set once SIGTERM has been received. While true, new
 	// workload RPCs are rejected with codes.Unavailable.
@@ -493,6 +551,8 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		slog.InfoContext(ctx, "No active workload at shutdown; exiting cleanly")
 		return
 	}
+	// The kills below are intentional; do not record them as a crash.
+	session.stopExitMonitor()
 
 	var wg sync.WaitGroup
 	for _, name := range session.containers {
@@ -522,7 +582,8 @@ func (s *AteomService) killContainer(ctx context.Context, session *workloadSessi
 
 	done := make(chan error, 1)
 	go func() {
-		done <- session.rcmd.cmdWait(ctx, name)
+		_, err := session.rcmd.cmdWait(ctx, name)
+		done <- err
 	}()
 
 	sigTermCtx, sigTermCtxCancel := context.WithTimeout(ctx, workloadGracePeriod)
@@ -589,6 +650,88 @@ func containerNames(containers []*ateompb.Container) []string {
 	return names
 }
 
+// exitMonitorRetryDelay spaces re-waits after a `runsc wait` failure that the
+// state read attributes to the background reaper rather than to a real exit.
+const exitMonitorRetryDelay = time.Second
+
+// maxStateReadAttempts bounds consecutive `runsc state` runs that reported an
+// error before the container is presumed gone.
+const maxStateReadAttempts = 3
+
+// startExitMonitor watches the session's application containers and records
+// the first exit that is not part of an intentional teardown on act, for
+// GetWorkloadHealth to report.
+func (s *AteomService) startExitMonitor(session *workloadSession, act *activation) {
+	// A freshly started monitor by definition expects no exits yet.
+	session.exitExpected.Store(false)
+	ctx, cancel := context.WithCancel(context.Background())
+	session.exitMonitorCancel = cancel
+	for _, name := range session.containers {
+		go s.watchContainerExit(ctx, session, act, name)
+	}
+}
+
+func (s *AteomService) watchContainerExit(ctx context.Context, session *workloadSession, act *activation, container string) {
+	var exitCode *int32
+	stateReadFailures := 0
+
+	for {
+		code, waitErr := session.prober.cmdWait(ctx, container)
+		if ctx.Err() != nil || session.exitExpected.Load() {
+			return
+		}
+		if waitErr == nil {
+			exitCode = code
+			break // runsc wait completed: the container exited.
+		}
+		// The background reaper can steal `runsc wait`'s exit status (ECHILD),
+		// failing the command while the container is still running. Confirm
+		// with `runsc state` rather than record a false crash.
+		containerStatus, stateErr := session.prober.cmdStateStatus(ctx, container)
+		if ctx.Err() != nil || session.exitExpected.Load() {
+			return
+		}
+		if stateErr != nil {
+			// Count only errors runsc itself reported (container gone): a
+			// runsc that never ran is no evidence, just retry.
+			var exitErr *exec.ExitError
+			if errors.As(stateErr, &exitErr) {
+				stateReadFailures++
+				if stateReadFailures >= maxStateReadAttempts {
+					break // runsc keeps rejecting the query: presume the container gone
+				}
+			}
+		} else if containerStatus != "running" {
+			break // container in a terminal state
+		} else {
+			stateReadFailures = 0 // confirmed running: the streak is broken
+		}
+		select {
+		case <-time.After(exitMonitorRetryDelay):
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	exit := &workloadExit{container: container, observedAt: time.Now(), exitCode: exitCode}
+	// First writer wins — the sandbox dying trips every waiter at once. The
+	// record lands on this waiter's own activation, so a stale waiter from
+	// an earlier one can never touch the current record.
+	if !act.exited.CompareAndSwap(nil, exit) {
+		return
+	}
+	attrs := []any{
+		slog.String("actor", act.attribution.Ref.String()),
+		slog.String("actorUID", act.attribution.UID),
+		slog.String("container", container),
+	}
+	if exitCode != nil {
+		attrs = append(attrs, slog.Int("exitCode", int(*exitCode)))
+	}
+	slog.ErrorContext(ctx, "Actor container exited outside of a control-plane teardown", attrs...)
+	s.actorLogger.EmitLifecycleLog(context.WithoutCancel(ctx), "Actor process exited", act.attribution)
+}
+
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -610,8 +753,20 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	// Retain the attribution before the boot rather than after it, so a sample
 	// taken against a workload that dies mid-boot is still attributable. The
-	// cleanup below drops it again if the boot fails outright.
-	s.activeActor.Store(&attribution)
+	// defer drops it again if the boot fails outright. Storing a fresh
+	// activation also discards any exit record on the previous one (the new
+	// activation's exited starts nil), so GetWorkloadHealth cannot report the
+	// new workload as exited while it boots.
+	act := &activation{attribution: attribution}
+	s.activeActor.Store(act)
+	// Covers the error returns before the main cleanup defer below is
+	// registered; that defer also clears the slot, as its first step, so
+	// pollers do not see the failed activation while it cleans up.
+	defer func() {
+		if retErr != nil {
+			s.activeActor.Store(nil)
+		}
+	}()
 
 	// Contract with atelet:
 	//
@@ -627,9 +782,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		DumpNetInfo:        true,
 		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
 	}); err != nil {
-		// Cleared here as well as in the deferred cleanup below, because that
-		// defer is not registered until after this check.
-		s.activeActor.Store(nil)
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
@@ -708,14 +860,15 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
-	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
+	s.activeSession = &workloadSession{rcmd: rcmd, prober: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
+	s.startExitMonitor(s.activeSession, act)
 
 	return &ateompb.RunWorkloadResponse{}, nil
 }
 
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
-func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (resp *ateompb.CheckpointWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -724,11 +877,23 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.setActiveRPC(rpcCheckpointWorkload, cancel)
 	defer s.clearActiveRPC()
 
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+
+	// The checkpoint ends the sandbox on purpose; stop the exit monitor first.
+	// An exit recorded before this point is kept — it is the evidence a
+	// checkpoint of the dead workload can never succeed.
+	if session := s.activeSession; session != nil {
+		session.stopExitMonitor()
+	}
+	// TODO: a failed checkpoint can leave the workload running, unreachable
+	// (networking is already deactivated) and now unmonitored; the failed
+	// CheckpointWorkload should tear the workload down and return a
+	// crash-classified error instead of leaving it behind.
+
 	if err := s.deactivateActorNetworking(ctx); err != nil {
 		return nil, err
 	}
 
-	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
 	// Contract with atelet:
@@ -827,10 +992,10 @@ func listSnapshotFiles(dir string) ([]string, error) {
 func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Container) {
 	for _, ctr := range containers {
 		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
-		_ = r.cmdWait(ctx, ctr.GetName())
+		_, _ = r.cmdWait(ctx, ctr.GetName())
 	}
 	_ = r.cmdKill(ctx, "pause", "SIGKILL")
-	_ = r.cmdWait(ctx, "pause")
+	_, _ = r.cmdWait(ctx, "pause")
 }
 
 func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
@@ -878,8 +1043,17 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
-	// Same as RunWorkload: retain before the boot, drop again if it fails.
-	s.activeActor.Store(&attribution)
+	// Same as RunWorkload: retain before the boot, drop again if it fails, and
+	// leave any previous activation's exit record behind.
+	act := &activation{attribution: attribution}
+	s.activeActor.Store(act)
+	// Same defer split as RunWorkload: this covers the pre-cleanup-defer
+	// returns, the cleanup defer clears first during its teardown.
+	defer func() {
+		if retErr != nil {
+			s.activeActor.Store(nil)
+		}
+	}()
 
 	// Contract with atelet:
 	//
@@ -896,8 +1070,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		DumpNetInfo:        true,
 		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
 	}); err != nil {
-		// Same as the Run path: the defer below is not registered yet.
-		s.activeActor.Store(nil)
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
@@ -1002,7 +1174,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
-	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
+	s.activeSession = &workloadSession{rcmd: rcmd, prober: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
+	s.startExitMonitor(s.activeSession, act)
 
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
@@ -1057,6 +1230,9 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	if s.activeSession != nil {
+		s.activeSession.stopExitMonitor()
+	}
 	s.activeActor.Store(nil)
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)

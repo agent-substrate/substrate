@@ -149,6 +149,19 @@ func main() {
 		w.Write([]byte(response))
 	})
 
+	// /crash kills the process with a nonzero exit, bypassing the graceful
+	// SIGTERM path, so tests can exercise the ateom exit monitors' crash
+	// detection on demand.
+	defaultMux.HandleFunc("/crash", func(w http.ResponseWriter, r *http.Request) {
+		slog.InfoContext(r.Context(), "Received /crash request, exiting with status 1")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("crashing\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		os.Exit(1)
+	})
+
 	go func() {
 		slog.InfoContext(ctx, "Starting counter server on port 80")
 		if err := http.ListenAndServe(":80", defaultMux); err != nil {

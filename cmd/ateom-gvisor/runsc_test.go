@@ -87,3 +87,51 @@ func TestWaitArgs(t *testing.T) {
 		t.Errorf("waitArgs() = %v, want %v", got, want)
 	}
 }
+
+// TestParseWaitExitStatus pins the wire format of `runsc wait`: a single
+// {"id", "exitStatus"} JSON object on stdout (exitStatus is 128+signal when
+// the process was killed by a signal).
+func TestParseWaitExitStatus(t *testing.T) {
+	for name, tc := range map[string]struct {
+		out     string
+		want    int32
+		wantErr bool
+	}{
+		"clean exit":     {out: `{"id":"main","exitStatus":0}`, want: 0},
+		"nonzero exit":   {out: `{"id":"main","exitStatus":7}`, want: 7},
+		"signaled":       {out: `{"id":"main","exitStatus":137}`, want: 137},
+		"trailing space": {out: "{\"id\":\"main\",\"exitStatus\":1}\n", want: 1},
+		"garbage":        {out: "not json", wantErr: true},
+		"empty":          {out: "", wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseWaitExitStatus([]byte(tc.out))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseWaitExitStatus(%q) error = %v, wantErr %v", tc.out, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Errorf("parseWaitExitStatus(%q) = %d, want %d", tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStateArgs(t *testing.T) {
+	r := &runsc{
+		path:     "/usr/bin/runsc",
+		actorUID: "test-actor-123",
+	}
+
+	got := r.stateArgs("my-container")
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"state",
+		"my-container",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("stateArgs() = %v, want %v", got, want)
+	}
+}

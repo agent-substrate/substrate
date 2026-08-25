@@ -118,7 +118,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Full-scope resume reaches "executing" in a different way than a cold boot
 	// does, but the window between accepting the actor and serving it is the same
 	// window, and a poll landing in it should name the actor either way.
-	s.activeActor.Store(&attribution)
+	// Storing a fresh activation also discards any exit record on the previous
+	// one (the new activation's exited starts nil), so GetWorkloadHealth cannot
+	// report the new workload as exited while it restores.
+	s.activeActor.Store(&activation{attribution: attribution})
 	defer func() {
 		if retErr != nil {
 			s.activeActor.Store(nil)
@@ -438,6 +441,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if ra.guestAgent != nil {
 		s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: ra.workloadIDs})
 	}
+	// The activation RestoreWorkload stored, so the exit record lands on the
+	// one GetWorkloadHealth reads.
+	s.startExitMonitor(ra, s.activeActor.Load())
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

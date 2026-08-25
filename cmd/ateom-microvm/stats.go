@@ -100,11 +100,11 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	if active == nil {
 		return nil, status.Errorf(codes.NotFound, "ateom is available; it is not executing actor %q", req.GetActorUid())
 	}
-	if active.UID != req.GetActorUid() {
-		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.UID, req.GetActorUid())
+	if active.attribution.UID != req.GetActorUid() {
+		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.attribution.UID, req.GetActorUid())
 	}
 
-	sample, err := s.sampleGuest(ctx, active)
+	sample, err := s.sampleGuest(ctx, &active.attribution)
 	if err != nil {
 		if errors.Is(err, errStaleGuestTarget) {
 			return nil, status.Error(codes.Internal, err.Error())
@@ -122,8 +122,8 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// Re-check that the same workload is still the active one. The calls above
 	// hold no lock, so a checkpoint plus a fresh run can complete underneath
 	// them, and the numbers would then belong to an actor other than the one
-	// being reported. Pointer identity is enough: activeActor is stored as a new
-	// pointer on every Run and Restore and never mutated in place, so an
+	// being reported. Pointer identity is enough: every Run and Restore stores
+	// a fresh activation and the attribution is never mutated in place, so an
 	// unchanged pointer means no transition happened across the read.
 	//
 	// NOT_FOUND, like the two checks above and for the same reason: the
@@ -147,7 +147,7 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD), nil
 	}
 
-	sample, err := s.sampleGuest(ctx, active)
+	sample, err := s.sampleGuest(ctx, &active.attribution)
 	if err != nil {
 		if errors.Is(err, errStaleGuestTarget) {
 			return nil, status.Error(codes.Internal, err.Error())
@@ -198,9 +198,9 @@ var errStaleGuestTarget = errors.New("guest agent connection belongs to a differ
 // call offers no error type that separates "gone" from "broken". The
 // exception is errStaleGuestTarget, above. Errors come back raw because the
 // two RPCs express the routine ones differently: an error code for the keyed
-// read, a NoSampleReason for the discovery read. Callers re-check
-// s.activeActor against the pointer they loaded after this returns; the read
-// holds no lock.
+// read, a NoSampleReason for the discovery read. Callers re-check s.activeActor
+// against the activation they loaded after this returns; the read holds no
+// lock.
 func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
 	// The actor is the one here, but there is no guest to ask yet. Usually that
 	// is a poll landing in the boot or the restore: the ateom retains the
