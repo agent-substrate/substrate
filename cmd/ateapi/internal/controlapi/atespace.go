@@ -129,15 +129,15 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAte
 	}
 
 	name := req.GetAtespace().GetName()
-	lock, err := s.persistence.AcquireLock(ctx, "lock:atespace:"+name)
-	if errors.Is(err, store.ErrLockConflict) {
+	lease, err := s.persistence.AcquireLease(ctx, "lease:atespace:"+name)
+	if errors.Is(err, store.ErrLeaseConflict) {
 		return nil, status.Error(codes.Aborted, "another operation is using this Atespace")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("while locking Atespace: %w", err)
+		return nil, fmt.Errorf("while leasing Atespace: %w", err)
 	}
-	defer lock.Close()
-	deleted, err := s.persistence.DeleteAtespace(lock.Context(), name)
+	defer lease.Close()
+	deleted, err := s.persistence.DeleteAtespace(lease.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)

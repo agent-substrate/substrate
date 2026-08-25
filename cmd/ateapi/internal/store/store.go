@@ -41,8 +41,8 @@ var (
 	// ErrFailedPrecondition indicates the object is not in the required state for the operation.
 	ErrFailedPrecondition = errors.New("persistence: failed precondition")
 
-	// ErrLockConflict indicates that a distributed lock is already held by another client.
-	ErrLockConflict = errors.New("persistence: lock conflict")
+	// ErrLeaseConflict indicates that a distributed lease is already held by another client.
+	ErrLeaseConflict = errors.New("persistence: lease conflict")
 
 	// ErrInvalidPageToken indicates that a list page token is malformed or was
 	// issued for a different list operation or scope.
@@ -227,10 +227,10 @@ type Interface interface {
 	// must Close the watch to release its subscription.
 	WatchWorkers(ctx context.Context) (*WorkerWatch, error)
 
-	// AcquireLock attempts to acquire a distributed lock for key. The lock is
-	// held and renewed automatically until the returned Lock is closed.
-	// Returns ErrLockConflict if the lock is already held by another client.
-	AcquireLock(ctx context.Context, key string) (*Lock, error)
+	// AcquireLease attempts to acquire a distributed lease for key. The lease is
+	// held and renewed automatically until the returned Lease is closed.
+	// Returns ErrLeaseConflict if the lease is already held by another client.
+	AcquireLease(ctx context.Context, key string) (*Lease, error)
 
 	// DebugClearAll drop all data from the database. Useful for debugging / local testing/
 	DebugClearAll(ctx context.Context) error
@@ -388,30 +388,29 @@ func NewWorkerWatch(events <-chan WorkerEvent, stop context.CancelFunc) *WorkerW
 // Close releases the subscription. Safe to call multiple times.
 func (w *WorkerWatch) Close() { w.stop() }
 
-// Lock represents a held distributed lock that is renewed automatically until
-// Close is called. If renewal cannot keep the lease alive, the context
+// Lease represents a held distributed lease that is renewed automatically
+// until Close is called. If renewal cannot keep the lease alive, the context
 // returned by Context is cancelled so the caller can detect it may no
 // longer have exclusive access.
-type Lock struct {
+type Lease struct {
 	ctx     context.Context
 	closeFn func()
 	once    sync.Once
 }
 
-// NewLock builds a Lock from its lease context (cancelled on loss or Close)
-// and the func that stops lease renewal and releases the lock.
-func NewLock(ctx context.Context, closeFn func()) *Lock {
-	return &Lock{ctx: ctx, closeFn: closeFn}
+// NewLease builds a Lease from its lease context (cancelled on loss or Close)
+// and the func that stops lease renewal and releases it.
+func NewLease(ctx context.Context, closeFn func()) *Lease {
+	return &Lease{ctx: ctx, closeFn: closeFn}
 }
 
-// Context returns a context derived from the context AcquireLock was called
+// Context returns a context derived from the context AcquireLease was called
 // with. It is cancelled when Close is called, or earlier if the lease is
 // lost.
-func (l *Lock) Context() context.Context { return l.ctx }
+func (l *Lease) Context() context.Context { return l.ctx }
 
-// Close stops lease renewal and releases the lock. Safe to call multiple
-// times.
-func (l *Lock) Close() { l.once.Do(l.closeFn) }
+// Close stops lease renewal and releases it. Safe to call multiple times.
+func (l *Lease) Close() { l.once.Do(l.closeFn) }
 
 // ListOptions carries the pagination parameters common to every List method.
 type ListOptions struct {

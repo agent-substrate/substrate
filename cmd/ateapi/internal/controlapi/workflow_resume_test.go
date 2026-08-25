@@ -62,24 +62,24 @@ func TestSchedulerRecordable(t *testing.T) {
 	}
 }
 
-type lockCountingStore struct {
+type leaseCountingStore struct {
 	store.Interface
 	acquireCalls int
 }
 
-func (s *lockCountingStore) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
+func (s *leaseCountingStore) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	s.acquireCalls++
-	return s.Interface.AcquireLock(ctx, key)
+	return s.Interface.AcquireLease(ctx, key)
 }
 
-func TestResumeActor_RunningFastPathDoesNotAcquireLock(t *testing.T) {
+func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
-	st := &lockCountingStore{Interface: persistence}
+	st := &leaseCountingStore{Interface: persistence}
 	w := &ActorWorkflow{store: st}
 
 	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
@@ -93,7 +93,7 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLock(t *testing.T) {
 		t.Errorf("ResumeActor actor = %v, want %v", got, created)
 	}
 	if st.acquireCalls != 0 {
-		t.Errorf("AcquireLock calls = %d, want 0", st.acquireCalls)
+		t.Errorf("AcquireLease calls = %d, want 0", st.acquireCalls)
 	}
 }
 

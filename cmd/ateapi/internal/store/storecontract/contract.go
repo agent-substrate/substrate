@@ -138,7 +138,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runAtespaceContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
 	runActorSnapshotContractTests(t, setup)
-	runLockContractTests(t, setup)
+	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runDebugContractTests(t, setup)
 }
@@ -1867,83 +1867,83 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 	})
 }
 
-func runLockContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+func runLeaseContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	t.Helper()
 
-	t.Run("AcquireLock_Success", func(t *testing.T) {
+	t.Run("AcquireLease_Success", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
-		lock, err := s.AcquireLock(ctx, "test-lock")
+		lease, err := s.AcquireLease(ctx, "test-lease")
 		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
+			t.Fatalf("AcquireLease failed: %v", err)
 		}
-		if lock == nil {
-			t.Fatal("AcquireLock returned a nil lock")
+		if lease == nil {
+			t.Fatal("AcquireLease returned a nil lease")
 		}
-		if err := lock.Context().Err(); err != nil {
-			t.Errorf("new lock context is already done: %v", err)
+		if err := lease.Context().Err(); err != nil {
+			t.Errorf("new lease context is already done: %v", err)
 		}
-		lock.Close()
+		lease.Close()
 	})
 
-	t.Run("AcquireLock_Conflict", func(t *testing.T) {
+	t.Run("AcquireLease_Conflict", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
-		lock, err := s.AcquireLock(ctx, "test-lock")
+		lease, err := s.AcquireLease(ctx, "test-lease")
 		if err != nil {
-			t.Fatalf("first AcquireLock failed: %v", err)
+			t.Fatalf("first AcquireLease failed: %v", err)
 		}
-		defer lock.Close()
+		defer lease.Close()
 
-		if _, err := s.AcquireLock(ctx, "test-lock"); !errors.Is(err, store.ErrLockConflict) {
-			t.Errorf("second AcquireLock error = %v, want ErrLockConflict", err)
-		}
-	})
-
-	t.Run("AcquireLock_NonReentry", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		lock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("first AcquireLock failed: %v", err)
-		}
-		defer lock.Close()
-
-		if _, err := s.AcquireLock(ctx, "test-lock"); !errors.Is(err, store.ErrLockConflict) {
-			t.Errorf("reentrant AcquireLock error = %v, want ErrLockConflict", err)
+		if _, err := s.AcquireLease(ctx, "test-lease"); !errors.Is(err, store.ErrLeaseConflict) {
+			t.Errorf("second AcquireLease error = %v, want ErrLeaseConflict", err)
 		}
 	})
 
-	t.Run("Lock_Close_Releases", func(t *testing.T) {
+	t.Run("AcquireLease_NonReentry", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
-		lock, err := s.AcquireLock(ctx, "test-lock")
+		lease, err := s.AcquireLease(ctx, "test-lease")
 		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
+			t.Fatalf("first AcquireLease failed: %v", err)
 		}
-		lock.Close()
+		defer lease.Close()
 
-		newLock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("AcquireLock after Close failed: %v", err)
+		if _, err := s.AcquireLease(ctx, "test-lease"); !errors.Is(err, store.ErrLeaseConflict) {
+			t.Errorf("reentrant AcquireLease error = %v, want ErrLeaseConflict", err)
 		}
-		newLock.Close()
 	})
 
-	t.Run("Lock_Close_Idempotent", func(t *testing.T) {
+	t.Run("Lease_Close_Releases", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
-		lock, err := s.AcquireLock(ctx, "test-lock")
+		lease, err := s.AcquireLease(ctx, "test-lease")
 		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
+			t.Fatalf("AcquireLease failed: %v", err)
 		}
-		lock.Close()
-		lock.Close()
+		lease.Close()
+
+		newLease, err := s.AcquireLease(ctx, "test-lease")
+		if err != nil {
+			t.Fatalf("AcquireLease after Close failed: %v", err)
+		}
+		newLease.Close()
+	})
+
+	t.Run("Lease_Close_Idempotent", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		lease, err := s.AcquireLease(ctx, "test-lease")
+		if err != nil {
+			t.Fatalf("AcquireLease failed: %v", err)
+		}
+		lease.Close()
+		lease.Close()
 	})
 }
 
@@ -1968,11 +1968,11 @@ func runDebugContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		if _, err := s.CreateWorker(ctx, &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}); err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
-		lock, err := s.AcquireLock(ctx, "lock-1")
+		lease, err := s.AcquireLease(ctx, "lease-1")
 		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
+			t.Fatalf("AcquireLease failed: %v", err)
 		}
-		defer lock.Close()
+		defer lease.Close()
 
 		if err := s.DebugClearAll(ctx); err != nil {
 			t.Fatalf("DebugClearAll failed: %v", err)
@@ -1987,9 +1987,9 @@ func runDebugContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		if workers, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000}); err != nil || len(workers.Items) != 0 {
 			t.Errorf("workers survived DebugClearAll: workers=%v err=%v", workers.Items, err)
 		}
-		reacquired, err := s.AcquireLock(ctx, "lock-1")
+		reacquired, err := s.AcquireLease(ctx, "lease-1")
 		if err != nil {
-			t.Errorf("lock survived DebugClearAll: %v", err)
+			t.Errorf("lease survived DebugClearAll: %v", err)
 		} else {
 			reacquired.Close()
 		}

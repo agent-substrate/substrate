@@ -54,7 +54,7 @@ type Persistence struct {
 	// and the partition-maintenance loop.
 	watchPool             *pgxpool.Pool
 	ownsWatchPool         bool
-	lockTTL               time.Duration
+	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
 	maintenanceDone       chan struct{}
@@ -149,7 +149,7 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
-	p := &Persistence{pool: pool, watchPool: watchPool, lockTTL: defaultLockTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	p := &Persistence{pool: pool, watchPool: watchPool, leaseTTL: defaultLeaseTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
 	// Cover the partition lead before accepting writes; from then on the
 	// maintenance loop keeps partitions ahead of the clock (and the
 	// DEFAULT partition catches writes if it ever falls behind).
@@ -1373,14 +1373,14 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }
 
-// --- Workflow locks ---
+// --- Workflow leases ---
 
-// defaultLockTTL is how long a lock may go unrenewed before another client
+// defaultLeaseTTL is how long a lease may go unrenewed before another client
 // can reclaim it.
-const defaultLockTTL = 30 * time.Second
+const defaultLeaseTTL = 30 * time.Second
 
-func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
-	ttl := p.lockTTL
+func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
+	ttl := p.leaseTTL
 	token := uuid.NewString()
 	if err := p.cleanupExpiredLeases(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
@@ -1391,7 +1391,7 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 		return nil, err
 	}
 	if !acquired {
-		return nil, store.ErrLockConflict
+		return nil, store.ErrLeaseConflict
 	}
 
 	leaseCtx, cancel := context.WithCancel(ctx)
@@ -1399,7 +1399,7 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 	go func() {
 		defer close(renewalDone)
 		defer cancel()
-		p.renewLockLoop(leaseCtx, key, token, ttl)
+		p.renewLeaseLoop(leaseCtx, key, token, ttl)
 	}()
 
 	closeFn := func() {
@@ -1409,10 +1409,10 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
 		if err := p.releaseLease(releaseCtx, key, token); err != nil {
-			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lock, relying on TTL to reclaim it", "key", key, "error", err)
+			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lease, relying on TTL to reclaim it", "key", key, "error", err)
 		}
 	}
-	return store.NewLock(leaseCtx, closeFn), nil
+	return store.NewLease(leaseCtx, closeFn), nil
 }
 
 func (p *Persistence) cleanupExpiredLeases(ctx context.Context) error {
@@ -1436,7 +1436,7 @@ func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl t
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
-		return false, fmt.Errorf("acquiring lock for %q: %w", key, err)
+		return false, fmt.Errorf("acquiring lease for %q: %w", key, err)
 	}
 	return true, nil
 }
@@ -1447,7 +1447,7 @@ const (
 	renewDeadlineFraction   = 2.0 / 3.0
 )
 
-func (p *Persistence) renewLockLoop(ctx context.Context, key, token string, ttl time.Duration) {
+func (p *Persistence) renewLeaseLoop(ctx context.Context, key, token string, ttl time.Duration) {
 	interval := ttl / renewIntervalDivisor
 	renewDeadline := time.Duration(float64(ttl) * renewDeadlineFraction)
 
@@ -1481,7 +1481,7 @@ func (p *Persistence) tryRenewLease(ctx context.Context, key, token string, ttl 
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				slog.WarnContext(ctx, "failed to renew PostgreSQL lock before its deadline", "key", key)
+				slog.WarnContext(ctx, "failed to renew PostgreSQL lease before its deadline", "key", key)
 			}
 			return false
 		case <-retry.C:
@@ -1493,10 +1493,10 @@ func (p *Persistence) tryRenewLease(ctx context.Context, key, token string, ttl 
 			case err == nil && renewed:
 				return true
 			case err == nil:
-				slog.WarnContext(ctx, "PostgreSQL lock renewal found lease no longer owned", "key", key)
+				slog.WarnContext(ctx, "PostgreSQL lease renewal found lease no longer owned", "key", key)
 				return false
 			default:
-				slog.WarnContext(ctx, "failed to renew PostgreSQL lock, retrying", "key", key, "error", err)
+				slog.WarnContext(ctx, "failed to renew PostgreSQL lease, retrying", "key", key, "error", err)
 				retry.Reset(retryPeriod)
 			}
 		}
@@ -1514,14 +1514,14 @@ func (p *Persistence) renewLease(ctx context.Context, key, token string, ttl tim
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
-		return false, fmt.Errorf("renewing lock for %q: %w", key, err)
+		return false, fmt.Errorf("renewing lease for %q: %w", key, err)
 	}
 	return true, nil
 }
 
 func (p *Persistence) releaseLease(ctx context.Context, key, token string) error {
 	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE key = $1 AND token = $2`, key, token); err != nil {
-		return fmt.Errorf("releasing lock for %q: %w", key, err)
+		return fmt.Errorf("releasing lease for %q: %w", key, err)
 	}
 	return nil
 }

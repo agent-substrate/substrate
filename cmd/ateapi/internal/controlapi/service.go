@@ -107,7 +107,7 @@ type serviceStore interface {
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error)
-	AcquireLock(ctx context.Context, key string) (*store.Lock, error)
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
 // GetPlugin retrieves a CSI volume plugin by driver name, dynamically discovering it if not present.

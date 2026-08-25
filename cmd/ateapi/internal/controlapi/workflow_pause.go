@@ -52,13 +52,13 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err, attrs...)
 	}()
 
-	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
-	defer lock.Close()
+	defer lease.Close()
 
-	actor, actorTemplate, err = w.loadActorForPause(lockCtx, actorRef)
+	actor, actorTemplate, err = w.loadActorForPause(leaseCtx, actorRef)
 	if err != nil {
 		return nil, err
 	}
@@ -70,24 +70,24 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 		return actor, nil
 	}
 	var marked *ateapipb.Actor
-	if marked, err = w.ensureMarkedPausing(lockCtx, actorRef, actor); err != nil {
+	if marked, err = w.ensureMarkedPausing(leaseCtx, actorRef, actor); err != nil {
 		return nil, err
 	}
 	actor = marked
-	if wireSnapshotScope, err = w.ensureAteletPaused(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if wireSnapshotScope, err = w.ensureAteletPaused(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, err
 	}
 	// TODO: There is no difference between suspend and pause for now, but we
 	// could optimize pause by not detaching. We would need to make sure Resume
 	// is idempotent.
-	if err = w.ensureVolumesDetached(lockCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
+	if err = w.ensureVolumesDetached(leaseCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
 		return nil, err
 	}
 	// FinalizePaused clears the WorkerAssignment the labels read, so snapshot
 	// them here, as crash.go does for the crash counter.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensurePausedFinalized(lockCtx, actorRef, actorTemplate); err != nil {
+	if finalized, err = w.ensurePausedFinalized(leaseCtx, actorRef, actorTemplate); err != nil {
 		return nil, err
 	}
 	actor = finalized

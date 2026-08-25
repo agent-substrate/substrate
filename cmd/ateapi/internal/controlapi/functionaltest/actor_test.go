@@ -2599,7 +2599,7 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	}
 }
 
-func TestResumeActor_LockConflict(t *testing.T) {
+func TestResumeActor_LeaseConflict(t *testing.T) {
 	ns := namespaceForTest("ns-resume-conflict")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -2618,7 +2618,7 @@ func TestResumeActor_LockConflict(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	// Set a delay on the fake Atelet to hold the lock
+	// Set a delay on the fake Atelet to hold the lease
 	tc.fakeAtelet.RestoreDelay = 1 * time.Second
 
 	// Launch Request A in a goroutine
@@ -2630,10 +2630,10 @@ func TestResumeActor_LockConflict(t *testing.T) {
 		errChan <- err
 	}()
 
-	// Sleep a bit to ensure Request A acquired the lock
+	// Sleep a bit to ensure Request A acquired the lease
 	time.Sleep(200 * time.Millisecond)
 
-	// Launch Request B (should fail due to lock conflict)
+	// Launch Request B (should fail due to lease conflict)
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})

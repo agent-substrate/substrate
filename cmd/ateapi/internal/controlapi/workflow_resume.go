@@ -71,7 +71,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	var tele restoreTelemetry
 	var wasRunning bool
 
-	// Recorded before the lock so lock contention still counts as an attempt.
+	// Recorded before the lease so lease contention still counts as an attempt.
 	// Clean already-running no-ops are skipped: the router resumes per routed
 	// request, and recording those would sample at router QPS and bury
 	// cold-resume latency.
@@ -86,7 +86,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	// Routed requests call ResumeActor even when the actor is already running.
 	// Read before taking the distributed lease so that hot-path checks do not
 	// upsert and delete a PostgreSQL lease row. Any state that needs work is read
-	// again under the lock below.
+	// again under the lease below.
 	actor, err = w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
@@ -95,14 +95,14 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return actor, false, nil
 	}
 
-	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
 	}
-	defer lock.Close()
+	defer lease.Close()
 
 	var src resumeSnapshotSource
-	actor, actorTemplate, src, err = w.loadActorForResume(lockCtx, actorRef, boot)
+	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef, boot)
 	if err != nil {
 		return nil, false, err
 	}
@@ -110,24 +110,24 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return actor, false, nil
 	}
 	var created *ateapipb.Actor
-	if created, err = w.ensureVolumesCreated(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = created
 	var worker *ateapipb.Worker
 	var assigned *ateapipb.Actor
-	if assigned, worker, err = w.ensureWorkerAssigned(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = assigned
-	if err = w.ensureVolumesAttached(lockCtx, actor, worker, actorTemplate); err != nil {
+	if err = w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate); err != nil {
 		return nil, false, err
 	}
-	if tele, err = w.ensureAteletRestored(lockCtx, actorRef, actor, actorTemplate, src); err != nil {
+	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
-	if running, err = w.finalizeRunning(lockCtx, actorRef); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef); err != nil {
 		return nil, false, err
 	}
 	actor = running

@@ -310,7 +310,7 @@ func TestCreateActorSnapshotTag_ForeignKeyErrors(t *testing.T) {
 	}
 }
 
-func TestAcquireLock_CleansExpiredLeases(t *testing.T) {
+func TestAcquireLease_CleansExpiredLeases(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	if _, err := s.pool.Exec(ctx, `
@@ -319,11 +319,11 @@ func TestAcquireLock_CleansExpiredLeases(t *testing.T) {
 		('active', 'live', clock_timestamp() + interval '1 hour')`); err != nil {
 		t.Fatalf("seeding leases: %v", err)
 	}
-	lock, err := s.AcquireLock(ctx, "new")
+	lease, err := s.AcquireLease(ctx, "new")
 	if err != nil {
-		t.Fatalf("AcquireLock: %v", err)
+		t.Fatalf("AcquireLease: %v", err)
 	}
-	defer lock.Close()
+	defer lease.Close()
 
 	var expired, active int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases WHERE key = 'expired'`).Scan(&expired); err != nil {
@@ -417,68 +417,68 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 	}
 }
 
-func TestAcquireLock_ExpiresAfterHolderStops(t *testing.T) {
+func TestAcquireLease_ExpiresAfterHolderStops(t *testing.T) {
 	s := setupPostgresPersistence(t)
-	s.lockTTL = 200 * time.Millisecond
+	s.leaseTTL = 200 * time.Millisecond
 	holderCtx, cancelHolder := context.WithCancel(context.Background())
-	lock, err := s.AcquireLock(holderCtx, "test-lock")
+	lease, err := s.AcquireLease(holderCtx, "test-lease")
 	if err != nil {
-		t.Fatalf("AcquireLock failed: %v", err)
+		t.Fatalf("AcquireLease failed: %v", err)
 	}
 	cancelHolder()
 	select {
-	case <-lock.Context().Done():
+	case <-lease.Context().Done():
 	case <-time.After(time.Second):
-		t.Fatal("lock context was not cancelled with its holder")
+		t.Fatal("lease context was not cancelled with its holder")
 	}
 
 	// Canceling the holder stops renewal without calling Close, modeling a
 	// process that disappeared and left its lease to expire.
-	time.Sleep(s.lockTTL + 500*time.Millisecond)
+	time.Sleep(s.leaseTTL + 500*time.Millisecond)
 
-	newLock, err := s.AcquireLock(context.Background(), "test-lock")
+	newLease, err := s.AcquireLease(context.Background(), "test-lease")
 	if err != nil {
-		t.Fatalf("AcquireLock after lease expiration failed: %v", err)
+		t.Fatalf("AcquireLease after lease expiration failed: %v", err)
 	}
-	newLock.Close()
+	newLease.Close()
 }
 
-// TestAcquireLock_ConcurrentTakeover races many goroutines to acquire an
+// TestAcquireLease_ConcurrentTakeover races many goroutines to acquire an
 // already-expired lease against the real database, and asserts exactly one
 // wins -- the property the doc's conditional-upsert SQL is meant to
 // guarantee under real concurrency, which a single-connection unit test
 // can't exercise.
-func TestAcquireLock_ConcurrentTakeover(t *testing.T) {
+func TestAcquireLease_ConcurrentTakeover(t *testing.T) {
 	s := setupPostgresPersistence(t)
-	s.lockTTL = time.Millisecond
+	s.leaseTTL = time.Millisecond
 	holderCtx, cancelHolder := context.WithCancel(context.Background())
-	initial, err := s.AcquireLock(holderCtx, "contested-lock")
+	initial, err := s.AcquireLease(holderCtx, "contested-lease")
 	if err != nil {
 		t.Fatalf("seeding initial lease failed: %v", err)
 	}
 	cancelHolder()
 	<-initial.Context().Done()
 	time.Sleep(50 * time.Millisecond) // let the 1ms lease expire.
-	s.lockTTL = 10 * time.Second
+	s.leaseTTL = 10 * time.Second
 
 	const numRacers = 20
-	winners := make(chan *store.Lock, numRacers)
+	winners := make(chan *store.Lease, numRacers)
 	var wg sync.WaitGroup
 	for i := 0; i < numRacers; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			lock, err := s.AcquireLock(context.Background(), "contested-lock")
+			lease, err := s.AcquireLease(context.Background(), "contested-lease")
 			if err != nil {
-				if !errors.Is(err, store.ErrLockConflict) {
-					t.Errorf("AcquireLock racer %d failed: %v", i, err)
+				if !errors.Is(err, store.ErrLeaseConflict) {
+					t.Errorf("AcquireLease racer %d failed: %v", i, err)
 				}
 				return
 			}
 			// Keep the winning lease held until every racer has attempted
 			// acquisition. Releasing it here would let later racers win
 			// sequentially rather than testing concurrent takeover.
-			winners <- lock
+			winners <- lease
 		}(i)
 	}
 	wg.Wait()
@@ -487,7 +487,7 @@ func TestAcquireLock_ConcurrentTakeover(t *testing.T) {
 	if got := len(winners); got != 1 {
 		t.Errorf("expected exactly 1 racer to win the expired lease, got %d", got)
 	}
-	for lock := range winners {
-		lock.Close()
+	for lease := range winners {
+		lease.Close()
 	}
 }
