@@ -94,17 +94,24 @@ func (s *fakeTemplateStore) ListActorTemplates(_ context.Context, _ string, opts
 	return resp, nil
 }
 
-func (s *fakeTemplateStore) UpdateActorTemplate(_ context.Context, ref resources.ActorTemplateRef, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+func (s *fakeTemplateStore) UpdateActorTemplate(_ context.Context, ref resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
 	tmpl, ok := s.templates[ref]
 	if !ok {
 		return nil, store.ErrNotFound
+	}
+	if err := precondition.Check(tmpl.GetMetadata()); err != nil {
+		return nil, err
 	}
 	updated := proto.Clone(tmpl).(*ateapipb.ActorTemplate)
 	if err := mutate(updated); err != nil {
 		return nil, err
 	}
+	updated.Metadata.Version++
 	s.templates[ref] = updated
 	return proto.Clone(updated).(*ateapipb.ActorTemplate), nil
 }
@@ -233,7 +240,7 @@ var testTemplateRef = resources.ActorTemplateRef{Atespace: testAtespace, Name: t
 // drives the golden actor to a snapshot without waiting for a warmup window.
 func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
 	tmpl := &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testTemplateName, Uid: testTemplateUID},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testTemplateName, Uid: testTemplateUID, Version: 1},
 		Containers: []*ateapipb.Container{
 			{Name: "main", Image: "img", Readyz: &ateapipb.ContainerReadyz{}},
 		},
@@ -600,7 +607,7 @@ func TestCheckpoint_TerminalConditionErrors(t *testing.T) {
 
 			// Checkpoint against a template a concurrent writer already
 			// drove to a terminal condition.
-			_, err := r.checkpoint(ctx, testTemplateRef, func(templateStatus *ateapipb.ActorTemplateStatus) {
+			_, err := r.checkpoint(ctx, testTemplate(seed.opt), func(templateStatus *ateapipb.ActorTemplateStatus) {
 				templateStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
 			})
 			if err == nil {
@@ -610,6 +617,30 @@ func TestCheckpoint_TerminalConditionErrors(t *testing.T) {
 				t.Error("take_golden_snapshot_at set, want store unchanged")
 			}
 		})
+	}
+}
+
+// TestCheckpoint_StaleObservationConflicts pins that checkpoint guards its
+// write with the observed template's uid and version: once a concurrent write
+// advances the stored version, the stale observation is rejected.
+func TestCheckpoint_StaleObservationConflicts(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTemplateStore(testTemplate())
+	r := newTestTemplateReconciler(st, &fakeGoldenControl{})
+
+	// A concurrent writer advances the stored version past the observation.
+	if _, err := st.UpdateActorTemplate(ctx, testTemplateRef, store.PreconditionFrom(testTemplate()), func(*ateapipb.ActorTemplate) error { return nil }); err != nil {
+		t.Fatalf("seeding concurrent update failed: %v", err)
+	}
+
+	_, err := r.checkpoint(ctx, testTemplate(), func(templateStatus *ateapipb.ActorTemplateStatus) {
+		templateStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
+	})
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("checkpoint error = %v, want ErrVersionConflict", err)
+	}
+	if st.storedStatus(t, testTemplateRef).GetTakeGoldenSnapshotAt() != nil {
+		t.Error("take_golden_snapshot_at set, want store unchanged")
 	}
 }
 
