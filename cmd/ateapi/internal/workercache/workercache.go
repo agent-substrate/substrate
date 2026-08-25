@@ -37,7 +37,7 @@ const relistPageSize = 1000
 // Cache maintains an in-memory snapshot of all workers.
 //
 // TODO: add metrics — at minimum a gauge for worker count, a counter for
-// resync events, and a counter for failed PUBLISH operations (in ateredis).
+// resync events, and a counter for failed worker-watch notifications.
 type Cache struct {
 	store          workerListWatcher
 	relistInterval time.Duration
@@ -108,6 +108,16 @@ func (c *Cache) Worker(name string) (*ateapipb.Worker, error) {
 		return nil, store.ErrNotFound
 	}
 	return worker, nil
+}
+
+// Forget removes a worker that a store write proved no longer exists. The
+// normal delete watch remains authoritative, but this closes the short race in
+// which scheduling selected a worker just after its row was deleted and before
+// the watch event reached the cache.
+func (c *Cache) Forget(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.workers, name)
 }
 
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {

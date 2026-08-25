@@ -43,6 +43,13 @@ var (
 	// ErrLockConflict indicates that a distributed lock is already held by another client.
 	ErrLockConflict = errors.New("persistence: lock conflict")
 
+	// ErrInvalidPageToken indicates that a list page token is malformed or was
+	// issued for a different list operation or scope.
+	ErrInvalidPageToken = errors.New("persistence: invalid page token")
+
+	// ErrInvalidPageSize indicates that a negative page size was supplied.
+	ErrInvalidPageSize = errors.New("persistence: invalid page size")
+
 	// ErrUIDConflict indicates a write was guarded on a uid the stored object does
 	// not carry, meaning the name now addresses a different incarnation. Retrying
 	// can never resolve it.
@@ -51,13 +58,18 @@ var (
 	// ErrPreconditionRequired indicates an update was called with a precondition
 	// missing either guard (uid or version). Blind writes are not accepted.
 	ErrPreconditionRequired = errors.New("persistence: precondition required")
+
+	// ErrImmutableField indicates an update's mutation changed a field that is
+	// immutable for the lifetime of the stored object.
+	ErrImmutableField = errors.New("persistence: immutable field")
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
-	// mutated. Returns ErrAlreadyExists if key is taken.
+	// mutated. Returns ErrAlreadyExists if key is taken, or
+	// ErrFailedPrecondition if the actor's atespace does not exist.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
@@ -83,7 +95,8 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, or the mutate's error verbatim otherwise.
+	// exhausted, ErrImmutableField if the mutated actor changed a field that is
+	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
@@ -100,7 +113,9 @@ type Interface interface {
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
 	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
 
-	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
+	// Adds an immutable Atespace-owned tag to an ActorSnapshot. Returns
+	// ErrNotFound if the snapshot does not exist, or ErrFailedPrecondition if
+	// the tag's atespace does not exist.
 	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
 	// Fetches an Atespace-owned tag. Returns ErrNotFound if missing. The tag's
@@ -125,7 +140,8 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, or the mutate's error verbatim otherwise.
+	// exhausted, ErrImmutableField if the mutated tag changed a field that is
+	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
@@ -138,9 +154,6 @@ type Interface interface {
 
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
-
-	// AtespaceExists reports whether the atespace object exists.
-	AtespaceExists(ctx context.Context, name string) (bool, error)
 
 	// Lists atespaces.
 	ListAtespaces(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Atespace], error)
@@ -174,8 +187,7 @@ type Interface interface {
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
-	// ErrNotFound if missing, or ErrFailedPrecondition while any
-	// ActorTemplateVersion still names it as parent.
+	// ErrNotFound if missing.
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 
 	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
@@ -327,6 +339,22 @@ type ListOptions struct {
 	// PageToken resumes a listing after the page it was issued for. Empty
 	// starts from the first page.
 	PageToken string
+}
+
+// DefaultPageSize is used by store implementations when PageSize is unset.
+const DefaultPageSize int32 = 1000
+
+// NormalizeListOptions applies the store default and rejects invalid sizes.
+// RPC handlers validate user input separately, but store callers also need a
+// safe contract because list implementations use PageSize in slice indexes.
+func NormalizeListOptions(opts ListOptions) (ListOptions, error) {
+	if opts.PageSize < 0 {
+		return ListOptions{}, ErrInvalidPageSize
+	}
+	if opts.PageSize == 0 {
+		opts.PageSize = DefaultPageSize
+	}
+	return opts, nil
 }
 
 // ListResponse is the return value of a List method: the page of items it

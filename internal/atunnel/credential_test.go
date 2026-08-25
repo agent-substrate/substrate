@@ -153,7 +153,14 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 
 	clientCAs := x509.NewCertPool()
 	clientCAs.AppendCertsFromPEM(ca.certPEM)
-	socketPath := filepath.Join(dir, "credential-broker.sock")
+	// t.TempDir() embeds the test name, which overruns the ~104 byte unix
+	// socket path limit on darwin, so the socket gets its own short dir.
+	socketDir, err := os.MkdirTemp("", "atunnel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "broker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)

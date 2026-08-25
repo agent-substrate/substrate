@@ -1,0 +1,41 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package egressauthz
+
+import (
+	"os"
+	"testing"
+
+	"github.com/agent-substrate/substrate/internal/e2e"
+)
+
+// Setup runs before the suite. The probe is created on first use, in the
+// randomized namespace the suite creates, so there is nothing to do here.
+func Setup() {}
+
+// Teardown runs after the suite.
+func Teardown() {}
+
+func run(m *testing.M) int {
+	Setup()
+	defer Teardown()
+
+	// return allows the deferred Teardown to run.
+	return e2e.RunTestMain(m)
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(run(m))
+}

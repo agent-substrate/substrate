@@ -23,7 +23,6 @@ package atepg
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,23 +35,43 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
+// watchPoolMaxConns sizes the dedicated outbox watch pool: one connection
+// for the WatchWorkers poller, one for the maintenance loop, and one of headroom
+// so a transiently slow poll can never gate a maintenance pass.
+const (
+	watchPoolMaxConns = 3
+	watchPoolMinConns = 1
+)
+
 type Persistence struct {
-	pool    *pgxpool.Pool
-	lockTTL time.Duration
+	pool *pgxpool.Pool
+	// watchPool serves the outbox side only: the WatchWorkers pollers
+	// and the partition-maintenance loop.
+	watchPool             *pgxpool.Pool
+	ownsWatchPool         bool
+	lockTTL               time.Duration
+	pollFailureCloseAfter time.Duration
+	stopMaintenance       context.CancelFunc
+	maintenanceDone       chan struct{}
 }
 
 var _ store.Interface = (*Persistence)(nil)
 
 // Connect opens a pgxpool against dsn, verifies connectivity, and applies the
-// embedded schema. Startup fails if the database cannot be reached.
+// embedded schema. Startup fails if the database cannot be reached. A second,
+// two-connection watch pool (owned by the Persistence, closed by Close) isolates
+// outbox polling and maintenance from write traffic.
 func Connect(ctx context.Context, dsn string) (*Persistence, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	cfg, err := poolConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
@@ -60,22 +79,105 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
 	}
-	p, err := NewPersistence(ctx, pool)
+
+	watchCfg, err := poolConfig(dsn)
 	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("watch pool: %w", err)
+	}
+	watchCfg.MaxConns = watchPoolMaxConns
+	watchCfg.MinConns = watchPoolMinConns
+	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
+	}
+
+	p, err := newPersistence(ctx, pool, watchPool)
+	if err != nil {
+		watchPool.Close()
 		pool.Close()
 		return nil, err
 	}
+	p.ownsWatchPool = true
 	return p, nil
 }
 
+// poolConfig parses dsn into a pool configuration whose TLS material is read
+// from disk again for every new connection.
+//
+// pgx resolves sslcert, sslkey and sslrootcert once, when the connection
+// string is parsed, and pins the result for the life of the pool. The paths in
+// use here are projected pod certificates that the kubelet replaces about
+// every day, so a long-lived process would keep presenting the client
+// certificate it started with, and keep trusting only the CAs it started with,
+// until connections started failing. Re-parsing in BeforeConnect costs one
+// small file read per new connection and picks up every rotation.
+func poolConfig(dsn string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+	}
+	usesTLS := cfg.ConnConfig.TLSConfig != nil
+	for _, fallback := range cfg.ConnConfig.Fallbacks {
+		usesTLS = usesTLS || fallback.TLSConfig != nil
+	}
+	if !usesTLS {
+		return cfg, nil
+	}
+	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+		fresh, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			return fmt.Errorf("re-reading PostgreSQL TLS material: %w", err)
+		}
+		cc.TLSConfig = fresh.TLSConfig
+		cc.Fallbacks = fresh.Fallbacks
+		return nil
+	}
+	return cfg, nil
+}
+
 // NewPersistence wraps an already-open pool, applying the idempotent schema.
-// Callers that already hold a pool (e.g. tests using
-// testcontainers) use this directly instead of Connect.
+// Callers that already hold a pool (e.g. tests using testcontainers) use
+// this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
+	return newPersistence(ctx, pool, pool)
+}
+
+func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
 	if err := applySchema(ctx, pool); err != nil {
 		return nil, err
 	}
-	return &Persistence{pool: pool, lockTTL: defaultLockTTL}, nil
+	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
+	p := &Persistence{pool: pool, watchPool: watchPool, lockTTL: defaultLockTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	// Cover the partition lead before accepting writes; from then on the
+	// maintenance loop keeps partitions ahead of the clock (and the
+	// DEFAULT partition catches writes if it ever falls behind).
+	bootNow, err := p.outboxNow(ctx)
+	if err != nil {
+		stopMaintenance()
+		return nil, err
+	}
+	if err := p.createWorkerOutboxPartitions(ctx, outboxPartitionLeadTimes(bootNow)...); err != nil {
+		stopMaintenance()
+		return nil, err
+	}
+	go func() {
+		defer close(p.maintenanceDone)
+		p.outboxMaintenance(maintenanceCtx)
+	}()
+	return p, nil
+}
+
+// Close stops the outbox maintenance loop and waits for it to exit,
+// then closes the watch pool if Connect created one. It does not close the
+// main pool, which the caller owns.
+func (p *Persistence) Close() {
+	p.stopMaintenance()
+	<-p.maintenanceDone
+	if p.ownsWatchPool {
+		p.watchPool.Close()
+	}
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
@@ -105,6 +207,18 @@ func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMet
 	return metadata
 }
 
+// validateProtoMetadataMatchesColumns verifies that the metadata in the database
+// matches the metadata in the proto.
+func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.ResourceMetadata, uid string, version int64) error {
+	if metadata.GetUid() != uid {
+		return fmt.Errorf("%s uid projection %q does not match proto metadata uid %q", resource, uid, metadata.GetUid())
+	}
+	if metadata.GetVersion() != version {
+		return fmt.Errorf("%s version projection %d does not match proto metadata version %d", resource, version, metadata.GetVersion())
+	}
+	return nil
+}
+
 func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }
 
 // isForeignKeyViolation matches both the insert/update-side violation
@@ -128,6 +242,14 @@ func pgErrCode(err error) string {
 	return ""
 }
 
+func pgErrConstraint(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ConstraintName
+	}
+	return ""
+}
+
 // --- Atespaces ---
 
 func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
@@ -142,9 +264,9 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	}
 
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO atespaces (name, proto)
-		VALUES ($1, $2)`,
-		name, protoBytes)
+		INSERT INTO atespaces (name, uid, version, proto)
+		VALUES ($1, $2, $3, $4)`,
+		name, dbAtespace.GetMetadata().GetUid(), dbAtespace.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -154,9 +276,9 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	return dbAtespace, nil
 }
 
-func getAtespaceRow(ctx context.Context, q querier, name string) (*ateapipb.Atespace, error) {
+func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -170,19 +292,11 @@ func getAtespaceRow(ctx context.Context, q querier, name string) (*ateapipb.Ates
 	return out, nil
 }
 
-func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
-	return getAtespaceRow(ctx, p.pool, name)
-}
-
-func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
-	var exists bool
-	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = $1)`, name).Scan(&exists); err != nil {
-		return false, fmt.Errorf("checking atespace existence: %w", err)
-	}
-	return exists, nil
-}
-
 func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Atespace]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindAtespace, "", 1)
 	if err != nil {
@@ -275,9 +389,9 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapip
 	return dbTemplate, nil
 }
 
-func getActorTemplateRow(ctx context.Context, q querier, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -289,10 +403,6 @@ func getActorTemplateRow(ctx context.Context, q querier, templateRef resources.A
 		return nil, fmt.Errorf("unmarshaling actor template: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
-	return getActorTemplateRow(ctx, p.pool, templateRef)
 }
 
 func (p *Persistence) ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error) {
@@ -317,27 +427,24 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor template update: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
+	var currentUID string
+	var currentVersion int64
 	var currentBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actor_templates
-		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`, templateRef.Atespace, templateRef.Name).Scan(&currentBytes); err != nil {
+	if err := p.pool.QueryRow(ctx, `
+			SELECT uid, version, proto FROM actor_templates
+			WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("locking actor template %s for update: %w", templateRef, err)
+		return nil, fmt.Errorf("getting actor template %s for update: %w", templateRef, err)
 	}
 
 	dbTemplate := &ateapipb.ActorTemplate{}
 	if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
 	}
 	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
 		return nil, err
@@ -354,19 +461,27 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE actor_templates SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4`,
-		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name); err != nil {
+	commandTag, err := p.pool.Exec(ctx, `
+			UPDATE actor_templates SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
+		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name, currentUID, currentVersion)
+	if err != nil {
 		return nil, fmt.Errorf("updating actor template %s: %w", templateRef, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor template update: %w", err)
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("updating actor template %s affected %d rows, want 1", templateRef, commandTag.RowsAffected())
 	}
 	return dbTemplate, nil
 }
 
 func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	keyParts := 2
 	if atespace != "" {
@@ -441,13 +556,6 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 		WHERE t.atespace = $1 AND t.name = $2
 		RETURNING t.proto`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
-		exists, existsErr := p.ActorTemplateExists(ctx, templateRef)
-		if existsErr != nil {
-			return nil, existsErr
-		}
-		if exists {
-			return nil, store.ErrFailedPrecondition
-		}
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
@@ -492,24 +600,20 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	return dbActor, nil
 }
 
-func getActorRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.Actor, error) {
+func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes)
+	err := p.pool.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, actorRef.Atespace, actorRef.Name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("getting actor %s/%s: %w", atespace, name, err)
+		return nil, fmt.Errorf("getting actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
 	}
 	out := &ateapipb.Actor{}
 	if err := proto.Unmarshal(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	return getActorRow(ctx, p.pool, actorRef.Atespace, actorRef.Name)
 }
 
 // validateUpdateActorMutation reports whether an actor mutation changed fields
@@ -527,6 +631,12 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
 		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
+	if stored, mutated := storedActor.GetActorTemplate(), mutatedActor.GetActorTemplate(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("actor_template is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetSourceSnapshotTag(), mutatedActor.GetSourceSnapshotTag(); !proto.Equal(stored, mutated) {
+		return fmt.Errorf("source_snapshot_tag is immutable: mutation changed it from %v to %v", stored, mutated)
+	}
 	return nil
 }
 
@@ -535,27 +645,24 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	atespace, name := actorRef.Atespace, actorRef.Name
-
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor update: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
-	var protoBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actors
-		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`, atespace, name).Scan(&protoBytes); err != nil {
+	var currentUID string
+	var currentVersion int64
+	var currentBytes []byte
+	if err := p.pool.QueryRow(ctx, `
+			SELECT uid, version, proto FROM actors
+			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("locking actor %s/%s for update: %w", atespace, name, err)
+		return nil, fmt.Errorf("getting actor %s/%s for update: %w", atespace, name, err)
 	}
 
 	dbActor := &ateapipb.Actor{}
-	if err := proto.Unmarshal(protoBytes, dbActor); err != nil {
+	if err := proto.Unmarshal(currentBytes, dbActor); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
 	}
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
 		return nil, err
@@ -565,31 +672,29 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, err
 	}
 	if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure and derive the next revision from the transactionally read actor.
+	// closure and derive the next revision from the state this attempt read.
 	dbActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
 
-	protoBytes, err = proto.Marshal(dbActor)
+	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
-
-	commandTag, err := tx.Exec(ctx, `
-		UPDATE actors
-		SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4`,
-		dbActor.GetMetadata().GetVersion(), protoBytes, atespace, name)
+	commandTag, err := p.pool.Exec(ctx, `
+			UPDATE actors
+			SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
+		dbActor.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
 	}
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor update: %w", err)
 	}
 	return dbActor, nil
 }
@@ -633,9 +738,12 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 }
 
 func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Actor]{}, err
+	}
 	var items []*ateapipb.Actor
 	var nextToken string
-	var err error
 	if atespace != "" {
 		items, nextToken, err = p.listActorsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
 	} else {
@@ -756,9 +864,9 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 		return nil, fmt.Errorf("marshaling actor snapshot: %w", err)
 	}
 	if _, err := p.pool.Exec(ctx, `
-		INSERT INTO actor_snapshots (atespace, name, proto)
-		VALUES ($1, $2, $3)`,
-		atespace, name, protoBytes); err != nil {
+		INSERT INTO actor_snapshots (atespace, name, uid, version, proto)
+		VALUES ($1, $2, $3, $4, $5)`,
+		atespace, name, dbSnapshot.GetMetadata().GetUid(), dbSnapshot.GetMetadata().GetVersion(), protoBytes); err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
 		}
@@ -767,9 +875,9 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 	return dbSnapshot, nil
 }
 
-func getActorSnapshotRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.ActorSnapshot, error) {
+func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
 	var protoBytes []byte
-	if err := q.QueryRow(ctx, `
+	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM actor_snapshots
 		WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -782,10 +890,6 @@ func getActorSnapshotRow(ctx context.Context, q querier, atespace, name string) 
 		return nil, fmt.Errorf("unmarshaling actor snapshot: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
-	return getActorSnapshotRow(ctx, p.pool, atespace, name)
 }
 
 func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
@@ -806,9 +910,12 @@ func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name st
 }
 
 func (p *Persistence) ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.ActorSnapshot]{}, err
+	}
 	var items []*ateapipb.ActorSnapshot
 	var nextToken string
-	var err error
 	if atespace != "" {
 		items, nextToken, err = p.listActorSnapshotsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
 	} else {
@@ -928,18 +1035,14 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespa
 		return nil, fmt.Errorf("beginning actor snapshot tag create: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-	if _, err := getActorSnapshotRow(ctx, tx, snapshotAtespace, snapshotName); err != nil {
-		return nil, err
-	}
-
 	var inserted []byte
 	err = tx.QueryRow(ctx, `
 		INSERT INTO actor_snapshot_tags
-		    (atespace, name, snapshot_atespace, snapshot_name, version, proto)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		    (atespace, name, snapshot_atespace, snapshot_name, uid, version, proto)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (atespace, name) DO NOTHING
 		RETURNING proto`, tagAtespace, tagName, snapshotAtespace, snapshotName,
-		dbTag.GetMetadata().GetVersion(), protoBytes).Scan(&inserted)
+		dbTag.GetMetadata().GetUid(), dbTag.GetMetadata().GetVersion(), protoBytes).Scan(&inserted)
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
 			return nil, fmt.Errorf("committing actor snapshot tag create: %w", err)
@@ -947,7 +1050,14 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespa
 		return dbTag, nil
 	}
 	if isForeignKeyViolation(err) {
-		return nil, store.ErrFailedPrecondition
+		switch pgErrConstraint(err) {
+		case "actor_snapshot_tags_snapshot_fk":
+			return nil, store.ErrNotFound
+		case "actor_snapshot_tags_atespace_fk":
+			return nil, store.ErrFailedPrecondition
+		default:
+			return nil, fmt.Errorf("inserting actor snapshot tag %s/%s violated unknown foreign key %q: %w", tagAtespace, tagName, pgErrConstraint(err), err)
+		}
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("inserting actor snapshot tag %s/%s: %w", tagAtespace, tagName, err)
@@ -992,27 +1102,24 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
-
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor snapshot tag update: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
+	var currentUID string
+	var currentVersion int64
 	var currentBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actor_snapshot_tags
-		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`, atespace, name).Scan(&currentBytes); err != nil {
+	if err := p.pool.QueryRow(ctx, `
+			SELECT uid, version, proto FROM actor_snapshot_tags
+			WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentUID, &currentVersion, &currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("locking actor snapshot tag %s/%s for update: %w", atespace, name, err)
+		return nil, fmt.Errorf("getting actor snapshot tag %s/%s for update: %w", atespace, name, err)
 	}
 
 	dbTag := &ateapipb.ActorSnapshotTag{}
 	if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
+	}
+	if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("actor snapshot tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
+		return nil, err
 	}
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
 		return nil, err
@@ -1022,29 +1129,29 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		return nil, err
 	}
 	if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, dbTag); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
-	// closure and derive the next revision from the transactionally read tag.
+	// closure and derive the next revision from the state this attempt read.
 	dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor snapshot tag: %w", err)
 	}
-	commandTag, err := tx.Exec(ctx, `
-		UPDATE actor_snapshot_tags
-		SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4`,
-		dbTag.GetMetadata().GetVersion(), updatedBytes, atespace, name)
+	commandTag, err := p.pool.Exec(ctx, `
+			UPDATE actor_snapshot_tags
+			SET version = $1, proto = $2
+			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
+		dbTag.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("updating actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
+	if commandTag.RowsAffected() == 0 {
+		return nil, store.ErrVersionConflict
+	}
 	if commandTag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("updating actor snapshot tag %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor snapshot tag update: %w", err)
 	}
 	return dbTag, nil
 }
@@ -1069,77 +1176,6 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 
 // --- Workers ---
 
-const (
-	// workerChangeChannel is the fixed LISTEN/NOTIFY channel for worker changes.
-	workerChangeChannel = "worker_changes"
-	// maxNotifyPayloadBytes reflects PostgreSQL's NOTIFY payload size limit.
-	// Writes fail rather than silently omit a notification if exceeded.
-	maxNotifyPayloadBytes = 8000
-)
-
-type workerEventEnvelope struct {
-	Type   int    `json:"t"`
-	Worker string `json:"w"` // protojson-encoded Worker
-}
-
-func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) ([]byte, error) {
-	workerJSON, err := protojson.Marshal(worker)
-	if err != nil {
-		return nil, fmt.Errorf("in protojson.Marshal: %w", err)
-	}
-	msg, err := json.Marshal(workerEventEnvelope{Type: int(eventType), Worker: string(workerJSON)})
-	if err != nil {
-		return nil, fmt.Errorf("in json.Marshal: %w", err)
-	}
-	return msg, nil
-}
-
-func unmarshalWorkerEvent(payload string) (store.WorkerEvent, error) {
-	var env workerEventEnvelope
-	if err := json.Unmarshal([]byte(payload), &env); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in json.Unmarshal: %w", err)
-	}
-	worker := &ateapipb.Worker{}
-	if err := protojson.Unmarshal([]byte(env.Worker), worker); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in protojson.Unmarshal: %w", err)
-	}
-	return store.WorkerEvent{Type: store.WorkerEventType(env.Type), Worker: worker}, nil
-}
-
-// writeAndNotify runs fn inside a transaction, then--only if fn reports a
-// change worth notifying--calls pg_notify in the same transaction so
-// delivery happens if and only if the transaction commits.
-func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (notify bool, err error)) error {
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
-	notify, err := fn(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	if notify {
-		payload, err := marshalWorkerEvent(eventType, worker)
-		if err != nil {
-			return fmt.Errorf("marshaling worker event: %w", err)
-		}
-		if len(payload) > maxNotifyPayloadBytes {
-			return fmt.Errorf("worker event payload of %d bytes exceeds PostgreSQL NOTIFY limit of %d bytes", len(payload), maxNotifyPayloadBytes)
-		}
-		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, string(payload)); err != nil {
-			return fmt.Errorf("notifying worker change: %w", err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("committing transaction: %w", err)
-	}
-	return nil
-}
-
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
 	// Workers are global-scoped, so the atespace is always empty.
@@ -1150,7 +1186,7 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	err = p.writeAndNotify(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	err = p.writeAndAppendEvent(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
@@ -1201,7 +1237,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	return p.writeAndNotify(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var returned []byte
 		err := tx.QueryRow(ctx, `
 			UPDATE workers
@@ -1230,7 +1266,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 
 func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 	deletedEvent := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-	return p.writeAndNotify(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var protoBytes []byte
 		err := tx.QueryRow(ctx, `
 			DELETE FROM workers
@@ -1238,7 +1274,7 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 			RETURNING proto`, name).Scan(&protoBytes)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				// Idempotent: nothing existed, so nothing to notify either.
+				// Idempotent: nothing existed, so no event to publish either.
 				return false, nil
 			}
 			return false, fmt.Errorf("deleting worker %s: %w", name, err)
@@ -1248,6 +1284,10 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 }
 
 func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	opts, err := store.NormalizeListOptions(opts)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Worker]{}, err
+	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindWorker, "", 1)
 	if err != nil {
@@ -1295,53 +1335,6 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }
 
-// WatchWorkers acquires a dedicated connection (hijacked out of the pool, so
-// it's never handed back for unrelated queries), LISTENs on the fixed
-// worker-change channel, and forwards decoded notifications until the
-// context is cancelled or the caller closes the watch.
-func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
-	watchCtx, cancel := context.WithCancel(ctx)
-
-	poolConn, err := p.pool.Acquire(watchCtx)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("acquiring watch connection: %w", err)
-	}
-	conn := poolConn.Hijack()
-
-	if _, err := conn.Exec(watchCtx, "LISTEN "+workerChangeChannel); err != nil {
-		conn.Close(watchCtx) //nolint:errcheck
-		cancel()
-		return nil, fmt.Errorf("listening for worker changes: %w", err)
-	}
-
-	ch := make(chan store.WorkerEvent, 128)
-	go func() {
-		defer close(ch)
-		defer conn.Close(context.Background()) //nolint:errcheck
-		for {
-			notification, err := conn.WaitForNotification(watchCtx)
-			if err != nil {
-				// Context cancelled (caller closed the watch) or the
-				// connection was lost. Either way, the caller must
-				// re-subscribe; matches ateredis's WatchWorkers contract.
-				return
-			}
-			event, err := unmarshalWorkerEvent(notification.Payload)
-			if err != nil {
-				slog.ErrorContext(ctx, "worker event unmarshal failed", slog.Any("err", err))
-				continue
-			}
-			select {
-			case ch <- event:
-			case <-watchCtx.Done():
-				return
-			}
-		}
-	}()
-	return store.NewWorkerWatch(ch, cancel), nil
-}
-
 // --- Workflow locks ---
 
 // defaultLockTTL is how long a lock may go unrenewed before another client
@@ -1351,6 +1344,9 @@ const defaultLockTTL = 30 * time.Second
 func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
 	ttl := p.lockTTL
 	token := uuid.NewString()
+	if err := p.cleanupExpiredLeases(ctx); err != nil {
+		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
+	}
 
 	acquired, err := p.acquireLease(ctx, key, token, ttl)
 	if err != nil {
@@ -1379,6 +1375,13 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 		}
 	}
 	return store.NewLock(leaseCtx, closeFn), nil
+}
+
+func (p *Persistence) cleanupExpiredLeases(ctx context.Context) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE expires_at <= clock_timestamp()`); err != nil {
+		return fmt.Errorf("deleting expired leases: %w", err)
+	}
+	return nil
 }
 
 func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
@@ -1488,7 +1491,7 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 // --- Debug ---
 
 func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases`); err != nil {
+	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
 		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil

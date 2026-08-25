@@ -37,7 +37,7 @@ far from its cause.
 
 - Standard library `testing` only — no assertion or mocking frameworks.
 - Table-driven tests with `t.Run` subtests are the default shape.
-- Prefer a real fake when one exists: `miniredis` for the store, `envtest` for
+- Prefer a real test implementation when one exists: the PostgreSQL test fixture for the store, `envtest` for
   the Kubernetes API. Release resources with `t.Cleanup`.
 
 ## TODOs

@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // Each system-info volume mount becomes a read-only bind mount whose source
@@ -40,7 +41,7 @@ func TestBuildActorOCISpec_SystemInfoVolumeMounts(t *testing.T) {
 		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
 	}
 	spec := buildActorOCISpec(
-		actorUID,
+		actorUID, "app",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
@@ -217,7 +218,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 	}
 	spec := buildActorOCISpec(
-		actorUID,
+		actorUID, "app",
 		[]string{"/app"}, nil, nil,
 		"/run/netns/x",
 		volumes,
@@ -243,6 +244,45 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		if !found {
 			t.Fatalf("durable-dir mount for %q missing; mounts=%v", vm.MountPath, spec.Mounts)
 		}
+	}
+}
+
+// An image volume binds the layer directory resolved for it, read-only.
+func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
+	volumes := []*ateletpb.Volume{
+		{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
+		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+	}
+	mounts := []*ateletpb.VolumeMount{
+		{Name: "agent", MountPath: "/ate"},
+		{Name: "data", MountPath: "/var/data"},
+	}
+	spec := buildActorOCISpec(
+		"actor_uid", "app",
+		[]string{"/ate/payload-binary"}, nil, nil,
+		"/run/netns/x",
+		volumes,
+		mounts,
+		nil,
+	)
+
+	var got *specs.Mount
+	for i, m := range spec.Mounts {
+		if m.Destination == "/ate" {
+			got = &spec.Mounts[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("image volume mount for /ate missing; mounts=%v", spec.Mounts)
+	}
+	if want := ateompath.ImageVolumeMountPath("actor_uid", "app", "agent"); got.Source != want {
+		t.Errorf("image volume source = %q, want %q", got.Source, want)
+	}
+	if got.Type != "bind" {
+		t.Errorf("image volume type = %q, want bind", got.Type)
+	}
+	if want := []string{"bind", "ro"}; !slices.Equal(got.Options, want) {
+		t.Errorf("image volume options = %v, want %v", got.Options, want)
 	}
 }
 
@@ -327,7 +367,7 @@ func TestResolveCapabilities(t *testing.T) {
 // ambient stay empty — see the comment in buildActorOCISpec.
 func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 	want := []string{"CAP_CHOWN", "CAP_KILL"}
-	spec := buildActorOCISpec("actor_uid", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want)
+	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -360,7 +400,7 @@ func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 
 // The pause container only reaps, so it is built with no capabilities at all.
 func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
-	spec := buildActorOCISpec("actor_uid", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil)
+	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {

@@ -114,7 +114,7 @@ type ControlClient interface {
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	// List Actors.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
-	// Create a new Atespace. Substrate-native, stored in Redis.
+	// Create a new Atespace. Substrate-native, stored in database.
 	CreateAtespace(ctx context.Context, in *CreateAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	// Get an Atespace by name.
 	GetAtespace(ctx context.Context, in *GetAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
@@ -470,7 +470,7 @@ type ControlServer interface {
 	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
 	// List Actors.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
-	// Create a new Atespace. Substrate-native, stored in Redis.
+	// Create a new Atespace. Substrate-native, stored in database.
 	CreateAtespace(context.Context, *CreateAtespaceRequest) (*Atespace, error)
 	// Get an Atespace by name.
 	GetAtespace(context.Context, *GetAtespaceRequest) (*Atespace, error)

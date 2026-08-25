@@ -188,6 +188,8 @@ type actorContainer struct {
 	// systemInfoMounts are the system-info volumes this container mounts, and
 	// where (see systeminfo.go). Empty for containers that declare none.
 	systemInfoMounts []*ateompb.SystemInfoVolumeMount
+	// imageMounts are the image volumes this container mounts, and where.
+	imageMounts []*ateompb.ImageVolumeMount
 }
 
 // resolvedRuntime holds the concrete binary/config paths for a request, taken
@@ -651,6 +653,7 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 			durableMounts:    c.GetDurableDirVolumeMounts(),
 			csiMounts:        c.GetCsiVolumeMounts(),
 			systemInfoMounts: c.GetSystemInfoVolumeMounts(),
+			imageMounts:      c.GetImageVolumeMounts(),
 		}
 	}
 	return ctrs, nil
@@ -671,6 +674,12 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
 			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
+		}
+		for _, vm := range c.imageMounts {
+			src := ateompath.ImageVolumeMountPath(id, c.name, vm.GetVolumeName())
+			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
+				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
+			}
 		}
 	}
 	if hasDurableVolumes(containers) {

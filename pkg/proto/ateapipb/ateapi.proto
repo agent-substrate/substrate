@@ -16,7 +16,6 @@ syntax = "proto3";
 
 package ateapi;
 
-import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -88,7 +87,7 @@ service Control {
   // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
-  // Create a new Atespace. Substrate-native, stored in Redis.
+  // Create a new Atespace. Substrate-native, stored in database.
   rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {}
 
   // Get an Atespace by name.
@@ -700,12 +699,6 @@ message UpdateActorRequest {
   // update.
   // actor.metadata.version and actor.metadata.uid are required preconditions.
   Actor actor = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - worker_selector
-  google.protobuf.FieldMask update_mask = 2;
 }
 
 message SuspendActorRequest {
@@ -741,14 +734,15 @@ message ResumeActorResponse {
 
 message DeleteActorRequest {
   ObjectRef actor = 1;
+  bool any_state = 2;
 }
 
 message GetActorSnapshotRequest {
-  ObjectRef snapshot = 1;
+  ObjectRef actor_snapshot = 1;
 }
 
 message GetActorSnapshotTagRequest {
-  ObjectRef tag = 1;
+  ObjectRef actor_snapshot_tag = 1;
 }
 
 message ListActorSnapshotsRequest {
@@ -758,7 +752,7 @@ message ListActorSnapshotsRequest {
 }
 
 message ListActorSnapshotsResponse {
-  repeated ActorSnapshot snapshots = 1;
+  repeated ActorSnapshot actor_snapshots = 1;
   string next_page_token = 2;
 }
 
@@ -771,20 +765,15 @@ message CreateActorSnapshotTagRequest {
 // The tag keeps its address: the snapshot it points at cannot be changed.
 message UpdateActorSnapshotTagRequest {
   // The tag to update.
-  // tag.metadata.atespace and tag.metadata.name identify which resource to
-  // update.
-  // tag.metadata.version and tag.metadata.uid are required preconditions
-  ActorSnapshotTag tag = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - scope
-  google.protobuf.FieldMask update_mask = 2;
+  // actor_snapshot_tag.metadata.atespace and actor_snapshot_tag.metadata.name
+  // identify which resource to update.
+  // actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
+  // are required preconditions
+  ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
 message DeleteActorSnapshotTagRequest {
-  ObjectRef tag = 1;
+  ObjectRef actor_snapshot_tag = 1;
 }
 
 // DeleteOptions carries per-delete controls. Today it holds optional
@@ -843,13 +832,6 @@ message UpdateWorkerRequest {
   // worker.metadata.version and worker.metadata.uid are optional preconditions
   // and zero values skip the check.
   Worker worker = 1;
-
-  // The set of fields to update. Required.
-  //
-  // Only the following fields are supported:
-  //   - sandbox_class
-  //   - labels
-  google.protobuf.FieldMask update_mask = 2;
 }
 
 message DeleteWorkerRequest {

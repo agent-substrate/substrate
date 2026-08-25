@@ -93,9 +93,7 @@ func newTestWorker(name, pod string) *ateapipb.Worker {
 }
 
 // mustCreateAtespace creates the atespace an actor test is about to populate.
-// Backends that enforce the actor->atespace foreign key (atepg) reject
-// CreateActor for a nonexistent atespace, so every actor test needs a real
-// parent atespace even though ateredis doesn't check.
+// The PostgreSQL store enforces the actor->atespace foreign key.
 func mustCreateAtespace(t *testing.T, s store.Interface, name string) {
 	t.Helper()
 	if _, err := s.CreateAtespace(context.Background(), newTestAtespace(name)); err != nil {
@@ -129,9 +127,8 @@ func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
 // against a fresh store.Interface built by setup for each subtest. setup is
 // responsible for its own cleanup (e.g. via t.Cleanup).
 //
-// Backend-specific behavior (e.g. ateredis's multi-shard pagination, atepg's
-// foreign-key races and transactional notifications) is NOT covered here; see
-// each backend's own test file for that.
+// PostgreSQL-specific behavior such as foreign-key races and transactional
+// notifications is not covered here; see atepg's own test file for that.
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorContractTests(t, setup)
 	runWorkerContractTests(t, setup)
@@ -139,7 +136,59 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorTemplateContractTests(t, setup)
 	runActorSnapshotContractTests(t, setup)
 	runLockContractTests(t, setup)
+	runListOptionsContractTests(t, setup)
 	runDebugContractTests(t, setup)
+}
+
+func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("ListOptions_InvalidPageSize", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		calls := []struct {
+			name string
+			call func(store.ListOptions) error
+		}{
+			{"atespaces", func(opts store.ListOptions) error { _, err := s.ListAtespaces(ctx, opts); return err }},
+			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
+			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
+			{"actor snapshots", func(opts store.ListOptions) error { _, err := s.ListActorSnapshots(ctx, "", opts); return err }},
+			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
+		}
+		for _, call := range calls {
+			t.Run(call.name, func(t *testing.T) {
+				if err := call.call(store.ListOptions{PageSize: -1}); !errors.Is(err, store.ErrInvalidPageSize) {
+					t.Errorf("negative PageSize error = %v, want ErrInvalidPageSize", err)
+				}
+				if err := call.call(store.ListOptions{}); err != nil {
+					t.Errorf("zero PageSize error = %v, want nil", err)
+				}
+			})
+		}
+	})
+
+	t.Run("ListOptions_InvalidPageToken", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		calls := []struct {
+			name string
+			call func(store.ListOptions) error
+		}{
+			{"atespaces", func(opts store.ListOptions) error { _, err := s.ListAtespaces(ctx, opts); return err }},
+			{"actors", func(opts store.ListOptions) error { _, err := s.ListActors(ctx, "", opts); return err }},
+			{"actor templates", func(opts store.ListOptions) error { _, err := s.ListActorTemplates(ctx, "", opts); return err }},
+			{"actor snapshots", func(opts store.ListOptions) error { _, err := s.ListActorSnapshots(ctx, "", opts); return err }},
+			{"workers", func(opts store.ListOptions) error { _, err := s.ListWorkers(ctx, opts); return err }},
+		}
+		for _, call := range calls {
+			t.Run(call.name, func(t *testing.T) {
+				if err := call.call(store.ListOptions{PageSize: 1, PageToken: "%%%"}); !errors.Is(err, store.ErrInvalidPageToken) {
+					t.Errorf("malformed PageToken error = %v, want ErrInvalidPageToken", err)
+				}
+			})
+		}
+	})
 }
 
 func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
@@ -1393,21 +1442,6 @@ func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Inter
 
 		if _, err := s.GetAtespace(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("expected ErrNotFound, got %v", err)
-		}
-	})
-
-	t.Run("AtespaceExists", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if ok, err := s.AtespaceExists(ctx, "team-a"); err != nil || ok {
-			t.Fatalf("AtespaceExists before create = (%v, %v), want (false, nil)", ok, err)
-		}
-		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
-			t.Fatalf("CreateAtespace failed: %v", err)
-		}
-		if ok, err := s.AtespaceExists(ctx, "team-a"); err != nil || !ok {
-			t.Fatalf("AtespaceExists after create = (%v, %v), want (true, nil)", ok, err)
 		}
 	})
 

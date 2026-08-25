@@ -33,6 +33,47 @@ data:
             endpoint: 0.0.0.0:4318
     processors:
       batch:
+
+      # The count connector below sends deltas, and the Prometheus exporter
+      # reads the new start timestamp of each batch as a reset. Without
+      # deltatocumulative the counts do not accumulate and each scrape shows
+      # only the last batch.
+      #
+      # max_streams bounds the memory. A stream is for each process and
+      # count, and not for each service, because serverboot gives each
+      # process its own service.instance.id. Above the limit new streams drop
+      # with no log line and the totals become too low.
+      deltatocumulative:
+        max_streams: 10000
+
+    # The volume of telemetry for each service, the same two counts that
+    # benchmarking/telemetry/meter.yaml gives on GKE. On GKE the managed
+    # collector cannot hold a connector, thus a measurement there needs a
+    # second collector in front of it. Here the collector is ours, thus the
+    # counts belong in it and kind needs no meter.
+    connectors:
+      count:
+        spans:
+          substrate_spans:
+            description: Spans received, by emitting service.
+            attributes:
+              # The connector reads each key from the attributes of the item,
+              # then the scope, then the resource, thus service.name resolves
+              # from the resource with no transform in front of it. The
+              # Prometheus exporter writes the key as service_name.
+              #
+              # Without a default value the connector removes each item that
+              # has no service.name from the count. The item does not show as
+              # unknown, and the totals are too low with no error message.
+              - key: service.name
+                default_value: unknown
+        datapoints:
+          substrate_datapoints:
+            description: Metric datapoints received, by emitting service.
+            attributes:
+              - key: service.name
+                default_value: unknown
+
     exporters:
       otlp/jaeger:
         endpoint: jaeger.otel-system.svc.cluster.local:4317
@@ -52,6 +93,39 @@ data:
           receivers: [otlp]
           processors: [batch]
           exporters: [prometheus, debug]
+
+        # The count pipelines read the same receiver as the two pipelines
+        # above, and they only count. The connector declares MutatesData
+        # false, thus it changes nothing that reaches Jaeger or Prometheus.
+        traces/count:
+          receivers: [otlp]
+          exporters: [count]
+        metrics/count:
+          receivers: [otlp]
+          exporters: [count]
+
+        # The counts that the connector makes, out to the Prometheus exporter.
+        metrics/count-out:
+          receivers: [count]
+          processors: [deltatocumulative]
+          exporters: [prometheus]
+
+      # The otelcol_* counters of the collector itself. A service that reports
+      # zero volume gives no data by itself: otelcol_receiver_accepted_* shows
+      # the difference between a service that sent nothing and data that never
+      # arrived. The default reader binds to localhost, thus give the address
+      # of each interface so the Prometheus pod can reach it.
+      #
+      # The level stays at the default. It already gives each counter above,
+      # and detailed adds histograms only, which no query here reads.
+      telemetry:
+        metrics:
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -69,6 +143,10 @@ spec:
     metadata:
       labels:
         app: opentelemetry-collector
+      # There is no prometheus.io/scrape annotation here. The annotation can
+      # name one port only, and the collector has two to read: 8889 for the
+      # substrate_* counts and 8888 for the otelcol_* counters. The
+      # otel-collector-self job in prometheus.yaml reads both.
     spec:
       containers:
       - name: otel-collector
@@ -85,6 +163,8 @@ spec:
           containerPort: 4318
         - name: prom
           containerPort: 8889
+        - name: self
+          containerPort: 8888
       volumes:
       - name: config
         configMap:
@@ -112,6 +192,9 @@ spec:
   - name: prom
     port: 8889
     targetPort: 8889
+  - name: self
+    port: 8888
+    targetPort: 8888
 ---
 apiVersion: apps/v1
 kind: Deployment

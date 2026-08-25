@@ -74,6 +74,12 @@ var (
 		"File that contains the CA pool state for "+podidentitysigner.Name,
 	)
 
+	workersPerSigner = pflag.Int(
+		"workers-per-signer",
+		1,
+		"Number of concurrent worker goroutines per signer.",
+	)
+
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
@@ -132,7 +138,7 @@ func main() {
 		os.Exit(1)
 	}
 	serviceDNSSignerController := signercontroller.New(clock.RealClock{}, servicednssigner.NewImpl(kc, serviceDNSCAPool, clock.RealClock{}), kc, hasher)
-	go serviceDNSSignerController.Run(ctx)
+	go serviceDNSSignerController.Run(ctx, *workersPerSigner)
 
 	// Create a signer for podidentity.podcert.ate.dev/identity
 	podIdentityCAPoolBytes, err := os.ReadFile(*podCAPoolFile)
@@ -146,7 +152,7 @@ func main() {
 		os.Exit(1)
 	}
 	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, clock.RealClock{}), kc, hasher)
-	go podIdentitySignerController.Run(ctx)
+	go podIdentitySignerController.Run(ctx, *workersPerSigner)
 
 	// TODO: Reload when the file changes.
 

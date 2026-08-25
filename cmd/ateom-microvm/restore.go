@@ -491,12 +491,6 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			switch tag, _ := fm["tag"].(string); tag {
 			case kata.FsTag:
 				fm["socket"] = kata.VirtiofsdSocketPath(id)
-			case "ateDurable":
-				// Legacy multi-virtiofs snapshot backward compatibility.
-				fm["socket"] = kata.DurableVirtiofsdSocketPath(id)
-			case "ateCSI":
-				// Legacy multi-virtiofs snapshot backward compatibility.
-				fm["socket"] = kata.CsiVirtiofsdSocketPath(id)
 			default:
 				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
 			}

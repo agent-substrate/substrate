@@ -166,6 +166,169 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 	return New("issuer", "", poolFile, st, workers)
 }
 
+// staleWatchStore wraps a store with a WatchWorkers that never delivers,
+// freezing any workercache built over it at its seed-time state — the unit
+// analog of the watch's delivery latency.
+type staleWatchStore struct{ store.Interface }
+
+func (s staleWatchStore) WatchWorkers(context.Context) (*store.WorkerWatch, error) {
+	return store.NewWorkerWatch(make(chan store.WorkerEvent), func() {}), nil
+}
+
+// TestMintCertReadsThroughStaleWorkerCache pins the authorization
+// read-through: an atelet minting immediately after ResumeActor committed the
+// worker's assignment must be authorized from the store even though this
+// replica's cache has not yet seen the assignment. The control case keeps the
+// store unassigned too and must still deny — only fresh data may authorize,
+// and only fresh data may deny.
+func TestMintCertReadsThroughStaleWorkerCache(t *testing.T) {
+	for name, assignInStore := range map[string]bool{
+		"assignment committed but not yet in cache: authorized via read-through": true,
+		"unassigned in cache and store: denial stands":                           false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+
+			// Phase 1: worker exists, unassigned; the cache seeds this view and
+			// (via the inert watch) never learns anything newer.
+			seedActor(t, ctx, st, actorFixture{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, workerNode: testNode, unassigned: true})
+			workers := workercache.New(staleWatchStore{st}, time.Hour)
+			cacheCtx, cancel := context.WithCancel(ctx)
+			t.Cleanup(cancel)
+			if err := workers.Start(cacheCtx); err != nil {
+				t.Fatalf("start worker cache: %v", err)
+			}
+
+			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+			if err != nil {
+				t.Fatalf("read seeded actor: %v", err)
+			}
+			if assignInStore {
+				// Phase 2: commit the assignment to the store only, as
+				// AssignWorker does (possibly on another replica).
+				worker, err := st.GetWorker(ctx, testWorkerName)
+				if err != nil {
+					t.Fatalf("read seeded worker: %v", err)
+				}
+				if worker.Status == nil {
+					worker.Status = &ateapipb.WorkerStatus{}
+				}
+				worker.Status.Assignment = &ateapipb.ActorAssignment{
+					Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
+					ActorUid: actor.GetMetadata().GetUid(),
+				}
+				if err := st.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
+					t.Fatalf("assign worker in store: %v", err)
+				}
+			}
+
+			srv := newTestServerWithCache(t, st, workers)
+			resp, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), mintCertRequest(t, actor.GetMetadata().GetUid()))
+
+			wantCode := codes.PermissionDenied
+			if assignInStore {
+				wantCode = codes.OK
+			}
+			if got := status.Code(err); got != wantCode {
+				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, wantCode)
+			}
+			if assignInStore && len(resp.GetActorCertificates()) == 0 {
+				t.Fatal("MintCert() returned no certificates")
+			}
+		})
+	}
+}
+
+// TestMintCertReadsThroughWorkerCacheMiss pins the read-through for a worker
+// the cache has never seen: a worker registered moments before assignment may
+// be committed to the store (possibly by another replica) before this
+// replica's cache has received the worker row at all. Absence from the cache
+// is stale data and must not deny by itself; absence from the store must.
+func TestMintCertReadsThroughWorkerCacheMiss(t *testing.T) {
+	for name, workerInStore := range map[string]bool{
+		"worker assigned in store but not yet in cache: authorized via read-through": true,
+		"worker in neither cache nor store: denial stands":                           false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+
+			// Phase 1: only the actor exists; the cache seeds with no workers
+			// and (via the inert watch) never learns of any.
+			seedActor(t, ctx, st, actorFixture{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, workerNode: testNode, noWorker: true})
+			workers := workercache.New(staleWatchStore{st}, time.Hour)
+			cacheCtx, cancel := context.WithCancel(ctx)
+			t.Cleanup(cancel)
+			if err := workers.Start(cacheCtx); err != nil {
+				t.Fatalf("start worker cache: %v", err)
+			}
+
+			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+			if err != nil {
+				t.Fatalf("read seeded actor: %v", err)
+			}
+			if workerInStore {
+				// Phase 2: register and assign the worker in the store only,
+				// after the cache stopped listening.
+				if err := st.CreateWorker(ctx, &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
+					WorkerNamespace: testPodNS,
+					WorkerPool:      testPool,
+					WorkerPod:       testWorkerPod,
+					WorkerPodUid:    testWorkerPodUID,
+					NodeName:        testNode,
+					Status: &ateapipb.WorkerStatus{
+						State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+						Assignment: &ateapipb.ActorAssignment{
+							Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
+							ActorUid: actor.GetMetadata().GetUid(),
+						},
+					},
+				}); err != nil {
+					t.Fatalf("register worker in store: %v", err)
+				}
+			}
+
+			srv := newTestServerWithCache(t, st, workers)
+			resp, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), mintCertRequest(t, actor.GetMetadata().GetUid()))
+
+			wantCode := codes.PermissionDenied
+			if workerInStore {
+				wantCode = codes.OK
+			}
+			if got := status.Code(err); got != wantCode {
+				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, wantCode)
+			}
+			if workerInStore && len(resp.GetActorCertificates()) == 0 {
+				t.Fatal("MintCert() returned no certificates")
+			}
+		})
+	}
+}
+
+// newTestServerWithCache is newTestServer with a caller-controlled worker
+// cache (e.g. one frozen at a stale state).
+func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercache.Cache) *Server {
+	t.Helper()
+
+	ca, err := localca.GenerateED25519CA("test-actor-ca")
+	if err != nil {
+		t.Fatalf("generate CA: %v", err)
+	}
+	poolBytes, err := localca.Marshal(&localca.Pool{CAs: []*localca.CA{ca}})
+	if err != nil {
+		t.Fatalf("marshal CA pool: %v", err)
+	}
+	poolFile := filepath.Join(t.TempDir(), "actor-ca-pool.json")
+	if err := os.WriteFile(poolFile, poolBytes, 0o600); err != nil {
+		t.Fatalf("write CA pool: %v", err)
+	}
+	return New("issuer", "", poolFile, st, workers)
+}
+
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
 	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example"}
 	for _, tt := range []struct {
@@ -247,6 +410,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	t.Helper()
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
+
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		Status:                 &ateapipb.ActorStatus{State: f.state},
@@ -266,10 +430,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 			WorkerPodUid:    testWorkerPodUID,
 		}
 	}
-	created, err := st.CreateActor(ctx, actor)
-	if err != nil {
-		t.Fatalf("seed actor: %v", err)
-	}
+	created := storetest.MustCreateActor(t, ctx, st, actor)
 
 	if f.noWorker {
 		return
@@ -337,6 +498,10 @@ func TestMintCertAuthorization(t *testing.T) {
 		"atelet on the hosting node mints for a running actor": {
 			fixture:  runningOnNode(testNode),
 			wantCode: codes.OK,
+		},
+		"actor is in ACTOR_STATE_DELETING with active worker assignment": {
+			fixture:  actorFixture{state: ateapipb.ActorState_ACTOR_STATE_DELETING, workerNode: testNode},
+			wantCode: codes.FailedPrecondition,
 		},
 		"caller presented no certificate": {
 			noPeer:   true,

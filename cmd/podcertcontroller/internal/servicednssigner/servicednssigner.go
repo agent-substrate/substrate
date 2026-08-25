@@ -113,6 +113,10 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 			continue
 		}
 
+		if len(svc.Spec.Selector) == 0 {
+			continue
+		}
+
 		// Find the set of pods that the service selects.
 		matchedPods, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: svc.Spec.Selector}),
@@ -171,7 +175,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		DNSNames:              dnsNames,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		// Link the leaf to its issuing CA by key id. Needed this for Valkey
+		// Link the leaf to its issuing CA by key id. Services use this
 		// to understand which CA to use when validating a client cert.
 		AuthorityKeyId: parent.SubjectKeyId,
 	}

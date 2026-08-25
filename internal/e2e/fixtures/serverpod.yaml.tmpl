@@ -1,0 +1,86 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# One manifest for every plain server a suite stands up beside the code under
+# test -- the thing an Actor's egress lands on, or the thing that dials the
+# gateway itself. e2e.DeployServerPod renders this; see internal/e2e/serverpod.go
+# for what each placeholder means.
+#
+# The differences between those servers are the placeholders below: a name, an
+# image, a port, a readiness probe, and whatever credentials the server has to
+# mount. Everything else was identical in every copy of this manifest that
+# existed before it was shared, so a per-server file only offered somewhere for
+# the copies to drift apart.
+#
+# A plain Pod, not an actor. These servers are scaffolding around the code under
+# test, and running one inside an actor would make its snapshot or restore
+# failures look like failures of the thing being tested.
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${NAME}
+spec:
+  restartPolicy: Never
+  containers:
+  - name: ${NAME}
+    image: ${IMAGE}
+    args:
+    - "--listen=:${PORT}"
+    ports:
+    - name: serve
+      containerPort: ${PORT}
+    # The suite starts dialing as soon as it has an address, so without a
+    # readiness gate the first connection can land before the listener exists
+    # and come back refused -- which reads as a failure of whatever sits between
+    # the caller and here, rather than as a pod that had not started yet.
+    readinessProbe:
+${READINESS_PROBE}
+      periodSeconds: 2
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+    # runAsUser must be spelled out: ko's distroless static base declares no
+    # USER, so runAsNonRoot on its own makes kubelet refuse to start the
+    # container ("image will run as root") rather than pick a uid. 65532 is
+    # distroless's nonroot uid, and the same one the egress gateway's pod uses.
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 65532
+      runAsGroup: 65532
+      capabilities:
+        drop: ["ALL"]
+${VOLUME_MOUNTS}
+${VOLUMES}
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${NAME}
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app: ${NAME}
+  ports:
+  - name: serve
+    port: ${PORT}
+    targetPort: ${PORT}

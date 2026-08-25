@@ -158,3 +158,16 @@ func TestPreconditionFrom(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeListOptions(t *testing.T) {
+	got, err := NormalizeListOptions(ListOptions{})
+	if err != nil {
+		t.Fatalf("NormalizeListOptions(zero) error = %v", err)
+	}
+	if got.PageSize != DefaultPageSize {
+		t.Errorf("NormalizeListOptions(zero).PageSize = %d, want %d", got.PageSize, DefaultPageSize)
+	}
+	if _, err := NormalizeListOptions(ListOptions{PageSize: -1}); !errors.Is(err, ErrInvalidPageSize) {
+		t.Errorf("NormalizeListOptions(negative) error = %v, want ErrInvalidPageSize", err)
+	}
+}

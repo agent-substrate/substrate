@@ -56,9 +56,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 			InProgressLocalSnapshotName: "local-snap-1",
 		},
 	}
-	if _, err := st.CreateActor(ctx, actor); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
+	storetest.MustCreateActor(t, ctx, st, actor)
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	w := &ActorWorkflow{store: st}
@@ -111,7 +109,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			ctx := context.Background()
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
-			created, err := st.CreateActor(ctx, &ateapipb.Actor{
+			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
 					State: ateapipb.ActorState_ACTOR_STATE_PAUSING,
@@ -123,9 +121,6 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 					InProgressLocalSnapshotName: "snap-prefix",
 				},
 			})
-			if err != nil {
-				t.Fatalf("CreateActor: %v", err)
-			}
 			if err := st.CreateWorker(ctx, &ateapipb.Worker{
 				WorkerNamespace: "default",
 				WorkerPool:      "pool1",
@@ -239,13 +234,11 @@ func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 		w := &ActorWorkflow{store: persistence}
 
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-		actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+
+		actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 			Status:   &ateapipb.ActorStatus{State: seedState},
 		})
-		if err != nil {
-			t.Fatalf("state %v: CreateActor: %v", seedState, err)
-		}
 
 		marked, err := w.ensureMarkedPausing(ctx, actorRef, actor)
 		assertPrerequisiteResult(t, seedState, err, allowed[seedState])
@@ -288,10 +281,7 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 					LatestSnapshot:              tt.prevSnapshot,
 				},
 			}
-			created, err := persistence.CreateActor(ctx, actor)
-			if err != nil {
-				t.Fatalf("CreateActor: %v", err)
-			}
+			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
 			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &atev1alpha1.ActorTemplate{}); err == nil {

@@ -67,6 +67,12 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
+#### Example 4: Filtering by Container
+An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor started`, `Actor checkpointing`, ...). `--container` (short form `-c`) restricts the output to the named container's logs:
+
+```bash
+kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
+```
 
 ---
 

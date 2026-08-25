@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -188,27 +189,13 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
 	// already on disk for atelet to ship.
 	tTeardown := time.Now()
-	s.teardownActor(ctx, actorUID, ra, client)
-	dTeardown := time.Since(tTeardown)
-	delete(s.running, actorUID)
-
-	// The guest is gone as of the teardown above, so the ateom is back to
-	// "available": there is nothing left to measure, and holding the attribution
-	// would let a later GetWorkloadStats report a checkpointed actor as though it
-	// were still running.
-	//
-	// Nothing above this point clears it, unlike the gVisor ateom, which clears
-	// as soon as its checkpoint call has taken the sandbox down. Here the guest
-	// is only paused until this teardown, so a checkpoint that failed earlier has
-	// left it present, and reporting its usage is then the honest answer. This is
-	// the same point at which the running entry goes away, which is what keeps
-	// the two views of "is an actor here" from disagreeing.
-	s.activeActor.Store(nil)
-
-	// Tear down the per-activation actor network.
-	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
-		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
+	if err := s.terminateWorkload(ctx, actorUID); err != nil {
+		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
+			slog.String("actor", attribution.Ref.String()),
+			slog.String("actorUID", actorUID),
+			slog.Any("err", err))
 	}
+	dTeardown := time.Since(tTeardown)
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 	slog.InfoContext(ctx, "Actor checkpointed", slog.String("id", actorUID), slog.Any("snapshot_files", snapshotFiles),
@@ -294,10 +281,9 @@ func listFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-// teardownActor stops the ateom-owned CH VMM for an actor. Best-effort: the
-// snapshot is already on disk, so this only needs to release resources. ra may be
+// teardownActor stops the ateom-owned CH VMM for an actor. ra may be
 // nil (e.g. ateom restarted and lost in-memory state).
-func (s *AteomService) teardownActor(ctx context.Context, id string, ra *runningActor, client *ch.Client) {
+func (s *AteomService) teardownActor(ctx context.Context, id string, ra *runningActor, client *ch.Client) error {
 	// Stop offering the guest to GetWorkloadStats first, before anything below
 	// makes it stop answering. Clearing it here rather than alongside the
 	// attribution is what keeps a poll that lands mid-teardown on the
@@ -305,11 +291,14 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 	// closed connection as a failed read.
 	s.guestStats.Store(nil)
 
+	var errs []error
 	if client != nil {
 		tShutdown := time.Now()
 		shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		if err := client.Shutdown(shutCtx); err != nil {
-			slog.WarnContext(ctx, "CH shutdown failed (continuing teardown)", slog.Any("err", err))
+			if !errors.Is(err, os.ErrNotExist) {
+				slog.WarnContext(ctx, "CH shutdown returned error during teardown", slog.Any("err", err))
+			}
 		}
 		cancel()
 		slog.InfoContext(ctx, "CH API shutdown done", slog.Duration("took", time.Since(tShutdown)))
@@ -353,8 +342,64 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 
 	// Detach the bundle rootfs overlays composed in buildActorContainers, so
 	// atelet's bundle wipe doesn't strand live mounts in this namespace.
-	// Best-effort like the rest of teardown.
 	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(id)); err != nil {
-		slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays", slog.String("actorUID", id), slog.Any("err", err))
+		if !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
+		}
 	}
+	return errors.Join(errs...)
+}
+
+// TerminateWorkload stops the running actor, tears down its VMM, and cleans up
+// networking and overlays.
+func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+
+	if err := s.terminateWorkload(ctx, attribution.UID); err != nil {
+		return nil, fmt.Errorf("failed to terminate workload: %w", err)
+	}
+
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
+
+	return &ateompb.TerminateWorkloadResponse{}, nil
+}
+
+func (s *AteomService) terminateWorkload(ctx context.Context, actorUID string) error {
+	var errs []error
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
+	}
+
+	ra := s.running[actorUID]
+	chSocket := kata.CLHSocketPath(actorUID)
+	if ra != nil && ra.apiSocket != "" {
+		chSocket = ra.apiSocket
+	}
+	client := ch.NewClient(chSocket)
+
+	if err := s.teardownActor(ctx, actorUID, ra, client); err != nil {
+		errs = append(errs, fmt.Errorf("while tearing down actor: %w", err))
+	}
+	delete(s.running, actorUID)
+
+	// The guest is gone as of the teardown above, so the ateom is back to
+	// "available": there is nothing left to measure, and holding the attribution
+	// would let a later GetWorkloadStats report a checkpointed actor as though it
+	// were still running.
+	//
+	// Nothing above this point clears it, unlike the gVisor ateom, which clears
+	// as soon as its checkpoint call has taken the sandbox down. Here the guest
+	// is only paused until this teardown, so a checkpoint that failed earlier has
+	// left it present, and reporting its usage is then the honest answer. This is
+	// the same point at which the running entry goes away, which is what keeps
+	// the two views of "is an actor here" from disagreeing.
+	s.activeActor.Store(nil)
+
+	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
+		errs = append(errs, fmt.Errorf("while cleaning up actor network: %w", err))
+	}
+	return errors.Join(errs...)
 }

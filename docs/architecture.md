@@ -226,7 +226,7 @@ environment definitions.
 
 These resources represent the high-frequency, ephemeral state of individual
 actors and workers. They are stored in a high-performance, low-latency state
-store (currently ValKey/Redis) to support real-time operations.
+store (PostgreSQL) to support real-time operations.
 
   * **Actor**: A specific instance of an ActorTemplate. An Actor record tracks
     its globally unique identifier, physical location (Worker IP), current
@@ -303,7 +303,7 @@ The brain of the system. It exposes a gRPC API for the data plane and CLI to
 manage actor lifecycles.
 
   * **State Store**: Tracks the mapping of Actors to Workers in a
-    high-performance Redis store.
+    PostgreSQL store.
 
   * **Scheduler**: Selects a ready worker for a resumption request.
 
@@ -464,9 +464,9 @@ including published tags, but leaves snapshot cleanup to garbage collection.
 
 ### Phase 4: Deletion
 
-Actors in `ACTOR_STATE_SUSPENDED` state can be deleted from the Control Plane.
-After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage
-collected. The garbage collection process is not implemented yet.
+By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING` or `ACTOR_STATE_PAUSED`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
+
+After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected. The garbage collection process is not implemented yet.
 
 ## State Management & Persistence
 

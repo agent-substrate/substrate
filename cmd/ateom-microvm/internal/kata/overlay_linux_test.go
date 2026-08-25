@@ -47,6 +47,27 @@ func TestUpperWorkDirsAreSiblings(t *testing.T) {
 	}
 }
 
+// The volume subtrees ride the ONE kataShared device (BindIntoShare): the host
+// side is bind-mounted under the directory virtiofsd serves, and the guest
+// re-opens the same relative path under its kataShared mount — find-paths
+// re-opens open volume files by path on restore, so host and guest must agree.
+func TestVolumeSubtreePaths(t *testing.T) {
+	for name, guest := range map[string]string{
+		"durable": GuestDurableVolumeDir("data"),
+		"csi":     GuestCSIVolumeDir("data"),
+	} {
+		host := filepath.Join(SharedDir("uid"), name, "data")
+		hostRel, err := filepath.Rel(SharedDir("uid"), host)
+		if err != nil {
+			t.Fatalf("Rel(host): %v", err)
+		}
+		guestRel := strings.TrimPrefix(guest, guestSharedDir)
+		if hostRel != guestRel {
+			t.Errorf("%s: host-relative path %q != guest-relative path %q; find-paths would re-open the wrong file", name, hostRel, guestRel)
+		}
+	}
+}
+
 func TestVirtiofsdArgs(t *testing.T) {
 	args := virtiofsdArgs(VirtiofsdOptions{
 		SocketPath: "/run/vm/virtiofsd.sock",

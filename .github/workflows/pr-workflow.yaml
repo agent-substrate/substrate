@@ -78,7 +78,7 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system --store-backend=postgres
+      run: hack/install-ate-kind.sh --deploy-ate-system
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
@@ -107,6 +107,47 @@ jobs:
       env:
         E2E_SANDBOX_CLASS: microvm
       run: hack/run-e2e-kind.sh -v -args --no-color
+    - name: Deploy MITM egress (sdsmint)
+      # Swap the passthrough egress gateway for the sdsmint variant, which
+      # mints per-SNI leaves from the egress-mitm-ca-pool (created here if
+      # missing). --deploy-atenet redeploys only the atenet components (the
+      # rest of the control plane is unchanged), keeping this step cheap.
+      # Cluster-wide, so it must come AFTER the standard lanes: once egress
+      # TLS is intercepted, their passthrough assumptions
+      # (TestActorEgressHTTPS's end-to-end TLS with the origin) no longer hold.
+      run: hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint
+    - name: Run E2E tests (egress MITM trust)
+      # The consumption half of the trust-bundle chain: an actor does TLS with
+      # the MITM gateway's minted leaf using ONLY the projected bundle, plus a
+      # system-roots negative control proving interception is real (see
+      # internal/e2e/suites/egressmitm).
+      env:
+        E2E_EGRESS_MITM: "1"
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
+    - name: Run E2E tests (egress MITM trust, micro-VM)
+      # The same proof with the probe on the micro-VM runtime. Trust DELIVERY
+      # differs per sandbox class (gVisor RO bind vs the micro-VM unified
+      # virtio-fs share), so the handshake is proven on both. Uses the
+      # micro-VM deps staged earlier in this job.
+      env:
+        E2E_EGRESS_MITM: "1"
+        E2E_SANDBOX_CLASS: microvm
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
+    - name: Deploy MITM egress demo
+      # The networking suite's egress tests need a fixture that trusts the
+      # CA used by sdsmint.
+      run: |
+        hack/install-ate-kind.sh --deploy-demo-egress-mitm
+        hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm
+    - name: Run E2E tests (networking, MITM egress)
+      env:
+        E2E_EGRESS_MITM: "1"
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color
+    - name: Run E2E tests (networking, MITM egress, micro-VM)
+      env:
+        E2E_EGRESS_MITM: "1"
+        E2E_SANDBOX_CLASS: microvm
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
       run: |

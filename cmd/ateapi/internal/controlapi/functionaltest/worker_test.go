@@ -24,11 +24,11 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-// TestListWorkers tests that workers mirrored to Redis are listed.
+// TestListWorkers tests that workers mirrored to the store are listed.
 // Workflow:
 // 1. Creates a mock WorkerPool in Kubernetes.
 // 2. Creates a mock worker Pod in Kubernetes belonging to that pool.
-// 3. Waits for the background WorkerPoolSyncer to mirror it to Redis.
+// 3. Waits for the background WorkerPoolSyncer to mirror it to the store.
 // 4. Calls ListWorkers RPC.
 // 5. Verifies that the worker appears in the response.
 func TestListWorkers(t *testing.T) {
@@ -84,5 +84,10 @@ func TestValidation_Worker(t *testing.T) {
 	t.Run("ListWorkers", func(t *testing.T) {
 		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageSize: -1})
 		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
+	})
+
+	t.Run("ListWorkers invalid token", func(t *testing.T) {
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageToken: "%%%"})
+		assertGrpcError(t, err, codes.InvalidArgument, "invalid page_token")
 	})
 }

@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"log/slog"
 	"reflect"
 	"testing"
 
@@ -35,6 +36,47 @@ func TestRefAliasesAreDistinctTypes(t *testing.T) {
 			t.Errorf("%s and %s are the same type; the phantom kind marker was lost", name, other)
 		}
 		seen[typ] = name
+	}
+}
+
+// The type attr comes from the type parameter alone, so a zero ref — where no
+// value of R was ever constructed — must log without panicking and still name
+// its resource kind.
+func TestResourceRefLogValue(t *testing.T) {
+	tests := []struct {
+		name string
+		val  slog.Value
+		want map[string]string
+	}{
+		{
+			name: "zero actor ref",
+			val:  ActorRef{}.LogValue(),
+			want: map[string]string{"type": "*ateapipb.Actor", "atespace": "", "name": ""},
+		},
+		{
+			name: "zero template ref",
+			val:  ActorTemplateRef{}.LogValue(),
+			want: map[string]string{"type": "*ateapipb.ActorTemplate", "atespace": "", "name": ""},
+		},
+		{
+			name: "populated actor ref",
+			val:  ActorRef{Atespace: "team-a", Name: "act-1"}.LogValue(),
+			want: map[string]string{"type": "*ateapipb.Actor", "atespace": "team-a", "name": "act-1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if kind := tt.val.Kind(); kind != slog.KindGroup {
+				t.Fatalf("LogValue() kind = %v, want %v", kind, slog.KindGroup)
+			}
+			got := make(map[string]string)
+			for _, attr := range tt.val.Group() {
+				got[attr.Key] = attr.Value.String()
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("LogValue() attrs = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
