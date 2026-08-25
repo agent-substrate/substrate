@@ -339,8 +339,8 @@ func TestAcquireLock_CleansExpiredLeases(t *testing.T) {
 
 // TestCreateActor_MissingAtespace_FailedPrecondition exercises the
 // foreign-key race the doc calls out: CreateActor rejects an actor whose
-// atespace doesn't exist (including a concurrently-deleted one), closing the
-// TOCTOU window ateredis's separate existence check leaves open.
+// atespace doesn't exist (including a concurrently-deleted one), with the
+// foreign key closing the TOCTOU window around a separate existence check.
 func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 	s := setupPostgresStore(t).(*Persistence)
 	ctx := context.Background()

@@ -2019,7 +2019,7 @@ func TestSuspendActor(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	name := "id1"
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -2046,6 +2046,7 @@ func TestSuspendActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SuspendActor failed: %v", err)
 	}
+	waitForWorkerAvailable(t, tc, workerName)
 
 	if !tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("expected atelet Checkpoint to be called")
@@ -2949,7 +2950,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	const pinned, relocated = "actor-pinned", "actor-squatter"
 	for _, name := range []string{pinned, relocated} {
@@ -2983,6 +2984,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if got := paused.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(); len(got) != 1 || got[0] != "node1" {
 		t.Fatalf("paused actor pinned to %v, want [node1]", got)
 	}
+	waitForWorkerAvailable(t, tc, workerName)
 
 	// Another actor takes node1's only worker, so the pinned actor's node is full
 	// while free capacity exists elsewhere.

@@ -525,6 +525,23 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	return string(createdPod.UID)
 }
 
+// waitForWorkerAvailable waits for an assignment release to reach the worker
+// cache. Lifecycle RPCs commit the release to the store before the cache's
+// PostgreSQL watch processes the corresponding update.
+func waitForWorkerAvailable(t *testing.T, tc *testContext, workerName string) {
+	t.Helper()
+	err := wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
+		worker, err := tc.workerCache.Worker(workerName)
+		if err != nil {
+			return false, nil
+		}
+		return worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE && worker.GetStatus().GetAssignment() == nil, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for worker %s to become available: %v", workerName, err)
+	}
+}
+
 // createAteletPod creates an atelet pod on nodeName and marks it Running with
 // an IP, which DialForAteletOnNode requires. The pod carries the namespace and
 // app=atelet label AteletInformer selects on, and is indexed by its node.
