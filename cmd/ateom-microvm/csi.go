@@ -56,7 +56,7 @@ func csiMounts(mounts []*ateompb.VolumeMount) []specs.Mount {
 // stageCsiVolumes bind-mounts the actor's host CSI volumes directory
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/csi.
 func (s *AteomService) stageCsiVolumes(ctx context.Context, actorUID string) error {
-	src := ateompath.VolumesDir(actorUID)
+	src := ateompath.VolumesDir(s.podUID, actorUID)
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking CSI volumes dir %q: %w", src, err)
 	}

@@ -41,7 +41,9 @@ func TestBuildActorOCISpec_SystemInfoVolumeMounts(t *testing.T) {
 		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
 	}
 	spec := buildActorOCISpec(
-		actorUID, "app",
+		"worker_pod_uid",
+		actorUID,
+		"app",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
@@ -208,6 +210,7 @@ func TestResolveProcessArgs(t *testing.T) {
 // Each durable-dir volume mount becomes a bind mount whose source is the
 // per-actor on-host DurableDirVolumeMountPoint for that volume name.
 func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
+	const workerPodUID = "worker_pod_uid"
 	const actorUID = "actor_uid"
 	durableDirs := []*ateletpb.VolumeMount{
 		{Name: "data", MountPath: "/var/data"},
@@ -218,7 +221,9 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 	}
 	spec := buildActorOCISpec(
-		actorUID, "app",
+		workerPodUID,
+		actorUID,
+		"app",
 		[]string{"/app"}, nil, nil,
 		"/run/netns/x",
 		volumes,
@@ -258,6 +263,7 @@ func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
 		{Name: "data", MountPath: "/var/data"},
 	}
 	spec := buildActorOCISpec(
+		"worker_pod_uid",
 		"actor_uid", "app",
 		[]string{"/ate/payload-binary"}, nil, nil,
 		"/run/netns/x",
@@ -367,7 +373,7 @@ func TestResolveCapabilities(t *testing.T) {
 // ambient stay empty — see the comment in buildActorOCISpec.
 func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 	want := []string{"CAP_CHOWN", "CAP_KILL"}
-	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want)
+	spec := buildActorOCISpec("worker_pod_uid", "actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -400,7 +406,7 @@ func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 
 // The pause container only reaps, so it is built with no capabilities at all.
 func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
-	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil)
+	spec := buildActorOCISpec("worker_pod_uid", "actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -419,5 +425,52 @@ func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
 		if len(set.got) != 0 {
 			t.Errorf("%s = %v, want empty", set.name, set.got)
 		}
+	}
+}
+
+func TestBuildActorOCISpec_ExternalVolumeMounts(t *testing.T) {
+	const workerPodUID = "worker_pod_uid"
+	const actorUID = "actor_uid"
+	extMounts := []*ateletpb.VolumeMount{
+		{Name: "shared-nfs", MountPath: "/mnt/nfs"},
+	}
+	volumes := []*ateletpb.Volume{
+		{
+			Name: "shared-nfs",
+			Source: &ateletpb.Volume_External{
+				External: &ateletpb.ExternalVolumeSource{
+					StorageVolumeId: "pvc-12345",
+					VolumeType:      "nfs.csi.k8s.io",
+				},
+			},
+		},
+	}
+	spec := buildActorOCISpec(
+		workerPodUID,
+		actorUID,
+		"app",
+		[]string{"/app"}, nil, nil,
+		"/run/netns/x",
+		volumes,
+		extMounts,
+		nil,
+	)
+
+	wantSrc := ateompath.VolumeHostPath(workerPodUID, actorUID, "shared-nfs")
+	found := false
+	for _, m := range spec.Mounts {
+		if m.Destination != "/mnt/nfs" {
+			continue
+		}
+		found = true
+		if m.Source != wantSrc {
+			t.Errorf("external volume source = %q, want %q", m.Source, wantSrc)
+		}
+		if m.Type != "bind" {
+			t.Errorf("external volume type = %q, want bind", m.Type)
+		}
+	}
+	if !found {
+		t.Fatalf("external volume mount for /mnt/nfs missing; mounts=%v", spec.Mounts)
 	}
 }

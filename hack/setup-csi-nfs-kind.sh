@@ -40,26 +40,7 @@ kubectl apply -f "${ROOT}/hack/third_party/csi-driver-nfs/deploy/csi-nfs-driveri
 kubectl apply -f "${ROOT}/hack/third_party/csi-driver-nfs/deploy/csi-nfs-controller.yaml"
 kubectl apply -f "${ROOT}/hack/third_party/csi-driver-nfs/deploy/csi-nfs-node.yaml"
 
-# 3. Patch CSI NFS Node DaemonSet to propagate mounts
-echo "Patching CSI NFS Node DaemonSet..."
-kubectl patch daemonset csi-nfs-node -n kube-system --patch '
-spec:
-  template:
-    spec:
-      containers:
-      - name: nfs
-        volumeMounts:
-        - name: ateom-dir
-          mountPath: /var/lib/ateom-gvisor
-          mountPropagation: Bidirectional
-      volumes:
-      - name: ateom-dir
-        hostPath:
-          path: /var/lib/ateom-gvisor
-          type: DirectoryOrCreate
-'
-
-# 4. Patch CSI NFS Controller Deployment to add socat proxy
+# 3. Patch CSI NFS Controller Deployment to add socat proxy
 echo "Patching CSI NFS Controller Deployment..."
 kubectl patch deployment csi-nfs-controller -n kube-system --patch '
 spec:

@@ -278,16 +278,36 @@ func PIDFilePath(actorUID, containerName string) string {
 	)
 }
 
-func VolumesDir(actorUID string) string {
+const (
+	// KubeletPodsDir is the root directory for Kubelet pod volume mounts.
+	KubeletPodsDir = "/var/lib/kubelet/pods"
+)
+
+// WorkerPodPath returns the path to the worker pod directory under KubeletPodsDir.
+func WorkerPodPath(workerPodUID string) string {
 	return filepath.Join(
-		ActorPath(actorUID),
-		"volumes",
+		KubeletPodsDir,
+		workerPodUID,
 	)
 }
 
-func VolumeHostPath(actorUID, volumeName string) string {
+// VolumesDir returns the base directory holding all external CSI volumes for an
+// actor running on a specific worker pod. It lives under the worker pod's directory
+// in /var/lib/kubelet/pods so that standard CSI node drivers can publish volumes.
+func VolumesDir(workerPodUID, actorUID string) string {
 	return filepath.Join(
-		VolumesDir(actorUID),
+		WorkerPodPath(workerPodUID),
+		// Hides mounts from kubelet's volume reconstruction reconciler ignores these mounts.
+		"substrate-volumes",
+		actorUID,
+	)
+}
+
+// VolumeHostPath returns the host directory where a specific external volume is
+// mounted for an actor on a given worker pod.
+func VolumeHostPath(workerPodUID, actorUID, volumeName string) string {
+	return filepath.Join(
+		VolumesDir(workerPodUID, actorUID),
 		volumeName,
 	)
 }

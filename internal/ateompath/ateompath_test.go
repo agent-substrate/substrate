@@ -94,3 +94,27 @@ func TestActorPathUsesUID(t *testing.T) {
 		t.Errorf("ActorPath(%q) = %q, want suffix %q", uid1, path1, want)
 	}
 }
+
+func TestVolumeHostPath(t *testing.T) {
+	workerPodUID := "pod-1234"
+	actorUID := "actor-5678"
+	volumeName := "my-vol"
+
+	want := "/var/lib/kubelet/pods/pod-1234/substrate-volumes/actor-5678/my-vol"
+	got := VolumeHostPath(workerPodUID, actorUID, volumeName)
+	if got != want {
+		t.Errorf("VolumeHostPath(%q, %q, %q) = %q, want %q", workerPodUID, actorUID, volumeName, got, want)
+	}
+
+	wantDir := "/var/lib/kubelet/pods/pod-1234/substrate-volumes/actor-5678"
+	gotDir := VolumesDir(workerPodUID, actorUID)
+	if gotDir != wantDir {
+		t.Errorf("VolumesDir(%q, %q) = %q, want %q", workerPodUID, actorUID, gotDir, wantDir)
+	}
+
+	wantPod := "/var/lib/kubelet/pods/pod-1234"
+	gotPod := WorkerPodPath(workerPodUID)
+	if gotPod != wantPod {
+		t.Errorf("WorkerPodPath(%q) = %q, want %q", workerPodUID, gotPod, wantPod)
+	}
+}

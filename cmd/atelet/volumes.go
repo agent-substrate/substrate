@@ -29,13 +29,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+func (s *AteomHerder) mountExternalVolumes(ctx context.Context, workerPodUID, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
 		}
-		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
+		hostPath := ateompath.VolumeHostPath(workerPodUID, actorUID, vol.GetName())
 		if err := os.MkdirAll(hostPath, 0o750); err != nil {
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
@@ -51,14 +51,14 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 	return nil
 }
 
-func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, workerPodUID, actorUID string, volumes []*ateletpb.Volume) error {
 	var errs []error
 	for _, vol := range volumes {
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
 		}
-		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
+		hostPath := ateompath.VolumeHostPath(workerPodUID, actorUID, vol.GetName())
 		slog.InfoContext(ctx, "Unmounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
 		// TODO: Standardize volume plugin lookup and error handling across control plane
 		// and worker plane (e.g. via a shared helper).

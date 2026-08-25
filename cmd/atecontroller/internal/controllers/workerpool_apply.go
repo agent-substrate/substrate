@@ -112,6 +112,10 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithMountPath(ateompath.BasePath).
 				WithMountPropagation(corev1.MountPropagationHostToContainer),
 			corev1ac.VolumeMount().
+				WithName("kubelet-pods").
+				WithMountPath(ateompath.KubeletPodsDir).
+				WithMountPropagation(corev1.MountPropagationHostToContainer),
+			corev1ac.VolumeMount().
 				WithName(atunnelIdentityVolume).
 				WithMountPath(atunnelIdentityMountPath).
 				WithReadOnly(true),
@@ -130,6 +134,11 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithName("run-ateom").
 				WithHostPath(corev1ac.HostPathVolumeSource().
 					WithPath(ateompath.BasePath).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName("kubelet-pods").
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.KubeletPodsDir).
 					WithType(corev1.HostPathDirectoryOrCreate)),
 			corev1ac.Volume().
 				WithName(atunnelIdentityVolume).
