@@ -272,8 +272,23 @@ spec:
         - "/usr/local/bin/envoy"
         - "-c"
         - "/etc/envoy/envoy.yaml"
+        # Without this Envoy sizes its worker pool from the host cpu count,
+        # which cgroup limits do not constrain, so a many-core node exhausts the
+        # default nofile before startup finishes. Four is ample for the short
+        # request/response connections this proxy accepts and, unlike the
+        # default, does not vary with the machine it lands on.
+        # hack/install-ate.sh --atenet-router-concurrency overrides it.
+        #
+        # Flag and value stay separate tokens. Envoy's parser rejects
+        # --concurrency=N outright ("Couldn't find match for argument") and the
+        # container then crashloops on a usage dump.
+        - "--concurrency"
+        - "$(ENVOY_CONCURRENCY)"
         - "--component-log-level"
         - "upstream:debug,router:debug,ext_proc:debug"
+        env:
+        - name: ENVOY_CONCURRENCY
+          value: "4"
         # Prevents Envoy from fast-exiting on SIGTERM before atenet-router finishes
         # its drain sequence. Polls for the drain-complete marker written by the
         # router on the shared emptyDir, terminating Envoy as soon as the drain

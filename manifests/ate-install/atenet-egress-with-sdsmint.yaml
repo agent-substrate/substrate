@@ -845,6 +845,19 @@ spec:
         - atenet-egress
         - --service-cluster
         - atenet-egress
+        # Without this Envoy sizes its worker pool from the host cpu count,
+        # which cgroup limits do not constrain, so a many-core node exhausts the
+        # default nofile before startup finishes. Envoy pins a connection to a
+        # worker for that connection's lifetime, and the CONNECT tunnels
+        # described below outlive ordinary requests by a long way, so this
+        # number is worth raising sooner here than on the router.
+        # hack/install-ate.sh --atenet-egress-concurrency overrides it.
+        #
+        # Flag and value stay separate tokens. Envoy's parser rejects
+        # --concurrency=N outright ("Couldn't find match for argument") and the
+        # container then crashloops on a usage dump.
+        - --concurrency
+        - "$(ENVOY_CONCURRENCY)"
         # Prevents Envoy from fast-exiting on SIGTERM before the ext-proc
         # sidecar finishes its drain sequence. Polls for the drain-complete
         # marker the sidecar writes on the shared emptyDir, terminating Envoy
@@ -865,6 +878,9 @@ spec:
           preStop:
             exec:
               command: ["sh", "-c", "while [ ! -f /var/run/atenet/drain-complete ]; do sleep 0.5; done"]
+        env:
+        - name: ENVOY_CONCURRENCY
+          value: "4"
         ports:
         - name: https
           containerPort: 443
