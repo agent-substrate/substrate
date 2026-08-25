@@ -171,6 +171,33 @@ message ResourceMetadata {
   google.protobuf.Timestamp update_time = 6;
 }
 
+enum ConditionStatus {
+  CONDITION_STATUS_UNSPECIFIED = 0;
+  CONDITION_STATUS_TRUE = 1;
+  CONDITION_STATUS_FALSE = 2;
+  CONDITION_STATUS_UNKNOWN = 3;
+}
+
+// Condition is one observation of a resource's state, mirroring Kubernetes
+// metav1.Condition. Resources expose a set of conditions instead of a phase
+// enum so new observations can be added without breaking clients.
+message Condition {
+  // type identifies the condition, unique within the conditions list.
+  string type = 1;
+
+  ConditionStatus status = 2;
+
+  // reason is a programmatic, CamelCase identifier for the condition's last
+  // transition.
+  string reason = 3;
+
+  // message is a human-readable explanation of the transition.
+  string message = 4;
+
+  // last_transition_time is when status last changed value.
+  google.protobuf.Timestamp last_transition_time = 5;
+}
+
 message ExternalVolume {
   // Name of the volume specified in the actor template.
   string volume_name = 1;
@@ -392,25 +419,13 @@ message Limits {
   string quantity = 2;
 }
 
-enum ActorTemplatePhase {
-  ACTOR_TEMPLATE_PHASE_UNSPECIFIED = 0;
-  ACTOR_TEMPLATE_PHASE_INITIAL = 1;
-  ACTOR_TEMPLATE_PHASE_ASSETS_FINALIZED = 2;
-  ACTOR_TEMPLATE_PHASE_GOLDEN_ACTOR_CREATED = 3;
-  ACTOR_TEMPLATE_PHASE_GOLDEN_ACTOR_RUNNING = 4;
-  ACTOR_TEMPLATE_PHASE_GOLDEN_SNAPSHOT_READY = 5;
-  ACTOR_TEMPLATE_PHASE_FAILED = 6;
-}
-
 message ActorTemplateStatus {
-  // State machine, mirroring the ActorTemplate CRD PhaseType:
-  // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
-  // READY and FAILED are terminal; the version is only usable once READY.
-  ActorTemplatePhase phase = 1;
-
-  // message is a human-readable explanation of the current state, most
-  // useful when the ActorTemplate is FAILED.
-  string message = 2;
+  // conditions record terminal observations about the golden-actor build,
+  // whose progress is otherwise derived from the golden actor itself:
+  // Ready (the golden snapshot is recorded in golden_snapshot and the
+  // version is usable) and Failed (the build failed, with the explanation
+  // in the condition's reason and message). Both are terminal.
+  repeated Condition conditions = 1;
 
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
@@ -629,8 +644,8 @@ message DeleteAtespaceRequest {
 
 message CreateActorTemplateRequest {
   // The actor template version to create. Server-assigned metadata (uid,
-  // version, timestamps) is ignored, as are the status fields: the server
-  // initializes new versions to ACTOR_TEMPLATE_PHASE_INITIAL.
+  // version, timestamps) is ignored, as are the status fields: new versions
+  // start with empty conditions and are reconciled from there.
   ActorTemplate actor_template = 1;
 }
 
