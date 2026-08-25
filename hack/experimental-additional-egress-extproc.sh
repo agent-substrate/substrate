@@ -80,7 +80,7 @@ emit_additional_egress_extproc_filter() {
     message_timeout: 2s
     # The actor's verified identity
     request_attributes:
-    - filter_state['ate.actor.identity']
+    - filter_state['dev.ate.actor.identity']
     processing_mode:
       request_header_mode: SEND
       response_header_mode: SKIP

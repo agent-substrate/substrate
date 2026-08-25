@@ -56,13 +56,6 @@ const (
 	OriginalDstAddressKey = "local"
 	// OriginalDstPortKey is the actor's target port.
 	OriginalDstPortKey = "port"
-
-	// AuthorityFilterStateKey is the filter-state key holding the request's
-	// :authority, set by xds.go's authorityFilterStateFilter.
-	AuthorityFilterStateKey = "dev.ate.authority"
-	// AuthorityFilterStateAttribute is the CEL expression ext_proc evaluates
-	// to read AuthorityFilterStateKey back out.
-	AuthorityFilterStateAttribute = "filter_state['" + AuthorityFilterStateKey + "']"
 )
 
 // Handler routes ingress requests to the worker hosting their actor.
@@ -97,9 +90,9 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// Resolved from filter state rather than Host/:authority directly: a
 	// reinjected CONNECT tunnel's own :authority has nothing to do with the
 	// actor, so xds.go captures the real one at connect_terminate instead.
-	authority := md.Attribute(AuthorityFilterStateAttribute)
+	authority := md.Attribute(extproc.AuthorityFilterStateAttribute)
 	if authority == "" {
-		return extproc.Result{}, invalidHostErr(md.Host, fmt.Errorf("missing %s request attribute", AuthorityFilterStateAttribute))
+		return extproc.Result{}, invalidHostErr(md.Host, fmt.Errorf("missing %s request attribute", extproc.AuthorityFilterStateAttribute))
 	}
 	actorRef, err := parseActorRef(authority)
 	if err != nil {
