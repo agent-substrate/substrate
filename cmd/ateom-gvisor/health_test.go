@@ -36,7 +36,7 @@ import (
 )
 
 // newHealthService builds a service the exit monitor can run on: each test
-// stubs the runsc invocations with a fakeProber on the session.
+// stubs the runsc invocations with a fakeRunsc on the session.
 func newHealthService() *AteomService {
 	return &AteomService{
 		lock:        newCancelableMutex(),
@@ -44,18 +44,20 @@ func newHealthService() *AteomService {
 	}
 }
 
-// fakeProber stubs the exit monitor's runsc wait/state invocations. A nil
-// func means the test expects that command to never run.
-type fakeProber struct {
+// fakeRunsc stubs the exit monitor's runsc wait/state invocations. A nil func,
+// like any command outside the monitor's slice of runscCommands, panics via
+// the nil embed: the test expects that command to never run.
+type fakeRunsc struct {
+	runscCommands
 	wait  func(ctx context.Context, container string) (*int32, error)
 	state func(ctx context.Context, container string) (string, error)
 }
 
-func (f fakeProber) cmdWait(ctx context.Context, container string) (*int32, error) {
+func (f fakeRunsc) cmdWait(ctx context.Context, container string) (*int32, error) {
 	return f.wait(ctx, container)
 }
 
-func (f fakeProber) cmdStateStatus(ctx context.Context, container string) (string, error) {
+func (f fakeRunsc) cmdStateStatus(ctx context.Context, container string) (string, error) {
 	return f.state(ctx, container)
 }
 
@@ -92,12 +94,12 @@ func assertNoExitRecord(t *testing.T, act *activation) {
 func TestExitMonitorRecordsExit(t *testing.T) {
 	s := newHealthService()
 	code := int32(7)
-	prober := fakeProber{wait: func(ctx context.Context, container string) (*int32, error) {
+	rcmd := fakeRunsc{wait: func(ctx context.Context, container string) (*int32, error) {
 		return &code, nil // the container exited immediately
 	}}
 
 	act := &activation{attribution: testActor}
-	session := &workloadSession{prober: prober, containers: []string{"main"}}
+	session := &workloadSession{rcmd: rcmd, containers: []string{"main"}}
 	s.startExitMonitor(session, act)
 
 	exit := waitForExitRecord(t, act)
@@ -115,13 +117,13 @@ func TestExitMonitorRecordsExit(t *testing.T) {
 func TestExitMonitorIgnoresExpectedExit(t *testing.T) {
 	s := newHealthService()
 	exited := make(chan struct{})
-	prober := fakeProber{wait: func(ctx context.Context, container string) (*int32, error) {
+	rcmd := fakeRunsc{wait: func(ctx context.Context, container string) (*int32, error) {
 		<-exited
 		return nil, nil
 	}}
 
 	act := &activation{attribution: testActor}
-	session := &workloadSession{prober: prober, containers: []string{"main"}}
+	session := &workloadSession{rcmd: rcmd, containers: []string{"main"}}
 	s.startExitMonitor(session, act)
 
 	// The exits are marked expected before the container dies, which is
@@ -150,7 +152,7 @@ func TestExitMonitorConfirmsBeforeRecording(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := newHealthService()
 			statusRead := make(chan struct{}, 1)
-			prober := fakeProber{
+			rcmd := fakeRunsc{
 				wait: func(ctx context.Context, container string) (*int32, error) {
 					return nil, errors.New("waiting for process to exit: waitpid: no child processes")
 				},
@@ -164,7 +166,7 @@ func TestExitMonitorConfirmsBeforeRecording(t *testing.T) {
 			}
 
 			act := &activation{attribution: testActor}
-			session := &workloadSession{prober: prober, containers: []string{"main"}}
+			session := &workloadSession{rcmd: rcmd, containers: []string{"main"}}
 			s.startExitMonitor(session, act)
 			<-statusRead
 
@@ -189,7 +191,7 @@ func TestExitMonitorRetriesStateReadFailures(t *testing.T) {
 	s := newHealthService()
 	var calls atomic.Int32
 	recovered := make(chan struct{}, 1)
-	prober := fakeProber{
+	rcmd := fakeRunsc{
 		wait: func(ctx context.Context, container string) (*int32, error) {
 			return nil, errors.New("waiting for process to exit: waitpid: no child processes")
 		},
@@ -206,7 +208,7 @@ func TestExitMonitorRetriesStateReadFailures(t *testing.T) {
 	}
 
 	act := &activation{attribution: testActor}
-	session := &workloadSession{prober: prober, containers: []string{"main"}}
+	session := &workloadSession{rcmd: rcmd, containers: []string{"main"}}
 	s.startExitMonitor(session, act)
 	<-recovered
 
@@ -222,7 +224,7 @@ func TestExitMonitorStateFailuresMustBeConsecutive(t *testing.T) {
 	s := newHealthService()
 	var calls atomic.Int32
 	pastNaiveLimit := make(chan struct{}, 1)
-	prober := fakeProber{
+	rcmd := fakeRunsc{
 		wait: func(ctx context.Context, container string) (*int32, error) {
 			return nil, errors.New("waiting for process to exit: waitpid: no child processes")
 		},
@@ -244,7 +246,7 @@ func TestExitMonitorStateFailuresMustBeConsecutive(t *testing.T) {
 	}
 
 	act := &activation{attribution: testActor}
-	session := &workloadSession{prober: prober, containers: []string{"main"}}
+	session := &workloadSession{rcmd: rcmd, containers: []string{"main"}}
 	s.startExitMonitor(session, act)
 	<-pastNaiveLimit
 
@@ -260,7 +262,7 @@ func TestExitMonitorNeverPresumesGoneOnExecFailure(t *testing.T) {
 	s := newHealthService()
 	var calls atomic.Int32
 	pastOldLimit := make(chan struct{}, 1)
-	prober := fakeProber{
+	rcmd := fakeRunsc{
 		wait: func(ctx context.Context, container string) (*int32, error) {
 			return nil, errors.New("waiting for process to exit: waitpid: no child processes")
 		},
@@ -276,7 +278,7 @@ func TestExitMonitorNeverPresumesGoneOnExecFailure(t *testing.T) {
 	}
 
 	act := &activation{attribution: testActor}
-	session := &workloadSession{prober: prober, containers: []string{"main"}}
+	session := &workloadSession{rcmd: rcmd, containers: []string{"main"}}
 	s.startExitMonitor(session, act)
 	<-pastOldLimit
 
@@ -291,13 +293,13 @@ func TestExitMonitorNeverPresumesGoneOnExecFailure(t *testing.T) {
 func TestExitMonitorScopesRecordToItsActivation(t *testing.T) {
 	s := newHealthService()
 	exitNow := make(chan struct{})
-	prober := fakeProber{wait: func(ctx context.Context, container string) (*int32, error) {
+	rcmd := fakeRunsc{wait: func(ctx context.Context, container string) (*int32, error) {
 		<-exitNow
 		return ptrInt32(1), nil
 	}}
 
 	prev := &activation{attribution: testActor}
-	session := &workloadSession{prober: prober, containers: []string{"main"}}
+	session := &workloadSession{rcmd: rcmd, containers: []string{"main"}}
 	s.activeActor.Store(prev)
 	s.startExitMonitor(session, prev)
 

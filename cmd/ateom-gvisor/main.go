@@ -308,20 +308,12 @@ type activeRPCInfo struct {
 	cancel context.CancelFunc
 }
 
-// containerProber is the slice of runsc the exit monitor depends on: waiting
-// for a container to exit and confirming its state. *runsc satisfies it; tests
-// substitute a fake to drive the monitor without a sandbox.
-type containerProber interface {
-	cmdWait(ctx context.Context, containerName string) (*int32, error)
-	cmdStateStatus(ctx context.Context, containerName string) (string, error)
-}
-
 // workloadSession captures the in-memory metadata for the workload currently running
 // in the sandbox, so the SIGTERM handler knows which containers to signal and
 // wait on during graceful shutdown. The sandbox runs one workload at a time.
 type workloadSession struct {
-	rcmd       *runsc
-	prober     containerProber
+	// rcmd is an interface so exit-monitor tests can substitute a fake.
+	rcmd       runscCommands
 	containers []string
 
 	// exitExpected marks the coming container exits as control-plane-initiated
@@ -676,7 +668,7 @@ func (s *AteomService) watchContainerExit(ctx context.Context, session *workload
 	stateReadFailures := 0
 
 	for {
-		code, waitErr := session.prober.cmdWait(ctx, container)
+		code, waitErr := session.rcmd.cmdWait(ctx, container)
 		if ctx.Err() != nil || session.exitExpected.Load() {
 			return
 		}
@@ -687,7 +679,7 @@ func (s *AteomService) watchContainerExit(ctx context.Context, session *workload
 		// The background reaper can steal `runsc wait`'s exit status (ECHILD),
 		// failing the command while the container is still running. Confirm
 		// with `runsc state` rather than record a false crash.
-		containerStatus, stateErr := session.prober.cmdStateStatus(ctx, container)
+		containerStatus, stateErr := session.rcmd.cmdStateStatus(ctx, container)
 		if ctx.Err() != nil || session.exitExpected.Load() {
 			return
 		}
@@ -860,7 +852,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
-	s.activeSession = &workloadSession{rcmd: rcmd, prober: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
+	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 	s.startExitMonitor(s.activeSession, act)
 
 	return &ateompb.RunWorkloadResponse{}, nil
@@ -1174,7 +1166,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
-	s.activeSession = &workloadSession{rcmd: rcmd, prober: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
+	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 	s.startExitMonitor(s.activeSession, act)
 
 	return &ateompb.RestoreWorkloadResponse{}, nil

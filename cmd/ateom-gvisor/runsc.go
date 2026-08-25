@@ -41,6 +41,24 @@ type runsc struct {
 	size sizing.SandboxSize
 }
 
+// runscCommands is the runsc CLI surface, one method per subcommand. *runsc is
+// the real implementation; tests substitute a fake to drive code that holds a
+// session without a sandbox.
+type runscCommands interface {
+	cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error
+	cmdStart(ctx context.Context, out io.Writer, containerName string) error
+	cmdCheckpoint(ctx context.Context, containerName, checkpointPath string) error
+	cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string) error
+	cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error
+	cmdDelete(ctx context.Context, containerName string) error
+	cmdState(ctx context.Context, containerName string) error
+	cmdStateStatus(ctx context.Context, containerName string) (string, error)
+	cmdKill(ctx context.Context, containerName, signal string) error
+	cmdWait(ctx context.Context, containerName string) (*int32, error)
+}
+
+var _ runscCommands = (*runsc)(nil)
+
 // nvproxyGlobalArgs returns the runsc global flags for GPU sandboxes, enabling
 // gVisor's GPU ioctl proxy when the worker has a GPU. --nvproxy must be set when
 // the sandbox is created (the pause/root container) so the sentry initializes GPU
