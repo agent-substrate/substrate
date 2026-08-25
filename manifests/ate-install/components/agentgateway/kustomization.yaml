@@ -42,7 +42,7 @@ patches:
         path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v0.0.0-alpha.42dba5b
+          image: cr.agentgateway.dev/agentgateway:v1.5.0
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -73,6 +73,18 @@ patches:
             mountPath: /run/servicedns-ca
       - op: remove
         path: /spec/template/spec/containers/1
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: servicedns-ca
+          projected:
+            sources:
+            - clusterTrustBundle:
+                signerName: servicedns.podcert.ate.dev/identity
+                labelSelector:
+                  matchLabels:
+                    podcert.ate.dev/canarying: live
+                path: trust-bundle.pem
   - target:
       group: apps
       version: v1
@@ -103,7 +115,7 @@ patches:
         path: /spec/template/spec/containers/0
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v0.0.0-alpha.42dba5b
+          image: cr.agentgateway.dev/agentgateway:v1.5.0
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -141,9 +153,6 @@ patches:
           - name: servicedns-ca
             mountPath: /run/servicedns-ca
             readOnly: true
-          - name: ca-state
-            mountPath: /run/ca-state
-            readOnly: true
       - op: replace
         path: /spec/template/spec/volumes/0/configMap/name
         value: atenet-egress-agentgateway-substrate-config
@@ -161,14 +170,3 @@ patches:
                   matchLabels:
                     podcert.ate.dev/canarying: live
                 path: trust-bundle.pem
-      - op: add
-        path: /spec/template/spec/volumes/-
-        value:
-          name: ca-state
-          projected:
-            sources:
-            - secret:
-                name: egress-mitm-ca-pool
-                items:
-                - key: pool
-                  path: mitm-pool.json

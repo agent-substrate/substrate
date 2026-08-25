@@ -87,10 +87,7 @@ func TestActorDirectAccess(t *testing.T) {
 // mTLS with the Actor's own actor-identity certificate plus an HTTP CONNECT to
 // atenet-egress, authorized there against that certificate, and only then
 // dialed out. A masqueraded (pre-gateway) egress would also return 200, so this
-// asserts the gateway is deployed and that it did not reject the Actor. The
-// response is also the request-level proof for AgentGateway: actor egress is
-// redirected to atunnel before it can leave the worker, so a successful origin
-// response necessarily crossed the egress gateway.
+// asserts the gateway is deployed and that it did not reject the Actor.
 func TestActorEgress(t *testing.T) {
 	ctx := context.Background()
 	actorName, _ := createAndResumeActor(t, ctx, "egress", egressFixture())
@@ -263,26 +260,6 @@ func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want
 	}
 	if len(pods.Items) == 0 {
 		t.Fatalf("no %s pods in %s; the egress gateway is not deployed", gatewaySelector, gatewayNamespace)
-	}
-
-	// The Envoy implementation exposes the CONNECT authority and actor identity
-	// in its access log, so retain that stronger assertion where it is available.
-	// AgentGateway's substrateEgress API does not currently expose an equivalent
-	// request access-log contract. Its successful origin responses above still
-	// prove traversal because atunnel transparently redirects every actor socket
-	// to this gateway.
-	hasEnvoy := false
-	for _, pod := range pods.Items {
-		for _, container := range pod.Spec.Containers {
-			if container.Name == gatewayContainer {
-				hasEnvoy = true
-				break
-			}
-		}
-	}
-	if !hasEnvoy {
-		t.Logf("atenet-egress has no Envoy access-log container; request response proves %s through AgentGateway", want)
-		return
 	}
 
 	// Poll for the access log line (it may show up asynchronously from the actual traffic).

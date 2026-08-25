@@ -39,7 +39,7 @@ import (
 const (
 	// DefaultConnectPort is the worker port on which atunnel accepts inbound
 	// mTLS CONNECT tunnels from the ingress router.
-	DefaultConnectPort = 444
+	DefaultConnectPort = 8443
 
 	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.

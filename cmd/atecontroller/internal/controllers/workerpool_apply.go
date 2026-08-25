@@ -94,7 +94,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		WithArgs(
 			"--pod-uid=$(POD_UID)",
 			"--atunnel-listen-address=0.0.0.0:443",
-			"--atunnel-connect-listen-address=0.0.0.0:444",
+			"--atunnel-connect-listen-address=0.0.0.0:8443",
 			"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 			"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 			"--atunnel-egress-listen-address=0.0.0.0:15001",
@@ -106,7 +106,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithProtocol(corev1.ProtocolTCP),
 			corev1ac.ContainerPort().
 				WithName("connect").
-				WithContainerPort(444).
+				WithContainerPort(8443).
 				WithProtocol(corev1.ProtocolTCP),
 			corev1ac.ContainerPort().
 				WithName("readyz").

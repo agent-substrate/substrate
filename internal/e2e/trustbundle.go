@@ -94,9 +94,22 @@ func newEgressTrustPool(t *testing.T) (*corev1.Secret, string) {
 	if err != nil {
 		t.Fatalf("marshaling the egress pool: %v", err)
 	}
+	certificateChain, err := ca.TLSCertificateChainPEM()
+	if err != nil {
+		t.Fatalf("encoding the egress CA certificate chain: %v", err)
+	}
+	privateKey, err := ca.TLSPrivateKeyPEM()
+	if err != nil {
+		t.Fatalf("encoding the egress CA private key: %v", err)
+	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Namespace: egressCAPoolNamespace, Name: egressCAPoolSecretName},
-		Data:       map[string][]byte{egressCAPoolSecretKey: poolBytes},
+		Type:       corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			egressCAPoolSecretKey:   poolBytes,
+			corev1.TLSCertKey:       certificateChain,
+			corev1.TLSPrivateKeyKey: privateKey,
+		},
 	}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.RootCertificate.Raw}))
 }
 
