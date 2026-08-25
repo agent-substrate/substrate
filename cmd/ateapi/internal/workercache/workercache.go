@@ -210,6 +210,12 @@ func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 				c.applyEvent(event)
 			}
 		case <-watch.Invalidated:
+			// Coalesce into the pending retry rather than relisting now: the
+			// churn that drops events keeps signalling, which would skip the
+			// backoff just as the store is failing.
+			if retry != nil {
+				continue
+			}
 			slog.WarnContext(ctx, "worker cache: watch events dropped, relisting")
 			correct()
 		case <-retry:

@@ -391,6 +391,7 @@ type fakeStore struct {
 	listErr      error // if set, ListWorkers returns it
 	failListOnce bool  // if set, the next ListWorkers fails and clears it
 	closes       int   // number of times a returned watch was Closed
+	lists        int   // number of ListWorkers calls
 }
 
 func newFakeStore(workers ...*ateapipb.Worker) *fakeStore {
@@ -414,6 +415,7 @@ func (f *fakeStore) WatchWorkers(_ context.Context) (*store.WorkerWatch, error) 
 func (f *fakeStore) ListWorkers(_ context.Context, _ store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lists++
 	if f.failListOnce {
 		f.failListOnce = false
 		return store.ListResponse[*ateapipb.Worker]{}, errors.New("transient list failure")
@@ -624,5 +626,42 @@ func TestInvalidationDiscardsStaleBacklog(t *testing.T) {
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A failing store gets one relist per backoff step, not one per invalidation:
+// the churn that drops events keeps signalling, and relisting on each signal
+// would skip the backoff exactly when the store can least afford it.
+//
+// No timing assumptions: invalidateCh has capacity 1, so every send after the
+// first blocks until the loop has consumed the previous one. The burst
+// therefore completes in microseconds, long before the 100ms retry can fire,
+// and the count reflects the coalescing alone.
+func TestInvalidationStormRespectsRelistBackoff(t *testing.T) {
+	ctx := t.Context()
+	fs := newFakeStore(makeWorker("ns", "w1", 1))
+	c := workercache.New(fs, time.Hour) // no periodic relist to interfere
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	fs.mu.Lock()
+	base := fs.lists // the relist Start already did
+	fs.listErr = errors.New("store down")
+	fs.mu.Unlock()
+
+	const signals = 20
+	for i := 0; i < signals; i++ {
+		fs.invalidateCh <- struct{}{}
+	}
+
+	fs.mu.Lock()
+	got := fs.lists - base
+	fs.mu.Unlock()
+
+	// Coalesced: one relist arms the retry and the rest fold into it. Without
+	// coalescing this is one per signal.
+	if got > 2 {
+		t.Errorf("ListWorkers called %d times for %d invalidations; want the burst coalesced into 1", got, signals)
 	}
 }
