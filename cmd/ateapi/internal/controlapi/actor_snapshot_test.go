@@ -526,7 +526,7 @@ func TestUpdateActorSnapshotTag_RejectsUnknownFields(t *testing.T) {
 			in := proto.Clone(stored).(*ateapipb.ActorSnapshotTag)
 			tt.injectUnknownField(in)
 
-			_, err := svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{Tag: in})
+			_, err := svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{ActorSnapshotTag: in})
 			wantErr := toGRPCStatusError(field.ErrorList{
 				field.Invalid(tt.wantPath, field.OmitValueType{}, ""),
 			})
@@ -540,7 +540,7 @@ func TestUpdateActorSnapshotTag_RejectsUnknownFields(t *testing.T) {
 			// The rejection happens before the store is touched, so the tag is
 			// left exactly as it was.
 			after, err := svc.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{
-				Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag-1"},
+				ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag-1"},
 			})
 			if err != nil {
 				t.Fatalf("GetActorSnapshotTag() error = %v", err)
