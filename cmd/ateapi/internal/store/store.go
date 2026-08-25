@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -103,6 +104,12 @@ type Interface interface {
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, or ErrFailedPrecondition if not already deleting.
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+
+	// CountActors returns the actor population grouped by state, across all
+	// atespaces. It is linear in the population, so callers should treat it as
+	// periodic rather than per-request and read the returned AsOf rather than
+	// assuming the tally is current.
+	CountActors(ctx context.Context) (ActorCounts, error)
 
 	// Creates an immutable ActorSnapshot. The caller sets snapshot_uri; the
 	// store keeps no location of its own.
@@ -449,4 +456,17 @@ type ListResponse[T any] struct {
 // HasNextPage reports whether another page follows this one.
 func (r ListResponse[T]) HasNextPage() bool {
 	return r.NextPageToken != ""
+}
+
+// ActorCounts is the actor population grouped by state, and the instant the
+// backend computed it.
+type ActorCounts struct {
+	// ByState tallies actors per state, across all atespaces. A state with no
+	// actors is absent rather than zero; a caller that needs a zero-valued
+	// series seeds it itself.
+	ByState map[ateapipb.ActorState]int64
+	// AsOf is when the tally was computed, not when the call was served, so a
+	// backend answering from a cached or materialized count reports its
+	// staleness rather than hiding it.
+	AsOf time.Time
 }

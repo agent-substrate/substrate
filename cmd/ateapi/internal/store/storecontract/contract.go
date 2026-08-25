@@ -104,6 +104,32 @@ func mustCreateAtespace(t *testing.T, s store.Interface, name string) {
 	}
 }
 
+// mustSetActorState transitions actor and returns the stored result, which
+// carries the version the next write must guard on.
+func mustSetActorState(t *testing.T, s store.Interface, actor *ateapipb.Actor, state ateapipb.ActorState) *ateapipb.Actor {
+	t.Helper()
+	actorRef := resources.ActorRefFromActor(actor)
+	updated, err := s.UpdateActor(context.Background(), actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.State = state
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor(%s) to %v failed: %v", actorRef, state, err)
+	}
+	return updated
+}
+
+func assertActorCounts(t *testing.T, s store.Interface, want map[ateapipb.ActorState]int64) {
+	t.Helper()
+	got, err := s.CountActors(context.Background())
+	if err != nil {
+		t.Fatalf("CountActors failed: %v", err)
+	}
+	if diff := cmp.Diff(want, got.ByState); diff != "" {
+		t.Errorf("CountActors tally mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func actorNameSet(actors []*ateapipb.Actor) map[string]bool {
 	set := make(map[string]bool, len(actors))
 	for _, a := range actors {
@@ -754,6 +780,72 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		if _, err := s.GetActor(ctx, resources.ActorRef{Name: "a1"}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetActor(empty, a1) = %v, want ErrNotFound", err)
 		}
+	})
+
+	t.Run("CountActors_EmptyStore", func(t *testing.T) {
+		s := setup(t)
+
+		got, err := s.CountActors(context.Background())
+		if err != nil {
+			t.Fatalf("CountActors failed: %v", err)
+		}
+		if len(got.ByState) != 0 {
+			t.Errorf("CountActors on an empty store = %v, want no states", got.ByState)
+		}
+		if got.AsOf.IsZero() {
+			t.Error("CountActors returned a zero AsOf")
+		}
+	})
+
+	t.Run("CountActors_TalliesByState", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		mustCreateAtespace(t, s, "team-b")
+
+		mkActor := func(atespace, name string, state ateapipb.ActorState) *ateapipb.Actor {
+			return &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				Status:                 &ateapipb.ActorStatus{State: state},
+			}
+		}
+		// Spread over two atespaces, so a count that was accidentally scoped to
+		// one of them would come up visibly short.
+		var created []*ateapipb.Actor
+		for _, a := range []*ateapipb.Actor{
+			mkActor("team-a", "a1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED),
+			mkActor("team-a", "a2", ateapipb.ActorState_ACTOR_STATE_SUSPENDED),
+			mkActor("team-b", "b1", ateapipb.ActorState_ACTOR_STATE_RUNNING),
+		} {
+			stored, err := s.CreateActor(ctx, a)
+			if err != nil {
+				t.Fatalf("CreateActor(%s/%s) failed: %v", a.GetMetadata().GetAtespace(), a.GetMetadata().GetName(), err)
+			}
+			created = append(created, stored)
+		}
+		assertActorCounts(t, s, map[ateapipb.ActorState]int64{
+			ateapipb.ActorState_ACTOR_STATE_SUSPENDED: 2,
+			ateapipb.ActorState_ACTOR_STATE_RUNNING:   1,
+		})
+
+		moved := mustSetActorState(t, s, created[0], ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		assertActorCounts(t, s, map[ateapipb.ActorState]int64{
+			ateapipb.ActorState_ACTOR_STATE_SUSPENDED: 1,
+			ateapipb.ActorState_ACTOR_STATE_RUNNING:   2,
+		})
+
+		// A state the fleet has drained drops out of the tally rather than
+		// reporting zero.
+		moved = mustSetActorState(t, s, moved, ateapipb.ActorState_ACTOR_STATE_DELETING)
+		if _, err := s.DeleteActor(ctx, resources.ActorRefFromActor(moved)); err != nil {
+			t.Fatalf("DeleteActor failed: %v", err)
+		}
+		assertActorCounts(t, s, map[ateapipb.ActorState]int64{
+			ateapipb.ActorState_ACTOR_STATE_SUSPENDED: 1,
+			ateapipb.ActorState_ACTOR_STATE_RUNNING:   1,
+		})
 	})
 }
 
