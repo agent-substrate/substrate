@@ -2963,7 +2963,7 @@ func (x *DeleteAtespaceRequest) GetAtespace() *ObjectRef {
 type CreateActorTemplateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor template version to create. Server-assigned metadata (uid,
-	// version, timestamps) is ignored, as are the status fields: new versions
+	// version, timestamps) is ignored, as are the status fields: new templates
 	// start with empty conditions and are reconciled from there.
 	ActorTemplate *ActorTemplate `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields

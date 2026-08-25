@@ -218,7 +218,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				// If the error is retriable, return an error here so the workqueue will retry.
 				return 0, fmt.Errorf("while creating golden actor: %w", err)
 			}
-			// Re-observe the freshly created actor at the begining of the loop.
+			// Re-observe the freshly created actor at the beginning of the loop.
 			continue
 		}
 		if err != nil {
