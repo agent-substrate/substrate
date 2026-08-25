@@ -272,6 +272,13 @@ spec:
         - "/usr/local/bin/envoy"
         - "-c"
         - "/etc/envoy/envoy.yaml"
+        # Envoy sizes its worker pool from the HOST cpu count, which cgroup
+        # limits do not constrain -- so on a many-core node it opens far more
+        # sockets than the default nofile allows and dies at startup with
+        # "Too many open files". A fixed pool is both sufficient here and
+        # independent of the machine it lands on.
+        - "--concurrency"
+        - "4"
         - "--component-log-level"
         - "upstream:debug,router:debug,ext_proc:debug"
         # Prevents Envoy from fast-exiting on SIGTERM before atenet-router finishes
