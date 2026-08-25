@@ -845,6 +845,13 @@ spec:
         - atenet-egress
         - --service-cluster
         - atenet-egress
+        # Envoy sizes its worker pool from the HOST cpu count, which cgroup
+        # limits do not constrain -- so on a many-core node it opens far more
+        # sockets than the default nofile allows and dies at startup with
+        # "Too many open files". A fixed pool is both sufficient here and
+        # independent of the machine it lands on.
+        - --concurrency
+        - "4"
         # Prevents Envoy from fast-exiting on SIGTERM before the ext-proc
         # sidecar finishes its drain sequence. Polls for the drain-complete
         # marker the sidecar writes on the shared emptyDir, terminating Envoy

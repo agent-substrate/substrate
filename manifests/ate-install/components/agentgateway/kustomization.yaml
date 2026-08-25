@@ -67,6 +67,12 @@ patches:
           env:
           - name: AGENTGATEWAY_OTLP_ADDRESS
             value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+          # agentgateway sizes its tokio runtime from the host cpu count unless
+          # WORKER_THREADS or CPU_LIMIT says otherwise, so on a many-core node it
+          # spawns a worker per host thread. Same cap, and same reasoning, as
+          # --concurrency on the Envoy dataplane.
+          - name: WORKER_THREADS
+            value: "4"
           ports:
           - name: http
             containerPort: 8080
@@ -121,6 +127,13 @@ patches:
           args:
           - -f
           - /etc/agentgateway/config.yaml
+          env:
+          # agentgateway sizes its tokio runtime from the host cpu count unless
+          # WORKER_THREADS or CPU_LIMIT says otherwise, so on a many-core node it
+          # spawns a worker per host thread. Same cap, and same reasoning, as
+          # --concurrency on the Envoy dataplane.
+          - name: WORKER_THREADS
+            value: "4"
           ports:
           - name: https
             containerPort: 8443
