@@ -15,6 +15,7 @@
 package controllers
 
 import (
+	"fmt"
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +34,15 @@ const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod
 // workerTerminationGracePeriodSeconds is the hardcoded pod termination grace
 // period for worker pods (60 minutes).
 const workerTerminationGracePeriodSeconds int64 = 3600
+
+const (
+	// DefaultMicroVMHypervisorDevice is the device used by KVM-backed workers.
+	DefaultMicroVMHypervisorDevice = "/dev/kvm"
+	// MSHVMicroVMHypervisorDevice is the device used by Microsoft Hypervisor root partitions.
+	MSHVMicroVMHypervisorDevice = "/dev/mshv"
+	// microVMHypervisorLabel distinguishes MSHV nodes from the default KVM workers.
+	microVMHypervisorLabel = "ate.dev/microvm-hypervisor"
+)
 
 // ateomOTelSettings is the telemetry configuration propagated to ateom worker
 // pods. A zero value leaves the pods without telemetry env.
@@ -72,6 +82,14 @@ const (
 // are declared here. otel, when it carries an endpoint, is propagated to the
 // ateom container so it pushes telemetry to that collector.
 func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings) *appsv1ac.DeploymentApplyConfiguration {
+	return buildDeploymentApplyConfigWithHypervisorDevice(wp, otel, DefaultMicroVMHypervisorDevice)
+}
+
+func buildDeploymentApplyConfigWithHypervisorDevice(
+	wp *atev1alpha1.WorkerPool,
+	otel ateomOTelSettings,
+	hypervisorDevice string,
+) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -163,7 +181,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		)
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
-	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
+	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass, hypervisorDevice)
 	maybeApplyGPUPodShape(podSpecAC, containerAC, wp.Spec.Template, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
@@ -276,7 +294,7 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 			WithType(corev1.AppArmorProfileTypeUnconfined))
 }
 
-// maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
+// maybeApplyMicroVMPodShape adds the configured hypervisor device and node placement a
 // micro-VM (kata + cloud-hypervisor) worker pool needs, on top of any
 // pod-template settings. No-op unless sandboxClass is the micro-VM class.
 //
@@ -289,26 +307,37 @@ func maybeApplyMicroVMPodShape(
 	podSpecAC *corev1ac.PodSpecApplyConfiguration,
 	containerAC *corev1ac.ContainerApplyConfiguration,
 	sandboxClass atev1alpha1.SandboxClass,
+	hypervisorDevice string,
 ) {
 	if sandboxClass != atev1alpha1.SandboxClassMicroVM {
 		return
 	}
+	if hypervisorDevice == "" {
+		hypervisorDevice = DefaultMicroVMHypervisorDevice
+	}
+	volumeName := "dev-kvm"
+	if hypervisorDevice == MSHVMicroVMHypervisorDevice {
+		volumeName = "dev-mshv"
+	}
 
-	// The micro-VM runtime needs /dev/kvm. The container is already privileged
-	// (so it can also reach vhost devices), but we mount /dev/kvm explicitly.
+	// The micro-VM runtime needs the host hypervisor device. The container is
+	// already privileged (so it can also reach vhost devices), but the device is
+	// mounted explicitly because privileged containers do not receive host
+	// devices on every container runtime.
 	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
-		WithName("dev-kvm").
-		WithMountPath("/dev/kvm"))
+		WithName(volumeName).
+		WithMountPath(hypervisorDevice))
 	podSpecAC.WithVolumes(corev1ac.Volume().
-		WithName("dev-kvm").
+		WithName(volumeName).
 		WithHostPath(corev1ac.HostPathVolumeSource().
-			WithPath("/dev/kvm").
+			WithPath(hypervisorDevice).
 			WithType(corev1.HostPathCharDev)))
 
-	// Pin placement to KVM-capable, nested-virt nodes via nodeSelector +
+	// Pin placement to hypervisor-capable nodes via nodeSelector +
 	// toleration on ate.dev/sandboxClass=microvm. This is our own convention
-	// (GKE attaches no label/taint to nested-virt pools): applied to kind nodes
-	// by hack/create-kind-cluster.sh and via --node-labels at GKE pool creation.
+	// (cloud providers attach no portable nested-virt label): applied to kind
+	// nodes by hack/create-kind-cluster.sh and explicitly when creating cloud
+	// node pools.
 	// Additive on top of the WorkerPool's configurable scheduling fields
 	// (spec.template nodeSelector/tolerations/affinity, added in #247) — merge,
 	// don't overwrite.
@@ -316,11 +345,28 @@ func maybeApplyMicroVMPodShape(
 		podSpecAC.NodeSelector = map[string]string{}
 	}
 	podSpecAC.NodeSelector["ate.dev/sandboxClass"] = string(atev1alpha1.SandboxClassMicroVM)
+	if hypervisorDevice == MSHVMicroVMHypervisorDevice {
+		podSpecAC.NodeSelector[microVMHypervisorLabel] = "mshv"
+		podSpecAC.NodeSelector[corev1.LabelArchStable] = "amd64"
+	}
 	podSpecAC.WithTolerations(corev1ac.Toleration().
 		WithKey("ate.dev/sandboxClass").
 		WithOperator(corev1.TolerationOpEqual).
 		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
 		WithEffect(corev1.TaintEffectNoSchedule))
+}
+
+// ValidateMicroVMHypervisorDevice restricts the controller to hypervisor
+// devices supported by Cloud Hypervisor. This value becomes a privileged
+// hostPath mount, so arbitrary paths must not be accepted.
+func ValidateMicroVMHypervisorDevice(device string) error {
+	switch device {
+	case DefaultMicroVMHypervisorDevice, MSHVMicroVMHypervisorDevice:
+		return nil
+	default:
+		return fmt.Errorf("unsupported microVM hypervisor device %q: must be %q or %q",
+			device, DefaultMicroVMHypervisorDevice, MSHVMicroVMHypervisorDevice)
+	}
 }
 
 // nvidiaToolkitContainerPath is where the host toolkit is mounted inside the

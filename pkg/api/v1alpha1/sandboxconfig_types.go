@@ -26,7 +26,7 @@ const (
 	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
 	SandboxClassGvisor SandboxClass = "gvisor"
 	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
-	// /dev/kvm and vhost devices.
+	// a supported host hypervisor device (/dev/kvm or /dev/mshv).
 	SandboxClassMicroVM SandboxClass = "microvm"
 )
 

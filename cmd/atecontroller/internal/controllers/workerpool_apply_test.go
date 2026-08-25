@@ -245,55 +245,79 @@ func TestBuildDeploymentApplyConfigMetadata(t *testing.T) {
 	}
 }
 
-// TestMicroVMPodShape asserts the micro-VM sandbox class adds the /dev/kvm
-// device (volume + container mount) and node placement (nodeSelector +
-// toleration on ate.dev/sandboxClass); other classes get none of it.
+// TestMicroVMPodShape asserts the micro-VM sandbox class adds the configured
+// hypervisor device (volume + container mount) and node placement (nodeSelector
+// + toleration on ate.dev/sandboxClass); other classes get none of it.
 func TestMicroVMPodShape(t *testing.T) {
 	tests := []struct {
-		name        string
-		class       atev1alpha1.SandboxClass
-		wantMicroVM bool
+		name             string
+		class            atev1alpha1.SandboxClass
+		hypervisorDevice string
+		wantDevice       string
+		wantVolume       string
 	}{
-		{"gvisor default", "", false},
-		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, false},
-		{"microvm", atev1alpha1.SandboxClassMicroVM, true},
+		{"gvisor default", "", DefaultMicroVMHypervisorDevice, "", ""},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, DefaultMicroVMHypervisorDevice, "", ""},
+		{"microvm default", atev1alpha1.SandboxClassMicroVM, "", DefaultMicroVMHypervisorDevice, "dev-kvm"},
+		{"microvm kvm", atev1alpha1.SandboxClassMicroVM, DefaultMicroVMHypervisorDevice, DefaultMicroVMHypervisorDevice, "dev-kvm"},
+		{"microvm mshv", atev1alpha1.SandboxClassMicroVM, MSHVMicroVMHypervisorDevice, MSHVMicroVMHypervisorDevice, "dev-mshv"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.SandboxClass = tt.class
-			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
+			ps := buildDeploymentApplyConfigWithHypervisorDevice(wp, ateomOTelSettings{}, tt.hypervisorDevice).Spec.Template.Spec
 
 			hasVol := false
 			for _, v := range ps.Volumes {
-				if v.Name != nil && *v.Name == "dev-kvm" {
+				if v.Name != nil && *v.Name == tt.wantVolume {
 					hasVol = true
-					if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != "/dev/kvm" ||
+					if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != tt.wantDevice ||
 						v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
-						t.Errorf("dev-kvm volume = %+v, want /dev/kvm CharDevice", v.HostPath)
+						t.Errorf("hypervisor-device volume = %+v, want %s CharDevice", v.HostPath, tt.wantDevice)
 					}
 				}
 			}
 			hasMount := false
 			for _, c := range ps.Containers {
 				for _, m := range c.VolumeMounts {
-					if m.MountPath != nil && *m.MountPath == "/dev/kvm" {
+					if m.Name != nil && *m.Name == tt.wantVolume && m.MountPath != nil && *m.MountPath == tt.wantDevice {
 						hasMount = true
 					}
 				}
 			}
 			_, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]
+			if tt.hypervisorDevice == MSHVMicroVMHypervisorDevice {
+				if got := ps.NodeSelector[microVMHypervisorLabel]; got != "mshv" {
+					t.Errorf("%s selector = %q, want mshv", microVMHypervisorLabel, got)
+				}
+				if got := ps.NodeSelector[corev1.LabelArchStable]; got != "amd64" {
+					t.Errorf("%s selector = %q, want amd64", corev1.LabelArchStable, got)
+				}
+			}
 			hasTol := false
 			for _, tol := range ps.Tolerations {
 				if tol.Key != nil && *tol.Key == "ate.dev/sandboxClass" {
 					hasTol = true
 				}
 			}
-			if hasVol != tt.wantMicroVM || hasMount != tt.wantMicroVM || hasSelector != tt.wantMicroVM || hasTol != tt.wantMicroVM {
+			wantMicroVM := tt.wantDevice != ""
+			if hasVol != wantMicroVM || hasMount != wantMicroVM || hasSelector != wantMicroVM || hasTol != wantMicroVM {
 				t.Errorf("microvm shape: vol=%v mount=%v selector=%v toleration=%v, want all %v",
-					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
+					hasVol, hasMount, hasSelector, hasTol, wantMicroVM)
 			}
 		})
+	}
+}
+
+func TestValidateMicroVMHypervisorDevice(t *testing.T) {
+	for _, device := range []string{DefaultMicroVMHypervisorDevice, MSHVMicroVMHypervisorDevice} {
+		if err := ValidateMicroVMHypervisorDevice(device); err != nil {
+			t.Errorf("ValidateMicroVMHypervisorDevice(%q) returned %v", device, err)
+		}
+	}
+	if err := ValidateMicroVMHypervisorDevice("/dev/vhost-vsock"); err == nil {
+		t.Fatal("ValidateMicroVMHypervisorDevice accepted an unsupported host path")
 	}
 }
 

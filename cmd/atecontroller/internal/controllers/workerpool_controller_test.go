@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -730,5 +731,20 @@ func TestWorkerPoolMetrics(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("observed %v, want %v", got, want)
+	}
+}
+
+func TestApplyDeploymentRejectsUnsupportedHypervisorDevice(t *testing.T) {
+	t.Parallel()
+	r := &WorkerPoolReconciler{
+		Client:                  k8sClient,
+		MicroVMHypervisorDevice: "/dev/vhost-vsock",
+	}
+	wp := makeWorkerPool("invalid-hypervisor-device", "default", 1, "ateom:v1")
+	wp.Spec.SandboxClass = atev1alpha1.SandboxClassMicroVM
+
+	err := r.applyDeployment(t.Context(), wp)
+	if err == nil || !strings.Contains(err.Error(), "unsupported microVM hypervisor device") {
+		t.Fatalf("applyDeployment() error = %v, want unsupported-device error", err)
 	}
 }

@@ -67,6 +67,9 @@ var (
 	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
 		"Trace sampler argument set on ateom worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
 
+	microVMHypervisorDevice = pflag.String("microvm-hypervisor-device", envOrDefault("ATE_MICROVM_HYPERVISOR_DEVICE", controllers.DefaultMicroVMHypervisorDevice),
+		"Host hypervisor device mounted into microVM worker pods. Supported values: /dev/kvm and /dev/mshv.")
+
 	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert.")
 	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
@@ -75,6 +78,13 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
 
 const serviceName = "atecontroller"
@@ -91,6 +101,9 @@ func main() {
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := controllers.ValidateMicroVMHypervisorDevice(*microVMHypervisorDevice); err != nil {
+		serverboot.Fatal(ctx, "Invalid --microvm-hypervisor-device", err)
 	}
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
@@ -172,6 +185,7 @@ func main() {
 		OTelMetricExportTimeout:  *otelMetricExportTimeout,
 		OTelTracesSampler:        *otelTracesSampler,
 		OTelTracesSamplerArg:     *otelTracesSamplerArg,
+		MicroVMHypervisorDevice:  *microVMHypervisorDevice,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkerPool")
 		os.Exit(1)

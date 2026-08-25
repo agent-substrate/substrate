@@ -96,7 +96,7 @@ type WorkerPoolSpec struct {
 	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
 
 	// SandboxClass selects the sandbox runtime family for this pool, which drives
-	// the worker pod shape (KVM/vhost device mounts and node placement) and which
+	// the worker pod shape (hypervisor device mounts and node placement) and which
 	// SandboxConfigs are eligible. The concrete binary is still selected by
 	// AteomImage. Defaults to gvisor.
 	//

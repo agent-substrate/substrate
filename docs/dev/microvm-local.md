@@ -1,11 +1,46 @@
 # Running the microVM runtime locally
 
 The microVM sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor)
-needs `/dev/kvm`, which takes some extra setup compared to the default gVisor
-path. This guide covers just that delta: getting a KVM-capable Docker
-environment — on Linux, or on Apple Silicon macOS via
+needs a host hypervisor device. It uses `/dev/kvm` by default, which takes some
+extra setup compared to the default gVisor path. This guide covers just that
+delta: getting a KVM-capable Docker environment — on Linux, or on Apple Silicon macOS via
 [Lima](https://lima-vm.io/) — then running the microVM counter demo and
 verifying a guest-memory snapshot round-trip.
+
+Microsoft Hypervisor root partitions expose `/dev/mshv` instead. Configure the
+controller with `ATE_MICROVM_HYPERVISOR_DEVICE=/dev/mshv`; the generated worker
+pods then mount `/dev/mshv` at its native path and Cloud Hypervisor selects its
+MSHV backend. The target nodes must still be labeled
+`ate.dev/sandboxClass=microvm` and `ate.dev/microvm-hypervisor=mshv`.
+
+> [!NOTE]
+> MSHV support is experimental. Kubernetes clusters must also provide the
+> PodCertificateRequest and ClusterTrustBundle APIs required by Agent Substrate.
+> The setting applies to every microVM WorkerPool managed by the controller. Do
+> not mix KVM and MSHV pools or change it while snapshots exist; snapshots are
+> not guaranteed to be portable across hypervisor backends. The current MSHV
+> path is limited to x86-64 nodes.
+
+For example, create an AKS node pool with Pod Sandboxing and apply the Substrate
+scheduling label:
+
+```sh
+az aks nodepool add \
+  --cluster-name "$CLUSTER_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name mshvpool \
+  --os-sku AzureLinux \
+  --workload-runtime KataVmIsolation \
+  --node-vm-size Standard_D8s_v5 \
+  --labels ate.dev/sandboxClass=microvm ate.dev/microvm-hypervisor=mshv
+
+kubectl -n ate-system set env deployment/ate-controller \
+  ATE_MICROVM_HYPERVISOR_DEVICE=/dev/mshv
+```
+
+The worker pods themselves must continue to use the default container runtime.
+Do not set `runtimeClassName: kata-vm-isolation`: `ateom-microvm` launches and
+manages the nested Cloud Hypervisor VM directly.
 
 ## Prerequisites
 
