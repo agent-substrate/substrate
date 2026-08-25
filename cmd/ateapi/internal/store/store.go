@@ -108,24 +108,24 @@ type Interface interface {
 	// store keeps no location of its own.
 	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
 
-	// Fetches an ActorSnapshot.
-	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
+	// Fetches an ActorSnapshot by reference. Returns ErrNotFound if missing.
+	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
 
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
 	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
 
-	// Adds an immutable Atespace-owned tag to an ActorSnapshot. Returns
-	// ErrNotFound if the snapshot does not exist, or ErrFailedPrecondition if
-	// the tag's atespace does not exist.
-	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	// Adds an immutable Atespace-owned tag to the ActorSnapshot addressed by
+	// snapshotRef. Returns ErrNotFound if the snapshot does not exist, or
+	// ErrFailedPrecondition if the tag's atespace does not exist.
+	CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
-	// Fetches an Atespace-owned tag. Returns ErrNotFound if missing. The tag's
-	// snapshot field names the ActorSnapshot it resolves to; fetch it with
-	// GetActorSnapshot if needed.
-	GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+	// Fetches an Atespace-owned tag by reference. Returns ErrNotFound if
+	// missing. The tag's snapshot field names the ActorSnapshot it resolves
+	// to; fetch it with GetActorSnapshot if needed.
+	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
 
 	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag
-	// addressed by atespace and name, and returns the stored ActorSnapshotTag with
+	// addressed by tagRef, and returns the stored ActorSnapshotTag with
 	// advanced metadata (version, update_time).
 	//
 	// precondition guards the write against landing on unexpected state: it is
@@ -143,10 +143,10 @@ type Interface interface {
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
 	// exhausted, ErrImmutableField if the mutated tag changed a field that is
 	// immutable for its lifetime, or the mutate's error verbatim otherwise.
-	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
+	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
-	DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+	DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns

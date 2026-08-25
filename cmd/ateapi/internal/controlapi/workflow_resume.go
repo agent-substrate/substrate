@@ -178,7 +178,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		return nil, nil, src, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 	if ref := actor.GetStatus().GetLatestSnapshot(); ref != nil {
-		snapshot, err := w.store.GetActorSnapshot(ctx, ref.GetAtespace(), ref.GetName())
+		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(ref))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, src, status.Error(codes.DataLoss, "ActorSnapshot data is missing")
 		}
@@ -190,7 +190,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		}
 		src.Scope = snapshot.GetStatus().GetContentScope()
 	} else if actorTemplate.Status.GoldenSnapshot != "" && !boot {
-		snapshot, err := w.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: resources.GoldenActorAtespace, Name: actorTemplate.Status.GoldenSnapshot})
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, src, status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 		}
@@ -225,7 +225,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			if actorTemplate.Status.GoldenSnapshot == "" {
 				return nil, nil, src, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
 			}
-			goldenSnapshot, err := w.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+			goldenSnapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: resources.GoldenActorAtespace, Name: actorTemplate.Status.GoldenSnapshot})
 			if errors.Is(err, store.ErrNotFound) {
 				return nil, nil, src, status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 			}

@@ -402,9 +402,9 @@ func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resou
 	return c.Interface.UpdateActor(ctx, actorRef, precondition, mutate)
 }
 
-func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	c.once.Do(c.inject)
-	return c.Interface.UpdateActorSnapshotTag(ctx, atespace, name, precondition, mutate)
+	return c.Interface.UpdateActorSnapshotTag(ctx, tagRef, precondition, mutate)
 }
 
 // seedAssignFixture stores one free gvisor worker and a SUSPENDED actor and

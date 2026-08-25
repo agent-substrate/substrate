@@ -51,7 +51,7 @@ func (s *RPCService) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActo
 	if errs := validateGetActorSnapshotRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	snapshot, err := s.persistence.GetActorSnapshot(ctx, req.GetActorSnapshot().GetAtespace(), req.GetActorSnapshot().GetName())
+	snapshot, err := s.persistence.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(req.GetActorSnapshot()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -78,7 +78,7 @@ func (s *RPCService) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetA
 	if errs := validateGetActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tag, err := s.persistence.GetActorSnapshotTag(ctx, req.GetActorSnapshotTag().GetAtespace(), req.GetActorSnapshotTag().GetName())
+	tag, err := s.persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot tag not found")
 	}
@@ -136,7 +136,7 @@ func (s *RPCService) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.C
 	if req.GetActorSnapshotTag().GetMetadata().GetAtespace() != ref.GetAtespace() {
 		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot tags must belong to the snapshot's Atespace")
 	}
-	tag, err := s.persistence.CreateActorSnapshotTag(ctx, ref.GetAtespace(), ref.GetName(), req.GetActorSnapshotTag())
+	tag, err := s.persistence.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRefFromObjectRef(ref), req.GetActorSnapshotTag())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -184,8 +184,9 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 	}
 	in := req.GetActorSnapshotTag()
 	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
+	tagRef := resources.ActorSnapshotTagRef{Atespace: atespace, Name: name}
 
-	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, tagRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		// Metadata is a server-owned field.
 		metadata := toUpdate.GetMetadata()
 		// Whole-object replace: clear first, so a field the client left unset is
@@ -241,7 +242,7 @@ func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.D
 	if errs := validateDeleteActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tag, err := s.persistence.DeleteActorSnapshotTag(ctx, req.GetActorSnapshotTag().GetAtespace(), req.GetActorSnapshotTag().GetName())
+	tag, err := s.persistence.DeleteActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetActorSnapshotTag().GetAtespace(), req.GetActorSnapshotTag().GetName())
 	}

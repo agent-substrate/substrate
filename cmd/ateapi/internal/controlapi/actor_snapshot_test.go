@@ -27,6 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -307,7 +308,7 @@ func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code InvalidArgument", err, code)
 	}
 
-	current, err := svc.persistence.GetActorSnapshotTag(ctx, testAtespace, "tag1")
+	current, err := svc.persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: "tag1"})
 	if err != nil {
 		t.Fatalf("GetActorSnapshotTag: %v", err)
 	}
@@ -352,7 +353,7 @@ func rpcServiceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag
 		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + atespace + "/snapshot-" + name},
 	})
 	tag.Snapshot = &ateapipb.ObjectRef{Atespace: snapshot.GetMetadata().GetAtespace(), Name: snapshot.GetMetadata().GetName()}
-	created, err := persistence.CreateActorSnapshotTag(context.Background(), atespace, snapshot.GetMetadata().GetName(), tag)
+	created, err := persistence.CreateActorSnapshotTag(context.Background(), resources.ActorSnapshotRef{Atespace: atespace, Name: snapshot.GetMetadata().GetName()}, tag)
 	if err != nil {
 		t.Fatalf("Failed to CreateActorSnapshotTag: %v", err)
 	}
@@ -375,7 +376,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 	const tagName = "before-upgrade"
 	// Tag A: what the client reads, and what its uid precondition names.
 	// Freshly created, so it sits at version 1.
-	originalTag, err := persistence.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
+	originalTag, err := persistence.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: testAtespace, Name: "snapshot-1"}, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
@@ -389,10 +390,10 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.DeleteActorSnapshotTag(ctx, testAtespace, tagName); err != nil {
+			if _, err := persistence.DeleteActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: tagName}); err != nil {
 				t.Fatalf("Racing writer: DeleteActorSnapshotTag: %v", err)
 			}
-			recreatedTag, err = persistence.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-2", &ateapipb.ActorSnapshotTag{
+			recreatedTag, err = persistence.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: testAtespace, Name: "snapshot-2"}, &ateapipb.ActorSnapshotTag{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 				Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 			})
@@ -415,7 +416,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 			err, code, originalTag.GetMetadata().GetUid())
 	}
 
-	storedTag, err := persistence.GetActorSnapshotTag(ctx, testAtespace, tagName)
+	storedTag, err := persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: tagName})
 	if err != nil {
 		t.Fatalf("GetActorSnapshotTag: %v", err)
 	}
@@ -440,7 +441,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 	})
 
 	const tagName = "before-upgrade"
-	originalTag, err := persistence.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
+	originalTag, err := persistence.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: testAtespace, Name: "snapshot-1"}, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
@@ -454,7 +455,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActorSnapshotTag(ctx, testAtespace, tagName, store.PreconditionFrom(originalTag), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+			if _, err := persistence.UpdateActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: tagName}, store.PreconditionFrom(originalTag), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 				toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE
 				return nil
 			}); err != nil {
@@ -472,7 +473,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
 
-	storedTag, err := persistence.GetActorSnapshotTag(ctx, testAtespace, tagName)
+	storedTag, err := persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: tagName})
 	if err != nil {
 		t.Fatalf("Failed to GetActorSnapshotTag(%s/%s): %v", testAtespace, tagName, err)
 	}

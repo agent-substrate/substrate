@@ -113,15 +113,14 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
 func (s *RPCService) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
-	tag, err := s.persistence.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
+	tag, err := s.persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
 	}
-	snapshotRef := tag.GetSnapshot()
-	snapshot, err := s.persistence.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
+	snapshot, err := s.persistence.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(tag.GetSnapshot()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}

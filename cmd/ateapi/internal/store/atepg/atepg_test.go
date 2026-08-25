@@ -249,7 +249,7 @@ func TestUpdateActorSnapshotTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 			t.Fatalf("CreateActorSnapshot(%q) failed: %v", name, err)
 		}
 	}
-	original, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-a", &ateapipb.ActorSnapshotTag{
+	original, err := s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: "snapshot-a"}, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tag-a"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
@@ -259,12 +259,12 @@ func TestUpdateActorSnapshotTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 
 	mutations := 0
 	var recreated *ateapipb.ActorSnapshotTag
-	_, err = s.UpdateActorSnapshotTag(ctx, "team-a", "tag-a", store.PreconditionFrom(original), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	_, err = s.UpdateActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"}, store.PreconditionFrom(original), func(toUpdate *ateapipb.ActorSnapshotTag) error {
 		mutations++
-		if _, err := s.DeleteActorSnapshotTag(ctx, "team-a", "tag-a"); err != nil {
+		if _, err := s.DeleteActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"}); err != nil {
 			return fmt.Errorf("deleting original tag: %w", err)
 		}
-		recreated, err = s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-b", &ateapipb.ActorSnapshotTag{
+		recreated, err = s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: "snapshot-b"}, &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tag-a"},
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		})
@@ -280,7 +280,7 @@ func TestUpdateActorSnapshotTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 	if mutations != 1 {
 		t.Errorf("guarded mutation ran %d times, want 1", mutations)
 	}
-	stored, err := s.GetActorSnapshotTag(ctx, "team-a", "tag-a")
+	stored, err := s.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"})
 	if err != nil {
 		t.Fatalf("GetActorSnapshotTag failed: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestCreateActorSnapshotTag_ForeignKeyErrors(t *testing.T) {
 		return &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "latest"}}
 	}
 
-	if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "missing", tag()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: "missing"}, tag()); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("missing snapshot error = %v, want ErrNotFound", err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "snapshot"}}); err != nil {
@@ -305,7 +305,7 @@ func TestCreateActorSnapshotTag_ForeignKeyErrors(t *testing.T) {
 	}
 	tagWithoutAtespace := tag()
 	tagWithoutAtespace.Metadata.Atespace = "gone"
-	if _, err := s.CreateActorSnapshotTag(ctx, "gone", "snapshot", tagWithoutAtespace); !errors.Is(err, store.ErrFailedPrecondition) {
+	if _, err := s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "gone", Name: "snapshot"}, tagWithoutAtespace); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("missing tag atespace error = %v, want ErrFailedPrecondition", err)
 	}
 }

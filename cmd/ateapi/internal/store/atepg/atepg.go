@@ -875,7 +875,8 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 	return dbSnapshot, nil
 }
 
-func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
+func (p *Persistence) GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error) {
+	atespace, name := snapshotRef.Atespace, snapshotRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM actor_snapshots
@@ -892,7 +893,8 @@ func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name strin
 	return out, nil
 }
 
-func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM actor_snapshot_tags
@@ -1019,7 +1021,8 @@ func (p *Persistence) listActorSnapshotsGlobal(ctx context.Context, pageSize int
 	return result, nextToken, nil
 }
 
-func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespace, snapshotName string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+	snapshotAtespace, snapshotName := snapshotRef.Atespace, snapshotRef.Name
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	tagName := tag.GetMetadata().GetName()
 	dbTag := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
@@ -1098,10 +1101,11 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 	return nil
 }
 
-func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
+	atespace, name := tagRef.Atespace, tagRef.Name
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
@@ -1156,7 +1160,8 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 	return dbTag, nil
 }
 
-func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
 		DELETE FROM actor_snapshot_tags

@@ -261,7 +261,7 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 			SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/data-snapshot",
 		},
 	})
-	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
+	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), resources.ActorSnapshotRef{Atespace: testAtespace, Name: snapshot.GetMetadata().GetName()}, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	}); err != nil {
@@ -317,7 +317,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 		},
 	})
 	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "external-volume-snapshot"}
-	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
+	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), resources.ActorSnapshotRef{Atespace: testAtespace, Name: snapshot.GetMetadata().GetName()}, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	}); err != nil {
