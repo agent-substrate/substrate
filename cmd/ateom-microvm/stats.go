@@ -38,12 +38,18 @@ import (
 // file reads inside the guest, and far short of the lifecycle calls' 20-30s.
 const statsCallTimeout = 2 * time.Second
 
-// containerStatsReader is the one guest-agent call GetWorkloadStats makes.
-// *kata.AgentClient satisfies it; the narrow interface is what lets the handler
-// be tested without a live micro-VM, which is otherwise the only way to get an
-// agent to talk to.
-type containerStatsReader interface {
+// guestStatsReader is the guest-agent surface the telemetry paths use, and
+// nothing else. *kata.AgentClient satisfies it; the narrow interface is what
+// lets both be tested without a live micro-VM, which is otherwise the only way
+// to get an agent to talk to.
+//
+// StatsContainer answers GetWorkloadStats — one container's cgroup, summed
+// across the actor. GetMetrics answers the guest-wide memory breakdown, which
+// the cgroups cannot: they account for the containers and for nothing else in
+// the guest.
+type guestStatsReader interface {
 	StatsContainer(ctx context.Context, containerID string) (*agentpb.CgroupStats, error)
+	GetMetrics(ctx context.Context) (string, error)
 }
 
 // guestStatsTarget is everything GetWorkloadStats needs to sample a live guest.
@@ -61,7 +67,7 @@ type guestStatsTarget struct {
 	// agent is the kata-agent client the actor's log forwarding already keeps
 	// open for its lifetime, borrowed rather than dialed again. ttrpc
 	// multiplexes, so a poll and the forwarding reads share it safely.
-	agent containerStatsReader
+	agent guestStatsReader
 
 	// workloadIDs are the guest containers to sum, one per actor container.
 	// Each actor container exists in the guest as TWO kata containers (see

@@ -51,6 +51,28 @@ var PlatformMetricPrefixes = []string{
 	"ate_scheduler_eligible_workers",
 }
 
+// MicroVMMetricPrefixes are the prefixes a micro-VM worker emits and a gVisor
+// one cannot, so they are asserted on top of PlatformMetricPrefixes only when
+// the suite runs against SandboxClassMicroVM. The guest memory breakdown reads
+// the kata-agent's view of the guest kernel; the sentry publishes no equivalent.
+var MicroVMMetricPrefixes = []string{
+	"ate_microvm_guest_memory_bytes",
+}
+
+// GuestMemoryComponents are every value of ate_guest_memory_component. The set
+// is closed and its members tile the guest's MemTotal (see
+// cmd/ateom-microvm/guestmem.go), which is the property that lets a dashboard
+// stack them: one missing means the breakdown has stopped being a partition and
+// the stack silently understates the guest.
+var GuestMemoryComponents = []string{
+	"free",
+	"page_cache",
+	"containers",
+	"tmpfs",
+	"kata_agent",
+	"kernel_and_other",
+}
+
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
 // its Prometheus exporter surface, returning the raw exposition text.
 func ScrapeCollectorMetrics(ctx context.Context) (string, error) {

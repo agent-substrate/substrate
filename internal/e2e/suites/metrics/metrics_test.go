@@ -23,6 +23,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,14 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// because it deletes the worker pod.
 	triggerActorCrash(t, ctx, clients, actorID)
 
+	// The micro-VM prefixes are additive and only on that class: gVisor emits no
+	// guest memory breakdown, so asserting them everywhere would fail every
+	// gVisor run.
+	want := slices.Clone(e2e.PlatformMetricPrefixes)
+	if e2e.IsMicroVM() {
+		want = append(want, e2e.MicroVMMetricPrefixes...)
+	}
+
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
 	var ateomSeen, controllerSeen bool
@@ -97,7 +106,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ScrapeCollectorMetrics: %v", err)
 		}
-		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
+		missing = e2e.MissingPlatformMetrics(scrape, want)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
@@ -272,6 +281,12 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 				errs = append(errs, err.Error())
 			}
 
+			if e2e.IsMicroVM() {
+				if err := validateGuestMemoryComponents(scrape); err != nil {
+					errs = append(errs, err.Error())
+				}
+			}
+
 			if len(errs) == 0 {
 				return
 			}
@@ -355,6 +370,48 @@ func validateSnapshotPhaseLabels(scrape string) error {
 		if !labelled {
 			return fmt.Errorf("no %s line carried all of ate_snapshot_kind, ate_snapshot_scope and ate_sandbox_class", m)
 		}
+	}
+	return nil
+}
+
+// validateGuestMemoryComponents guards the property that makes the guest memory
+// breakdown worth charting: the components partition the guest's MemTotal, so
+// every one of them must be observed. A slice that quietly stopped being
+// reported leaves a stack that still renders and still understates the guest.
+// Attribution is by template, so those labels must be there too — without them
+// the series cannot be compared across images, which is the question the metric
+// exists to answer.
+func validateGuestMemoryComponents(scrape string) error {
+	seen := make(map[string]bool, len(e2e.GuestMemoryComponents))
+	var lines int
+	for _, line := range strings.Split(scrape, "\n") {
+		if !strings.HasPrefix(line, "ate_microvm_guest_memory_bytes") {
+			continue
+		}
+		lines++
+		component := extractLabelValue(line, "ate_guest_memory_component")
+		if component == "" {
+			return fmt.Errorf("ate_microvm_guest_memory_bytes line is missing ate_guest_memory_component: %q", line)
+		}
+		if !slices.Contains(e2e.GuestMemoryComponents, component) {
+			return fmt.Errorf("ate_guest_memory_component %q is not one of %v; the closed set is what makes the series stackable", component, e2e.GuestMemoryComponents)
+		}
+		if extractLabelValue(line, "ate_template_namespace") == "" || extractLabelValue(line, "ate_template_name") == "" {
+			return fmt.Errorf("ate_microvm_guest_memory_bytes line is missing the template labels: %q", line)
+		}
+		seen[component] = true
+	}
+	if lines == 0 {
+		return fmt.Errorf("no ate_microvm_guest_memory_bytes line in the collector scrape")
+	}
+	var missing []string
+	for _, component := range e2e.GuestMemoryComponents {
+		if !seen[component] {
+			missing = append(missing, component)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("guest memory components %v were never observed, so the breakdown no longer partitions MemTotal", missing)
 	}
 	return nil
 }

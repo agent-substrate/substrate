@@ -129,6 +129,12 @@ type fakeAgent struct {
 	// so flipping it here lands in the window the re-check guards.
 	onCall func()
 
+	// scrape and scrapeErr are the canned GetMetrics reply, for the guest
+	// memory breakdown's tests; the GetWorkloadStats tests below leave them
+	// unset.
+	scrape    string
+	scrapeErr error
+
 	// calls records the container ids asked for, in order, so a test can tell
 	// "summed two containers" from "read one twice".
 	calls []string
@@ -150,6 +156,13 @@ func (f *fakeAgent) StatsContainer(ctx context.Context, containerID string) (*ag
 	return f.stats[containerID], nil
 }
 
+func (f *fakeAgent) GetMetrics(ctx context.Context) (string, error) {
+	if f.scrapeErr != nil {
+		return "", f.scrapeErr
+	}
+	return f.scrape, nil
+}
+
 // containerStats is one container's guest reading: usage bytes, peak bytes,
 // reclaimable page cache, and cumulative CPU nanoseconds.
 func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupStats {
@@ -166,7 +179,7 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 // containers published to GetWorkloadStats. lock is constructed like NewService
 // does, since it is a pointer with no usable zero value and
 // TestGetWorkloadStatsDoesNotTakeLock holds it.
-func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
+func newStatsService(agent guestStatsReader, workloadIDs ...string) *AteomService {
 	s := &AteomService{lock: newCancelableMutex()}
 	s.activeActor.Store(&testActor)
 	s.guestStats.Store(&guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})

@@ -90,7 +90,7 @@ func TestFromCgroupStats(t *testing.T) {
 		{
 			name: "memory.stat without a reclaimable-cache entry",
 			cs:   cgroupStats(1000, 0, map[string]uint64{"anon": 900}, 0),
-			want: Sample{MemoryCurrentBytes: 1000, MemoryWorkingSetBytes: 1000},
+			want: Sample{MemoryCurrentBytes: 1000, MemoryWorkingSetBytes: 1000, MemoryAnonBytes: 900},
 		},
 		{
 			// Guests below Linux 5.19 have no cgroup v2 high-water mark. The rest
@@ -150,6 +150,37 @@ func TestFromCgroupStats(t *testing.T) {
 	}
 }
 
+// Which key holds the anonymous pages depends on the cgroup version the guest
+// kernel gave the container, and the guest is not something ateom picks. A
+// version whose key this package does not know must read as zero rather than as
+// some other entry that happens to be nearby.
+func TestFromCgroupStatsAnonKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stats map[string]uint64
+		want  uint64
+	}{
+		{"cgroup v2 anon", map[string]uint64{"anon": 900}, 900},
+		{"cgroup v1 total_rss", map[string]uint64{"total_rss": 900}, 900},
+		{"cgroup v1 rss alone", map[string]uint64{"rss": 900}, 900},
+		{
+			// v1 publishes both, and the hierarchical total is the one that
+			// matches what v2's figure means: it includes the children.
+			name:  "v1 prefers the hierarchical total over the per-cgroup rss",
+			stats: map[string]uint64{"rss": 400, "total_rss": 900},
+			want:  900,
+		},
+		{"no anon entry", map[string]uint64{"inactive_file": 100}, 0},
+		{"no stats at all", nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FromCgroupStats(cgroupStats(1000, 0, tc.stats, 0)).MemoryAnonBytes; got != tc.want {
+				t.Errorf("MemoryAnonBytes = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSamplePlus(t *testing.T) {
 	maxUint64 := ^uint64(0)
 
@@ -160,17 +191,17 @@ func TestSamplePlus(t *testing.T) {
 	}{
 		{
 			name: "adds every field",
-			a:    Sample{MemoryCurrentBytes: 100, MemoryPeakBytes: 200, MemoryWorkingSetBytes: 90, CPUUsageUsec: 10},
-			b:    Sample{MemoryCurrentBytes: 1, MemoryPeakBytes: 2, MemoryWorkingSetBytes: 3, CPUUsageUsec: 4},
-			want: Sample{MemoryCurrentBytes: 101, MemoryPeakBytes: 202, MemoryWorkingSetBytes: 93, CPUUsageUsec: 14},
+			a:    Sample{MemoryCurrentBytes: 100, MemoryPeakBytes: 200, MemoryWorkingSetBytes: 90, MemoryAnonBytes: 50, CPUUsageUsec: 10},
+			b:    Sample{MemoryCurrentBytes: 1, MemoryPeakBytes: 2, MemoryWorkingSetBytes: 3, MemoryAnonBytes: 5, CPUUsageUsec: 4},
+			want: Sample{MemoryCurrentBytes: 101, MemoryPeakBytes: 202, MemoryWorkingSetBytes: 93, MemoryAnonBytes: 55, CPUUsageUsec: 14},
 		},
 		{
 			// The accumulator starts here, so a zero left operand must be the
 			// identity or every actor's first container would be dropped.
 			name: "zero is the identity",
 			a:    Sample{},
-			b:    Sample{MemoryCurrentBytes: 7, MemoryPeakBytes: 8, MemoryWorkingSetBytes: 9, CPUUsageUsec: 10},
-			want: Sample{MemoryCurrentBytes: 7, MemoryPeakBytes: 8, MemoryWorkingSetBytes: 9, CPUUsageUsec: 10},
+			b:    Sample{MemoryCurrentBytes: 7, MemoryPeakBytes: 8, MemoryWorkingSetBytes: 9, MemoryAnonBytes: 6, CPUUsageUsec: 10},
+			want: Sample{MemoryCurrentBytes: 7, MemoryPeakBytes: 8, MemoryWorkingSetBytes: 9, MemoryAnonBytes: 6, CPUUsageUsec: 10},
 		},
 		{
 			// A wrapped total would read as a nearly idle actor, which is the one

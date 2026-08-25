@@ -254,6 +254,12 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
 
 	ateomService := NewService(*podUID, *chBinary, *kataConfig, *kataDebug, *vmmMemReserve, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle)
+	if err := ateomService.registerGuestMemoryMetrics(mp); err != nil {
+		// Not fatal: the breakdown is observability, and an ateom that cannot
+		// publish it can still run actors. Failing the boot over it would trade
+		// a blind spot for an outage.
+		slog.ErrorContext(ctx, "Failed to register the guest memory breakdown; the micro-VM's internal memory split will not be reported", slog.Any("error", err))
+	}
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),

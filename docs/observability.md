@@ -140,6 +140,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.namespace`, `ate.template.name`, `ate.sandbox.class`, plus `ate.failure.reason` on failure) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
+| `ate.microvm.guest.memory.bytes` | ateom-microvm | gauge | guest RAM of a running micro-VM, split by what is holding it (labels `ate.guest.memory.component`, `ate.template.namespace`, `ate.template.name`). microVM only: the gVisor sentry publishes no equivalent decomposition |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
 
@@ -157,6 +158,11 @@ For `ate.scheduler.eligible_workers`:
 For `ate.imagecache.requests`:
 * `ate.imagecache.outcome` is `hit` when the node holds a complete image record — every layer directory the record names is present — and `miss` when the lookup must pull. A failed lookup is neither: `error` is a failed lookup whatever the cause, and `cancelled` or `timeout` is the caller giving up, as on `ate.router.outcome`. So the hit ratio is `hit / (hit + miss)`, with failures and abandoned lookups out of the denominator.
 * `error.type` is present only on the `error` outcome, and carries the registry's own HTTP status for its rejection, from a fixed set: `401`, `403`, `404`, `429`, `500`, `502`, `503`, `504`. The set is an allow-list because the registry client reports whatever the remote returned. Each other status, and each failure that carries no status, reports `_OTHER`.
+
+For `ate.microvm.guest.memory.bytes`:
+* `ate.guest.memory.component` is a closed set that tiles the guest kernel's MemTotal, so the series stack: `free`, `page_cache`, `containers` (the workload cgroups' anonymous pages), `tmpfs`, `kata_agent`, and `kernel_and_other` as the residual. MemTotal is itself below the RAM assigned to the VM, so the stack does not add up to the actor's memory size.
+* Attribution is by template, not by actor: a worker is recycled through actor after actor and each would leave a series behind, the same reason `ateattr.ActorMetricAttributes` omits actor identity.
+* Everything outside `free` is a page a Full checkpoint has to write, so this is the metric that explains a snapshot's size — and through it the `persist` and `download` phases of the suspend and resume histograms.
 
 `ate.workerpool.namespace` and `ate.workerpool.name` identify a pool together, on every instrument that names one. A WorkerPool is a namespaced resource, so the name on its own merges same-named pools from different namespaces into one series. The pair means that capacity (`ate.workerpool.workers`, `ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`) joins to demand (`ate.scheduler.assignment.duration`, `ate.actor.lifecycle.operation.duration`, `ate.actor.crashes`) by pool.
 

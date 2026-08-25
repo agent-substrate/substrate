@@ -280,6 +280,29 @@ func (a *AgentClient) StatsContainer(ctx context.Context, containerID string) (*
 	return resp.GetCgroupStats(), nil
 }
 
+// GetMetrics returns the kata-agent's own Prometheus scrape, taken from inside
+// the guest. Mirrors grpc.AgentService/GetMetrics.
+//
+// The reply is one blob of Prometheus text exposition rather than a structured
+// message — the agent serializes its registry as-is — so the caller has to parse
+// it (see internal/guestmem). What makes that worth doing is that the registry
+// carries the guest kernel's /proc/meminfo alongside the agent process's own
+// counters, which makes this the only call that sees the guest AS A WHOLE.
+// StatsContainer sees one container's cgroup, and the sum of those cgroups is
+// not the guest: it leaves out the kernel, the agent itself, and every page of
+// cache charged to no container.
+//
+// Safe to call while the stdout/stderr forwarding goroutines are reading over
+// the same client, for the same reason StatsContainer is: ttrpc multiplexes.
+func (a *AgentClient) GetMetrics(ctx context.Context) (string, error) {
+	resp := &agentpb.Metrics{}
+	req := &agentpb.GetMetricsRequest{}
+	if err := a.client.Call(ctx, "grpc.AgentService", "GetMetrics", req, resp); err != nil {
+		return "", fmt.Errorf("agent GetMetrics: %w", err)
+	}
+	return resp.GetMetrics(), nil
+}
+
 // StreamReader adapts the agent's repeated ReadStdout/ReadStderr unary calls into
 // an io.Reader, so the consumer can pump the container's output through the shared
 // actorlog forwarder like any other stream. Each Read issues one RPC with Len set
