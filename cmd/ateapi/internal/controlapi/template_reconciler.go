@@ -63,7 +63,7 @@ type templateReconcilerStore interface {
 }
 
 // goldenActorControl is the in-process slice of the Control service the
-// reconciler drives golden actors through. *Service satisfies it.
+// reconciler drives golden actors through. *RPCService satisfies it.
 type goldenActorControl interface {
 	CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error)
 	GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)

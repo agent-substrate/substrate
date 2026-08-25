@@ -191,6 +191,10 @@ func main() {
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
+	// Drive stored ActorTemplates through the golden actor flow.
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, sandboxConfigLister)
+	templateReconciler.Start(shutdownCtx)
+
 	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, *actorIDCAPoolFile, persistence, workerCache)
 	debugSrv := debugapi.NewService(persistence)
 
