@@ -125,7 +125,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		Substrate: actoridjwt.SubstrateClaims{
 			Atespace:  req.GetAtespace(),
 			ActorName: req.GetActorName(),
-			ActorUid:  req.GetActorUid(),
+			ActorUID:  req.GetActorUid(),
 		},
 	}
 
