@@ -2,7 +2,7 @@
 
 ## Overview
 
-Agent Substrate is a Kubernetes-based system for building multitenant applications based on independent, stateful container instances. Substrate builds on sandboxed, snapshottable Pods by adding the ability to update running containers in the Pod without invoking the Kubernetes scheduler. Substrate enables these containers to rapidly cycle between active and inactive lifecycle phases with fast suspend and resume from snapshots in inexpensive cloud object storage, without losing in-memory or filesystem state. This is especially critical for agentic workloads, which frequently oscillate between active (handling user input) and idle (waiting for LLMs or tool calls to complete). With Substrate, resources can be reclaimed during these idle moments for use by other workloads. This enables both greater efficiency and greater scale than using Pods alone, while still leveraging Kubernetes to provision capacity, configure networking and storage, and manage Substrate itself.
+Agent Substrate delivers a performant, high density runtime environment for large scale agent deployments. The agent substrate control plane provides full lifecycle management for agent sandboxes, delivering sub-second agent resume/suspend operations, and allows heavy multiplexing of agents onto the same computer infrastructure. It supports multiple sandbox technologies including microVMs and gVisor. Substrate builds on sandboxed, snapshottable Pods by adding the ability to update running containers in the Pod leveraging the high scale and low latency Agent Substrate control plane. Substrate enables these containers to rapidly cycle between active and inactive lifecycle phases with fast suspend and resume from snapshots in inexpensive cloud object storage, without losing in-memory or filesystem state. This is especially critical for agentic workloads, which frequently oscillate between active (handling user input) and idle (waiting for LLMs or tool calls to complete). With Substrate, resources can be reclaimed during these idle moments for use by other workloads. This enables both greater efficiency and greater scale than using Pods alone, while still leveraging Kubernetes to provision capacity, configure networking and storage, and manage Substrate itself.
 
 This project is trying to move very quickly to find the right set of capabilities for the ever-changing agentic workloads market. Below are our priorities. Any efforts which are not aligned with these priorities should probably be deferred.
 
@@ -70,7 +70,7 @@ Below is a collection of finer-grained efforts which we believe align with the a
 
 ### Observability
 
-* Session-Aware Telemetry Correlation: Automated OTLP export where all logs, metrics, and traces are natively tagged with the Substrate actor name and worker ID.
+* Actor-Aware Telemetry Correlation: Automated OTLP export where all logs, metrics, and traces are natively tagged with the Substrate actor name and worker ID.
 * Prometheus metrics
 
 ### Performance and Reliability
@@ -95,7 +95,7 @@ Below is a collection of finer-grained efforts which we believe align with the a
 * Agent Development Kit (ADK) Native Support: Developing first-class bindings for ADK, allowing developers to build stateful agents that natively leverage Substrate’s lifecycle management and persistent working memory.
 * LangChain Remote Execution Provider: A dedicated provider for LangChain to run complex, long-running agent tools in durable, sandboxed environments.
 * Native MCP Server Hosting: Built-in support for deploying Model Context Protocol (MCP) servers as managed Substrate Actors, creating a secure tool ecosystem for any LLM.
-* Actor-to-Actor (A2A) Calling Model: Standardized protocol for actors to discover and call other actors within the mesh via the gateway.
+* Actor-to-Actor (A2A) Calling Model: Standardized protocol for actors to discover and call other actors within Substrate via the gateway.
 * Native MCP Tool Hosting: Ability to define and deploy standard Model Context Protocol (MCP) servers as managed Substrate Actors, providing a plug-and-play ecosystem for agentic tools.
 
 ### Operability

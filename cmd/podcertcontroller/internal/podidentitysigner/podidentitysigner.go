@@ -28,7 +28,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/clock"
@@ -37,6 +39,31 @@ import (
 
 const Name = "podidentity.podcert.ate.dev/identity"
 const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
+
+// atelet's identity, as installed by manifests/ate-install/atelet.yaml. Pods
+// running as atelet serve TLS (e.g. to ate-apiserver), so their certs also
+// carry the serverAuth EKU.
+const (
+	ateletNamespace      = "ate-system"
+	ateletServiceAccount = "atelet"
+)
+
+// workerPoolLabel marks pods created by atecontroller for a WorkerPool. Worker
+// pods host the atunnel ingress server, presenting this cert as a TLS server
+// cert to atenet-router, so they need the serverAuth EKU too. They run as the
+// actor namespace's default ServiceAccount, so the label is what distinguishes
+// them rather than their identity.
+const workerPoolLabel = "ate.dev/worker-pool"
+
+func extKeyUsages(pod *corev1.Pod, namespace, serviceAccount string) []x509.ExtKeyUsage {
+	usages := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	_, isWorker := pod.ObjectMeta.Labels[workerPoolLabel]
+	isAtelet := namespace == ateletNamespace && serviceAccount == ateletServiceAccount
+	if isAtelet || isWorker {
+		usages = append(usages, x509.ExtKeyUsageServerAuth)
+	}
+	return usages
+}
 
 type Impl struct {
 	kc     kubernetes.Interface
@@ -121,16 +148,38 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		Path:   path.Join("ns", pcr.ObjectMeta.Namespace, "sa", pcr.Spec.ServiceAccountName),
 	}
 
+	parent := h.caPool.CAs[0].RootCertificate
+
 	template := &x509.Certificate{
 		BasicConstraintsValid: true,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		URIs:                  []*url.URL{spiffeURI},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:           extKeyUsages(pod, pcr.ObjectMeta.Namespace, pcr.Spec.ServiceAccountName),
+		// Link the leaf to its issuing CA by key id so verifiers can disambiguate
+		// a multi-CA trust bundle (e.g. valkey trusts both the servicedns and
+		// podidentity CAs).
+		// https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.1
+		AuthorityKeyId: parent.SubjectKeyId,
 	}
 
-	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, h.caPool.CAs[0].RootCertificate, subjectPublicKey, h.caPool.CAs[0].SigningKey)
+	// Fields are sourced from the PCR spec (attested by kube-apiserver) rather
+	// than the Pod object, which lacks the ServiceAccount and Node UIDs.
+	podIdentity := &substratex509.PodIdentity{
+		Namespace:          pcr.ObjectMeta.Namespace,
+		ServiceAccountName: pcr.Spec.ServiceAccountName,
+		ServiceAccountUID:  string(pcr.Spec.ServiceAccountUID),
+		PodName:            pcr.Spec.PodName,
+		PodUID:             string(pcr.Spec.PodUID),
+		NodeName:           string(pcr.Spec.NodeName),
+		NodeUID:            string(pcr.Spec.NodeUID),
+	}
+	if err := substratex509.AddPodIdentityToCertificate(podIdentity, template); err != nil {
+		return fmt.Errorf("while adding pod identity to certificate: %w", err)
+	}
+
+	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, parent, subjectPublicKey, h.caPool.CAs[0].SigningKey)
 	if err != nil {
 		return fmt.Errorf("while signing subject cert: %w", err)
 	}

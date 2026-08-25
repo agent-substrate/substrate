@@ -72,7 +72,7 @@ func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*exec.Cmd, *Client, err
 		return nil, nil, fmt.Errorf("while starting cloud-hypervisor: %w", err)
 	}
 	client := NewClient(o.APISocket)
-	if err := client.WaitReady(ctx, 15*time.Second); err != nil {
+	if _, err := client.WaitReady(ctx, 15*time.Second); err != nil {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 		return nil, nil, fmt.Errorf("while waiting for VMM api-socket: %w", err)

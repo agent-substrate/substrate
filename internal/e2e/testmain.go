@@ -19,6 +19,7 @@ import (
 	goflag "flag"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -29,6 +30,28 @@ var (
 	KubeConfig  string
 	KubeContext string
 )
+
+var (
+	suiteCleanupsMu sync.Mutex
+	suiteCleanups   []func()
+)
+
+func RegisterSuiteCleanup(fn func()) {
+	suiteCleanupsMu.Lock()
+	defer suiteCleanupsMu.Unlock()
+	suiteCleanups = append(suiteCleanups, fn)
+}
+
+func runSuiteCleanups() {
+	suiteCleanupsMu.Lock()
+	fns := suiteCleanups
+	suiteCleanups = nil
+	suiteCleanupsMu.Unlock()
+
+	for i := len(fns) - 1; i >= 0; i-- {
+		fns[i]()
+	}
+}
 
 func bindFlags() {
 	pflag.BoolVar(&RunE2E, "e2e", false, "run e2e tests")
@@ -76,7 +99,17 @@ func runAndCleanup(m *testing.M) int {
 		return 1
 	}
 
-	defer CleanupNamespaces()
-
-	return m.Run()
+	// Namespaces are deleted only on success. A failed run keeps them: the actor
+	// lives in a worker pod there, and its ateom logs (for a micro-VM worker, the
+	// guest's console tail too) are the only record of why it failed. Deleting the
+	// namespace takes those pods with it before anyone — a developer or CI's
+	// post-failure log dump — can read them.
+	code := m.Run()
+	runSuiteCleanups()
+	if code != 0 {
+		RetainNamespaces()
+		return code
+	}
+	CleanupNamespaces()
+	return code
 }

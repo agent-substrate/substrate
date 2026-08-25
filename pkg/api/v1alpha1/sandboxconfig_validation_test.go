@@ -35,17 +35,30 @@ const validSHA256 = "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea8
 // the install — loaded here so the test guards the policy we actually ship.
 const vapManifestPath = "../../../manifests/ate-install/sandboxconfig-validation.yaml"
 
+const validPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+
 func sandboxConfig(name string, class SandboxClass, assets map[string]map[string]AssetFile) *SandboxConfig {
 	return &SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: SandboxConfigSpec{
 			SandboxClass: class,
+			PauseImage:   validPauseImage,
 			Assets:       assets,
 		},
 	}
 }
 
+// withPauseImage overrides the pause image on an otherwise-valid config.
+func withPauseImage(sc *SandboxConfig, image string) *SandboxConfig {
+	sc.Spec.PauseImage = image
+	return sc
+}
+
 func runscAsset() AssetFile { return AssetFile{URL: "gs://bucket/runsc", SHA256: validSHA256} }
+
+func gvisorAsset() AssetFile {
+	return AssetFile{URL: "gs://bucket/gvisor.tar.bz2", SHA256: validSHA256}
+}
 
 // microVMAssets returns a full, valid micro-VM asset set for one architecture:
 // the five assets the policy requires. The overlay rootfs serves the OCI image
@@ -113,8 +126,16 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr bool
 		errMsg  string
 	}{{
-		name:    "valid gvisor with runsc",
+		name:    "valid gvisor with release tarball",
+		sc:      sandboxConfig("ok-gvisor-tarball", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"gvisor": gvisorAsset()}}),
+		wantErr: false,
+	}, {
+		name:    "valid gvisor with legacy runsc",
 		sc:      sandboxConfig("ok-gvisor", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": runscAsset()}, "arm64": {"runsc": runscAsset()}}),
+		wantErr: false,
+	}, {
+		name:    "valid gvisor mixing tarball and legacy per arch",
+		sc:      sandboxConfig("ok-gvisor-mixed", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"runsc": runscAsset()}}),
 		wantErr: false,
 	}, {
 		name:    "valid microvm with full asset set",
@@ -143,13 +164,13 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "microvm SandboxConfig must define",
 	}, {
-		name:    "gvisor arch missing runsc",
+		name:    "gvisor arch missing gvisor and runsc",
 		sc:      sandboxConfig("bad-no-runsc", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"notrunsc": runscAsset()}}),
 		wantErr: true,
 		errMsg:  "runsc",
 	}, {
-		name:    "gvisor one arch missing runsc",
-		sc:      sandboxConfig("bad-mixed-arch", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": runscAsset()}, "arm64": {"notrunsc": runscAsset()}}),
+		name:    "gvisor one arch missing gvisor and runsc",
+		sc:      sandboxConfig("bad-mixed-arch", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"notrunsc": runscAsset()}}),
 		wantErr: true,
 		errMsg:  "runsc",
 	}, {
@@ -172,6 +193,16 @@ func TestSandboxConfigValidation(t *testing.T) {
 		sc:      sandboxConfig("bad-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {URL: "gs://bucket/runsc", SHA256: "deadbeef"}}}),
 		wantErr: true,
 		errMsg:  "sha256",
+	}, {
+		name:    "missing pauseImage",
+		sc:      withPauseImage(sandboxConfig("bad-no-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), ""),
+		wantErr: true,
+		errMsg:  "pauseImage",
+	}, {
+		name:    "unpinned pauseImage",
+		sc:      withPauseImage(sandboxConfig("bad-unpinned-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), "registry.k8s.io/pause:3.10.2"),
+		wantErr: true,
+		errMsg:  "All images must be pinned",
 	}}
 
 	for _, tt := range tests {

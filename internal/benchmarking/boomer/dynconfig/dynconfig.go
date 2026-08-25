@@ -24,11 +24,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"sync/atomic"
 	"time"
 
 	"github.com/myzhan/boomer"
+)
+
+// Resume modes. Explicit issues a ResumeActor RPC before sending traffic.
+// Implicit issues no wake request at all: the actor stays suspended until a
+// request reaches the atenet router, which wakes it while the request is
+// parked.
+const (
+	ResumeModeExplicit = "explicit"
+	ResumeModeImplicit = "implicit"
+
+	ReadModeData   = "data"
+	ReadModeDigest = "digest"
 )
 
 // Config is the dynamic-mutable subset of boomer's behavior. Holder swaps
@@ -37,6 +50,10 @@ type Config struct {
 	MinWait          time.Duration
 	MaxWait          time.Duration
 	TraceProbability float64
+	DurDirFileSize   int64  // bytes
+	ResumeMode       string // ResumeModeExplicit | ResumeModeImplicit
+	DurDirReadMode   string // ReadModeData | ReadModeDigest
+	DurDirTemplate   string // ActorTemplate name
 }
 
 // Holder lets readers Load() the current Config and writers Store() a new
@@ -70,6 +87,10 @@ type payload struct {
 	TraceProbability *float64 `json:"trace_probability"`
 	MinWaitTime      *float64 `json:"min_wait_time"`
 	MaxWaitTime      *float64 `json:"max_wait_time"`
+	DurDirFileSize   *float64 `json:"durdir_file_size_bytes"`
+	ResumeMode       *string  `json:"resume_mode"`
+	DurDirReadMode   *string  `json:"durdir_read_mode"`
+	DurDirTemplate   *string  `json:"durdir_template"`
 }
 
 // Parse decodes a JSON blob (typically from a CLI flag) and merges its
@@ -83,7 +104,11 @@ func Parse(jsonBytes []byte, current Config) (Config, error) {
 	if err := json.Unmarshal(jsonBytes, &p); err != nil {
 		return current, fmt.Errorf("decode config json: %w", err)
 	}
-	return p.merge(current), nil
+	merged := p.merge(current)
+	if err := merged.Validate(); err != nil {
+		return current, fmt.Errorf("validate config: %w", err)
+	}
+	return merged, nil
 }
 
 // Fetch GETs `url` and merges any returned fields into `current`. Returns
@@ -105,7 +130,40 @@ func Fetch(ctx context.Context, url string, current Config) (Config, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
 		return current, fmt.Errorf("decode %s: %w", url, err)
 	}
-	return p.merge(current), nil
+	merged := p.merge(current)
+	if err := merged.Validate(); err != nil {
+		return current, fmt.Errorf("validate %s: %w", url, err)
+	}
+	return merged, nil
+}
+
+// Validate checks that the config values are within legal ranges.
+func (c Config) Validate() error {
+	if c.MinWait < 0 {
+		return fmt.Errorf("min_wait_time cannot be negative: %v", c.MinWait)
+	}
+	if c.MaxWait < 0 {
+		return fmt.Errorf("max_wait_time cannot be negative: %v", c.MaxWait)
+	}
+	if c.MaxWait < c.MinWait {
+		return fmt.Errorf("max_wait_time (%v) cannot be less than min_wait_time (%v)", c.MaxWait, c.MinWait)
+	}
+	if c.TraceProbability < 0 || c.TraceProbability > 1 {
+		return fmt.Errorf("trace_probability must be between 0.0 and 1.0, got: %f", c.TraceProbability)
+	}
+	if c.DurDirFileSize < 0 {
+		return fmt.Errorf("durdir_file_size_bytes cannot be negative: %d", c.DurDirFileSize)
+	}
+	if c.DurDirFileSize > math.MaxInt32 {
+		return fmt.Errorf("durdir_file_size_bytes cannot exceed %d (2 GiB), got: %d", math.MaxInt32, c.DurDirFileSize)
+	}
+	if c.ResumeMode != "" && c.ResumeMode != ResumeModeExplicit && c.ResumeMode != ResumeModeImplicit {
+		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", c.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
+	}
+	if c.DurDirReadMode != "" && c.DurDirReadMode != ReadModeData && c.DurDirReadMode != ReadModeDigest {
+		return fmt.Errorf("invalid durdir_read_mode %q: must be %q or %q", c.DurDirReadMode, ReadModeData, ReadModeDigest)
+	}
+	return nil
 }
 
 // merge folds the payload's set fields into `current`, leaving unset fields
@@ -121,6 +179,18 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.MaxWaitTime != nil {
 		out.MaxWait = time.Duration(*p.MaxWaitTime * float64(time.Second))
+	}
+	if p.DurDirFileSize != nil {
+		out.DurDirFileSize = int64(*p.DurDirFileSize)
+	}
+	if p.ResumeMode != nil {
+		out.ResumeMode = *p.ResumeMode
+	}
+	if p.DurDirReadMode != nil {
+		out.DurDirReadMode = *p.DurDirReadMode
+	}
+	if p.DurDirTemplate != nil {
+		out.DurDirTemplate = *p.DurDirTemplate
 	}
 	return out
 }
@@ -148,6 +218,10 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Float64("trace_probability", next.TraceProbability),
 			slog.Duration("min_wait", next.MinWait),
 			slog.Duration("max_wait", next.MaxWait),
+			slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
+			slog.String("resume_mode", next.ResumeMode),
+			slog.String("durdir_read_mode", next.DurDirReadMode),
+			slog.String("durdir_template", next.DurDirTemplate),
 		)
 	})
 }

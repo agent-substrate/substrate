@@ -28,6 +28,15 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
+- apiGroups: ["ate.dev"]
+  resources: ["csidriverconfigs"]
+  verbs: ["get", "list", "watch"]
+# ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
+# resolved on the node: atelet reads them through an informer and projects
+# the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["clustertrustbundles"]
+  verbs: ["get", "watch", "list"]
 ---
 # 3. Bind Identity to Permissions
 apiVersion: rbac.authorization.k8s.io/v1
@@ -41,6 +50,31 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: atelet
+  apiGroup: rbac.authorization.k8s.io
+---
+# 4. Namespaced Role for EndpointSlices
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atelet-endpointslices
+  namespace: ate-system
+rules:
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atelet-endpointslices
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: atelet
+  namespace: ate-system
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io
 ---
 # 4. Create DaemonSet
@@ -64,11 +98,34 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
+      # Budget for the full shutdown sequence: --drain-delay (0 for atelet) +
+      # --drain-timeout (5m). Sized long because Checkpoint/Restore stream
+      # multi-GiB snapshots and must not be force-cancelled mid-upload. The sum
+      # must fit within terminationGracePeriodSeconds, plus slack for the force
+      # Stop() and the tracer/meter flush on exit.
+      terminationGracePeriodSeconds: 330
+      # atelet must run on every node a WorkerPool actor may schedule to.
+      # Microvm pools are tainted ate.dev/sandboxClass=<class>:NoSchedule per
+      # the convention in cmd/atecontroller/internal/controllers/workerpool_apply.go
+      # (which also adds the matching toleration to ateom worker pods).
+      # Tolerating the key with operator: Exists covers any current or future
+      # sandbox class value without needing another manifest edit.
+      tolerations:
+      - key: ate.dev/sandboxClass
+        operator: Exists
+        effect: NoSchedule
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
         - --gcp-auth-for-image-pulls=true
+        - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+        # Graceful shutdown knobs. The sum must fit within
+        # terminationGracePeriodSeconds above.
+        - --drain-delay=0s
+        - --drain-timeout=5m
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
         # /var/lib/ateom-gvisor hostPath as root, so it needs no Linux
@@ -85,7 +142,7 @@ spec:
             drop:
             - ALL
         env:
-        - name: MY_NODE_NAME
+        - name: NODE_NAME
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
@@ -103,10 +160,13 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
+        # OTLP exporter settings are shared by every control plane component;
+        # see manifests/ate-install/ate-otel-config.yaml.
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
         ports:
         - name: grpc
           containerPort: 8085
@@ -115,11 +175,64 @@ spec:
           containerPort: 9090
           hostPort: 9090
           protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        # /healthz stays 200 while a terminating pod drains; /readyz turns 503,
+        # so liveness and readiness diverge correctly during shutdown.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ateom-gvisor
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: kubelet-plugins
+          mountPath: /var/lib/kubelet/plugins
       volumes:
       - name: run-ateom
         hostPath:
           path: /var/lib/ateom-gvisor
           type: DirectoryOrCreate
+      # Mount Kubelet plugins directory to access CSI driver Unix domain sockets.
+      - name: kubelet-plugins
+        hostPath:
+          path: /var/lib/kubelet/plugins
+          type: DirectoryOrCreate
+      # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
+      # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
+      # serving cert (which requires DNS SANs it would not have); the
+      # clusterTrustBundle verifies the apiserver's client certificate.
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem

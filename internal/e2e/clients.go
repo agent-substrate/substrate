@@ -69,7 +69,7 @@ func NewClients(ctx context.Context) (*Clients, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	apiClient, err := ateclient.NewClient(connectCtx, KubeConfig, KubeContext, "", false)
+	apiClient, err := ateclient.NewClient(connectCtx, KubeConfig, KubeContext, "", "", false)
 	if err != nil {
 		return nil, fmt.Errorf("NewClient: %w", err)
 	}

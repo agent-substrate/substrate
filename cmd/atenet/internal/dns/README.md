@@ -4,7 +4,7 @@ The DNS Controller orchestrates the configuration needed to setup the ATE routin
 
 We want to resolve requests for <actor-name>.<atespace>.actors.resources.substrate.ate.dev to the router service address.
 
-* Stub resolver mode: orchestrate running a CoreDNS instance with the actor name mapped to the router service address.
+* Stub resolver mode: orchestrate running a CoreDNS instance with the actor name mapped to the atenet-router service address.
 
 Cluster resources:
 

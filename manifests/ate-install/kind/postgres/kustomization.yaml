@@ -1,0 +1,43 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Deliberately not listed in ../kustomization.yaml: PostgreSQL is opt-in
+# (--store-backend=postgres; the default is redis), so hack/install-ate.sh
+# builds this overlay standalone at the point where it applies PostgreSQL.
+resources:
+  - ../../postgres.yaml
+
+# The base reserves a full CPU for a single-replica database. On a kind node --
+# 4 vCPU on a GitHub runner -- that is a quarter of the node held for a test
+# database, and it is the largest single reason demo WorkerPools run out of
+# schedulable CPU. Only the request (what the scheduler subtracts) is lowered;
+# the 2-CPU limit is untouched, so postgres still bursts as far as it did.
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: postgres
+              resources:
+                requests:
+                  cpu: 250m

@@ -20,7 +20,7 @@
 #     LOCUST_NO_GLUTTON_USER=1 prevents tests/glutton.py from declaring the
 #     stub User on this worker so GluttonUser spawns are owned exclusively
 #     by the boomer container.
-#   * boomer-glutton: Go re-implementation of GluttonUser. Connects to the
+#   * boomer-glutton: Go re-implementation of GluttonUser and DurdirUser. Connects to the
 #     master at localhost:5557 via the locust worker ZMQ protocol; exposes
 #     its own per-worker diagnostics at /metrics on :8001 (aggregate stats
 #     flow through the master via boomer.RecordSuccess).
@@ -52,10 +52,9 @@ spec:
         - "-m"
         - "locust"
         - "-f"
-        - "/app/tests"
+        - "/app/tests/${BENCHMARK_USER_CLASS}.py"
         - "--master"
         - "--master-bind-host=0.0.0.0"
-        - "--class-picker"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
@@ -73,36 +72,47 @@ spec:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
           readOnly: true
-        resources:
-          requests:
-            cpu: "500m"
-            memory: "512Mi"
-
-      - name: locust-python-worker
-        image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
-        imagePullPolicy: Always
-        args:
-        - "-m"
-        - "locust"
-        - "-f"
-        - "/app/tests"
-        - "--worker"
-        - "--master-host=localhost"
-        env:
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
-        # Skips the GluttonUser stub declaration so the master never assigns
-        # GluttonUser spawns to this worker — boomer owns that class.
-        - name: LOCUST_NO_GLUTTON_USER
-          value: "1"
-        volumeMounts:
-        - name: servicedns-ca
-          mountPath: /run/servicedns-ca
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true
         resources:
           requests:
             cpu: "500m"
             memory: "512Mi"
+      # Python and boomer workers do not play nicely together, leaving this in for reference.
+      # - name: locust-python-worker
+      #   image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
+      #   imagePullPolicy: Always
+      #   args:
+      #   - "-m"
+      #   - "locust"
+      #   - "-f"
+      #   - "/app/tests"
+      #   - "--worker"
+      #   # Literal IPv4, not "localhost". The master binds 0.0.0.0:5557, which
+      #   # is IPv4-only; locust sets ZMQ_IPV6 on the worker socket whenever the
+      #   # master host resolves to anything AF_INET6, and the pod's /etc/hosts
+      #   # maps localhost to ::1 as well as 127.0.0.1. The worker would then
+      #   # dial [::1]:5557 and retry forever against a silent master.
+      #   - "--master-host=127.0.0.1"
+      #   env:
+      #   - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      #     value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+      #   # Skips the GluttonUser stub declaration so the master never assigns
+      #   # GluttonUser spawns to this worker — boomer owns that class.
+      #   - name: LOCUST_NO_GLUTTON_USER
+      #     value: "1"
+      #   volumeMounts:
+      #   - name: servicedns-ca
+      #     mountPath: /run/servicedns-ca
+      #     readOnly: true
+      #   - name: podidentity
+      #     mountPath: /run/podidentity.podcert.ate.dev
+      #     readOnly: true
+      #   resources:
+      #     requests:
+      #       cpu: "500m"
+      #       memory: "512Mi"
 
       - name: boomer-glutton
         # Same image as the master/worker — the boomer-glutton Go binary is
@@ -118,6 +128,7 @@ spec:
         # are honored. The endpoint is served by
         # benchmarking/locust/common/boomer_config.py on the master.
         - "--master-web-port=8089"
+        - "--user-class=${BENCHMARK_USER_CLASS}"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
@@ -125,6 +136,13 @@ spec:
         - name: boomer-prom
           containerPort: 8001
           protocol: TCP
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
         resources:
           requests:
             cpu: "500m"
@@ -140,6 +158,14 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: ca.crt
+      # The benchmark's client identity, presented to ateapi over mTLS.
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
 ---
 apiVersion: v1
 kind: Service
@@ -162,3 +188,17 @@ spec:
     protocol: TCP
     port: 8001
     targetPort: 8001
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: benchmarking-permissions
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: benchmarking
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
+  apiGroup: rbac.authorization.k8s.io

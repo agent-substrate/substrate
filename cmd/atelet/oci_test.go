@@ -15,163 +15,193 @@
 package main
 
 import (
-	"archive/tar"
-	"bytes"
-	"context"
-	"os"
-	"path/filepath"
+	"errors"
 	"slices"
-	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-type tarEntry struct {
-	name     string
-	typeflag byte
-	mode     int64
-	body     string
-	linkname string
-}
-
-func defaultMode(typeflag byte) int64 {
-	switch typeflag {
-	case tar.TypeDir:
-		return 0o755
-	case tar.TypeSymlink:
-		return 0o777
-	default:
-		return 0o644
+// Each system-info volume mount becomes a read-only bind mount whose source
+// is the per-actor on-host SystemInfoVolumeRoot for that volume name. It is
+// delivered as a bind mount rather than environment variables because env
+// lives in the checkpointed process memory and would be frozen at the golden
+// snapshot's values after a restore; a bind mount is re-attached per-actor on
+// every resume.
+func TestBuildActorOCISpec_SystemInfoVolumeMounts(t *testing.T) {
+	const actorUID = "actor_uid"
+	volumeMounts := []*ateletpb.VolumeMount{
+		{Name: "sysinfo", MountPath: "/run/ate"},
 	}
-}
-
-func buildTar(t *testing.T, entries []tarEntry) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	for _, e := range entries {
-		mode := e.mode
-		if mode == 0 {
-			mode = defaultMode(e.typeflag)
-		}
-		hdr := &tar.Header{
-			Name:     e.name,
-			Typeflag: e.typeflag,
-			Mode:     mode,
-			Size:     int64(len(e.body)),
-			Linkname: e.linkname,
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)
-		}
-		if e.body != "" {
-			if _, err := tw.Write([]byte(e.body)); err != nil {
-				t.Fatalf("tar.Write(%q): %v", e.name, err)
-			}
-		}
+	volumes := []*ateletpb.Volume{
+		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("tar.Close: %v", err)
-	}
-	return buf.Bytes()
-}
-
-func runUntar(t *testing.T, entries []tarEntry) (string, error) {
-	t.Helper()
-	dir := t.TempDir()
-	return dir, untar(context.Background(), bytes.NewReader(buildTar(t, entries)), dir)
-}
-
-// With an identity dir, a read-only bind mount appears at IdentityMountPath.
-func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	spec := buildActorOCISpec(
-		"actor_uid",
-		nil,
+		actorUID, "app",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
 		"/run/netns/x",
-		"/host/actors/actor_uid/identity",
+		volumes,
+		volumeMounts,
 		nil,
 	)
 	found := false
 	for _, m := range spec.Mounts {
-		if m.Destination != IdentityMountPath {
+		if m.Destination != "/run/ate" {
 			continue
 		}
 		found = true
-		if m.Source != "/host/actors/actor_uid/identity" {
-			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
+		if want := ateompath.SystemInfoVolumeRoot(actorUID, "sysinfo"); m.Source != want {
+			t.Errorf("system-info mount source = %q, want %q", m.Source, want)
 		}
 		if m.Type != "bind" {
-			t.Errorf("identity mount type = %q, want bind", m.Type)
+			t.Errorf("system-info mount type = %q, want bind", m.Type)
 		}
 		if !slices.Contains(m.Options, "ro") {
-			t.Errorf("identity mount must be read-only, options=%v", m.Options)
+			t.Errorf("system-info mount must be read-only, options=%v", m.Options)
 		}
 	}
 	if !found {
-		t.Fatalf("identity mount %q missing; mounts=%v", IdentityMountPath, spec.Mounts)
+		t.Fatalf("system-info mount %q missing; mounts=%v", "/run/ate", spec.Mounts)
 	}
 }
 
-func TestMergeActorEnv(t *testing.T) {
+func TestResolveActorEnv(t *testing.T) {
 	defaultPath := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 	tests := []struct {
 		name        string
-		imageEnv    []string
+		image       *v1.Config
 		templateEnv []string
 		want        []string
 	}{
 		{
 			name:        "template overrides image by key",
-			imageEnv:    []string{"FOO=image"},
+			image:       &v1.Config{Env: []string{"FOO=image"}},
 			templateEnv: []string{"FOO=template"},
 			want:        []string{"FOO=template", defaultPath},
 		},
 		{
 			name:        "default PATH applies when neither sets it",
-			imageEnv:    []string{"FOO=image"},
+			image:       &v1.Config{Env: []string{"FOO=image"}},
 			templateEnv: []string{"BAR=template"},
 			want:        []string{"BAR=template", "FOO=image", defaultPath},
 		},
 		{
-			name:     "image PATH overrides default",
-			imageEnv: []string{"PATH=/image/bin"},
-			want:     []string{"PATH=/image/bin"},
+			name:  "image PATH overrides default",
+			image: &v1.Config{Env: []string{"PATH=/image/bin"}},
+			want:  []string{"PATH=/image/bin"},
 		},
 		{
 			name:        "template PATH overrides default",
+			image:       &v1.Config{},
 			templateEnv: []string{"PATH=/template/bin"},
 			want:        []string{"PATH=/template/bin"},
 		},
 		{
-			name:     "blank and keyless entries are dropped",
-			imageEnv: []string{"", "=novalue"},
-			want:     []string{defaultPath},
+			name:  "blank and keyless entries are dropped",
+			image: &v1.Config{Env: []string{"", "=novalue"}},
+			want:  []string{defaultPath},
+		},
+		{
+			name:        "nil image config uses template env and default PATH",
+			image:       nil,
+			templateEnv: []string{"FOO=template"},
+			want:        []string{"FOO=template", defaultPath},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mergeActorEnv(tc.imageEnv, tc.templateEnv)
+			got := resolveActorEnv(tc.image, tc.templateEnv)
 			if !slices.Equal(got, tc.want) {
-				t.Errorf("mergeActorEnv(%v, %v) =\n  %v\nwant:\n  %v", tc.imageEnv, tc.templateEnv, got, tc.want)
+				t.Errorf("resolveActorEnv(%v, %v) =\n  %v\nwant:\n  %v", tc.image, tc.templateEnv, got, tc.want)
 			}
 		})
 	}
 }
 
-// Without an identity dir (the pause container), no identity mount appears.
-func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("actor_uid", nil, []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
-	for _, m := range bare.Mounts {
-		if m.Destination == IdentityMountPath {
-			t.Errorf("identity mount must be absent when identityDir is empty")
-		}
+func TestResolveProcessArgs(t *testing.T) {
+	cfg := func(entrypoint, cmd []string) *v1.Config {
+		return &v1.Config{Entrypoint: entrypoint, Cmd: cmd}
+	}
+
+	tests := []struct {
+		name    string
+		image   *v1.Config
+		command []string
+		args    []string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:  "image ENTRYPOINT+CMD used when neither is overridden",
+			image: cfg([]string{"/app"}, []string{"--serve"}),
+			want:  []string{"/app", "--serve"},
+		},
+		{
+			name:  "args override CMD, image ENTRYPOINT kept",
+			image: cfg([]string{"/init", "/wrapper.sh"}, nil),
+			args:  []string{"serve"},
+			want:  []string{"/init", "/wrapper.sh", "serve"},
+		},
+		{
+			name:    "command overrides both ENTRYPOINT and CMD",
+			image:   cfg([]string{"/app"}, []string{"--serve"}),
+			command: []string{"/other"},
+			want:    []string{"/other"},
+		},
+		{
+			name:    "command and args override both",
+			image:   cfg([]string{"/app"}, []string{"--serve"}),
+			command: []string{"/other"},
+			args:    []string{"--flag"},
+			want:    []string{"/other", "--flag"},
+		},
+		{
+			name:  "image ENTRYPOINT only, no CMD",
+			image: cfg([]string{"/ko-app/counter"}, nil),
+			want:  []string{"/ko-app/counter"},
+		},
+		{
+			name:    "no image config, command supplies argv",
+			image:   nil,
+			command: []string{"/pause"},
+			want:    []string{"/pause"},
+		},
+		{
+			name:    "empty argv is an error",
+			image:   cfg(nil, nil),
+			wantErr: true,
+		},
+		{
+			name:    "nil image and no overrides is an error",
+			image:   nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveProcessArgs(tc.image, tc.command, tc.args)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolveProcessArgs(%v, %v, %v) err = %v, wantErr %v", tc.image, tc.command, tc.args, err, tc.wantErr)
+			}
+			if err != nil {
+				if !errors.Is(err, ateerrors.ReasonInvalidContainerConfig) {
+					t.Errorf("empty-argv error must carry ReasonInvalidContainerConfig, got: %v", err)
+				}
+				return
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("resolveProcessArgs(%v, %v, %v) = %v, want %v", tc.image, tc.command, tc.args, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -183,12 +213,17 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		{Name: "data", MountPath: "/var/data"},
 		{Name: "cache", MountPath: "/var/cache"},
 	}
+	volumes := []*ateletpb.Volume{
+		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+		{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+	}
 	spec := buildActorOCISpec(
-		actorUID,
-		nil, []string{"/app"}, nil, nil,
+		actorUID, "app",
+		[]string{"/app"}, nil, nil,
 		"/run/netns/x",
-		"",
+		volumes,
 		durableDirs,
+		nil,
 	)
 
 	for _, vm := range durableDirs {
@@ -212,439 +247,177 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 	}
 }
 
-func TestCreateMountPoint(t *testing.T) {
-	t.Run("creates target inside rootfs", func(t *testing.T) {
-		root := t.TempDir()
-		if err := createMountPoint(root, IdentityMountPath); err != nil {
-			t.Fatalf("createMountPoint: %v", err)
-		}
-		info, err := os.Stat(filepath.Join(root, "run", "ate"))
-		if err != nil {
-			t.Fatalf("mount point not created in rootfs: %v", err)
-		}
-		if !info.IsDir() {
-			t.Errorf("mount point must be a directory to host the identity bind mount")
-		}
-	})
+// An image volume binds the layer directory resolved for it, read-only.
+func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
+	volumes := []*ateletpb.Volume{
+		{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
+		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+	}
+	mounts := []*ateletpb.VolumeMount{
+		{Name: "agent", MountPath: "/ate"},
+		{Name: "data", MountPath: "/var/data"},
+	}
+	spec := buildActorOCISpec(
+		"actor_uid", "app",
+		[]string{"/ate/payload-binary"}, nil, nil,
+		"/run/netns/x",
+		volumes,
+		mounts,
+		nil,
+	)
 
-	t.Run("refuses symlink escaping the rootfs", func(t *testing.T) {
-		root := t.TempDir()
-		outside := t.TempDir()
-		// A malicious image could ship /run as a symlink pointing out of the
-		// rootfs; os.Root must refuse to follow it.
-		if err := os.Symlink(outside, filepath.Join(root, "run")); err != nil {
-			t.Fatalf("planting symlink: %v", err)
+	var got *specs.Mount
+	for i, m := range spec.Mounts {
+		if m.Destination == "/ate" {
+			got = &spec.Mounts[i]
 		}
-		if err := createMountPoint(root, IdentityMountPath); err == nil {
-			t.Errorf("expected error when /run escapes the rootfs, got nil")
-		}
-		// Nothing may be created through the escaping symlink.
-		if entries, err := os.ReadDir(outside); err != nil {
-			t.Errorf("reading outside dir: %v", err)
-		} else if len(entries) != 0 {
-			t.Errorf("write escaped the rootfs: %s is not empty (%d entries)", outside, len(entries))
-		}
-	})
+	}
+	if got == nil {
+		t.Fatalf("image volume mount for /ate missing; mounts=%v", spec.Mounts)
+	}
+	if want := ateompath.ImageVolumeMountPath("actor_uid", "app", "agent"); got.Source != want {
+		t.Errorf("image volume source = %q, want %q", got.Source, want)
+	}
+	if got.Type != "bind" {
+		t.Errorf("image volume type = %q, want bind", got.Type)
+	}
+	if want := []string{"bind", "ro"}; !slices.Equal(got.Options, want) {
+		t.Errorf("image volume options = %v, want %v", got.Options, want)
+	}
 }
 
-func TestValidateTarName(t *testing.T) {
-	tests := []struct {
-		name      string
-		input     string
-		wantClean string
-		wantSkip  bool
-		wantErr   bool
-	}{
-		{name: "regular file", input: "etc/passwd", wantClean: "etc/passwd"},
-		{name: "current dir", input: ".", wantSkip: true},
-		{name: "empty", input: "", wantSkip: true},
-		{name: "trailing slash", input: "etc/", wantClean: "etc"},
-		{name: "absolute path", input: "/etc/passwd", wantClean: "etc/passwd"},
-		{name: "double slash absolute", input: "//etc/passwd", wantClean: "etc/passwd"},
-		{name: "parent escape", input: "../etc/passwd", wantErr: true},
-		{name: "parent only", input: "..", wantErr: true},
-		{name: "embedded escape", input: "a/../../escape", wantErr: true},
-		{name: "ok with dot segments", input: "./a/./b", wantClean: "a/b"},
+// wantDefaultCapabilities is the set a container gets when it asks for no
+// adjustment. It is spelled out rather than derived from defaultCapabilities so
+// that widening or narrowing the default is a deliberate test change.
+var wantDefaultCapabilities = []string{
+	"CAP_AUDIT_WRITE",
+	"CAP_KILL",
+	"CAP_NET_BIND_SERVICE",
+}
+
+func withoutCaps(in []string, drop ...string) []string {
+	out := slices.Clone(in)
+	for _, d := range drop {
+		out = slices.DeleteFunc(out, func(c string) bool { return c == d })
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			gotClean, gotSkip, err := validateTarName(tc.input)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateTarName(%q) err = %v, wantErr %v", tc.input, err, tc.wantErr)
-			}
-			if err != nil {
-				return
-			}
-			if gotSkip != tc.wantSkip {
-				t.Errorf("skip = %v, want %v", gotSkip, tc.wantSkip)
-			}
-			if gotClean != tc.wantClean {
-				t.Errorf("clean = %q, want %q", gotClean, tc.wantClean)
+	return out
+}
+
+func withCaps(in []string, add ...string) []string {
+	out := append(slices.Clone(in), add...)
+	slices.Sort(out)
+	return out
+}
+
+func TestResolveCapabilities(t *testing.T) {
+	tests := []struct {
+		name string
+		caps *ateletpb.Capabilities
+		want []string
+	}{{
+		name: "unset keeps the default set",
+		caps: nil,
+		want: wantDefaultCapabilities,
+	}, {
+		name: "empty keeps the default set",
+		caps: &ateletpb.Capabilities{},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "drop removes from the default set",
+		caps: &ateletpb.Capabilities{Drop: []string{"NET_BIND_SERVICE", "AUDIT_WRITE"}},
+		want: withoutCaps(wantDefaultCapabilities, "CAP_NET_BIND_SERVICE", "CAP_AUDIT_WRITE"),
+	}, {
+		name: "add grants on top of the default set",
+		caps: &ateletpb.Capabilities{Add: []string{"SYS_ADMIN"}},
+		want: withCaps(wantDefaultCapabilities, "CAP_SYS_ADMIN"),
+	}, {
+		name: "drop ALL clears the default set",
+		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}},
+		want: nil,
+	}, {
+		name: "drop ALL with add gives an exact set",
+		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}, Add: []string{"NET_ADMIN", "CHOWN"}},
+		want: []string{"CAP_CHOWN", "CAP_NET_ADMIN"},
+	}, {
+		// Drop applies first, so naming a capability in both grants it.
+		name: "add wins over drop",
+		caps: &ateletpb.Capabilities{Drop: []string{"KILL"}, Add: []string{"KILL"}},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "adding a default capability does not duplicate it",
+		caps: &ateletpb.Capabilities{Add: []string{"KILL"}},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "dropping a capability outside the default set is a no-op",
+		caps: &ateletpb.Capabilities{Drop: []string{"SYS_ADMIN"}},
+		want: wantDefaultCapabilities,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveCapabilities(tt.caps)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("resolveCapabilities() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestUntar_HappyPath(t *testing.T) {
-	entries := []tarEntry{
-		{name: ".", typeflag: tar.TypeDir},
-		{name: "etc/", typeflag: tar.TypeDir},
-		{name: "etc/hostname", typeflag: tar.TypeReg, body: "demo\n"},
-		{name: "bin/", typeflag: tar.TypeDir},
-		{name: "bin/sh", typeflag: tar.TypeReg, mode: 0o755, body: "#!/sh\n"},
-		{name: "bin/bash", typeflag: tar.TypeLink, linkname: "bin/sh"},
-		{name: "etc/host-link", typeflag: tar.TypeSymlink, linkname: "hostname"},
-	}
-	dir, err := runUntar(t, entries)
-	if err != nil {
-		t.Fatalf("untar: %v", err)
-	}
+// The resolved set lands in bounding, effective and permitted. Inheritable and
+// ambient stay empty — see the comment in buildActorOCISpec.
+func TestBuildActorOCISpec_Capabilities(t *testing.T) {
+	want := []string{"CAP_CHOWN", "CAP_KILL"}
+	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want)
 
-	if got, err := os.ReadFile(filepath.Join(dir, "etc/hostname")); err != nil {
-		t.Errorf("read etc/hostname: %v", err)
-	} else if string(got) != "demo\n" {
-		t.Errorf("etc/hostname = %q, want %q", got, "demo\n")
+	caps := spec.Process.Capabilities
+	if caps == nil {
+		t.Fatal("spec.Process.Capabilities is nil")
 	}
-
-	if target, err := os.Readlink(filepath.Join(dir, "etc/host-link")); err != nil {
-		t.Errorf("readlink etc/host-link: %v", err)
-	} else if target != "hostname" {
-		t.Errorf("symlink target = %q, want %q", target, "hostname")
-	}
-
-	srcInfo, err := os.Stat(filepath.Join(dir, "bin/sh"))
-	if err != nil {
-		t.Fatalf("stat bin/sh: %v", err)
-	}
-	dstInfo, err := os.Stat(filepath.Join(dir, "bin/bash"))
-	if err != nil {
-		t.Fatalf("stat bin/bash: %v", err)
-	}
-	if !os.SameFile(srcInfo, dstInfo) {
-		t.Errorf("bin/bash is not a hardlink to bin/sh")
-	}
-}
-
-func TestUntar_LaterEntryWins(t *testing.T) {
-	t.Run("dir then symlink", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "var/", typeflag: tar.TypeDir},
-			{name: "var/run/", typeflag: tar.TypeDir},
-			{name: "run/", typeflag: tar.TypeDir},
-			{name: "run/sock", typeflag: tar.TypeReg, body: "sock"},
-			{name: "var/run", typeflag: tar.TypeSymlink, linkname: "../run"},
-		}
-		dir, err := runUntar(t, entries)
-		if err != nil {
-			t.Fatalf("untar: %v", err)
-		}
-		fi, err := os.Lstat(filepath.Join(dir, "var/run"))
-		if err != nil {
-			t.Fatalf("lstat var/run: %v", err)
-		}
-		if fi.Mode()&os.ModeSymlink == 0 {
-			t.Fatalf("var/run not a symlink, mode = %v", fi.Mode())
-		}
-		if got, _ := os.Readlink(filepath.Join(dir, "var/run")); got != "../run" {
-			t.Errorf("symlink target = %q, want %q", got, "../run")
-		}
-	})
-
-	t.Run("file overwrite", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "etc/", typeflag: tar.TypeDir},
-			{name: "etc/conf", typeflag: tar.TypeReg, body: "v1"},
-			{name: "etc/conf", typeflag: tar.TypeReg, body: "v2"},
-		}
-		dir, err := runUntar(t, entries)
-		if err != nil {
-			t.Fatalf("untar: %v", err)
-		}
-		if got, _ := os.ReadFile(filepath.Join(dir, "etc/conf")); string(got) != "v2" {
-			t.Errorf("etc/conf = %q, want %q", got, "v2")
-		}
-	})
-
-	t.Run("symlink retargeted", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "etc/", typeflag: tar.TypeDir},
-			{name: "etc/x", typeflag: tar.TypeReg, body: "x"},
-			{name: "etc/y", typeflag: tar.TypeReg, body: "y"},
-			{name: "etc/link", typeflag: tar.TypeSymlink, linkname: "x"},
-			{name: "etc/link", typeflag: tar.TypeSymlink, linkname: "y"},
-		}
-		dir, err := runUntar(t, entries)
-		if err != nil {
-			t.Fatalf("untar: %v", err)
-		}
-		if got, _ := os.Readlink(filepath.Join(dir, "etc/link")); got != "y" {
-			t.Errorf("symlink target = %q, want %q", got, "y")
-		}
-	})
-
-	t.Run("repeated dir entry tolerated", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "etc/", typeflag: tar.TypeDir},
-			{name: "etc/", typeflag: tar.TypeDir},
-		}
-		if _, err := runUntar(t, entries); err != nil {
-			t.Errorf("untar: %v", err)
-		}
-	})
-
-	t.Run("identical symlink redeclaration is a no-op", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "etc/", typeflag: tar.TypeDir},
-			{name: "etc/x", typeflag: tar.TypeReg, body: "x"},
-			{name: "etc/link", typeflag: tar.TypeSymlink, linkname: "x"},
-			{name: "etc/link", typeflag: tar.TypeSymlink, linkname: "x"},
-		}
-		dir, err := runUntar(t, entries)
-		if err != nil {
-			t.Fatalf("untar: %v", err)
-		}
-		if got, _ := os.Readlink(filepath.Join(dir, "etc/link")); got != "x" {
-			t.Errorf("symlink target = %q, want %q", got, "x")
-		}
-	})
-
-	t.Run("symlink overwritten by file", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "etc/", typeflag: tar.TypeDir},
-			{name: "etc/x", typeflag: tar.TypeReg, body: "original"},
-			{name: "etc/link", typeflag: tar.TypeSymlink, linkname: "x"},
-			{name: "etc/link", typeflag: tar.TypeReg, body: "replacement"},
-		}
-		dir, err := runUntar(t, entries)
-		if err != nil {
-			t.Fatalf("untar: %v", err)
-		}
-		fi, err := os.Lstat(filepath.Join(dir, "etc/link"))
-		if err != nil {
-			t.Fatalf("lstat etc/link: %v", err)
-		}
-		if fi.Mode().IsRegular() {
-			got, err := os.ReadFile(filepath.Join(dir, "etc/link"))
-			if err != nil {
-				t.Fatalf("read etc/link: %v", err)
-			}
-			if string(got) != "replacement" {
-				t.Errorf("etc/link content = %q, want %q", got, "replacement")
-			}
-		} else {
-			t.Errorf("etc/link mode is not regular file: %v", fi.Mode())
-		}
-		// Also verify etc/x was NOT overwritten
-		gotX, err := os.ReadFile(filepath.Join(dir, "etc/x"))
-		if err != nil {
-			t.Fatalf("read etc/x: %v", err)
-		}
-		if string(gotX) != "original" {
-			t.Errorf("etc/x content was overwritten to %q", gotX)
-		}
-	})
-
-	t.Run("file overwritten by symlink", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "etc/", typeflag: tar.TypeDir},
-			{name: "etc/link", typeflag: tar.TypeReg, body: "original-file"},
-			{name: "etc/link", typeflag: tar.TypeSymlink, linkname: "target-doesnt-exist"},
-		}
-		dir, err := runUntar(t, entries)
-		if err != nil {
-			t.Fatalf("untar: %v", err)
-		}
-		fi, err := os.Lstat(filepath.Join(dir, "etc/link"))
-		if err != nil {
-			t.Fatalf("lstat etc/link: %v", err)
-		}
-		if fi.Mode()&os.ModeSymlink == 0 {
-			t.Errorf("etc/link mode is not a symlink: %v", fi.Mode())
-		}
-		got, err := os.Readlink(filepath.Join(dir, "etc/link"))
-		if err != nil {
-			t.Fatalf("readlink etc/link: %v", err)
-		}
-		if got != "target-doesnt-exist" {
-			t.Errorf("etc/link target = %q, want %q", got, "target-doesnt-exist")
-		}
-	})
-
-	t.Run("hardlink overwritten by file", func(t *testing.T) {
-		entries := []tarEntry{
-			{name: "bin/", typeflag: tar.TypeDir},
-			{name: "bin/sh", typeflag: tar.TypeReg, body: "sh-original"},
-			{name: "bin/bash", typeflag: tar.TypeLink, linkname: "bin/sh"},
-			{name: "bin/bash", typeflag: tar.TypeReg, body: "bash-new"},
-		}
-		dir, err := runUntar(t, entries)
-		if err != nil {
-			t.Fatalf("untar: %v", err)
-		}
-		gotBash, err := os.ReadFile(filepath.Join(dir, "bin/bash"))
-		if err != nil {
-			t.Fatalf("read bin/bash: %v", err)
-		}
-		if string(gotBash) != "bash-new" {
-			t.Errorf("bin/bash content = %q, want %q", gotBash, "bash-new")
-		}
-		// Verify bin/sh was NOT modified!
-		gotSh, err := os.ReadFile(filepath.Join(dir, "bin/sh"))
-		if err != nil {
-			t.Fatalf("read bin/sh: %v", err)
-		}
-		if string(gotSh) != "sh-original" {
-			t.Errorf("bin/sh content was overwritten to %q (hardlink was not unlinked)", gotSh)
-		}
-	})
-}
-
-// A read-only directory in the image (e.g. ko ships /ko-app as 0555) must still
-// get its child written AND keep the image's mode, so atelet can unpack arbitrary
-// actor images as plain root without CAP_DAC_OVERRIDE. removeAllWritable must
-// then still be able to delete the restored read-only tree. (Meaningful as a
-// non-root test run; as root the dir-permission checks are bypassed.)
-func TestUntar_ReadOnlyDir(t *testing.T) {
-	entries := []tarEntry{
-		{name: "ko-app", typeflag: tar.TypeDir, mode: 0o555},
-		{name: "ko-app/counter", typeflag: tar.TypeReg, mode: 0o755, body: "bin"},
-	}
-	dir, err := runUntar(t, entries)
-	if err != nil {
-		t.Fatalf("untar into read-only dir: %v", err)
-	}
-	if got, _ := os.ReadFile(filepath.Join(dir, "ko-app/counter")); string(got) != "bin" {
-		t.Errorf("ko-app/counter = %q, want %q", got, "bin")
-	}
-	info, err := os.Stat(filepath.Join(dir, "ko-app"))
-	if err != nil {
-		t.Fatalf("stat ko-app: %v", err)
-	}
-	if info.Mode().Perm() != 0o555 {
-		t.Errorf("ko-app mode = %v, want the image's 0555 preserved", info.Mode().Perm())
-	}
-	// atelet must be able to delete the restored read-only tree (this also lets
-	// t.TempDir's cleanup succeed, which plain os.RemoveAll could not on 0555).
-	if err := removeAllWritable(filepath.Join(dir, "ko-app")); err != nil {
-		t.Errorf("removeAllWritable on restored read-only dir: %v", err)
-	}
-}
-
-func TestUntar_PathTraversal(t *testing.T) {
-	tests := []struct {
-		name  string
-		entry tarEntry
+	for _, set := range []struct {
+		name string
+		got  []string
 	}{
-		{name: "parent prefix", entry: tarEntry{name: "../escape", typeflag: tar.TypeReg, body: "x"}},
-		{name: "embedded parent", entry: tarEntry{name: "a/b/../../../escape", typeflag: tar.TypeReg, body: "x"}},
-		{name: "parent only", entry: tarEntry{name: "..", typeflag: tar.TypeReg, body: "x"}},
+		{"Bounding", caps.Bounding},
+		{"Effective", caps.Effective},
+		{"Permitted", caps.Permitted},
+	} {
+		if !slices.Equal(set.got, want) {
+			t.Errorf("%s = %v, want %v", set.name, set.got, want)
+		}
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := runUntar(t, []tarEntry{tc.entry})
-			if err == nil {
-				t.Fatalf("untar(%q) succeeded, want error", tc.entry.name)
-			}
-			if !strings.Contains(err.Error(), "invalid tar entry") {
-				t.Errorf("error = %q, want it to mention 'invalid tar entry'", err.Error())
-			}
-		})
-	}
-}
-
-func TestUntar_SymlinkEscape(t *testing.T) {
-	// CVE-2024-24579 / CVE-2020-27833 pattern: a tar declares a symlink
-	// pointing outside the rootfs, then a later entry writes through it.
-	parent := t.TempDir()
-	rootfsDir := filepath.Join(parent, "rootfs")
-	if err := os.Mkdir(rootfsDir, 0o755); err != nil {
-		t.Fatalf("mkdir rootfs: %v", err)
-	}
-	hostDir := filepath.Join(parent, "host")
-	if err := os.Mkdir(hostDir, 0o755); err != nil {
-		t.Fatalf("mkdir host: %v", err)
-	}
-	hostFile := filepath.Join(hostDir, "passwd")
-	if err := os.WriteFile(hostFile, []byte("original"), 0o644); err != nil {
-		t.Fatalf("write host file: %v", err)
-	}
-
-	entries := []tarEntry{
-		{name: "etc", typeflag: tar.TypeSymlink, linkname: hostDir},
-		{name: "etc/passwd", typeflag: tar.TypeReg, body: "OWNED"},
-	}
-	if err := untar(context.Background(), bytes.NewReader(buildTar(t, entries)), rootfsDir); err == nil {
-		t.Fatalf("untar succeeded; expected escape via symlink to be refused")
-	}
-
-	got, err := os.ReadFile(hostFile)
-	if err != nil {
-		t.Fatalf("read host file: %v", err)
-	}
-	if string(got) != "original" {
-		t.Errorf("host file modified to %q -- symlink escape was NOT prevented", got)
-	}
-}
-
-func TestUntar_HardlinkEscape(t *testing.T) {
-	tests := []struct {
-		name  string
-		entry tarEntry
+	for _, set := range []struct {
+		name string
+		got  []string
 	}{
-		{name: "parent target", entry: tarEntry{name: "etc/passwd", typeflag: tar.TypeLink, linkname: "../host/passwd"}},
-		{name: "embedded escape target", entry: tarEntry{name: "etc/passwd", typeflag: tar.TypeLink, linkname: "a/../../host"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := runUntar(t, []tarEntry{tc.entry})
-			if err == nil {
-				t.Fatalf("untar succeeded, want hardlink escape refused")
-			}
-			if !strings.Contains(err.Error(), "invalid hardlink target") {
-				t.Errorf("error = %q, want it to mention 'invalid hardlink target'", err.Error())
-			}
-		})
+		{"Inheritable", caps.Inheritable},
+		{"Ambient", caps.Ambient},
+	} {
+		if len(set.got) != 0 {
+			t.Errorf("%s = %v, want empty", set.name, set.got)
+		}
 	}
 }
 
-func TestUntar_RejectSpecialFiles(t *testing.T) {
-	tests := []struct {
-		name     string
-		typeflag byte
+// The pause container only reaps, so it is built with no capabilities at all.
+func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
+	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil)
+
+	caps := spec.Process.Capabilities
+	if caps == nil {
+		t.Fatal("spec.Process.Capabilities is nil")
+	}
+	for _, set := range []struct {
+		name string
+		got  []string
 	}{
-		{name: "char device", typeflag: tar.TypeChar},
-		{name: "block device", typeflag: tar.TypeBlock},
-		{name: "fifo", typeflag: tar.TypeFifo},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := runUntar(t, []tarEntry{{name: "weird", typeflag: tc.typeflag}})
-			if err == nil {
-				t.Fatalf("untar succeeded, want unhandled-typeflag error")
-			}
-			if !strings.Contains(err.Error(), "unhandled tar entry typeflag") {
-				t.Errorf("error = %q, want it to mention 'unhandled tar entry typeflag'", err.Error())
-			}
-		})
-	}
-}
-
-func TestUntar_TruncatedArchive(t *testing.T) {
-	full := buildTar(t, []tarEntry{
-		{name: "ok", typeflag: tar.TypeReg, body: "hello"},
-	})
-	if len(full) < 64 {
-		t.Fatalf("buildTar produced suspiciously small output: %d bytes", len(full))
-	}
-	truncated := full[:len(full)-64]
-
-	dir := t.TempDir()
-	err := untar(context.Background(), bytes.NewReader(truncated), dir)
-	if err == nil {
-		t.Fatalf("untar on truncated archive succeeded; want error")
-	}
-	if !strings.Contains(err.Error(), "in tarReader.Next") &&
-		!strings.Contains(err.Error(), "unexpected EOF") {
-		t.Errorf("error = %v, want it to surface the underlying tar/copy error", err)
+		{"Bounding", caps.Bounding},
+		{"Effective", caps.Effective},
+		{"Inheritable", caps.Inheritable},
+		{"Permitted", caps.Permitted},
+		{"Ambient", caps.Ambient},
+	} {
+		if len(set.got) != 0 {
+			t.Errorf("%s = %v, want empty", set.name, set.got)
+		}
 	}
 }

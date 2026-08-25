@@ -61,6 +61,12 @@ func startFakeCH(t *testing.T) (*Client, *fakeCH) {
 		f.mu.Lock()
 		f.requests = append(f.requests, recordedReq{method: r.Method, path: r.URL.Path, body: string(body)})
 		f.mu.Unlock()
+		if r.URL.Path == "/api/v1/vmm.ping" {
+			// Mirror what a real VMM answers, which callers parse for its version.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"build_version":"v52.0","version":"52.0.0","pid":1,"features":["kvm"]}`))
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	f.srv = &http.Server{Handler: mux}
@@ -82,7 +88,7 @@ func TestClientLifecycleCalls(t *testing.T) {
 	client, fake := startFakeCH(t)
 	ctx := context.Background()
 
-	if err := client.WaitReady(ctx, time.Second); err != nil {
+	if _, err := client.WaitReady(ctx, time.Second); err != nil {
 		t.Fatalf("WaitReady: %v", err)
 	}
 	if err := client.Pause(ctx); err != nil {
@@ -135,7 +141,7 @@ func TestClientLifecycleCalls(t *testing.T) {
 func TestWaitReadyTimesOut(t *testing.T) {
 	// Socket that never exists -> WaitReady should time out, not hang.
 	client := NewClient(filepath.Join(t.TempDir(), "nonexistent.sock"))
-	err := client.WaitReady(context.Background(), 50*time.Millisecond)
+	_, err := client.WaitReady(context.Background(), 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("WaitReady returned nil for a dead socket, want timeout error")
 	}

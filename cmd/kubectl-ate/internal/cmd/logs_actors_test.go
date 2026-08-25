@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -33,146 +34,178 @@ import (
 
 func TestFilterAndDisplayLogLine(t *testing.T) {
 	tests := []struct {
-		name            string
-		line            string
-		targetAtespace  string
-		targetActorName string
-		wantMatched     bool
-		wantTime        string
-		wantOutput      string
+		name        string
+		line        string
+		target      resources.ActorRef
+		container   string
+		wantMatched bool
+		wantTime    string
+		wantOutput  string
 	}{
 		{
-			name:            "matching actor, JSON log with RFC3339Nano",
-			line:            `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38.602878302Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
+			name:        "matching actor, JSON log with RFC3339Nano",
+			line:        `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38.602878302Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
-			name:            "matching actor, plain text log",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","message":"Hello"}`,
+			name:        "matching actor, plain text log",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Hello"}`,
 		},
 		{
-			name:            "matching actor, JSON log with no timestamp fallback",
-			line:            `{"level":"error","msg":"Failed","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "",
-			wantOutput:      `{"level":"error","msg":"Failed"}`,
+			name:        "matching actor, JSON log with no timestamp fallback",
+			line:        `{"level":"error","msg":"Failed","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "",
+			wantOutput:  `{"level":"error","msg":"Failed"}`,
 		},
 		{
-			name:            "matching actor, fallback to standard labels key",
-			line:            `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38.602878302Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
+			name:        "matching actor, fallback to standard labels key",
+			line:        `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38.602878302Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
-			name:            "non-matching actor",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-2"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "non-matching actor",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-2"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "", // zero: another actor's line must not advance follow's resume cursor
+			wantOutput:  "",
 		},
 		{
-			name:            "same actor name in a different atespace",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-2","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "same actor name in a different atespace",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-2","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
 		},
 		{
-			name:            "matching actor name without atespace label",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "matching actor name without atespace label",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
 		},
 		{
-			name:            "empty target atespace does not match empty atespace label",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "empty target atespace does not match empty atespace label",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
 		},
 		{
-			name:            "empty target actor name does not match empty name label",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":""}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "empty target actor name does not match empty name label",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":""}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: ""},
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
 		},
 		{
-			name:            "invalid json line",
-			line:            "not a json line",
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "",
-			wantOutput:      "",
+			name:        "invalid json line",
+			line:        "not a json line",
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
 		},
 		{
-			name:            "matching actor, flat JSON log",
-			line:            `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","traceID":"abc-123","err":"timeout","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","err":"timeout","level":"info","msg":"Hello","traceID":"abc-123"}`,
+			name:        "matching actor, flat JSON log",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","traceID":"abc-123","err":"timeout","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","err":"timeout","level":"info","msg":"Hello","traceID":"abc-123"}`,
 		},
 		{
-			name:            "matching actor, severity and message keys",
-			line:            `{"time":"2026-05-16T01:03:38Z","severity":"error","message":"Disk full","custom_tag":"alert","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","custom_tag":"alert","message":"Disk full","severity":"error"}`,
+			name:        "matching actor, severity and message keys",
+			line:        `{"time":"2026-05-16T01:03:38Z","severity":"error","message":"Disk full","custom_tag":"alert","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","custom_tag":"alert","message":"Disk full","severity":"error"}`,
 		},
 		{
-			name:            "matching actor, 2-field structured log without time",
-			line:            `{"message":"login failed","code":401,"logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "",
-			wantOutput:      `{"code":401,"message":"login failed"}`,
+			name:        "matching actor, 2-field structured log without time",
+			line:        `{"message":"login failed","code":401,"logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "",
+			wantOutput:  `{"code":401,"message":"login failed"}`,
 		},
 		{
-			name:            "matching actor, JSON log with custom application labels",
-			line:            `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1","app":"my-app"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
+			name:        "matching actor, JSON log with custom application labels",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","app":"my-app"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
+		},
+		{
+			// ateom drops these at the producer; the CLI strips the whole reserved
+			// namespace too, so a label that reached the stream some other way is
+			// never printed as platform attribution.
+			name:        "matching actor, label in substrate's reserved namespace is stripped",
+			line:        `{"time":"2026-05-16T01:03:38Z","msg":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.tenant":"forged","app":"my-app"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
+		},
+		{
+			name:        "no filter shows a container line",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"counter"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			name:        "container filter matches the named container",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"counter"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			container:   "counter",
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			name:        "container filter excludes a different container",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"sidecar"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			container:   "counter",
+			wantMatched: false,
+			wantTime:    "", // filtered out: only displayed lines may advance follow's resume cursor
+			wantOutput:  "",
+		},
+		{
+			name:        "container filter excludes a lifecycle event",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			container:   "counter",
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logTime, matched := filterAndDisplayLogLine(tc.line, tc.targetAtespace, tc.targetActorName, &buf)
+			logTime, matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, container: tc.container}, &buf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
@@ -238,15 +271,19 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 				return nil, fmt.Errorf("unexpected actor name: %s", in.GetActor().GetName())
 			}
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      podName,
-				AteomPodNamespace: namespace,
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       podName,
+						WorkerNamespace: namespace,
+					},
+				},
 			}, nil
 		},
 	}
 
-	logLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-123"}}`
+	logLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 	mockStreamer := &mockPodLogsStreamer{
 		StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 			if ns != namespace || name != podName {
@@ -262,14 +299,14 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient: mockAPI,
-		atespace:  "space-1",
+		actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:  mockStreamer,
 		stdout:    &stdout,
 		stderr:    &stderr,
 		follow:    false,
 	}
 
-	err := runner.Run(context.Background(), actorName)
+	err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -285,6 +322,84 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	}
 }
 
+// TestLogsActorRunner_Run_OneShot_ContainerFilter exercises the --container
+// selection against one stream that interleaves two containers and a
+// lifecycle event.
+func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
+	actorName := "act-123"
+
+	counterLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
+	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"sidecar"}}`
+	lifecycleLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+
+	tests := []struct {
+		name       string
+		container  string
+		wantOutput []string
+	}{
+		{
+			name:       "no filter shows everything",
+			wantOutput: []string{"from counter", "from sidecar", "Actor started"},
+		},
+		{
+			name:       "container filter",
+			container:  "counter",
+			wantOutput: []string{"from counter"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAPI := &mockAteAPIClient{
+				GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+					return &ateapipb.Actor{
+						Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+						Status: &ateapipb.ActorStatus{
+							State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+							WorkerAssignment: &ateapipb.WorkerAssignment{
+								WorkerPod:       "pod-xyz",
+								WorkerNamespace: "ns-abc",
+							},
+						},
+					}, nil
+				},
+			}
+			mockStreamer := &mockPodLogsStreamer{
+				StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+					return io.NopCloser(strings.NewReader(counterLine + "\n" + sidecarLine + "\n" + lifecycleLine + "\n")), nil
+				},
+			}
+
+			var stdout, stderr bytes.Buffer
+			runner := &LogsActorRunner{
+				apiClient: mockAPI,
+				actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
+				streamer:  mockStreamer,
+				stdout:    &stdout,
+				stderr:    &stderr,
+				container: tc.container,
+			}
+
+			if err := runner.Run(context.Background()); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var gotLines []string
+			if got := strings.TrimSpace(stdout.String()); got != "" {
+				gotLines = strings.Split(got, "\n")
+			}
+			if len(gotLines) != len(tc.wantOutput) {
+				t.Fatalf("got %d lines %q, want %d", len(gotLines), gotLines, len(tc.wantOutput))
+			}
+			for i, want := range tc.wantOutput {
+				if !strings.Contains(gotLines[i], want) {
+					t.Errorf("line %d = %q, want it to contain %q", i, gotLines[i], want)
+				}
+			}
+		})
+	}
+}
+
 func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 	actorName := "act-123"
 
@@ -292,7 +407,7 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 			return &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-				Status:   ateapipb.Actor_STATUS_SUSPENDED, // not running
+				Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}, // not running
 			}, nil
 		},
 	}
@@ -306,19 +421,19 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient: mockAPI,
-		atespace:  "space-1",
+		actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:  mockStreamer,
 		stdout:    &stdout,
 		stderr:    &stderr,
 		follow:    false,
 	}
 
-	err := runner.Run(context.Background(), actorName)
+	err := runner.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 
-	wantErrMsg := "actor act-123 is not currently running on any worker pod"
+	wantErrMsg := "actor space-1/act-123 is not currently running on any worker pod"
 	if !strings.Contains(err.Error(), wantErrMsg) {
 		t.Errorf("unexpected error message: %v (expected substring %q)", err, wantErrMsg)
 	}
@@ -346,21 +461,25 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 				// First call: suspended
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   ateapipb.Actor_STATUS_SUSPENDED,
+					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
 			// Subsequent calls: running
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      podName,
-				AteomPodNamespace: namespace,
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       podName,
+						WorkerNamespace: namespace,
+					},
+				},
 			}, nil
 		},
 	}
 
-	logLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-123"}}`
+	logLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -391,7 +510,7 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -401,7 +520,7 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(ctx, actorName)
+	err := runner.Run(ctx)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,7 +560,7 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -451,12 +570,12 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(context.Background(), actorName)
+	err := runner.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 
-	wantErrMsg := "actor act-notfound not found"
+	wantErrMsg := "actor space-1/act-notfound not found"
 	if !strings.Contains(err.Error(), wantErrMsg) {
 		t.Errorf("unexpected error: %v (expected %q)", err, wantErrMsg)
 	}
@@ -479,10 +598,14 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 			if getActorCalls == 1 {
 				// 1. Initial call for stream 1: pod-1
 				return &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-					AteomPodName:      "pod-1",
-					AteomPodNamespace: "ns",
-					Status:            ateapipb.Actor_STATUS_RUNNING,
+					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+					Status: &ateapipb.ActorStatus{
+						State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapipb.WorkerAssignment{
+							WorkerPod:       "pod-1",
+							WorkerNamespace: "ns",
+						},
+					},
 				}, nil
 			}
 
@@ -495,10 +618,14 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 			}
 
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      "pod-2",
-				AteomPodNamespace: "ns",
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       "pod-2",
+						WorkerNamespace: "ns",
+					},
+				},
 			}, nil
 		},
 	}
@@ -524,7 +651,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 				pr, pw := io.Pipe()
 				go func() {
 					// write one line and then keep it open
-					fmt.Fprintln(pw, `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"line 1 from pod-1","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-migrate"}}`)
+					fmt.Fprintln(pw, `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"line 1 from pod-1","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}`)
 					close(lineRead) // guaranteed to have been read because io.Pipe is unbuffered!
 					// wait until context is cancelled
 					<-streamCtx.Done()
@@ -541,14 +668,14 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 			// Now we can cancel the main context to exit the follow loop
 			cancel()
 
-			return io.NopCloser(strings.NewReader(`{"time":"2026-05-16T01:03:39Z","level":"info","msg":"line 1 from pod-2","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-migrate"}}` + "\n")), nil
+			return io.NopCloser(strings.NewReader(`{"time":"2026-05-16T01:03:39Z","level":"info","msg":"line 1 from pod-2","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-migrate"}}` + "\n")), nil
 		},
 	}
 
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -558,7 +685,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(ctx, actorName)
+	err := runner.Run(ctx)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -589,10 +716,14 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 			// 1. Initial call: running on pod-1
 			if getActorCalls == 1 {
 				return &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-					AteomPodName:      "pod-1",
-					AteomPodNamespace: "ns",
-					Status:            ateapipb.Actor_STATUS_RUNNING,
+					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+					Status: &ateapipb.ActorStatus{
+						State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapipb.WorkerAssignment{
+							WorkerPod:       "pod-1",
+							WorkerNamespace: "ns",
+						},
+					},
 				}, nil
 			}
 
@@ -606,7 +737,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 				}
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   ateapipb.Actor_STATUS_SUSPENDED,
+					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
@@ -614,16 +745,20 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 			if getActorCalls == 3 {
 				return &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
-					Status:   ateapipb.Actor_STATUS_SUSPENDED,
+					Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 				}, nil
 			}
 
 			// 4. Subsequent loop reconnection call: running again on pod-1
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      "pod-1",
-				AteomPodNamespace: "ns",
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       "pod-1",
+						WorkerNamespace: "ns",
+					},
+				},
 			}, nil
 		},
 	}
@@ -643,7 +778,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 			if streamCalls == 1 {
 				pr, pw := io.Pipe()
 				go func() {
-					fmt.Fprintln(pw, `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"before suspend","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-suspended-mid"}}`)
+					fmt.Fprintln(pw, `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"before suspend","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-suspended-mid"}}`)
 					close(lineRead) // guaranteed to have been read!
 					<-streamCtx.Done()
 					pw.Close()
@@ -654,14 +789,14 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 			// Second stream (after resuming): cancel context to stop test
 			cancel()
 
-			return io.NopCloser(strings.NewReader(`{"time":"2026-05-16T01:03:40Z","level":"info","msg":"after resume","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-suspended-mid"}}` + "\n")), nil
+			return io.NopCloser(strings.NewReader(`{"time":"2026-05-16T01:03:40Z","level":"info","msg":"after resume","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-suspended-mid"}}` + "\n")), nil
 		},
 	}
 
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -671,7 +806,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(ctx, actorName)
+	err := runner.Run(ctx)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -682,5 +817,94 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	}
 	if !strings.Contains(stdoutStr, "after resume") {
 		t.Errorf("expected output to contain 'after resume', got %q", stdoutStr)
+	}
+}
+
+// A worker pod's stream carries lines that are not displayed (other actors,
+// filtered-out containers). Those must not advance the follow resume cursor
+// (SinceTime), or a reconnect could skip the lines the user asked for.
+func TestLogsActorRunner_Run_Follow_UndisplayedLineDoesNotAdvanceCursor(t *testing.T) {
+	actorName := "act-123"
+
+	mockAPI := &mockAteAPIClient{
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+			return &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				Status: &ateapipb.ActorStatus{
+					State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       "pod-xyz",
+						WorkerNamespace: "ns-abc",
+					},
+				},
+			}, nil
+		},
+	}
+
+	// A different actor's line and a filtered-out sidecar line of our own actor:
+	// both carry parseable timestamps but neither is displayed.
+	foreignLine := `{"time":"2026-05-16T01:03:38Z","message":"not mine","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"other"}}`
+	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"sidecar"}}`
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var streamCalls int
+	var reconnectHadSinceTime bool
+	secondCall := make(chan struct{})
+
+	mockStreamer := &mockPodLogsStreamer{
+		StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			streamCalls++
+
+			if streamCalls == 1 {
+				// First connection: only undisplayed lines, then EOF to force a reconnect.
+				return io.NopCloser(strings.NewReader(foreignLine + "\n" + sidecarLine + "\n")), nil
+			}
+			if streamCalls == 2 {
+				reconnectHadSinceTime = opts.SinceTime != nil
+				close(secondCall)
+			}
+			return io.NopCloser(strings.NewReader("")), nil
+		},
+	}
+
+	runner := &LogsActorRunner{
+		apiClient:         mockAPI,
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
+		streamer:          mockStreamer,
+		stdout:            &bytes.Buffer{},
+		stderr:            &bytes.Buffer{},
+		follow:            true,
+		container:         "counter",
+		pollInterval:      1 * time.Millisecond,
+		reconnectInterval: 1 * time.Millisecond,
+		tickerInterval:    time.Hour, // keep the migration monitor out of the way
+	}
+
+	done := make(chan struct{})
+	go func() {
+		_ = runner.Run(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-secondCall:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("reconnect (second StreamLogs call) never happened")
+	}
+
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if reconnectHadSinceTime {
+		t.Error("reconnect carried a SinceTime cursor; undisplayed lines must not advance it")
 	}
 }

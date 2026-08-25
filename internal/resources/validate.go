@@ -71,6 +71,42 @@ func ValidateObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.Error
 	return errs
 }
 
+// ValidateUpdateMetadataRef checks the metadata an update request uses to name
+// the resource it acts on. All four fields are required: atespace and name
+// identify the resource, and uid and version guard the incarnation and revision
+// the update was written against.  It does not check the server-managed timestamps,
+// which clients may not set. Unlike ValidateObjectRef, nil metadata is an error
+// rather than a no-op: a request that names no resource cannot be served.
+func ValidateUpdateMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetName(), fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val == 0 {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else if val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
+	}
+
+	return errs
+}
+
 // ValidateGlobalObjectRef checks that a reference to a global-scoped resource is
 // well-formed: its atespace must be empty (global resources do not belong to an
 // atespace) and its name must be a valid resource name. It does not check that
@@ -147,28 +183,33 @@ func ValidateRunscHash(sha256Hash string) error {
 	return nil
 }
 
-// ValidateSnapshotURIPrefix ensures a checkpoint/restore snapshot location is
-// a well-formed URI with a bucket, so a bad prefix fails fast at the RPC
-// boundary instead of deep inside an object-storage call. It deliberately
-// does not restrict the scheme: the storage layer only uses the host (bucket)
-// and path, and which schemes are acceptable is a storage-backend policy, not
-// a per-RPC one. The local paths used for snapshot upload/download are
-// derived from the separately validated actor ref, not from this URI, so this
-// is a sanity check rather than a path-traversal guard.
-func ValidateSnapshotURIPrefix(prefix string) error {
-	u, err := url.Parse(prefix)
+// ValidateSnapshotLocation ensures an ActorTemplate's snapshotsConfig.location
+// is a well-formed URI with a bucket, so a bad location fails fast instead of
+// deep inside an object-storage call. It deliberately does not restrict the
+// scheme: the storage layer only uses the host (bucket) and path, and which
+// schemes are acceptable is a storage-backend policy, not a per-RPC one. The
+// local paths used for snapshot upload/download are derived from the
+// separately validated actor ref, not from this URI, so this is a sanity check
+// rather than a path-traversal guard.
+//
+// This validates the base that many snapshots share, not any one snapshot's
+// URI; SnapshotURI is the type for the latter, and it applies this check when
+// it is built.
+func ValidateSnapshotLocation(location string) error {
+	u, err := url.Parse(location)
 	if err != nil {
-		return fmt.Errorf("invalid snapshot URI prefix %q: %v", prefix, err)
+		return fmt.Errorf("invalid snapshot location %q: %v", location, err)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("invalid snapshot URI prefix %q: missing bucket", prefix)
+		return fmt.Errorf("invalid snapshot location %q: missing bucket", location)
 	}
-	// Object names are appended to the prefix by string concatenation. A
-	// query, fragment, or userinfo component would swallow the appended name
-	// when the result is re-parsed (the storage layer uses only host and
-	// path), silently redirecting the upload/download to a different object.
+	// Snapshot and object names are appended to the location by string
+	// concatenation. A query, fragment, or userinfo component would swallow
+	// the appended name when the result is re-parsed (the storage layer uses
+	// only host and path), silently redirecting the upload/download to a
+	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid snapshot URI prefix %q: must contain only a scheme, bucket, and path", prefix)
+		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
 	}
 	return nil
 }
@@ -176,6 +217,8 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 // ValidateWorker checks that the worker message is well-formed.
 func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
+
+	errs = append(errs, validateWorkerMetadata(worker, fldPath.Child("metadata"))...)
 
 	if val, fldPath := worker.WorkerNamespace, fldPath.Child("worker_namespace"); val == "" {
 		errs = append(errs, field.Required(fldPath, ""))
@@ -201,8 +244,8 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 		}
 	}
 
-	if val := worker.Assignment; val != nil {
-		errs = append(errs, ValidateAssignment(val, fldPath.Child("assignment"))...)
+	if val := worker.GetStatus().GetAssignment(); val != nil {
+		errs = append(errs, ValidateAssignment(val, fldPath.Child("status", "assignment"))...)
 	}
 
 	if val, fldPath := worker.Ip, fldPath.Child("ip"); val == "" {
@@ -225,10 +268,51 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 		}
 	}
 
+	// state is server-managed; accept any defined enum value (the unset/zero
+	// WORKER_STATE_UNSPECIFIED is tolerated for backward compatibility), reject
+	// unknowns.
+	if val, fldPath := worker.GetStatus().GetState(), fldPath.Child("status", "state"); ateapipb.WorkerState_name[int32(val)] == "" {
+		errs = append(errs, field.NotSupported(fldPath, val, []string{
+			ateapipb.WorkerState_WORKER_STATE_ACTIVE.String(),
+			ateapipb.WorkerState_WORKER_STATE_DRAINING.String(),
+		}))
+	}
+
 	return errs
 }
 
-func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) field.ErrorList {
+// validateWorkerMetadata checks the Worker's identity. Workers are
+// global-scoped, so atespace must be empty.
+func validateWorkerMetadata(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	meta := worker.GetMetadata()
+	if meta == nil {
+		return append(errs, field.Required(fldPath, ""))
+	}
+
+	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val != "" {
+		errs = append(errs, field.Invalid(fldPath, val, "must be empty; Workers are global-scoped"))
+	}
+
+	if val, fldPath := meta.GetName(), fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val != "" {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
+	}
+
+	return errs
+}
+
+func ValidateAssignment(assignment *ateapipb.ActorAssignment, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
 
 	if val, fldPath := assignment.ActorTemplate, fldPath.Child("actor_template"); val == nil {
@@ -254,17 +338,11 @@ func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) fi
 	if val, fldPath := assignment.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		if val, fldPath := assignment.Actor.Name, fldPath.Child("name"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+		errs = append(errs, ValidateObjectRef(val, fldPath)...)
+	}
 
-		if val, fldPath := assignment.Actor.Atespace, fldPath.Child("atespace"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+	if val, fldPath := assignment.ActorUid, fldPath.Child("actor_uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	}
 
 	return errs

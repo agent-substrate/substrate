@@ -174,6 +174,41 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	}
 }
 
+// TestServerUnaryInterceptorPreservesDetails verifies the public interceptor
+// returns the handler's status intact: ErrorInfo details (reason and metadata)
+// must survive the public wire, even when the status is wrapped.
+func TestServerUnaryInterceptorPreservesDetails(t *testing.T) {
+	metadata := map[string]string{"want": "0.2.0", "have": "0.1.0"}
+	structuredErr := ateerrors.NewGRPCError(context.Background(), codes.FailedPrecondition, ateerrors.ReasonInvalidCheckpointResult, metadata, errors.New("refused"))
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return nil, fmt.Errorf("outer error: %w", structuredErr)
+	}
+
+	_, err := ServerUnaryInterceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	st, _ := status.FromError(err)
+	if st.Code() != codes.FailedPrecondition {
+		t.Errorf("code = %v, want %v", st.Code(), codes.FailedPrecondition)
+	}
+
+	info := errorInfoOf(t, err)
+	if info == nil {
+		t.Fatal("status is missing the ErrorInfo detail")
+	}
+	if got, want := info.GetReason(), string(ateerrors.ReasonInvalidCheckpointResult); got != want {
+		t.Errorf("ErrorInfo.Reason = %q, want %q", got, want)
+	}
+	for k, want := range metadata {
+		if got := info.GetMetadata()[k]; got != want {
+			t.Errorf("ErrorInfo.Metadata[%q] = %q, want %q", k, got, want)
+		}
+	}
+}
+
 type trailerStream struct {
 	method   string
 	trailers metadata.MD
@@ -216,6 +251,77 @@ func TestServerUnaryInterceptorEmitsElapsedTrailer(t *testing.T) {
 	}
 	if got, min := time.Duration(elapsedUs)*time.Microsecond, minHandlerDuration; got < min {
 		t.Errorf("trailer reported %s; expected at least %s (handler sleep)", got, min)
+	}
+}
+
+func TestMaxDeadlineUnaryInterceptor_MaxDeadlineIsEnforced(t *testing.T) {
+	const ceiling = 50 * time.Millisecond
+
+	tests := []struct {
+		name      string
+		callerCtx func() (context.Context, context.CancelFunc)
+	}{
+		{
+			name: "no caller deadline",
+			callerCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+		},
+		{
+			name: "caller deadline longer than ceiling",
+			callerCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Hour)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			interceptor := MaxDeadlineUnaryInterceptor(ceiling)
+
+			callerCtx, cancel := tt.callerCtx()
+			defer cancel()
+
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				gotDeadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatalf("expected the ceiling deadline to be present")
+				}
+				if until := time.Until(gotDeadline); until > ceiling {
+					t.Errorf("time until deadline = %v, want at most the %v ceiling", until, ceiling)
+				}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+
+			_, err := interceptor(callerCtx, "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("err = %v, want context.DeadlineExceeded (should not have waited out the caller's own deadline)", err)
+			}
+		})
+	}
+}
+
+func TestMaxDeadlineUnaryInterceptor_ShorterDeadlineIsPreserved(t *testing.T) {
+	interceptor := MaxDeadlineUnaryInterceptor(time.Hour)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	callerDeadline, _ := callerCtx.Deadline()
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		gotDeadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatalf("expected the caller's shorter deadline to be preserved")
+		}
+		if !gotDeadline.Equal(callerDeadline) {
+			t.Errorf("deadline = %v, want caller's deadline %v (a ceiling above the caller's own deadline must not override it)", gotDeadline, callerDeadline)
+		}
+		return "response", nil
+	}
+
+	if _, err := interceptor(callerCtx, "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

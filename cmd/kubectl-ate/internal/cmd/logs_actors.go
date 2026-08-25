@@ -27,7 +27,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -40,6 +42,7 @@ import (
 
 var followLogs bool
 var logsAtespaceFlag string
+var logsContainerFlag string
 
 var logsActorsCmd = &cobra.Command{
 	Use:     "actors <actor-name>",
@@ -53,6 +56,7 @@ func init() {
 	logsActorsCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Specify if the logs should be streamed.")
 	logsActorsCmd.Flags().StringVarP(&logsAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
+	logsActorsCmd.Flags().StringVarP(&logsContainerFlag, "container", "c", "", "Show only logs from this container.")
 	logsCmd.AddCommand(logsActorsCmd)
 }
 
@@ -80,17 +84,18 @@ func (s *k8sPodLogsStreamer) StreamLogs(ctx context.Context, namespace, podName 
 type LogsActorRunner struct {
 	apiClient         AteAPIClient
 	streamer          PodLogsStreamer
-	atespace          string
+	actorRef          resources.ActorRef
 	stdout            io.Writer
 	stderr            io.Writer
 	follow            bool
+	container         string
 	pollInterval      time.Duration
 	reconnectInterval time.Duration
 	tickerInterval    time.Duration
 }
 
 // Run executes the logs command.
-func (r *LogsActorRunner) Run(ctx context.Context, actorName string) error {
+func (r *LogsActorRunner) Run(ctx context.Context) error {
 	if r.pollInterval <= 0 {
 		r.pollInterval = 2 * time.Second
 	}
@@ -103,22 +108,22 @@ func (r *LogsActorRunner) Run(ctx context.Context, actorName string) error {
 
 	defer r.apiClient.Close()
 	if r.follow {
-		return r.runFollow(ctx, actorName)
+		return r.runFollow(ctx)
 	}
-	return r.runOneShot(ctx, actorName)
+	return r.runOneShot(ctx)
 }
 
-func (r *LogsActorRunner) runOneShot(ctx context.Context, actorName string) error {
-	actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorName}})
+func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
+	actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 	if err != nil {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
 
-	podName := actor.GetAteomPodName()
-	namespace := actor.GetAteomPodNamespace()
+	podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
+	namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 
-	if podName == "" || namespace == "" || actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return fmt.Errorf("actor %s is not currently running on any worker pod", actorName)
+	if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return fmt.Errorf("actor %s is not currently running on any worker pod", r.actorRef)
 	}
 
 	opts := &corev1.PodLogOptions{
@@ -131,12 +136,13 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context, actorName string) erro
 	}
 	defer stream.Close()
 
+	filter := logLineFilter{target: r.actorRef, container: r.container}
 	scanner := bufio.NewScanner(stream)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, r.atespace, actorName, r.stdout)
+		filterAndDisplayLogLine(line, filter, r.stdout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -144,7 +150,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context, actorName string) erro
 	return nil
 }
 
-func (r *LogsActorRunner) runFollow(ctx context.Context, actorName string) error {
+func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 	var lastWorkerPod string
 	var lastSeenTime time.Time
 
@@ -155,10 +161,10 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorName string) error
 		default:
 		}
 
-		actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorName}})
+		actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("actor %s not found: %w", actorName, err)
+				return fmt.Errorf("actor %s not found: %w", r.actorRef, err)
 			}
 			select {
 			case <-ctx.Done():
@@ -168,10 +174,10 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorName string) error
 			}
 		}
 
-		podName := actor.GetAteomPodName()
-		namespace := actor.GetAteomPodNamespace()
+		podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
+		namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 
-		if podName == "" || namespace == "" || actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -206,14 +212,15 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorName string) error
 		}
 
 		var wg sync.WaitGroup
-		r.startMigrationMonitor(streamCtx, streamCancel, &wg, actorName, podName)
+		r.startMigrationMonitor(streamCtx, streamCancel, &wg, podName)
 
+		filter := logLineFilter{target: r.actorRef, container: r.container}
 		scanner := bufio.NewScanner(stream)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
 			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, r.atespace, actorName, r.stdout)
+			logTime, _ := filterAndDisplayLogLine(line, filter, r.stdout)
 			if !logTime.IsZero() {
 				lastSeenTime = logTime
 			}
@@ -249,7 +256,6 @@ func (r *LogsActorRunner) startMigrationMonitor(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	wg *sync.WaitGroup,
-	actorName string,
 	currentPod string,
 ) {
 	wg.Add(1)
@@ -262,10 +268,10 @@ func (r *LogsActorRunner) startMigrationMonitor(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorName}})
+				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 				if err == nil {
 					act := resp
-					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetAteomPodName() != currentPod {
+					if act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
 						// Actor suspended or migrated! Cancel stream context to reconnect.
 						cancel()
 						return
@@ -278,9 +284,8 @@ func (r *LogsActorRunner) startMigrationMonitor(
 
 func runLogsActor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	actorName := args[0]
 
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
@@ -294,19 +299,38 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	runner := &LogsActorRunner{
 		apiClient:         apiClient,
 		streamer:          &k8sPodLogsStreamer{clientset: k8sClient},
-		atespace:          logsAtespaceFlag,
+		actorRef:          resources.ActorRef{Atespace: logsAtespaceFlag, Name: args[0]},
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
 		follow:            followLogs,
+		container:         logsContainerFlag,
 		pollInterval:      2 * time.Second,
 		reconnectInterval: 1 * time.Second,
 		tickerInterval:    2 * time.Second,
 	}
 
-	return runner.Run(ctx, actorName)
+	return runner.Run(ctx)
 }
 
-func filterAndDisplayLogLine(line, targetAtespace, targetActorName string, w io.Writer) (time.Time, bool) {
+// logLineFilter selects which of an actor's log lines are displayed: all of
+// them by default, or only the named container's when container is set.
+type logLineFilter struct {
+	target    resources.ActorRef
+	container string
+}
+
+// matches reports whether a line emitted by emitter from containerName (empty
+// for lifecycle events) should be displayed.
+func (f logLineFilter) matches(emitter resources.ActorRef, containerName string) bool {
+	// Actor names are only unique within an atespace, and a worker pod can host
+	// actors from different atespaces over time, so match on both.
+	if emitter != f.target || f.target.Atespace == "" || f.target.Name == "" {
+		return false
+	}
+	return f.container == "" || containerName == f.container
+}
+
+func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (time.Time, bool) {
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
@@ -323,34 +347,33 @@ func filterAndDisplayLogLine(line, targetAtespace, targetActorName string, w io.
 		}
 	}
 
-	var atespace, actorName string
+	var emitter resources.ActorRef
+	var emitterContainer string
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
-				if name, ok := labels["ate.dev/actor_name"].(string); ok && name != "" {
-					actorName = name
-					atespace, _ = labels["ate.dev/actor_atespace"].(string)
+				if name, ok := labels[string(ateattr.ActorNameKey)].(string); ok && name != "" {
+					emitter.Name = name
+					emitter.Atespace, _ = labels[string(ateattr.AtespaceKey)].(string)
+					emitterContainer, _ = labels[string(ateattr.ActorContainerNameKey)].(string)
 					break
 				}
 			}
 		}
 	}
 
-	// Actor names are only unique within an atespace, and a worker pod can host
-	// actors from different atespaces over time, so match on both.
-	matched := (actorName != "" && actorName == targetActorName &&
-		targetAtespace != "" && atespace == targetAtespace)
-
-	if !matched {
-		return logTime, false
+	if !filter.matches(emitter, emitterContainer) {
+		return time.Time{}, false
 	}
 
-	// remove actor labels from CLI output
+	// Remove substrate's labels from CLI output. Stripping the whole reserved
+	// prefix rather than the known keys means an actor cannot get a plausible
+	// ate.*-namespaced label of its own printed as platform attribution.
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
 				for k := range labels {
-					if strings.HasPrefix(k, "ate.dev/") {
+					if strings.HasPrefix(k, ateattr.ReservedNamespace) {
 						delete(labels, k)
 					}
 				}
@@ -370,7 +393,7 @@ func filterAndDisplayLogLine(line, targetAtespace, targetActorName string, w io.
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(m); err != nil {
-		return logTime, false
+		return time.Time{}, false
 	}
 
 	encodedStr := strings.TrimSpace(buf.String())

@@ -24,6 +24,8 @@ import (
 	"strings"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+
+	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // ensureKataCompatibleSpec augments the bundle's config.json with the fields
@@ -31,7 +33,7 @@ import (
 // Without linux.resources, kata's ContainerConfig nil-derefs and the shim
 // crashes. This shaper is a bridge; a future atelet change should emit
 // runtime-appropriate specs so it can retire.
-func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error) {
+func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxSize) (*specs.Spec, error) {
 	specPath := filepath.Join(bundle, "config.json")
 	b, err := os.ReadFile(specPath)
 	if err != nil {
@@ -51,6 +53,11 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error)
 	if spec.Linux.CgroupsPath == "" {
 		spec.Linux.CgroupsPath = "/ateomchv/" + id
 	}
+	// Right-size the guest container cgroup to the actor's declared limits; the
+	// kata-agent applies spec.Linux.Resources inside the VM. Shared with the gVisor
+	// runtime via internal/sizing; overlays the device allowlist + CPU shares set
+	// by defaultKataResources.
+	size.ApplyToOCISpec(&spec)
 
 	// atelet's spec carries gVisor pause-model CRI annotations
 	// (container-type=container, sandbox-id=pause). kata reads those and waits
@@ -63,10 +70,10 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error)
 		}
 	}
 
-	// NB: no virtio-fs-overlay annotation here. With the STOCK shim, this spec is
-	// for the "carrier" container that only boots the VM + shares the RO base over
-	// virtio-fs. ateom assembles the actual overlay rootfs itself by driving the
-	// kata-agent CreateContainer over ttrpc (see RunWorkload) — no patched shim.
+	// NB: no overlay-related annotations here. The rootfs overlay is assembled on
+	// the HOST (see kata.StageMergedRootfs); this spec is used directly for the
+	// container the kata-agent runs on the shared merged tree (see RunWorkload) —
+	// stock agent, no patched shim.
 
 	// Point the network namespace at our interior netns (which holds the pod's
 	// eth0); kata finds eth0 there and wires it to the VM's virtio-net.
@@ -88,12 +95,12 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error)
 	// the exact set `ctr run --runtime io.containerd.kata.v2` emits, which kata's
 	// agent accepts. (Static shaper; pod DNS integration is future work.)
 	//
-	// KNOWN GAP vs the gVisor runtime: this also drops atelet's read-only actor
-	// identity bind mount (/run/ate/actor-id). The micro-VM guest can't see host
-	// paths (the rootfs is an overlay of a virtio-fs base + a guest-RAM upper, not a
-	// host bind), so atelet's host-path identity mount has nothing to bind to.
-	// Exposing the identity needs a per-actor volume plumbed into the guest; not yet
-	// implemented. No micro-VM workload depends on it today.
+	// Dropping atelet's volume bind mounts here is fine: host-path binds can't
+	// attach inside the guest anyway. Volumes reach micro-VM containers as
+	// subtrees of the single per-actor virtio-fs share instead — durable-dir
+	// volumes (writable, durable.go), CSI volumes (csi.go), and system-info
+	// volumes (read-only, systeminfo.go) — with the binds added to the
+	// workload specs ateom drives through the kata-agent (see workloadSpec).
 	spec.Mounts = defaultKataMounts()
 
 	out, err := json.MarshalIndent(&spec, "", "  ")

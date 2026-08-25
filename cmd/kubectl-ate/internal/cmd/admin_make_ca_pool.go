@@ -28,6 +28,8 @@ import (
 var caID string
 var targetSecretNamespace string
 var targetSecretName string
+var caKeyType string
+var caCommonName string
 
 var makeCaPoolCmd = &cobra.Command{
 	Use:   "make-ca-pool",
@@ -45,7 +47,11 @@ var makeCaPoolCmd = &cobra.Command{
 			return fmt.Errorf("while creating Kubernetes client: %w", err)
 		}
 
-		ca, err := localca.GenerateED25519CA(caID)
+		ca, err := localca.GenerateCA(localca.GenerateOptions{
+			ID:         caID,
+			CommonName: caCommonName,
+			KeyType:    localca.KeyType(caKeyType),
+		})
 		if err != nil {
 			return fmt.Errorf("while generating CA: %w", err)
 		}
@@ -84,5 +90,9 @@ func init() {
 	makeCaPoolCmd.Flags().StringVar(&caID, "ca-id", "", "The ID of the initial CA in the Pool")
 	makeCaPoolCmd.Flags().StringVar(&targetSecretNamespace, "secret-namespace", "default", "Create the secret in this namespace")
 	makeCaPoolCmd.Flags().StringVar(&targetSecretName, "name", "", "Create the secret with this name")
+	makeCaPoolCmd.Flags().StringVar(&caKeyType, "key-type", string(localca.KeyTypeED25519),
+		fmt.Sprintf("Signing key algorithm, %q or %q. Prefer %s for a CA whose certificates are validated by clients outside substrate, where Ed25519 support cannot be assumed.",
+			localca.KeyTypeED25519, localca.KeyTypeECDSAP256, localca.KeyTypeECDSAP256))
+	makeCaPoolCmd.Flags().StringVar(&caCommonName, "common-name", "", "Subject common name of the CA certificate. Cosmetic; nothing authenticates on it.")
 	makeCaPoolCmd.MarkFlagRequired("name")
 }

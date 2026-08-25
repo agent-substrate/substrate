@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         python3-venv \
         docker.io \
+        unzip \
+        zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Go must be new enough to honor the `tool` directive in
@@ -58,8 +60,9 @@ RUN python3 -m venv /opt/automation/venv \
  && /opt/automation/venv/bin/pip install --no-cache-dir -r /opt/automation/requirements.txt
 ENV PATH=/opt/automation/venv/bin:$PATH
 
-COPY orchestrator.py /opt/automation/orchestrator.py
-COPY manifests/runner-job.yaml.tmpl /opt/automation/manifests/runner-job.yaml.tmpl
+COPY orchestrator.py util.py /opt/automation/
+COPY testtypes/ /opt/automation/testtypes/
+COPY manifests/runner-job.yaml.tmpl manifests/nighthawk-ingress-runner-job.yaml.tmpl /opt/automation/manifests/
 
 ENV PYTHONUNBUFFERED=1
 

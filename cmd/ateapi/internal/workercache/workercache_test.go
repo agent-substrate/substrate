@@ -36,6 +36,9 @@ func TestCache_NotReadyBeforeStart(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from Workers before Start, got nil")
 	}
+	if _, err := c.Worker(workerName("ns", "pod")); err == nil {
+		t.Fatal("expected error from Worker before Start, got nil")
+	}
 }
 
 func TestCache_SyncsOnStart(t *testing.T) {
@@ -55,6 +58,24 @@ func TestCache_SyncsOnStart(t *testing.T) {
 	}
 	if diff := cmp.Diff([]*ateapipb.Worker{w1, w2}, got, protocmp.Transform(), workerSortOpt); diff != "" {
 		t.Errorf("workers mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCache_Worker(t *testing.T) {
+	want := makeWorker("ns", "pod", 1)
+	c := workercache.New(newFakeStore(want), time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	got, err := c.Worker(workerName("ns", "pod"))
+	if err != nil {
+		t.Fatalf("Worker: %v", err)
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("worker mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := c.Worker(workerName("ns", "missing")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing Worker error = %v, want store.ErrNotFound", err)
 	}
 }
 
@@ -92,16 +113,19 @@ func TestCache_UpdatedEvent_NewerVersionApplied(t *testing.T) {
 	}
 
 	updated := makeWorker("ns", "pod1", 2)
-	updated.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-1"}}
+	updated.Status.Assignment = &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "actor-1-uid",
+	}
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
 
 	eventually(t, func() bool {
 		workers, err := c.Workers()
-		if err != nil || len(workers) != 1 || workers[0].Assignment == nil {
+		if err != nil || len(workers) != 1 || workers[0].GetStatus().GetAssignment() == nil {
 			return false
 		}
-		wass := workers[0].Assignment
-		return wass.Actor.Name == "actor-1"
+		wass := workers[0].GetStatus().GetAssignment()
+		return wass.Actor.Name == "actor-1" && wass.ActorUid == "actor-1-uid"
 	}, 2*time.Second)
 
 	got, _ := c.Workers()
@@ -122,7 +146,10 @@ func TestCache_UpdatedEvent_OlderVersionIgnored(t *testing.T) {
 
 	// Send a stale update followed by a sentinel we can detect.
 	stale := makeWorker("ns", "pod1", 3)
-	stale.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "stale-actor"}}
+	stale.Status.Assignment = &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "stale-actor"},
+		ActorUid: "stale-actor-uid",
+	}
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: stale})
 
 	sentinel := makeWorker("ns", "pod2", 1)
@@ -150,9 +177,10 @@ func TestCache_DeletedEvent(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
+	// Delete events carry only the name.
 	fs.send(store.WorkerEvent{
 		Type:   store.WorkerEventDeleted,
-		Worker: &ateapipb.Worker{WorkerNamespace: "ns", WorkerPod: "pod1"},
+		Worker: &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: workerName("ns", "pod1")}},
 	})
 
 	eventually(t, func() bool {
@@ -380,15 +408,15 @@ func (f *fakeStore) WatchWorkers(_ context.Context) (*store.WorkerWatch, error) 
 	}), nil
 }
 
-func (f *fakeStore) ListWorkers(_ context.Context, _ int32, _ string) ([]*ateapipb.Worker, string, error) {
+func (f *fakeStore) ListWorkers(_ context.Context, _ store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listErr != nil {
-		return nil, "", f.listErr
+		return store.ListResponse[*ateapipb.Worker]{}, f.listErr
 	}
 	out := make([]*ateapipb.Worker, len(f.workers))
 	copy(out, f.workers)
-	return out, "", nil
+	return store.ListResponse[*ateapipb.Worker]{Items: out}, nil
 }
 
 func (f *fakeStore) send(event store.WorkerEvent) {
@@ -412,11 +440,22 @@ func (f *fakeStore) disconnect() {
 	close(old)
 }
 
+// workerName stands in for the pod UID that names a real Worker. The tests only
+// need it to be stable and unique per pod.
+func workerName(namespace, pod string) string {
+	return "uid-" + namespace + "-" + pod
+}
+
 func makeWorker(namespace, pod string, version int64) *ateapipb.Worker {
 	return &ateapipb.Worker{
+		Metadata: &ateapipb.ResourceMetadata{
+			Name:    workerName(namespace, pod),
+			Version: version,
+		},
 		WorkerNamespace: namespace,
 		WorkerPod:       pod,
-		Version:         version,
+		WorkerPodUid:    workerName(namespace, pod),
+		Status:          &ateapipb.WorkerStatus{},
 	}
 }
 

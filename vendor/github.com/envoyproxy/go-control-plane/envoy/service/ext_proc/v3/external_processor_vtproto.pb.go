@@ -8,6 +8,7 @@ package ext_procv3
 
 import (
 	protohelpers "github.com/planetscale/vtprotobuf/protohelpers"
+	anypb "github.com/planetscale/vtprotobuf/types/known/anypb"
 	durationpb "github.com/planetscale/vtprotobuf/types/known/durationpb"
 	structpb "github.com/planetscale/vtprotobuf/types/known/structpb"
 	proto "google.golang.org/protobuf/proto"
@@ -380,6 +381,28 @@ func (m *ProcessingResponse) MarshalToSizedBufferVTStrict(dAtA []byte) (int, err
 	if m.unknownFields != nil {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
+	}
+	if len(m.TypedDynamicMetadata) > 0 {
+		for k := range m.TypedDynamicMetadata {
+			v := m.TypedDynamicMetadata[k]
+			baseI := i
+			size, err := (*anypb.Any)(v).MarshalToSizedBufferVTStrict(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
+			i--
+			dAtA[i] = 0x12
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x6a
+		}
 	}
 	if m.RequestDrain {
 		i--
@@ -1788,6 +1811,19 @@ func (m *ProcessingResponse) SizeVT() (n int) {
 	}
 	if m.RequestDrain {
 		n += 2
+	}
+	if len(m.TypedDynamicMetadata) > 0 {
+		for k, v := range m.TypedDynamicMetadata {
+			_ = k
+			_ = v
+			l = 0
+			if v != nil {
+				l = (*anypb.Any)(v).SizeVT()
+			}
+			l += 1 + protohelpers.SizeOfVarint(uint64(l))
+			mapEntrySize := 1 + len(k) + protohelpers.SizeOfVarint(uint64(len(k))) + l
+			n += mapEntrySize + 1 + protohelpers.SizeOfVarint(uint64(mapEntrySize))
+		}
 	}
 	n += len(m.unknownFields)
 	return n

@@ -35,6 +35,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	Glutton_WriteRAM_FullMethodName  = "/glutton.Glutton/WriteRAM"
 	Glutton_WriteDisk_FullMethodName = "/glutton.Glutton/WriteDisk"
+	Glutton_ReadDisk_FullMethodName  = "/glutton.Glutton/ReadDisk"
 	Glutton_OpenFD_FullMethodName    = "/glutton.Glutton/OpenFD"
 	Glutton_Ping_FullMethodName      = "/glutton.Glutton/Ping"
 	Glutton_Gossip_FullMethodName    = "/glutton.Glutton/Gossip"
@@ -54,6 +55,8 @@ type GluttonClient interface {
 	// Tells glutton to write to disk using the specified mode. Data
 	// written will be random bytes.
 	WriteDisk(ctx context.Context, in *WriteDiskRequest, opts ...grpc.CallOption) (*WriteDiskResponse, error)
+	// Tells glutton to read from disk using the specified mode.
+	ReadDisk(ctx context.Context, in *ReadDiskRequest, opts ...grpc.CallOption) (*ReadDiskResponse, error)
 	// Tells glutton to make sure it has the specified number of file
 	// descriptors open. It will open or close file descriptors to
 	// hit the desired count (note this count is in addition to the other
@@ -88,6 +91,16 @@ func (c *gluttonClient) WriteDisk(ctx context.Context, in *WriteDiskRequest, opt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WriteDiskResponse)
 	err := c.cc.Invoke(ctx, Glutton_WriteDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gluttonClient) ReadDisk(ctx context.Context, in *ReadDiskRequest, opts ...grpc.CallOption) (*ReadDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadDiskResponse)
+	err := c.cc.Invoke(ctx, Glutton_ReadDisk_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +151,8 @@ type GluttonServer interface {
 	// Tells glutton to write to disk using the specified mode. Data
 	// written will be random bytes.
 	WriteDisk(context.Context, *WriteDiskRequest) (*WriteDiskResponse, error)
+	// Tells glutton to read from disk using the specified mode.
+	ReadDisk(context.Context, *ReadDiskRequest) (*ReadDiskResponse, error)
 	// Tells glutton to make sure it has the specified number of file
 	// descriptors open. It will open or close file descriptors to
 	// hit the desired count (note this count is in addition to the other
@@ -163,6 +178,9 @@ func (UnimplementedGluttonServer) WriteRAM(context.Context, *WriteRAMRequest) (*
 }
 func (UnimplementedGluttonServer) WriteDisk(context.Context, *WriteDiskRequest) (*WriteDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WriteDisk not implemented")
+}
+func (UnimplementedGluttonServer) ReadDisk(context.Context, *ReadDiskRequest) (*ReadDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadDisk not implemented")
 }
 func (UnimplementedGluttonServer) OpenFD(context.Context, *OpenFDRequest) (*OpenFDResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method OpenFD not implemented")
@@ -226,6 +244,24 @@ func _Glutton_WriteDisk_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GluttonServer).WriteDisk(ctx, req.(*WriteDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Glutton_ReadDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).ReadDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_ReadDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).ReadDisk(ctx, req.(*ReadDiskRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -298,6 +334,10 @@ var Glutton_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WriteDisk",
 			Handler:    _Glutton_WriteDisk_Handler,
+		},
+		{
+			MethodName: "ReadDisk",
+			Handler:    _Glutton_ReadDisk_Handler,
 		},
 		{
 			MethodName: "OpenFD",

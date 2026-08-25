@@ -17,13 +17,14 @@ package ateclient
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -36,12 +37,20 @@ import (
 
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
+	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
+)
+
+const (
+	apiServerName = "api.ate-system.svc"
+
+	// serviceDNSSignerName and liveBundleSelector mirror the
+	// clusterTrustBundle projected-volume sources that in-cluster clients
+	// mount to verify ateapi's serving cert.
+	serviceDNSSignerName = "servicedns.podcert.ate.dev/identity"
+	liveBundleSelector   = "podcert.ate.dev/canarying=live"
 )
 
 // Client wraps the gRPC ControlClient and DebugClient and ensures the port-forward connection is closed when done.
@@ -69,7 +78,7 @@ func (c *Client) Close() {
 
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically port-forwards
 // to the ate-api-server pod in the ate-system namespace.
-func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) (*Client, error) {
+func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
 	tp, err := initTracing(ctx, traceEnabled)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize tracing: %w", err)
@@ -77,13 +86,15 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 
 	var cli *Client
 	if endpoint != "" {
-		cli, err = dialDirect(kubeconfigPath, k8sContext, endpoint, traceEnabled)
+		cli, err = dialDirect(ctx, kubeconfigPath, k8sContext, endpoint, tokenFile, traceEnabled)
 	} else {
-		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, traceEnabled)
+		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, tokenFile, traceEnabled)
 	}
 
 	if err != nil {
-		_ = tp.Shutdown(ctx)
+		if tp != nil {
+			_ = tp.Shutdown(ctx)
+		}
 		return nil, err
 	}
 
@@ -91,13 +102,27 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 	return cli, nil
 }
 
-func dialDirect(kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) (*Client, error) {
-	// Always assume TLS to match production behavior
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
+	clientset, err := NewK8sClientset(kubeconfigPath, k8sContext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create k8s client: %w", err)
+	}
+
+	// Verify the server before attaching the bearer token below: the token
+	// must never be sent over an unauthenticated channel.
+	tlsCfg, err := serverTLSConfig(ctx, clientset)
+	if err != nil {
+		return nil, err
+	}
 
 	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithTransportCredentials(creds))
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
 		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
@@ -123,7 +148,7 @@ func LoadConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
 }
 
-func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, traceEnabled bool) (*Client, error) {
+func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool) (*Client, error) {
 	config, err := LoadConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
@@ -134,91 +159,29 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
-	// Look up the 'api' Service to dynamically get its pod selector
-	svc, err := clientset.CoreV1().Services("ate-system").Get(ctx, "api", metav1.GetOptions{})
+	// TODO: Should we special-case a LoadBalancer "api" Service and dial its
+	// address directly instead of port-forwarding?
+	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, "ate-system", "api", 443)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get api service: %w", err)
-	}
-	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
-
-	// Find the pods backing the service
-	pods, err := clientset.CoreV1().Pods("ate-system").List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list ateapi pods: %w", err)
-	}
-	if len(pods.Items) == 0 {
-		return nil, fmt.Errorf("no ate-api-server pods found in ate-system namespace")
-	}
-	targetPod := pods.Items[0]
-
-	// Setup port-forwarding
-	req := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(targetPod.Namespace).
-		Name(targetPod.Name).
-		SubResource("portforward")
-
-	transport, upgrader, err := spdy.RoundTripperFor(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create SPDY transport: %w", err)
-	}
-
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, req.URL())
-
-	stopCh := make(chan struct{})
-	readyCh := make(chan struct{})
-
-	ports := []string{"0:443"} // Port 0 asks OS for a random available local port
-
-	fw, err := portforward.New(dialer, ports, stopCh, readyCh, io.Discard, io.Discard)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create port forwarder: %w", err)
-	}
-
-	errCh := make(chan error, 1)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := fw.ForwardPorts(); err != nil {
-			errCh <- fmt.Errorf("port forwarding failed: %w", err)
-		}
-	}()
-
-	// Wait for the tunnel to be ready, an error, or context cancellation
-	select {
-	case <-readyCh:
-		// Tunnel is ready!
-	case err := <-errCh:
 		return nil, err
-	case <-ctx.Done():
-		return nil, ctx.Err()
 	}
-
-	forwardedPorts, err := fw.GetPorts()
-	if err != nil || len(forwardedPorts) == 0 {
-		close(stopCh)
-		return nil, fmt.Errorf("failed to get forwarded ports: %w", err)
-	}
-
-	localPort := forwardedPorts[0].Local
 	localEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
 
-	// The ate-api-server uses TLS with pod certificates, so we need InsecureSkipVerify
-	// to talk to it over localhost.
-	transportCreds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-
-	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithTransportCredentials(transportCreds))
-	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	jwtOpts, err := jwtDialOptions(ctx, clientset)
+	tlsCfg, err := serverTLSConfig(ctx, clientset)
 	if err != nil {
-		close(stopCh)
+		stopForward()
 		return nil, err
 	}
-	opts = append(opts, jwtOpts...)
+
+	var opts []grpc.DialOption
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
+	if err != nil {
+		stopForward()
+		return nil, err
+	}
+	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
 		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
@@ -226,7 +189,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 
 	conn, err := grpc.NewClient(localEndpoint, opts...)
 	if err != nil {
-		close(stopCh)
+		stopForward()
 		return nil, fmt.Errorf("failed to dial gRPC over tunnel: %w", err)
 	}
 
@@ -234,26 +197,57 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		ControlClient: ateapipb.NewControlClient(conn),
 		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
-		cancel: func() {
-			close(stopCh)
-			wg.Wait()
-		},
+		cancel:        stopForward,
 	}, nil
 }
 
-func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grpc.DialOption, error) {
-	jwtMode, err := isJWTMode(ctx, clientset)
+func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.Config, error) {
+	ctbs, err := clientset.CertificatesV1beta1().ClusterTrustBundles().List(ctx, metav1.ListOptions{
+		LabelSelector: liveBundleSelector,
+	})
 	if err != nil {
-		return nil, err
-	}
-	if !jwtMode {
-		return nil, nil
+		return nil, fmt.Errorf("failed to list ClusterTrustBundles: %w", err)
 	}
 
+	pool := x509.NewCertPool()
+	found := false
+	for _, ctb := range ctbs.Items {
+		if ctb.Spec.SignerName != serviceDNSSignerName {
+			continue
+		}
+		if !pool.AppendCertsFromPEM([]byte(ctb.Spec.TrustBundle)) {
+			return nil, fmt.Errorf("ClusterTrustBundle %q contains no valid certificates", ctb.ObjectMeta.Name)
+		}
+		found = true
+	}
+	if !found {
+		return nil, fmt.Errorf("no live ClusterTrustBundle found for signer %q", serviceDNSSignerName)
+	}
+
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    pool,
+		ServerName: apiServerName,
+	}, nil
+}
+
+// bearerTokenDialOption attaches the configured token, or mints an ate-client
+// ServiceAccount token when tokenFile is empty.
+func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset, tokenFile string) (grpc.DialOption, error) {
+	if tokenFile == "-" {
+		creds, err := readBearerToken(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read bearer token from stdin: %w", err)
+		}
+		return grpc.WithPerRPCCredentials(creds), nil
+	}
+	if tokenFile != "" {
+		return grpc.WithPerRPCCredentials(fileBearerTokenCreds(tokenFile)), nil
+	}
 	expirationSeconds := int64(3600)
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
-			Audiences:         []string{"api.ate-system.svc"},
+			Audiences:         []string{apiServerName},
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
@@ -264,38 +258,19 @@ func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grp
 	if token.Status.Token == "" {
 		return nil, fmt.Errorf("failed to request ateapi bearer token: token response was empty")
 	}
-	return []grpc.DialOption{grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token))}, nil
+	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
 }
 
-func isJWTMode(ctx context.Context, clientset *kubernetes.Clientset) (bool, error) {
-	// TODO: Replace deployment introspection with an explicit client-readable
-	// config file once ateapi auth mode is part of install/runtime config.
-	deployment, err := clientset.AppsV1().Deployments("ate-system").Get(ctx, "ate-api-server", metav1.GetOptions{})
+func readBearerToken(r io.Reader) (bearerTokenCreds, error) {
+	b, err := io.ReadAll(r)
 	if err != nil {
-		return false, fmt.Errorf("failed to get ate-api-server deployment: %w", err)
+		return "", err
 	}
-	for _, container := range deployment.Spec.Template.Spec.Containers {
-		if container.Name != "ate-api-server" {
-			continue
-		}
-		return isJWTAuthModeArg(container.Args), nil
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", fmt.Errorf("bearer token is empty")
 	}
-	return false, fmt.Errorf("failed to find ate-api-server container in deployment")
-}
-
-func isJWTAuthModeArg(args []string) bool {
-	for i, arg := range args {
-		if arg == "--auth-mode=jwt" {
-			return true
-		}
-		if strings.HasPrefix(arg, "--auth-mode=") {
-			return strings.TrimPrefix(arg, "--auth-mode=") == "jwt"
-		}
-		if arg == "--auth-mode" && i+1 < len(args) {
-			return args[i+1] == "jwt"
-		}
-	}
-	return false
+	return bearerTokenCreds(token), nil
 }
 
 type bearerTokenCreds string
@@ -309,7 +284,31 @@ func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (ma
 
 func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
 
+type fileBearerTokenCreds string
+
+func (c fileBearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	b, err := os.ReadFile(string(c))
+	if err != nil {
+		return nil, fmt.Errorf("read bearer token file %q: %w", c, err)
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return nil, fmt.Errorf("bearer token file %q is empty", c)
+	}
+	return map[string]string{"authorization": "Bearer " + token}, nil
+}
+
+func (c fileBearerTokenCreds) RequireTransportSecurity() bool { return true }
+
+// initTracing returns (nil, nil) when tracing is disabled: the OTel globals
+// stay noop so no traceparent is injected, the server roots the trace, and the
+// server side sampling ratio applies. A NeverSample provider here would
+// instead pin every ParentBased sampler downstream to not sampled.
 func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, error) {
+	if !enabled {
+		return nil, nil
+	}
+
 	res, err := resource.New(ctx,
 		resource.WithSchemaURL(semconv.SchemaURL),
 		resource.WithAttributes(
@@ -320,14 +319,9 @@ func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, e
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	sampler := sdktrace.NeverSample()
-	if enabled {
-		sampler = sdktrace.AlwaysSample()
-	}
-
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sampler),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
@@ -357,4 +351,13 @@ func NewK8sClientset(kubeconfigPath, k8sContext string) (*kubernetes.Clientset, 
 		return nil, err
 	}
 	return kubernetes.NewForConfig(config)
+}
+
+// NewMetricsClientset creates a new Kubernetes Metrics Clientset using the provided kubeconfig path and context.
+func NewMetricsClientset(kubeconfigPath, k8sContext string) (*metricsv1beta1.Clientset, error) {
+	config, err := LoadConfig(kubeconfigPath, k8sContext)
+	if err != nil {
+		return nil, err
+	}
+	return metricsv1beta1.NewForConfig(config)
 }

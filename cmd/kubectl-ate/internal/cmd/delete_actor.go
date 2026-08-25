@@ -18,11 +18,13 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
 
 var deleteAtespaceFlag string
+var deleteActorAnyStateFlag bool
 
 var deleteActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
@@ -30,21 +32,22 @@ var deleteActorCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		c, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return err
 		}
 		defer c.Close()
 
-		name := args[0]
+		actorRef := resources.ActorRef{Atespace: deleteAtespaceFlag, Name: args[0]}
 		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: deleteAtespaceFlag, Name: name},
+			Actor:    actorRef.ToObjectRef(),
+			AnyState: deleteActorAnyStateFlag,
 		})
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("actor %q deleted\n", name)
+		fmt.Printf("actor %q deleted\n", actorRef.Name)
 		return nil
 	},
 }
@@ -52,5 +55,6 @@ var deleteActorCmd = &cobra.Command{
 func init() {
 	deleteActorCmd.Flags().StringVarP(&deleteAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = deleteActorCmd.MarkFlagRequired("atespace")
+	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "Delete the actor from any state")
 	deleteCmd.AddCommand(deleteActorCmd)
 }

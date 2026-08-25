@@ -15,43 +15,42 @@
 package ateapiauth
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"os"
-	"strings"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/k8sresolver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"k8s.io/client-go/kubernetes"
 )
 
-const (
-	DefaultServiceAccountCAFile    = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	DefaultServiceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-)
+const DefaultServiceAccountCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
-// ClientConfig configures how to dial the ateapi gRPC server.
-//
-//   - Mode=ModeMTLS: insecure TLS dial (InsecureSkipVerify=true). Client
-//     identity is expected to come from mTLS credentials projected into
-//     the pod (servicedns.podcert.ate.dev). No app-level credentials.
-//   - Mode=ModeJWT: validates the server cert against CAFile, sends a Bearer
-//     token from TokenFile as per-RPC credentials.
+// roundRobinServiceConfig spreads RPCs across every address the resolver
+// returns.
+const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
+
+// ClientConfig configures how to dial the ateapi gRPC server with mutual TLS.
+// The credential bundle is re-read on every handshake so in-place
+// pod-certificate rotations are picked up.
 type ClientConfig struct {
-	Mode Mode
-
 	// CAFile is a PEM file containing CA certs that sign the server cert.
-	// Required in all modes. Ignored for ModeMTLS until mTLS verification is
-	// fully wired.
+	// Required.
 	CAFile string
 
 	// ServerName overrides SNI / hostname verification. Optional.
 	ServerName string
 
-	// TokenFile is a path to a Kubernetes projected ServiceAccount token used
-	// as a Bearer credential. Required for ModeJWT.
-	TokenFile string
+	// ClientCredBundle is a PEM file containing the client certificate chain
+	// and PKCS8 private key presented to the server. Required.
+	ClientCredBundle string
+
+	// K8sClient is an optional Kubernetes client. When provided, an EndpointSlice
+	// resolver builder using this client will be attached to DialOptions.
+	K8sClient kubernetes.Interface
 }
 
 // DialOptions returns the grpc.DialOption set described by cfg, suitable to
@@ -60,57 +59,39 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	if cfg.CAFile == "" {
 		return nil, fmt.Errorf("ateapiauth: CAFile is required")
 	}
-	switch cfg.Mode {
-	case "", ModeMTLS:
-		tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in
-		return []grpc.DialOption{
-			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-		}, nil
-
-	case ModeJWT:
-		if cfg.TokenFile == "" {
-			return nil, fmt.Errorf("ateapiauth: jwt mode requires TokenFile")
-		}
-		caPEM, err := os.ReadFile(cfg.CAFile)
-		if err != nil {
-			return nil, fmt.Errorf("ateapiauth: reading CA file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("ateapiauth: no certificates found in CA file %q", cfg.CAFile)
-		}
-		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			RootCAs:    pool,
-			ServerName: cfg.ServerName,
-		}
-		return []grpc.DialOption{
-			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-			grpc.WithPerRPCCredentials(&fileTokenCreds{path: cfg.TokenFile}),
-		}, nil
-
-	default:
-		return nil, fmt.Errorf("ateapiauth: unknown client mode %q", cfg.Mode)
+	if cfg.ClientCredBundle == "" {
+		return nil, fmt.Errorf("ateapiauth: a client credential bundle (mTLS) is required")
 	}
-}
-
-// fileTokenCreds reads a Kubernetes projected SA token from disk for every
-// RPC. Kubernetes refreshes the file in place; reading it each time picks up
-// rotations.
-type fileTokenCreds struct {
-	path string
-}
-
-func (c *fileTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	b, err := os.ReadFile(c.path)
+	pool, err := loadCAPool(cfg.CAFile)
 	if err != nil {
-		return nil, fmt.Errorf("ateapiauth: reading token file %q: %w", c.path, err)
+		return nil, err
 	}
-	tok := strings.TrimSpace(string(b))
-	if tok == "" {
-		return nil, fmt.Errorf("ateapiauth: token file %q is empty", c.path)
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    pool,
+		ServerName: cfg.ServerName,
 	}
-	return map[string]string{"authorization": "Bearer " + tok}, nil
+
+	opts := []grpc.DialOption{
+		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
+	}
+	if cfg.K8sClient != nil {
+		opts = append(opts, grpc.WithResolvers(k8sresolver.NewBuilder(cfg.K8sClient)))
+	}
+
+	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	return opts, nil
 }
 
-func (c *fileTokenCreds) RequireTransportSecurity() bool { return true }
+func loadCAPool(caFile string) (*x509.CertPool, error) {
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("ateapiauth: reading CA file: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("ateapiauth: no certificates found in CA file %q", caFile)
+	}
+	return pool, nil
+}
