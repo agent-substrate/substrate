@@ -44,10 +44,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
@@ -71,12 +71,13 @@ var (
 	otlpRelaySocket = flag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	atunnelListenAddress       = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
-	workerCredentialBundle     = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
-	podIdentityTrustBundle     = flag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
-	atunnelClientIdentity      = flag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
-	atunnelEgressListenAddress = flag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
-	egressGatewayTrustBundle   = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+	atunnelListenAddress        = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	atunnelConnectListenAddress = flag.String("atunnel-connect-listen-address", "0.0.0.0:444", "Address for actor ingress mTLS CONNECT")
+	workerCredentialBundle      = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
+	podIdentityTrustBundle      = flag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
+	atunnelClientIdentity       = flag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelEgressListenAddress  = flag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	egressGatewayTrustBundle    = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 )
 
 const (
@@ -221,6 +222,16 @@ func do(ctx context.Context) error {
 		}
 	}()
 	slog.InfoContext(ctx, "atunnel serving", slog.String("address", *atunnelListenAddress))
+	atunnelConnectListener, err := net.Listen("tcp", *atunnelConnectListenAddress)
+	if err != nil {
+		return fmt.Errorf("while opening atunnel CONNECT listener: %w", err)
+	}
+	go func() {
+		if err := atunnelIngress.ServeConnect(ctx, atunnelConnectListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor CONNECT ingress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel CONNECT serving", slog.String("address", *atunnelConnectListenAddress))
 	atunnelEgress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
 	if err != nil {
 		return fmt.Errorf("while configuring atunnel egress: %w", err)
@@ -435,7 +446,7 @@ type AteomService struct {
 	// poller through all of them. The writers keep holding lock; the point is the
 	// reader. As there, the type makes a lock-free read possible without making
 	// one happen — GetWorkloadStats must not take lock at all.
-	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+	activeActor atomic.Pointer[resources.ActorAttribution]
 
 	// guestStats is what GetWorkloadStats measures with: the kata-agent client
 	// and the guest containers to sum. Nil whenever there is no guest to ask —

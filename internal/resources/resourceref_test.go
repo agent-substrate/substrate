@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"log/slog"
 	"reflect"
 	"testing"
 
@@ -26,9 +27,8 @@ import (
 // is expected.
 func TestRefAliasesAreDistinctTypes(t *testing.T) {
 	types := map[string]reflect.Type{
-		"ActorRef":                reflect.TypeFor[ActorRef](),
-		"ActorTemplateRef":        reflect.TypeFor[ActorTemplateRef](),
-		"ActorTemplateVersionRef": reflect.TypeFor[ActorTemplateVersionRef](),
+		"ActorRef":         reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef": reflect.TypeFor[ActorTemplateRef](),
 	}
 	seen := make(map[reflect.Type]string)
 	for name, typ := range types {
@@ -36,6 +36,47 @@ func TestRefAliasesAreDistinctTypes(t *testing.T) {
 			t.Errorf("%s and %s are the same type; the phantom kind marker was lost", name, other)
 		}
 		seen[typ] = name
+	}
+}
+
+// The type attr comes from the type parameter alone, so a zero ref — where no
+// value of R was ever constructed — must log without panicking and still name
+// its resource kind.
+func TestResourceRefLogValue(t *testing.T) {
+	tests := []struct {
+		name string
+		val  slog.Value
+		want map[string]string
+	}{
+		{
+			name: "zero actor ref",
+			val:  ActorRef{}.LogValue(),
+			want: map[string]string{"type": "*ateapipb.Actor", "atespace": "", "name": ""},
+		},
+		{
+			name: "zero template ref",
+			val:  ActorTemplateRef{}.LogValue(),
+			want: map[string]string{"type": "*ateapipb.ActorTemplate", "atespace": "", "name": ""},
+		},
+		{
+			name: "populated actor ref",
+			val:  ActorRef{Atespace: "team-a", Name: "act-1"}.LogValue(),
+			want: map[string]string{"type": "*ateapipb.Actor", "atespace": "team-a", "name": "act-1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if kind := tt.val.Kind(); kind != slog.KindGroup {
+				t.Fatalf("LogValue() kind = %v, want %v", kind, slog.KindGroup)
+			}
+			got := make(map[string]string)
+			for _, attr := range tt.val.Group() {
+				got[attr.Key] = attr.Value.String()
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("LogValue() attrs = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -171,51 +212,6 @@ func TestActorTemplateRefFromActorTemplate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ActorTemplateRefFromActorTemplate(tt.template); got != tt.want {
 				t.Errorf("ActorTemplateRefFromActorTemplate() = %+v, want %+v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestActorTemplateVersionRefString(t *testing.T) {
-	got := ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-1-v1"}.String()
-	if want := "team-a/tmpl-1-v1"; got != want {
-		t.Errorf("String() = %q, want %q", got, want)
-	}
-}
-
-func TestActorTemplateVersionRefObjectRefRoundTrip(t *testing.T) {
-	versionRef := ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-1-v1"}
-
-	obj := versionRef.ToObjectRef()
-	if obj.GetAtespace() != "team-a" || obj.GetName() != "tmpl-1-v1" {
-		t.Errorf("ToObjectRef() = (%q, %q), want (team-a, tmpl-1-v1)", obj.GetAtespace(), obj.GetName())
-	}
-	if got := ActorTemplateVersionRefFromObjectRef(obj); got != versionRef {
-		t.Errorf("round-trip = %+v, want %+v", got, versionRef)
-	}
-}
-
-func TestActorTemplateVersionRefFromActorTemplateVersion(t *testing.T) {
-	tests := []struct {
-		name    string
-		version *ateapipb.ActorTemplateVersion
-		want    ActorTemplateVersionRef
-	}{
-		{
-			name: "populated",
-			version: &ateapipb.ActorTemplateVersion{Metadata: &ateapipb.ResourceMetadata{
-				Atespace: "team-a",
-				Name:     "tmpl-1-v1",
-			}},
-			want: ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-1-v1"},
-		},
-		{"nil version", nil, ActorTemplateVersionRef{}},
-		{"nil metadata", &ateapipb.ActorTemplateVersion{}, ActorTemplateVersionRef{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ActorTemplateVersionRefFromActorTemplateVersion(tt.version); got != tt.want {
-				t.Errorf("ActorTemplateVersionRefFromActorTemplateVersion() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

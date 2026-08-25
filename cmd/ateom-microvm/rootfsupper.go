@@ -39,28 +39,27 @@ package main
 // Snapshots: the upper does not ride in guest memory, so a FULL snapshot
 // ships it as a tar (rootfsUpperTarFile), taken while the guest is paused
 // (the share is write-through, so a paused guest's completed writes are
-// already in the upper). Restore is self-describing — the tar's presence is
-// what says the snapshot carries a host-merged rootfs — which is also what
-// keeps legacy tmpfs-upper snapshots restorable: no tar means the share
-// presents the bare image and the guest's own in-memory upper takes over. A
-// DATA snapshot deliberately excludes rootfs state: the workload cold-starts
-// on restore.
+// already in the upper). Every FULL snapshot carries one; restoring anything
+// older fails at the untar. A DATA snapshot deliberately excludes rootfs state:
+// the workload cold-starts on restore.
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/tarutil"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
 // rootfsUpperTarFile is the snapshot file holding the tar of the actor's
-// rootfs uppers. Its entries are <containerID>/fs/... and <containerID>/work/...
-// relative to rootfsUpperDir — the same layout kata.UpperWorkDirs mounts — so
-// extraction restores exactly the tree the merged overlays (and the guest's
-// find-paths) expect.
+// rootfs uppers. Its entries are <containerID>/fs/... relative to
+// rootfsUpperDir — the upperdir half of the layout kata.UpperWorkDirs mounts —
+// so extraction restores exactly the tree the merged overlays (and the guest's
+// find-paths) expect. The workdir half is deliberately absent (see
+// tarRootfsUpper); StageMergedRootfs recreates it at mount.
 const rootfsUpperTarFile = "rootfs-upper.tar"
 
 // rootfsUpperDir is the host directory backing the actor's rootfs overlay
@@ -86,32 +85,23 @@ func resetRootfsUpperDir(actorUID string) error {
 	return nil
 }
 
-// actorHasDiskUpper reports whether the running actor's rootfs is host-merged,
-// by the host directory only a merged-rootfs boot/restore creates (and
-// teardownActor removes; a legacy restore explicitly removes any crash-orphaned
-// leftover, so "directory absent" means the same thing on every entry path).
-// A LEGACY actor — restored from a snapshot taken by the retired tmpfs-upper
-// implementation — has no directory: its upper lives inside guest memory, and
-// its checkpoints must keep capturing it there.
-func actorHasDiskUpper(actorUID string) bool {
-	_, err := os.Stat(rootfsUpperDir(actorUID))
-	return err == nil
-}
-
-// snapshotHasRootfsUpper reports whether a snapshot carries host-merged rootfs
-// uppers — i.e. whether restore must re-materialize them and mount the merged
-// trees (vs a legacy snapshot, whose share presents the bare image).
-func snapshotHasRootfsUpper(snapshotDir string) bool {
-	_, err := os.Stat(filepath.Join(snapshotDir, rootfsUpperTarFile))
-	return err == nil
-}
-
 // tarRootfsUpper archives the actor's rootfs uppers (dir) into the checkpoint
 // directory. The caller must have paused the guest first: virtiofsd is
 // write-through, so a completed guest write has reached the host overlay's
 // upper by then, but a running guest could still add more after the walk.
+//
+// Each container's overlay WORKDIR (<cid>/work) is excluded: with index=off
+// pinned on the mount (see kata.StageMergedRootfs) a restored workdir is
+// inert — overlayfs wipes and rebuilds it at mount, and StageMergedRootfs
+// recreates the directory regardless — so archiving it is dead weight on the
+// suspend path. Not always trivial weight, either: a copy-up in flight when
+// the guest paused can leave file-sized temp data there.
 func tarRootfsUpper(ctx context.Context, dir, checkpointDir string) error {
-	if err := tarutil.Create(ctx, filepath.Join(checkpointDir, rootfsUpperTarFile), dir); err != nil {
+	skipWorkdir := func(rel string) bool {
+		parts := strings.Split(rel, "/")
+		return len(parts) == 2 && parts[1] == "work"
+	}
+	if err := tarutil.CreateFiltered(ctx, filepath.Join(checkpointDir, rootfsUpperTarFile), dir, skipWorkdir); err != nil {
 		return fmt.Errorf("while archiving rootfs uppers from %q: %w", dir, err)
 	}
 	return nil

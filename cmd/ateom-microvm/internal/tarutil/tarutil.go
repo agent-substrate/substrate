@@ -54,10 +54,21 @@ import (
 // srcDir itself is not an entry.
 //
 // Regular files, directories, symlinks, FIFOs, and device nodes are archived
-// with their mode, ownership, modification time, and user.* xattrs. A file
-// with multiple links inside srcDir is archived once and referenced as a
-// hardlink thereafter. Sockets are skipped (see writeTree).
+// with their mode, ownership, modification time, and user.* / trusted.overlay.*
+// xattrs. A file with multiple links inside srcDir is archived once and
+// referenced as a hardlink thereafter. Sockets are skipped (see writeTree).
 func Create(ctx context.Context, tarPath, srcDir string) error {
+	return CreateFiltered(ctx, tarPath, srcDir, nil)
+}
+
+// SkipFunc reports whether an archive entry should be omitted, given its
+// slash-separated path relative to the archive root. Returning true for a
+// directory omits its entire subtree.
+type SkipFunc func(rel string) bool
+
+// CreateFiltered is Create with entries omitted where skip returns true. A nil
+// skip archives everything.
+func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) error {
 	f, err := os.Create(tarPath)
 	if err != nil {
 		return fmt.Errorf("creating tar %q: %w", tarPath, err)
@@ -65,7 +76,7 @@ func Create(ctx context.Context, tarPath, srcDir string) error {
 	defer f.Close()
 
 	tw := tar.NewWriter(f)
-	if err := writeTree(ctx, tw, srcDir); err != nil {
+	if err := writeTree(ctx, tw, srcDir, skip); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -80,9 +91,10 @@ func Create(ctx context.Context, tarPath, srcDir string) error {
 }
 
 // writeTree walks srcDir in lexical order (filepath.WalkDir) and writes one
-// entry per path. The deterministic order keeps archives of identical trees
+// entry per path, omitting entries (and, for directories, subtrees) that skip
+// selects. The deterministic order keeps archives of identical trees
 // byte-comparable, which makes snapshot diffs meaningful.
-func writeTree(ctx context.Context, tw *tar.Writer, srcDir string) error {
+func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc) error {
 	// Maps an already-archived multi-link inode to the name it was archived
 	// under, so later links become tar hardlink entries instead of copies.
 	linked := map[inodeKey]string{}
@@ -96,6 +108,12 @@ func writeTree(ctx context.Context, tw *tar.Writer, srcDir string) error {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+		if skip != nil && skip(filepath.ToSlash(rel)) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 

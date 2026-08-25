@@ -55,34 +55,10 @@ KO_DOCKER_REPO="${KO_DOCKER_REPO:-}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
-ATE_ATEAPI_CLIENT_AUTH="${ATE_ATEAPI_CLIENT_AUTH:-cert}"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --ateapi-client-auth=*) ATE_ATEAPI_CLIENT_AUTH="${1#*=}" ;;
-    --ateapi-client-auth)
-      if [[ $# -lt 2 ]]; then
-        echo "Error: --ateapi-client-auth requires cert or token" >&2
-        exit 1
-      fi
-      shift
-      ATE_ATEAPI_CLIENT_AUTH="$1"
-      ;;
-    *)
-      echo "Error: unknown argument $1" >&2
-      exit 1
-      ;;
-  esac
-  shift
-done
-
-case "${ATE_ATEAPI_CLIENT_AUTH}" in
-  cert|token) ;;
-  *)
-    echo "Error: --ateapi-client-auth must be cert or token, got '${ATE_ATEAPI_CLIENT_AUTH}'" >&2
-    exit 1
-    ;;
-esac
+if [[ $# -gt 0 ]]; then
+  echo "Error: unknown argument $1" >&2
+  exit 1
+fi
 
 if [[ -z "${KO_DOCKER_REPO}" ]]; then
   echo "Error: KO_DOCKER_REPO is required (set it in .ate-dev-env.sh for GKE," >&2
@@ -102,10 +78,10 @@ log() {
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth="${ATE_ATEAPI_CLIENT_AUTH}"
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system --ateapi-client-auth="${ATE_ATEAPI_CLIENT_AUTH}"
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system
 fi
 
 # --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
@@ -113,7 +89,7 @@ fi
 # the arm64 virtiofsd sha at deploy (see that script for details). Ordering
 # matters: the control plane must be up so the SandboxConfig CRD exists.
 log "Installing micro-VM dependencies..."
-hack/install-microvm-deps.sh --install
+KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install
 
 # --- 3. apply the demo ------------------------------------------------------
 # Use ./hack/run-tool.sh ko so ko honors KO_DOCKER_REPO (the committed .ko.yaml base

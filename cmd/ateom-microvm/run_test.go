@@ -21,10 +21,12 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
@@ -196,5 +198,47 @@ func TestInitParams(t *testing.T) {
 	}
 	if strings.Contains(systemd, "init=") {
 		t.Errorf("initParams(false) = %q, must not override init", systemd)
+	}
+}
+
+// The guest must log over virtio-console, not the emulated UART: the UART traps to
+// the VMM per byte, which costs ~800ms of cold boot on the kata guest's boot log.
+// Debug mode adds the UART back (with earlycon) to capture the early messages hvc0
+// is too late to see.
+func TestBuildVMConfigConsole(t *testing.T) {
+	const id = "actor-1"
+	consoleLog := kata.ConsoleLogPath(id)
+
+	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, false)
+	if cfg.Console == nil || cfg.Console.Mode != "File" || cfg.Console.File != consoleLog {
+		t.Errorf("Console = %+v, want File %q", cfg.Console, consoleLog)
+	}
+	if cfg.Serial == nil || cfg.Serial.Mode != "Off" {
+		t.Errorf("Serial = %+v, want mode Off", cfg.Serial)
+	}
+	if !strings.Contains(cfg.Payload.Cmdline, "console=hvc0") {
+		t.Errorf("cmdline = %q, want console=hvc0", cfg.Payload.Cmdline)
+	}
+	if strings.Contains(cfg.Payload.Cmdline, "earlycon") {
+		t.Errorf("cmdline = %q, must not pay for earlycon outside debug mode", cfg.Payload.Cmdline)
+	}
+
+	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, true)
+	if dbg.Serial == nil || dbg.Serial.Mode != "File" || dbg.Serial.File != kata.SerialLogPath(id) {
+		t.Errorf("debug Serial = %+v, want File %q", dbg.Serial, kata.SerialLogPath(id))
+	}
+	if !strings.Contains(dbg.Payload.Cmdline, "earlycon=") {
+		t.Errorf("debug cmdline = %q, want an earlycon", dbg.Payload.Cmdline)
+	}
+}
+
+// The SIGTERM path signals these ids over ttrpc, and the agent rejects an id it
+// does not know with InvalidContainerId — which aborts the whole graceful
+// shutdown, so a stale id here silently costs the guest its clean exit.
+func TestWorkloadIDs(t *testing.T) {
+	ctrs := []actorContainer{{name: "counter"}, {name: "sidecar"}}
+	got := workloadIDs(ctrs)
+	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
+		t.Errorf("workloadIDs() = %v, want %v", got, want)
 	}
 }

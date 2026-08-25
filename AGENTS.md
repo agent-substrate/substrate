@@ -57,6 +57,13 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Copyright Headers**: All files must contain appropriate copyright and license headers. See templates in `hack/boilerplate/`.
 - **Modularity**: Submit small, focused Pull Requests that touch a limited part of the codebase for easier reviews and rebasing.
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
+- **Comments**: Keep them brief and to the point. Comment the final state of the code, not the path taken to it — a problem that only existed partway through writing the change is noise to the next reader, as is a pointer to a scratch or planning file that isn't in the repository.
+- **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
+
+## Commit Messages
+
+- **Describe the change and why it was needed**: The message is read on `main` long after the PR branch is gone, so it should stand on its own.
+- **No issue or PR references**: Leave out `#1234`, `Fixes #1234`, and GitHub URLs. GitHub renders them as cross-references on the linked thread, and rebases or force-pushes repeat them. Put that context in the pull request description instead, where it belongs to the review rather than to the permanent history.
 
 ## Testing Instructions
 

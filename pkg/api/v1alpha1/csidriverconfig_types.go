@@ -43,6 +43,27 @@ type CSIDriverConfigSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^unix://.+$`
 	NodeSocketOverride string `json:"nodeSocketOverride,omitempty"`
+
+	// TLS configures TLS/mTLS for the connection to the ControllerEndpoint.
+	// +optional
+	TLS *CSIDriverTLSConfig `json:"tls,omitempty"`
+}
+
+// CSIDriverTLSConfig holds TLS and mTLS configuration for CSI driver connections.
+// +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.usePodIdentity) && self.usePodIdentity)",message="tls.usePodIdentity must be true when tls.enabled is true; manual certificates are not yet supported"
+type CSIDriverTLSConfig struct {
+	// Enabled controls whether TLS is used.
+	// +required
+	Enabled bool `json:"enabled"`
+
+	// TODO: Add alternative support for manual certs by adding SecretReference fields.
+	// UsePodIdentity indicates whether to reuse Substrate's Pod Identity (SPIFFE) certificates.
+	// +optional
+	UsePodIdentity bool `json:"usePodIdentity,omitempty"`
+
+	// ServerName override for TLS verification.
+	// +optional
+	ServerName string `json:"serverName,omitempty"`
 }
 
 // CSIDriverConfig is the Schema for the csidriverconfigs API

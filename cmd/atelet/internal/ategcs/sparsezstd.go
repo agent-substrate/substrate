@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
@@ -79,12 +78,8 @@ func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err
 		return 0, 0, err
 	}
 
-	zw, err := zstd.NewWriter(dst,
-		zstd.WithEncoderLevel(zstd.SpeedFastest),
-		zstd.WithEncoderConcurrency(runtime.GOMAXPROCS(0)))
-	if err != nil {
-		return 0, 0, err
-	}
+	// One worker per chunk the file can fill, so a small object does not pay for a pool.
+	zw := newParZstd(dst, int(size/parZstdChunk)+1)
 	// fail closes the encoder before returning err (Close flushes/frees state).
 	fail := func(e error) (int64, int64, error) {
 		zw.Close()

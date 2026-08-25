@@ -60,13 +60,15 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-x123",
 			SandboxClass:    "gvisor",
-			Assignment: &ateapipb.Assignment{
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "ate-demo-counter",
-					Name:     "my-counter-1",
+			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "ate-demo-counter",
+						Name:     "my-counter-1",
+					},
 				},
 			},
-			Labels: map[string]string{"ate.dev/worker-pool": "counter"},
 		},
 		{
 			WorkerNamespace: "ate-demo-counter",
@@ -174,16 +176,20 @@ func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "microvm",
-			Assignment: &ateapipb.Assignment{
-				Actor: &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					Actor: &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
+				},
 			},
 		},
 		{
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-2",
-			Assignment: &ateapipb.Assignment{
-				Actor: &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					Actor: &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
+				},
 			},
 		},
 	}

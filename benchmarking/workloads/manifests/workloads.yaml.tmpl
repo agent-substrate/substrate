@@ -46,6 +46,13 @@ spec:
   - name: sleep
     image: busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
     command: ["/bin/sleep", "1000000"]
+  # Without a limit a microvm actor gets the kata default 2 GiB guest, and
+  # anything the guest kernel caches rides along in the memory snapshot —
+  # bigger guest, bigger snapshot, slower suspend/resume. microvm requires at
+  # least 256Mi (128Mi VMM reserve + 128Mi guest floor).
+  resources:
+    limits:
+      memory: ${ACTOR_MEMORY}
   workerSelector:
     matchLabels:
       workload: benchmark-ateom
@@ -73,13 +80,111 @@ spec:
     - "--metrics-listen-addr=:9090"
     - "--data-dir=/tmp/glutton"
     - "--mode=http"
+    # Substrate puts no OTLP configuration in an actor container:
+    # resolveActorEnv in cmd/atelet/oci.go merges the env of the ActorTemplate
+    # and the ENV of the image, and nothing more. Without the value below, the
+    # SDK uses its default localhost:4317. No process listens on that address
+    # in the sandbox, thus substrate discards each actor span with no error
+    # message. You cannot measure the actor telemetry until you set this value.
+    env:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: "${OTLP_ENDPOINT}"
+    # The telemetry meter counts by service.name. Thus this value keeps the
+    # actor volume separate from the volume of the control plane. See
+    # benchmarking/telemetry/README.md.
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: "service.name=glutton-actor"
     # Hold ResumeActor open until port 80 actually answers.
     readyz:
       httpGet:
         path: /readyz
         port: 80
+  # See the note on the sleep template: unset means the 2 GiB microvm default,
+  # which the benchmarks should not silently inherit. Raise ${ACTOR_MEMORY}
+  # for suites that exercise glutton's WriteRAM path.
+  resources:
+    limits:
+      memory: ${ACTOR_MEMORY}
   workerSelector:
     matchLabels:
       workload: benchmark-ateom
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/benchmark-workloads/glutton/
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: glutton-durdir-data
+  namespace: benchmark-workloads
+spec:
+  # Must match the WorkerPool's sandboxClass so snapshots stay within a class.
+  sandboxClass: ${SANDBOX_CLASS}
+  containers:
+  - name: glutton
+    image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+    command:
+    - "/ko-app/glutton"
+    - "--grpc-listen-addr=:80"
+    - "--metrics-listen-addr=:9090"
+    - "--data-dir=/var/lib/glutton"
+    - "--mode=http"
+    # Data-scope resume is a cold boot; without this the router can reach the
+    # sandbox before glutton is listening.
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /var/lib/glutton
+  volumes:
+  - name: data
+    durableDir: {}
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Data    # suspend uploads ONLY the durable dir
+    onResume:
+      fromData: ColdBoot
+    location: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-data/
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: glutton-durdir-full
+  namespace: benchmark-workloads
+spec:
+  # Must match the WorkerPool's sandboxClass so snapshots stay within a class.
+  sandboxClass: ${SANDBOX_CLASS}
+  containers:
+  - name: glutton
+    image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+    command:
+    - "/ko-app/glutton"
+    - "--grpc-listen-addr=:80"
+    - "--metrics-listen-addr=:9090"
+    - "--data-dir=/var/lib/glutton"
+    - "--mode=http"
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /var/lib/glutton
+  volumes:
+  - name: data
+    durableDir: {}
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Full
+    location: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-full/

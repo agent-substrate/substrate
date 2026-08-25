@@ -113,10 +113,10 @@ func NewActorWorkflow(
 // ActorWorkflow and nothing more.
 type actorWorkflowStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
-	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
+	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
 	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
 	AcquireLock(ctx context.Context, key string) (*store.Lock, error)

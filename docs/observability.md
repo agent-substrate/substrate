@@ -6,21 +6,23 @@ This guide explains how Agent Substrate achieves observability across these susp
 
 ## The Observability Model
 
-To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
-* `ate.dev/actor_name`: The name of the actor (e.g., `my-counter-1` or `test`).
-* `ate.dev/actor_atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
-* `ate.dev/actor_uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
-* `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
-* `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
-* `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
+To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods. These are the same `ate.*` keys the spans and metrics below use, defined once in [`internal/ateattr`](../internal/ateattr):
+* `ate.actor.name`: The name of the actor (e.g., `my-counter-1` or `test`).
+* `ate.atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
+* `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
+* `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
+* `ate.template.namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
+
+`ate.*` is reserved for Substrate. An actor's own log lines pass through untouched except for keys in that namespace, which are dropped before the record is written, so nothing a workload emits can be read as platform-issued attribution.
 
 ---
 
 ## 1. Logging
 
-Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.dev` metadata labels.
+Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
 
 ### Active Actor Inspection via CLI
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
@@ -65,6 +67,12 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
+#### Example 4: Filtering by Container
+An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor started`, `Actor checkpointing`, ...). `--container` (short form `-c`) restricts the output to the named container's logs:
+
+```bash
+kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
+```
 
 ---
 
@@ -77,21 +85,21 @@ Because the logging pipeline indexes the core metadata labels, you can query you
 To track the unified, continuous lifecycle of a single actor regardless of how many times it migrated across worker pods or was suspended/resumed:
 
 ```text
-labels."ate.dev/actor_name"="test"
+labels."ate.actor.name"="test"
 ```
 
 #### 2. Atespace-Centric View
 To monitor or debug all actor instances in a specific atespace (e.g., analyzing the collective behavior or error rates of all actors belonging to one tenant):
 
 ```text
-labels."ate.dev/actor_atespace"="ate-demo-counter"
+labels."ate.atespace"="ate-demo-counter"
 ```
 
 #### 3. Template-Centric View
 To monitor or debug all actor instances created from a specific ActorTemplate (e.g., analyzing the collective behavior or error rates of all counter actors). One atespace can run actors from many templates, so this is a distinct dimension from the atespace view above:
 
 ```text
-labels."ate.dev/actor_template_name"="counter"
+labels."ate.template.name"="counter"
 ```
 
 #### 4. Pod-Centric View
@@ -103,6 +111,14 @@ resource.labels.pod_name="counter-c995fdf4c-m7d96"
 
 ---
 
+### Joining Logs to Traces
+
+Substrate-emitted records carry top-level `trace_id`, `span_id`, and `trace_flags` in lowercase hex, the names the [OpenTelemetry spec](https://opentelemetry.io/docs/specs/otel/compatibility/logging_trace_context/) fixes for non-OTLP log formats. That covers component logs (every `slog.*Context` call, via [`internal/contextlogging`](../internal/contextlogging)) and the synthetic actor lifecycle records, so a suspend or resume log line joins the RPC that drove it.
+
+An actor's **own** lines carry trace context only if the actor emits these fields itself, in which case they pass through unchanged. Substrate cannot supply them: one forwarder goroutine covers a container's whole output stream and cannot tell which request produced a given line. Per-line correlation for actor logs arrives with the actor telemetry relay ([#853](https://github.com/agent-substrate/substrate/issues/853)), where the actor's own SDK carries the context.
+
+---
+
 ## 2. Metrics
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
@@ -110,7 +126,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
-| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `STATUS_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
+| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.namespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.namespace`, `ate.template.name`) |
@@ -132,7 +148,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 * **Autoscaling Control Loop & Anti-Windup**: `desired - ready > 0` sustained beyond a few minutes indicates undelivered capacity due to node pool exhaustion, quota limits, or stuck worker pods, serving as anti-windup input for demand-reactive capacity scaling.
 
 For `atenet.router.route.duration`:
-* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
+* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
 
 For `ate.scheduler.eligible_workers`:

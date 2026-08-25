@@ -47,50 +47,38 @@ func TestUpperWorkDirsAreSiblings(t *testing.T) {
 	}
 }
 
-func TestVirtiofsdArgs(t *testing.T) {
-	tests := []struct {
-		name      string
-		opts      VirtiofsdOptions
-		wantCache string
-	}{
-		{
-			name:      "legacy bare-image share defaults to cache=always",
-			opts:      VirtiofsdOptions{SocketPath: "/run/vm/virtiofsd.sock", SharedDir: "/run/shared"},
-			wantCache: "--cache=always",
-		},
-		{
-			name: "writable merged-rootfs share overrides the cache mode",
-			opts: VirtiofsdOptions{
-				SocketPath: "/run/vm/virtiofsd.sock",
-				SharedDir:  "/run/kata-containers/shared/sandboxes/uid/shared",
-				Cache:      "auto",
-			},
-			wantCache: "--cache=auto",
-		},
+// The volume subtrees ride the ONE kataShared device (BindIntoShare): the host
+// side is bind-mounted under the directory virtiofsd serves, and the guest
+// re-opens the same relative path under its kataShared mount — find-paths
+// re-opens open volume files by path on restore, so host and guest must agree.
+func TestVolumeSubtreePaths(t *testing.T) {
+	for name, guest := range map[string]string{
+		"durable": GuestDurableVolumeDir("data"),
+		"csi":     GuestCSIVolumeDir("data"),
+	} {
+		host := filepath.Join(SharedDir("uid"), name, "data")
+		hostRel, err := filepath.Rel(SharedDir("uid"), host)
+		if err != nil {
+			t.Fatalf("Rel(host): %v", err)
+		}
+		guestRel := strings.TrimPrefix(guest, guestSharedDir)
+		if hostRel != guestRel {
+			t.Errorf("%s: host-relative path %q != guest-relative path %q; find-paths would re-open the wrong file", name, hostRel, guestRel)
+		}
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			args := virtiofsdArgs(tc.opts)
-			if !slices.Contains(args, tc.wantCache) {
-				t.Errorf("args %v do not contain %q", args, tc.wantCache)
-			}
-			// The host kernel owns the overlay; the guest needs no xattr
-			// passthrough, so the flag must never be emitted.
-			if slices.Contains(args, "--xattr") {
-				t.Errorf("args %v contain --xattr; the guest has no overlay to feed it to", args)
-			}
-			for _, want := range []string{
-				"--socket-path=" + tc.opts.SocketPath,
-				"--shared-dir=" + tc.opts.SharedDir,
-				// find-paths re-opens the guest's open files by path on
-				// restore; both shares depend on it.
-				"--migration-mode",
-				"find-paths",
-			} {
-				if !slices.Contains(args, want) {
-					t.Errorf("args %v do not contain %q", args, want)
-				}
-			}
-		})
+}
+
+func TestVirtiofsdArgs(t *testing.T) {
+	args := virtiofsdArgs(VirtiofsdOptions{
+		SocketPath: "/run/vm/virtiofsd.sock",
+		SharedDir:  "/run/kata-containers/shared/sandboxes/uid/shared",
+	})
+	if !slices.Contains(args, "--cache=auto") {
+		t.Errorf("args %v do not contain --cache=auto", args)
+	}
+	// The host kernel owns the overlay; the guest needs no xattr passthrough, so
+	// the flag must never be emitted.
+	if slices.Contains(args, "--xattr") {
+		t.Errorf("args %v contain --xattr; the guest has no overlay to feed it to", args)
 	}
 }

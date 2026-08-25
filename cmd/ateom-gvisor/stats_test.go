@@ -29,7 +29,6 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -42,7 +41,7 @@ import (
 // to end. What is testable here is everything GetWorkloadStats does with the
 // result, which is where the polling loop will actually live.
 
-var testActor = ateomstats.ActorAttribution{
+var testActor = resources.ActorAttribution{
 	Ref:               resources.ActorRef{Atespace: "space-a", Name: "actor-a"},
 	UID:               "uid-a",
 	TemplateNamespace: "ns-a",
@@ -121,7 +120,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		files map[string]string
 		// active is stored into activeActor when non-nil; nil leaves the ateom
 		// "available".
-		active   *ateomstats.ActorAttribution
+		active   *resources.ActorAttribution
 		actorUID string
 		want     codes.Code
 	}{
@@ -289,7 +288,7 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 
 	tests := []struct {
 		name string
-		to   *ateomstats.ActorAttribution
+		to   *resources.ActorAttribution
 		want ateompb.NoSampleReason
 	}{
 		// A new actor took the slot: there is a workload, its numbers are just

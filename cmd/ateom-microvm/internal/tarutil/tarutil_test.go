@@ -272,6 +272,50 @@ func TestCreateSkipsSockets(t *testing.T) {
 	}
 }
 
+// TestCreateFilteredSkipsSubtree verifies CreateFiltered drops exactly the
+// entries the skip function selects — for a directory, the whole subtree — and
+// leaves everything else identical to an unfiltered archive. The rootfs
+// snapshot leans on this to exclude overlay workdirs.
+func TestCreateFilteredSkipsSubtree(t *testing.T) {
+	src := t.TempDir()
+	for rel, content := range map[string]string{
+		"app/fs/data.txt":  "keep",
+		"app/work/tmp.bin": "drop",
+		"app/work/#1/f":    "drop nested",
+		"beta/work-not/f":  "keep (not an exact match)",
+	} {
+		p := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for %q: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %q: %v", rel, err)
+		}
+	}
+
+	tarPath := filepath.Join(t.TempDir(), "filtered.tar")
+	skip := func(rel string) bool {
+		parts := strings.Split(rel, "/")
+		return len(parts) == 2 && parts[1] == "work"
+	}
+	if err := CreateFiltered(t.Context(), tarPath, src, skip); err != nil {
+		t.Fatalf("CreateFiltered: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	for _, rel := range []string{"app/fs/data.txt", "beta/work-not/f"} {
+		if _, err := os.Stat(filepath.Join(dst, rel)); err != nil {
+			t.Errorf("kept entry %q missing after filtered round trip: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "app/work")); !os.IsNotExist(err) {
+		t.Errorf("skipped subtree app/work survived (stat err = %v), want absent", err)
+	}
+}
+
 // TestRoundTripSpecialModeBits pins setuid/setgid/sticky across a round trip.
 // FileMode.Perm() silently drops them, so without this the archive would record
 // bits that extraction throws away — and a setgid data directory would come back

@@ -69,7 +69,6 @@ func NewRequestMetadata(headers []*corev3.HeaderValue, attributes map[string]*st
 			method = val
 		}
 	}
-
 	return &RequestMetadata{
 		Headers:    headersMap,
 		Path:       path,

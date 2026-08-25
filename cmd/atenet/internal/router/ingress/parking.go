@@ -70,7 +70,7 @@ const (
 //
 // When a request targets a suspended actor, the router resumes it via the
 // control plane before routing. If the worker pool is momentarily saturated the
-// control plane returns FailedPrecondition ("no free workers available"). With
+// control plane returns ResourceExhausted ("no free workers available"). With
 // parking enabled the router holds ("parks") such a request and keeps retrying
 // the resume until the actor becomes routable or Budget elapses, instead of
 // failing the request immediately. Max bounds how many requests may be parked

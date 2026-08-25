@@ -20,7 +20,7 @@
 #     LOCUST_NO_GLUTTON_USER=1 prevents tests/glutton.py from declaring the
 #     stub User on this worker so GluttonUser spawns are owned exclusively
 #     by the boomer container.
-#   * boomer-glutton: Go re-implementation of GluttonUser. Connects to the
+#   * boomer-glutton: Go re-implementation of GluttonUser and DurdirUser. Connects to the
 #     master at localhost:5557 via the locust worker ZMQ protocol; exposes
 #     its own per-worker diagnostics at /metrics on :8001 (aggregate stats
 #     flow through the master via boomer.RecordSuccess).
@@ -52,7 +52,7 @@ spec:
         - "-m"
         - "locust"
         - "-f"
-        - "/app/tests/glutton.py"
+        - "/app/tests/${BENCHMARK_USER_CLASS}.py"
         - "--master"
         - "--master-bind-host=0.0.0.0"
         env:
@@ -71,9 +71,6 @@ spec:
         volumeMounts:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
-          readOnly: true
-        - name: ateapi-token
-          mountPath: /run/ateapi-token
           readOnly: true
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
@@ -109,9 +106,6 @@ spec:
       #   - name: servicedns-ca
       #     mountPath: /run/servicedns-ca
       #     readOnly: true
-      #   - name: ateapi-token
-      #     mountPath: /run/ateapi-token
-      #     readOnly: true
       #   - name: podidentity
       #     mountPath: /run/podidentity.podcert.ate.dev
       #     readOnly: true
@@ -134,6 +128,7 @@ spec:
         # are honored. The endpoint is served by
         # benchmarking/locust/common/boomer_config.py on the master.
         - "--master-web-port=8089"
+        - "--user-class=${BENCHMARK_USER_CLASS}"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
@@ -144,9 +139,6 @@ spec:
         volumeMounts:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
-          readOnly: true
-        - name: ateapi-token
-          mountPath: /run/ateapi-token
           readOnly: true
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
@@ -166,19 +158,7 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: ca.crt
-      - name: ateapi-token
-        projected:
-          sources:
-          - serviceAccountToken:
-              audience: api.ate-system.svc
-              expirationSeconds: 3600
-              path: token
-      # The benchmark's own client identity, presented to ateapi. Its
-      # interceptor rejects calls carrying no credential, taking identity from
-      # an mTLS client cert or, failing that, a Bearer token. Use the cert:
-      # that is what the base install gives ate-controller and atenet-router
-      # (the token path is the opt-in ATE_ATEAPI_CLIENT_AUTH=token overlay),
-      # and it yields a SPIFFE ID rather than an opaque JWT subject.
+      # The benchmark's client identity, presented to ateapi over mTLS.
       - name: podidentity
         projected:
           sources:

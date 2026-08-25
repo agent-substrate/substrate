@@ -16,19 +16,40 @@ package csi
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/volume"
+	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
+
+const (
+	// DefaultClientCertPath is the path to the pod identity credential bundle.
+	DefaultClientCertPath = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+	// DefaultCACertPath is the path to the servicedns trust bundle.
+	DefaultCACertPath = "/run/servicedns.podcert.ate.dev/trust-bundle.pem"
+)
+
+type tlsPaths struct {
+	clientCert string
+	caCert     string
+}
+
+var defaultTLSPaths = tlsPaths{
+	clientCert: DefaultClientCertPath,
+	caCert:     DefaultCACertPath,
+}
 
 // Plugin implements volume.VolumePluginWorkerPlane using the CSI Client.
 type Plugin struct {
@@ -250,6 +271,10 @@ func getStandardCapabilities() []*csi.VolumeCapability {
 
 // NewCSIPlugin establishes a CSI client and returns a verified Plugin instance.
 func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLister, driverName string, isController bool) (*Plugin, error) {
+	return newCSIPlugin(ctx, lister, driverName, isController, defaultTLSPaths)
+}
+
+func newCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLister, driverName string, isController bool, paths tlsPaths) (*Plugin, error) {
 	if lister == nil {
 		return nil, fmt.Errorf("missing csiDriverConfigLister")
 	}
@@ -269,7 +294,17 @@ func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLis
 	default:
 		endpoint = "unix://" + ateompath.KubeletPluginSocketPath(driverName)
 	}
-	csiClient, err := NewCSIClient(endpoint)
+
+	var tlsCfg *tls.Config
+	if isController {
+		var err error
+		tlsCfg, err = resolveTLSConfig(cfg, paths)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve TLS config for %q: %w", driverName, err)
+		}
+	}
+
+	csiClient, err := NewCSIClient(endpoint, tlsCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize CSI client from endpoint %q: %w", endpoint, err)
 	}
@@ -287,4 +322,83 @@ func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLis
 	}
 
 	return csiPlugin, nil
+}
+
+func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Config, error) {
+	if cfg == nil || cfg.Spec.TLS == nil || !cfg.Spec.TLS.Enabled {
+		return nil, nil
+	}
+
+	tlsCfg := cfg.Spec.TLS
+
+	if !tlsCfg.UsePodIdentity {
+		// TODO: Support manual certificates loaded from Secrets specified in the config.
+		return nil, fmt.Errorf("only pod identity TLS is supported in this configuration")
+	}
+
+	// Verify CA pool exists and is readable at construction time.
+	_, err := getCertPool(paths.caCert)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load CA cert pool from %q: %w", paths.caCert, err)
+	}
+
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		ServerName: tlsCfg.ServerName,
+		// NextProtos configures ALPN h2 for gRPC over TLS.
+		NextProtos: []string{"h2"},
+		// Load Client Certificate dynamically.
+		// In Substrate's Pod Identity model, certificates are projected into the pod
+		// as files by the kubelet (via Substrate's podcertcontroller).
+		// Kubelet handles the rotation of these files on disk.
+		// credbundle.ClientLoader monitors these files and automatically reloads
+		// them when they change, ensuring rotation is picked up on subsequent handshakes.
+		GetClientCertificate: credbundle.ClientLoader(paths.clientCert),
+		// Dynamic CA Reloading:
+		// Standard tls.Config.RootCAs is a static cert pool evaluated at construction time.
+		// To automatically pick up CA trust bundle rotations on disk without restarting the process,
+		// we set InsecureSkipVerify=true and verify the server certificate chain dynamically
+		// against the latest CA bundle read from disk in VerifyConnection.
+		InsecureSkipVerify: true,
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return fmt.Errorf("server did not present certificates")
+			}
+
+			// Read CA trust bundle on each TLS connection handshake.
+			roots, err := getCertPool(paths.caCert)
+			if err != nil {
+				return fmt.Errorf("failed to load CA cert pool from %q: %w", paths.caCert, err)
+			}
+
+			intermediates := x509.NewCertPool()
+			for _, cert := range state.PeerCertificates[1:] {
+				intermediates.AddCert(cert)
+			}
+
+			leaf := state.PeerCertificates[0]
+			opts := x509.VerifyOptions{
+				DNSName:       tlsCfg.ServerName,
+				Roots:         roots,
+				Intermediates: intermediates,
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			}
+			if _, err := leaf.Verify(opts); err != nil {
+				return fmt.Errorf("failed to verify server certificate against CA in %q: %w", paths.caCert, err)
+			}
+			return nil
+		},
+	}, nil
+}
+
+func getCertPool(path string) (*x509.CertPool, error) {
+	certBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cert file %q: %w", path, err)
+	}
+	certPool := x509.NewCertPool()
+	if !certPool.AppendCertsFromPEM(certBytes) {
+		return nil, fmt.Errorf("failed to parse certs from %q", path)
+	}
+	return certPool, nil
 }

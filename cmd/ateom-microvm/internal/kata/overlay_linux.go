@@ -24,10 +24,7 @@ package kata
 // itself. Rootfs writes therefore cost host disk, not guest RAM, and persist across
 // suspend/resume via the snapshot's rootfs-upper tar.
 //
-// (Snapshots from the retired guest-tmpfs-upper mode still restore: their upper rides
-// inside the restored guest memory, and the lower is re-presented with the legacy
-// read-only bind, see ReconstructSharedDirFromImage.) This file holds the
-// rootfs-staging helpers.
+// This file holds the rootfs-staging helpers.
 
 import (
 	"context"
@@ -52,22 +49,30 @@ const (
 	typeVirtioFS   = "virtiofs"
 	virtioFSDriver = "virtio-fs"
 	// guestSharedDir is where the agent mounts the kataShared tag in the guest;
-	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs.
+	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs, durable
+	// volumes at <guestSharedDir>/durable/<volumeName>, CSI volumes at
+	// <guestSharedDir>/csi/<volumeName>, and system-info volumes at
+	// <guestSharedDir>/system-info/<volumeName>.
 	guestSharedDir = "/run/kata-containers/shared/containers/"
-
-	// DurableFsTag is the virtio-fs tag for the actor's WRITABLE durable-dir
-	// share, served by a second virtiofsd (the kataShared share stays read-only).
-	DurableFsTag = "ateDurable"
-	// guestDurableDir is where the agent mounts DurableFsTag in the guest; each
-	// volume's contents live at <guestDurableDir>/<volumeName> and are bind-mounted
-	// from there into the containers that declare the volume.
-	guestDurableDir = "/run/ateom-durable"
 )
 
 // GuestDurableVolumeDir is the in-guest path holding one durable volume's
 // contents, i.e. the bind source for that volume's container mount points.
 func GuestDurableVolumeDir(volumeName string) string {
-	return guestDurableDir + "/" + volumeName
+	return guestSharedDir + "durable/" + volumeName
+}
+
+// GuestCSIVolumeDir is the in-guest path holding one CSI volume's
+// contents, i.e. the bind source for that volume's container mount points.
+func GuestCSIVolumeDir(volumeName string) string {
+	return guestSharedDir + "csi/" + volumeName
+}
+
+// GuestSystemInfoVolumeDir is the in-guest path holding one system-info
+// volume's contents, i.e. the read-only bind source for that volume's
+// container mount points.
+func GuestSystemInfoVolumeDir(volumeName string) string {
+	return guestSharedDir + "system-info/" + volumeName
 }
 
 // SharedDir is the host directory virtiofsd serves into the guest as the RO base.
@@ -95,33 +100,32 @@ func UpperWorkDirs(upperBase, containerID string) (upper, work string) {
 // stock kata flow.
 func GuestSharedRootfs(containerID string) string { return guestSharedDir + containerID + "/rootfs" }
 
+// GuestSharedVolumeDir is the in-guest path one image volume's contents appear
+// at, beside the container's rootfs in the same kataShared tree.
+func GuestSharedVolumeDir(containerID, volumeName string) string {
+	return filepath.Join(guestSharedDir, containerID, "volumes", volumeName)
+}
+
+// SharedVolumeDir is the host path under virtiofsd's served tree that
+// GuestSharedVolumeDir resolves to.
+func SharedVolumeDir(id, containerID, volumeName string) string {
+	return filepath.Join(SharedDir(id), containerID, "volumes", volumeName)
+}
+
 // VirtiofsdOptions configures StartVirtiofsd.
 type VirtiofsdOptions struct {
 	Binary     string // virtiofsd executable; defaults to "virtiofsd"
 	SocketPath string // vhost-user socket CH connects to (VirtiofsdSocketPath)
 	SharedDir  string // directory to serve (SharedDir(id))
-	// Cache is virtiofsd's --cache mode. Empty defaults to "always", which is
-	// only correct for a strictly read-only share (see virtiofsdArgs).
-	Cache string
-	Log   io.Writer
+	Log        io.Writer
 }
 
 // virtiofsdArgs builds the virtiofsd command line for o.
 func virtiofsdArgs(o VirtiofsdOptions) []string {
-	cache := o.Cache
-	if cache == "" {
-		// "always" is only correct for a strictly read-only share with immutable
-		// host contents — today that is solely the LEGACY restore path's bare-image
-		// share (see ReconstructSharedDirFromImage). WRITABLE shares (the merged
-		// rootfs, the durable-dir volumes) must pass Cache: "auto": the guest
-		// writes through them and the host contents change underneath the guest
-		// on restore, so cache=always would serve stale data.
-		cache = "always"
-	}
 	return []string{
 		"--socket-path=" + o.SocketPath,
 		"--shared-dir=" + o.SharedDir,
-		"--cache=" + cache,
+		"--cache=auto",
 		"--thread-pool-size=1",
 		"--announce-submounts",
 		"--migration-mode", "find-paths",
@@ -184,6 +188,28 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 	}
 }
 
+// StageImageVolume bind-mounts one composed image volume read-only at
+// <cid>/volumes/<name> under SharedDir(id), so virtiofsd exposes it to the
+// guest.
+func StageImageVolume(ctx context.Context, src, id, cid, volumeName string) error {
+	if cid == "" || volumeName == "" {
+		return fmt.Errorf("StageImageVolume: empty container id or volume name")
+	}
+	if err := BindIntoShare(ctx, src, id, filepath.Join(cid, "volumes", volumeName)); err != nil {
+		return fmt.Errorf("while binding image volume %q into the shared tree: %w", volumeName, err)
+	}
+	// Read-only is this volume type's contract (the image is someone else's,
+	// mounted for its contents); the other subtree consumers stay writable.
+	dst := SharedVolumeDir(id, cid, volumeName)
+	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
+	var roErr strings.Builder
+	ro.Stderr = &roErr
+	if err := reaper.Run(ro); err != nil {
+		return fmt.Errorf("remounting image volume %q read-only: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
+	}
+	return nil
+}
+
 // StageMergedRootfs mounts overlay(lower = the OCI image bundle rootfs, upper/work =
 // the actor's host rootfs-upper dirs for cid) at SharedDir(restoreID)/<cid>/rootfs —
 // the merged tree the ONE virtiofsd serves and the guest runs the container on
@@ -204,6 +230,11 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
 		_ = reaper.Run(exec.Command("umount", "-l", dst))
 	}
+	// The workdir is scratch: wipe it so a volatile mount is never refused by a
+	// dirty marker left behind by the previous activation.
+	if err := os.RemoveAll(work); err != nil {
+		return fmt.Errorf("clearing overlay workdir %q: %w", work, err)
+	}
 	for _, d := range []string{dst, upper, work} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return fmt.Errorf("creating %q: %w", d, err)
@@ -219,8 +250,13 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	// off, every copy-up is a full data copy and the upper is self-contained —
 	// the portability the find-paths comment above promises. (redirect_dir is
 	// path-based and travels fine, so it stays at the kernel default.)
+	// volatile: skip the sync overlayfs would otherwise do on this upper,
+	// including at umount. The upper is throwaway — it is tarred into the
+	// snapshot and then deleted — so the durability volatile gives up is
+	// durability we do not use. It refuses to mount over a workdir left dirty by
+	// a previous volatile mount, hence the wipe above.
 	opts := "lowerdir=" + bundleRootfs + ",upperdir=" + upper + ",workdir=" + work +
-		",metacopy=off,index=off"
+		",metacopy=off,index=off,volatile"
 	cmd := exec.CommandContext(ctx, "mount", "-t", "overlay", "overlay", "-o", opts, dst)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -245,6 +281,50 @@ func UnmountMergedRootfs(restoreID, cid string) {
 	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
 		_ = reaper.Run(exec.Command("umount", "-l", dst))
 	}
+}
+
+// BindIntoShare bind-mounts a host directory at SharedDir(id)/<name>, so the
+// ONE virtiofsd serves it to the guest as a subtree of the kataShared mount
+// (--announce-submounts presents it to the guest as its own filesystem).
+//
+// This is THE pattern for exposing another host directory to the guest — the
+// durable-dir and CSI volumes ride it today: a separate share would otherwise
+// pay for its own virtiofsd (a process, a vhost socket, an fs device in every
+// snapshot config and a restore-time revival of all three) per actor, forever.
+// A bind costs one mount, and teardown already covers it: CleanupSandboxState
+// lazily detaches every mount under the sandbox dir first, and will not remove
+// a dir whose mounts it could not all detach, so the source directory (which
+// may belong to atelet, as the volume dirs do) is never deleted through a live
+// bind. Callers must stage binds before StartVirtiofsd, both to keep
+// the served tree complete from the first request and because find-paths
+// migration re-opens a restored guest's open files by path at reconnect.
+//
+// rel is the mount's path relative to the share root: a top-level name sits
+// beside the per-container <cid>/... entries, so it must not collide with a
+// container id (the durable/csi subtrees); a path inside a container's own
+// subtree (the image volumes' <cid>/volumes/<name>) cannot collide at all.
+func BindIntoShare(ctx context.Context, src, id, rel string) error {
+	if rel == "" {
+		return fmt.Errorf("BindIntoShare: empty share-relative path")
+	}
+	dst := filepath.Join(SharedDir(id), rel)
+	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint.
+	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
+		_ = reaper.Run(exec.Command("umount", "-l", dst))
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("creating share subdir %q: %w", dst, err)
+	}
+	// --rbind, not --bind: a source that is itself a mount (a composed image
+	// volume) comes along either way, but only rbind carries mounts nested
+	// beneath it; for the plain-directory sources it is the same operation.
+	cmd := exec.CommandContext(ctx, "mount", "--rbind", src, dst)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := reaper.Run(cmd); err != nil {
+		return fmt.Errorf("bind-mounting %q into the shared tree at %q: %w (%s)", src, dst, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // ReconstructSharedDirFromImage bind-mounts a container's OCI image rootfs at
@@ -289,29 +369,24 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	return nil
 }
 
+type CreateSandboxOpts struct {
+	SandboxID string
+	Hostname  string
+}
+
 // CreateSandboxForActor creates the guest sandbox with the kataShared virtio-fs mount
-// (the merged rootfs trees every container runs on). Mirrors kata startSandbox.
-//
-// withDurableShare additionally mounts the writable durable-dir share, whose
-// per-volume subdirectories the containers bind-mount at their declared paths.
-func (a *AgentClient) CreateSandboxForActor(ctx context.Context, sandboxID, hostname string, withDurableShare bool) error {
+// (the merged rootfs trees, durable volumes, CSI volumes, and system-info
+// volumes every container runs on). Mirrors kata startSandbox.
+func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSandboxOpts) error {
 	storages := []*agentpb.Storage{{
 		Driver:     virtioFSDriver,
 		Source:     FsTag,
 		Fstype:     typeVirtioFS,
 		MountPoint: guestSharedDir,
 	}}
-	if withDurableShare {
-		storages = append(storages, &agentpb.Storage{
-			Driver:     virtioFSDriver,
-			Source:     DurableFsTag,
-			Fstype:     typeVirtioFS,
-			MountPoint: guestDurableDir,
-		})
-	}
 	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
-		Hostname:  hostname,
-		SandboxId: sandboxID,
+		Hostname:  opts.Hostname,
+		SandboxId: opts.SandboxID,
 		Storages:  storages,
 	})
 }

@@ -17,6 +17,7 @@ package resources
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -44,6 +45,7 @@ func (r ResourceRef[R]) String() string {
 // than flattening them into one opaque string.
 func (r ResourceRef[R]) LogValue() slog.Value {
 	return slog.GroupValue(
+		slog.String("type", reflect.TypeFor[R]().String()),
 		slog.String("atespace", r.Atespace),
 		slog.String("name", r.Name),
 	)
@@ -114,24 +116,5 @@ func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateR
 	return ActorTemplateRef{
 		Atespace: t.GetMetadata().GetAtespace(),
 		Name:     t.GetMetadata().GetName(),
-	}
-}
-
-// ActorTemplateVersionRef identifies an ActorTemplateVersion by the
-// (atespace, name).
-type ActorTemplateVersionRef = ResourceRef[*ateapipb.ActorTemplateVersion]
-
-// ActorTemplateVersionRefFromObjectRef converts a wire reference to an
-// ActorTemplateVersionRef.
-func ActorTemplateVersionRefFromObjectRef(ref *ateapipb.ObjectRef) ActorTemplateVersionRef {
-	return resourceRefFromObjectRef[*ateapipb.ActorTemplateVersion](ref)
-}
-
-// ActorTemplateVersionRefFromActorTemplateVersion returns the reference
-// addressing the given version.
-func ActorTemplateVersionRefFromActorTemplateVersion(v *ateapipb.ActorTemplateVersion) ActorTemplateVersionRef {
-	return ActorTemplateVersionRef{
-		Atespace: v.GetMetadata().GetAtespace(),
-		Name:     v.GetMetadata().GetName(),
 	}
 }
