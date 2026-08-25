@@ -17,6 +17,7 @@ package ategcs
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,17 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"golang.org/x/sys/unix"
 )
+
+// errSparseUnsupported means the source filesystem cannot report holes, so the
+// caller should fall back to a dense zstd stream. Mirrors atelet's copySparse,
+// which makes the same guarantee for local checkpoint copies.
+var errSparseUnsupported = errors.New("filesystem cannot report holes")
+
+// probeSeekDataWhence is unix.SEEK_DATA, used only for the initial probe in
+// writeSparseZstd. It is a var, not a literal, only so tests can force it to an
+// unrecognized whence value and exercise the sparse-unsupported fallback below
+// without needing an actual filesystem that lacks SEEK_DATA.
+var probeSeekDataWhence = unix.SEEK_DATA
 
 // sparseMagic marks the sparse-extent snapshot format (see writeSparseZstd). It is
 // 8 bytes and deliberately NOT a valid zstd frame magic, so a reader can tell this
@@ -66,6 +78,15 @@ func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err
 	}
 	size := fi.Size()
 
+	// Probe SEEK_DATA before writing anything to dst, so a filesystem that cannot
+	// report holes falls back to a dense stream with dst untouched. ENXIO means the
+	// probe ran fine and found no data at all (the file is one big hole), which the
+	// loop below already handles correctly.
+	fd := int(src.Fd())
+	if _, err := unix.Seek(fd, 0, probeSeekDataWhence); err != nil && err != unix.ENXIO {
+		return 0, 0, errSparseUnsupported
+	}
+
 	// magic + version in the clear (buffered: a couple of tiny writes).
 	bw := bufio.NewWriter(dst)
 	if _, err := bw.WriteString(sparseMagic); err != nil {
@@ -89,7 +110,6 @@ func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err
 		return fail(err)
 	}
 
-	fd := int(src.Fd())
 	off := int64(0)
 	for off < size {
 		ds, serr := unix.Seek(fd, off, unix.SEEK_DATA)

@@ -506,3 +506,52 @@ func TestCopyZstdSparseClearsStaleData(t *testing.T) {
 		t.Fatalf("stale data not cleared / wrong size: len(got)=%d len(want)=%d", len(got), len(want))
 	}
 }
+
+// TestWriteContentFallsBackWhenSparseUnsupported forces writeSparseZstd's SEEK_DATA
+// probe to fail with an error other than ENXIO, the same failure a filesystem
+// without SEEK_DATA support gives for real, and checks writeContent falls back to
+// a plain dense stream rather than failing the whole upload.
+func TestWriteContentFallsBackWhenSparseUnsupported(t *testing.T) {
+	orig := probeSeekDataWhence
+	probeSeekDataWhence = 99 // not a real whence value: Seek fails with EINVAL
+	t.Cleanup(func() { probeSeekDataWhence = orig })
+
+	const size = 1 << 20
+	want := make([]byte, size)
+	for i := range want[:4096] {
+		want[i] = byte(i%251 + 1)
+	}
+
+	srcPath := filepath.Join(t.TempDir(), "src")
+	src, err := os.Create(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	if _, err := src.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	wres, err := writeContent(&buf, src)
+	if err != nil {
+		t.Fatalf("writeContent: %v", err)
+	}
+	if wres.sparse {
+		t.Error("writeContent: sparse=true, want a dense fallback")
+	}
+	if wres.logicalBytes != size {
+		t.Errorf("writeContent logicalBytes=%d, want %d", wres.logicalBytes, size)
+	}
+
+	var out bytes.Buffer
+	if _, err := decodeContent(&out, &buf); err != nil {
+		t.Fatalf("decodeContent: %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), want) {
+		t.Fatalf("fallback round-trip mismatch: len(got)=%d len(want)=%d", out.Len(), len(want))
+	}
+}

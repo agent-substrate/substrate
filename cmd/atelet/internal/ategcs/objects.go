@@ -150,10 +150,17 @@ type writeContentResult struct {
 func writeContent(out io.Writer, content io.Reader) (writeContentResult, error) {
 	if f, ok := content.(*os.File); ok {
 		logical, populated, err := writeSparseZstd(out, f)
-		if err != nil {
+		switch {
+		case err == nil:
+			return writeContentResult{logicalBytes: logical, populatedBytes: populated, sparse: true}, nil
+		case !errors.Is(err, errSparseUnsupported):
 			return writeContentResult{}, err
 		}
-		return writeContentResult{logicalBytes: logical, populatedBytes: populated, sparse: true}, nil
+		// Unsupported: writeSparseZstd wrote nothing to out, but the probe moved
+		// f's read offset, so rewind before the dense stream below.
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return writeContentResult{}, err
+		}
 	}
 	logical, err := plainZstd(out, content)
 	if err != nil {
