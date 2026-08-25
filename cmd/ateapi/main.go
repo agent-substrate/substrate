@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
@@ -33,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
