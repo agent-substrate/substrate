@@ -105,6 +105,8 @@ function usage() {
   echo "--deploy-ate-system --store-backend=postgres):"
   echo ""
   echo "  --deploy-postgres                      Deploy the single-replica PostgreSQL StatefulSet"
+  echo "  ATE_API_POSTGRES_CONNECTION_STRING     Use an external PostgreSQL instance and skip the bundled instance"
+  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""

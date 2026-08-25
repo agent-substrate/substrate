@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -364,6 +365,9 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
 		if err == nil {
 			return persistence, nil
+		}
+		if !errors.Is(err, atepg.ErrUnavailable) {
+			return nil, err
 		}
 		connectErr = err
 		slog.WarnContext(ctx, "Failed to connect to PostgreSQL, retrying...", slog.Int("attempt", attempt), slog.Any("err", err))

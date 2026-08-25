@@ -62,6 +62,10 @@ type Persistence struct {
 
 var _ store.Interface = (*Persistence)(nil)
 
+// ErrUnavailable reports that ateapi could not establish the initial
+// PostgreSQL connection. Callers can retry this error before startup.
+var ErrUnavailable = errors.New("PostgreSQL is unavailable")
+
 // Connect opens a pgxpool against dsn, creates schema if necessary, and
 // applies pending schema migrations. A dedicated watch pool isolates outbox
 // polling and maintenance from writes.
@@ -80,11 +84,11 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
+		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
 	}
-	if _, err := pool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
+	if err := createSchema(ctx, pool, schema); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+		return nil, err
 	}
 
 	watchCfg := config.Copy()
@@ -104,6 +108,25 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 	}
 	p.ownsWatchPool = true
 	return p, nil
+}
+
+func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("starting PostgreSQL schema transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // Commit or the returned error decides the outcome.
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "agent-substrate:create-schema:"+schema); err != nil {
+		return fmt.Errorf("locking PostgreSQL schema %q: %w", schema, err)
+	}
+	if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
+		return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing PostgreSQL schema %q: %w", schema, err)
+	}
+	return nil
 }
 
 // NewPersistence wraps an already-open pool, applying pending migrations.

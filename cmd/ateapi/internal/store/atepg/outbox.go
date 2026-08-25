@@ -347,10 +347,11 @@ func (p *Persistence) tryCreateWorkerOutboxPartitions(ctx context.Context, trunc
 // entire range is older than retention.
 func (p *Persistence) dropExpiredWorkerOutboxPartitions(ctx context.Context, q querier, now time.Time) error {
 	rows, err := q.Query(ctx, `
-		SELECT c.relname FROM pg_inherits i
-		JOIN pg_class c ON c.oid = i.inhrelid
+		SELECT child.relname FROM pg_inherits i
+		JOIN pg_class child ON child.oid = i.inhrelid
 		JOIN pg_class parent ON parent.oid = i.inhparent
-		WHERE parent.relname = 'worker_outbox'`)
+		WHERE i.inhparent = 'worker_outbox'::regclass
+		AND child.relnamespace = parent.relnamespace`)
 	if err != nil {
 		return fmt.Errorf("listing outbox partitions: %w", err)
 	}

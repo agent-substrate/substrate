@@ -32,10 +32,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        fetch-depth: 0
     - name: Setup Go
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
+    - name: Verify immutable PostgreSQL migrations
+      if: github.event_name == 'pull_request'
+      run: hack/verify/postgresql-migrations.sh "${{ github.event.pull_request.base.sha }}"
     - run: go test -race -v ./...
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that

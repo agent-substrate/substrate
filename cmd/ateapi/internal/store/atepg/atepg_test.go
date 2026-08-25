@@ -19,10 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	migratedatabase "github.com/golang-migrate/migrate/v4/database"
+	migratepgx "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -112,33 +116,140 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 func TestMigrationsConcurrentStartup(t *testing.T) {
 	pool := requirePool(t)
 	ctx := t.Context()
-	if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "concurrent-startup" CASCADE`); err != nil {
 		t.Fatalf("resetting PostgreSQL schema: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "concurrent-startup" CASCADE`)
+	})
 
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
-			p, err := NewPersistence(ctx, pool)
+			p, err := Connect(ctx, containerDSN, "concurrent-startup")
 			if p != nil {
 				p.Close()
+				p.pool.Close()
 			}
 			errs <- err
 		}()
 	}
 	for range 2 {
 		if err := <-errs; err != nil {
-			t.Fatalf("NewPersistence failed: %v", err)
+			t.Fatalf("Connect failed: %v", err)
 		}
 	}
 
 	var version int
 	var dirty bool
-	if err := pool.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT version, dirty FROM "concurrent-startup".schema_migrations`).Scan(&version, &dirty); err != nil {
 		t.Fatalf("reading migration version: %v", err)
 	}
 	if version != 1 || dirty {
 		t.Fatalf("migration state = (%d, %t), want (1, false)", version, dirty)
+	}
+}
+
+func TestMigrationsWaitForInProgressMigration(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "migration-lock-wait"
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-lock-wait" CASCADE`); err != nil {
+		t.Fatalf("resetting schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-lock-wait" CASCADE`)
+	})
+
+	p, err := Connect(ctx, containerDSN, schema)
+	if err != nil {
+		t.Fatalf("creating current schema: %v", err)
+	}
+	p.Close()
+	p.pool.Close()
+
+	migrationPool, err := pgxpool.New(ctx, containerDSN+"&search_path="+schema)
+	if err != nil {
+		t.Fatalf("opening migration pool: %v", err)
+	}
+	t.Cleanup(migrationPool.Close)
+	migrator, _, err := openMigrator(migrationPool)
+	if err != nil {
+		t.Fatalf("opening migrator: %v", err)
+	}
+	t.Cleanup(func() {
+		sourceErr, databaseErr := migrator.Close()
+		if err := errors.Join(sourceErr, databaseErr); err != nil {
+			t.Errorf("closing migrator: %v", err)
+		}
+	})
+
+	lockConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquiring migration lock connection: %v", err)
+	}
+	var databaseName string
+	if err := lockConn.QueryRow(ctx, `SELECT current_database()`).Scan(&databaseName); err != nil {
+		lockConn.Release()
+		t.Fatalf("reading database name: %v", err)
+	}
+	lockID, err := migratedatabase.GenerateAdvisoryLockId(databaseName, schema, migratepgx.DefaultMigrationsTable)
+	if err != nil {
+		lockConn.Release()
+		t.Fatalf("generating migration lock ID: %v", err)
+	}
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock($1::text::bigint)`, lockID)
+		}
+		lockConn.Release()
+	})
+	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_lock($1::text::bigint)`, lockID); err != nil {
+		t.Fatalf("locking migrations: %v", err)
+	}
+	if _, err := lockConn.Exec(ctx, `UPDATE "migration-lock-wait".schema_migrations SET dirty = true`); err != nil {
+		t.Fatalf("marking migration in progress: %v", err)
+	}
+
+	result := make(chan error, 1)
+	go func() { result <- migrateToLatest(ctx, migrator, 1) }()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case err := <-result:
+			t.Fatalf("migration returned before the advisory lock was released: %v", err)
+		case <-ticker.C:
+			var waiting bool
+			if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).Scan(&waiting); err != nil {
+				t.Fatalf("checking migration lock wait: %v", err)
+			}
+			if waiting {
+				goto release
+			}
+		case <-timeout.C:
+			t.Fatal("migration did not wait for the advisory lock")
+		}
+	}
+
+release:
+	if _, err := lockConn.Exec(ctx, `UPDATE "migration-lock-wait".schema_migrations SET dirty = false`); err != nil {
+		t.Fatalf("marking migration complete: %v", err)
+	}
+	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_unlock($1::text::bigint)`, lockID); err != nil {
+		t.Fatalf("unlocking migrations: %v", err)
+	}
+	locked = false
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("migration failed after the advisory lock was released: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("migration did not finish after the advisory lock was released")
 	}
 }
 
@@ -148,12 +259,21 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	const schema = "substrate-test"
 	if _, err := pool.Exec(ctx, `
 		DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+		DROP SCHEMA IF EXISTS "substrate-other-test" CASCADE;
+		CREATE SCHEMA "substrate-other-test";
+		CREATE TABLE "substrate-other-test".worker_outbox (
+			created_at timestamptz NOT NULL
+		) PARTITION BY RANGE (created_at);
+		CREATE TABLE "substrate-other-test".worker_outbox_p200001010000
+			PARTITION OF "substrate-other-test".worker_outbox
+			FOR VALUES FROM ('2000-01-01 00:00:00+00') TO ('2000-01-01 00:05:00+00');
 		CREATE TABLE IF NOT EXISTS public.substrate_schema_test_marker (id integer)`); err != nil {
 		t.Fatalf("preparing schema test: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `
 			DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+			DROP SCHEMA IF EXISTS "substrate-other-test" CASCADE;
 			DROP TABLE IF EXISTS public.substrate_schema_test_marker`)
 	})
 
@@ -193,6 +313,97 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if !markerExists {
 		t.Error("migration removed an unrelated table")
 	}
+
+	if err := persistence.dropExpiredWorkerOutboxPartitions(ctx, persistence.watchPool, time.Now()); err != nil {
+		t.Fatalf("dropping expired partitions in the configured schema: %v", err)
+	}
+	var unrelatedPartitionExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('"substrate-other-test".worker_outbox_p200001010000') IS NOT NULL`).Scan(&unrelatedPartitionExists); err != nil {
+		t.Fatalf("checking unrelated outbox partition: %v", err)
+	}
+	if !unrelatedPartitionExists {
+		t.Error("outbox maintenance removed a partition from another schema")
+	}
+}
+
+func TestMigrationSchemaStates(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+
+	t.Run("ahead and clean", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`); err != nil {
+			t.Fatalf("resetting schema: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`)
+		})
+
+		p, err := Connect(ctx, containerDSN, "migration-ahead")
+		if err != nil {
+			t.Fatalf("creating current schema: %v", err)
+		}
+		p.Close()
+		p.pool.Close()
+		if _, err := pool.Exec(ctx, `UPDATE "migration-ahead".schema_migrations SET version = 2, dirty = false`); err != nil {
+			t.Fatalf("setting ahead migration state: %v", err)
+		}
+
+		p, err = Connect(ctx, containerDSN, "migration-ahead")
+		if err != nil {
+			t.Fatalf("Connect with an ahead clean schema failed: %v", err)
+		}
+		p.Close()
+		p.pool.Close()
+	})
+
+	t.Run("dirty", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-dirty" CASCADE`); err != nil {
+			t.Fatalf("resetting schema: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-dirty" CASCADE`)
+		})
+
+		p, err := Connect(ctx, containerDSN, "migration-dirty")
+		if err != nil {
+			t.Fatalf("creating current schema: %v", err)
+		}
+		p.Close()
+		p.pool.Close()
+		if _, err := pool.Exec(ctx, `UPDATE "migration-dirty".schema_migrations SET dirty = true`); err != nil {
+			t.Fatalf("setting dirty migration state: %v", err)
+		}
+
+		_, err = Connect(ctx, containerDSN, "migration-dirty")
+		var dirtyErr migrate.ErrDirty
+		if !errors.As(err, &dirtyErr) {
+			t.Fatalf("Connect error = %v, want migrate.ErrDirty", err)
+		}
+	})
+
+	t.Run("tables without metadata", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `
+			DROP SCHEMA IF EXISTS "migration-legacy" CASCADE;
+			CREATE SCHEMA "migration-legacy";
+			CREATE TABLE "migration-legacy".atespaces (id integer)`); err != nil {
+			t.Fatalf("creating legacy schema: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-legacy" CASCADE`)
+		})
+
+		_, err := Connect(ctx, containerDSN, "migration-legacy")
+		if err == nil || !strings.Contains(err.Error(), "Substrate tables exist without migration metadata") {
+			t.Fatalf("Connect error = %v, want unsupported schema error", err)
+		}
+		var metadataExists bool
+		if err := pool.QueryRow(ctx, `SELECT to_regclass('"migration-legacy".schema_migrations') IS NOT NULL`).Scan(&metadataExists); err != nil {
+			t.Fatalf("checking migration metadata: %v", err)
+		}
+		if metadataExists {
+			t.Error("Connect created migration metadata for an unsupported schema")
+		}
+	})
 }
 
 func setupPostgresPersistence(t *testing.T) *Persistence {
