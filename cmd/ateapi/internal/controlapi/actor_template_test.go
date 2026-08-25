@@ -197,7 +197,7 @@ func TestCreateActorTemplate(t *testing.T) {
 }
 
 // TestCreateActorTemplateIgnoresServerOwnedFields pins the create contract:
-// status on the request is dropped and new versions start with empty
+// status on the request is dropped and new templates start with empty
 // conditions. The store persists whatever the handler hands it, so the
 // handler is the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {

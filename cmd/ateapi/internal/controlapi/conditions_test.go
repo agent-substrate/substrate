@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -25,46 +26,104 @@ func TestSetCondition(t *testing.T) {
 	statusTrue := ateapipb.ConditionStatus_CONDITION_STATUS_TRUE
 	statusFalse := ateapipb.ConditionStatus_CONDITION_STATUS_FALSE
 
-	var conds []*ateapipb.Condition
-	setCondition(&conds, conditionReady, statusFalse, "Waiting", "not yet")
-	if len(conds) != 1 {
-		t.Fatalf("got %d conditions, want 1", len(conds))
-	}
-	if conditionIsTrue(conds, conditionReady) {
-		t.Error("Ready is true, want false")
-	}
-	firstTransition := findCondition(conds, conditionReady).GetLastTransitionTime()
-	if firstTransition == nil {
-		t.Fatal("last_transition_time not set on insert")
-	}
-
-	// Same status: reason and message update, transition time does not.
-	earlier := timestamppb.New(firstTransition.AsTime().Add(-1))
-	findCondition(conds, conditionReady).LastTransitionTime = earlier
-	setCondition(&conds, conditionReady, statusFalse, "StillWaiting", "still not yet")
-	cond := findCondition(conds, conditionReady)
-	if cond.GetReason() != "StillWaiting" || cond.GetMessage() != "still not yet" {
-		t.Errorf("reason/message = %q/%q, want updated", cond.GetReason(), cond.GetMessage())
-	}
-	if !cond.GetLastTransitionTime().AsTime().Equal(earlier.AsTime()) {
-		t.Error("last_transition_time moved without a status flip")
+	// Seed timestamp well in the past so a moved transition time is
+	// distinguishable from a preserved one.
+	past := timestamppb.New(time.Now().Add(-time.Hour))
+	existingReady := func(status ateapipb.ConditionStatus) []*ateapipb.Condition {
+		return []*ateapipb.Condition{{
+			Type:               conditionReady,
+			Status:             status,
+			Reason:             "Waiting",
+			Message:            "not yet",
+			LastTransitionTime: past,
+		}}
 	}
 
-	// Status flip: transition time moves.
-	setCondition(&conds, conditionReady, statusTrue, "Ready", "done")
-	if got := findCondition(conds, conditionReady).GetLastTransitionTime().AsTime(); !got.After(earlier.AsTime()) {
-		t.Error("last_transition_time did not move on status flip")
-	}
-	if !conditionIsTrue(conds, conditionReady) {
-		t.Error("Ready is not true after flip")
+	tests := []struct {
+		name                string
+		conds               []*ateapipb.Condition
+		condType            string
+		status              ateapipb.ConditionStatus
+		reason, message     string
+		wantLen             int
+		wantTransitionMoved bool
+	}{
+		{
+			name:                "insert into empty",
+			condType:            conditionReady,
+			status:              statusFalse,
+			reason:              "Waiting",
+			message:             "not yet",
+			wantLen:             1,
+			wantTransitionMoved: true,
+		},
+		{
+			name:                "same status updates reason and message only",
+			conds:               existingReady(statusFalse),
+			condType:            conditionReady,
+			status:              statusFalse,
+			reason:              "StillWaiting",
+			message:             "still not yet",
+			wantLen:             1,
+			wantTransitionMoved: false,
+		},
+		{
+			name:                "status flip moves transition time",
+			conds:               existingReady(statusFalse),
+			condType:            conditionReady,
+			status:              statusTrue,
+			reason:              "Ready",
+			message:             "done",
+			wantLen:             1,
+			wantTransitionMoved: true,
+		},
+		{
+			name:                "second type appends rather than overwrites",
+			conds:               existingReady(statusTrue),
+			condType:            conditionFailed,
+			status:              statusTrue,
+			reason:              reasonGoldenActorCrashed,
+			message:             "boom",
+			wantLen:             2,
+			wantTransitionMoved: true,
+		},
 	}
 
-	// A second type appends rather than overwrites.
-	setCondition(&conds, conditionFailed, statusTrue, reasonGoldenActorCrashed, "boom")
-	if len(conds) != 2 {
-		t.Fatalf("got %d conditions, want 2", len(conds))
-	}
-	if !conditionIsTrue(conds, conditionFailed) || !conditionIsTrue(conds, conditionReady) {
-		t.Error("expected both Ready and Failed true")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			conds := tc.conds
+			setCondition(&conds, tc.condType, tc.status, tc.reason, tc.message)
+
+			if len(conds) != tc.wantLen {
+				t.Fatalf("got %d conditions, want %d", len(conds), tc.wantLen)
+			}
+			cond := findCondition(conds, tc.condType)
+			if cond == nil {
+				t.Fatalf("condition %q not found", tc.condType)
+			}
+			if cond.GetStatus() != tc.status || cond.GetReason() != tc.reason || cond.GetMessage() != tc.message {
+				t.Errorf("got %v/%q/%q, want %v/%q/%q",
+					cond.GetStatus(), cond.GetReason(), cond.GetMessage(),
+					tc.status, tc.reason, tc.message)
+			}
+			if got, want := conditionIsTrue(conds, tc.condType), tc.status == statusTrue; got != want {
+				t.Errorf("conditionIsTrue = %v, want %v", got, want)
+			}
+			if cond.GetLastTransitionTime() == nil {
+				t.Fatal("last_transition_time not set")
+			}
+			if moved := cond.GetLastTransitionTime().AsTime().After(past.AsTime()); moved != tc.wantTransitionMoved {
+				t.Errorf("transition time moved = %v, want %v", moved, tc.wantTransitionMoved)
+			}
+			// Conditions of other types must survive untouched.
+			for _, orig := range tc.conds {
+				if orig.GetType() == tc.condType {
+					continue
+				}
+				if got := findCondition(conds, orig.GetType()); got == nil || got.GetStatus() != orig.GetStatus() {
+					t.Errorf("pre-existing condition %q was dropped or modified", orig.GetType())
+				}
+			}
+		})
 	}
 }

@@ -643,7 +643,7 @@ message DeleteAtespaceRequest {
 
 message CreateActorTemplateRequest {
   // The actor template version to create. Server-assigned metadata (uid,
-  // version, timestamps) is ignored, as are the status fields: new versions
+  // version, timestamps) is ignored, as are the status fields: new templates
   // start with empty conditions and are reconciled from there.
   ActorTemplate actor_template = 1;
 }
