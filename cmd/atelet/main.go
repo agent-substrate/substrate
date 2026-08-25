@@ -1796,6 +1796,12 @@ type AteomDialer struct {
 // (the channel idle timeout parks only one of them). Closing on eviction can
 // fail an RPC still in flight on a conn that aged to the LRU tail, but that
 // failure is visible and retryable, unlike the leak.
+//
+// TODO: Consider pool semantics instead of a cache: a conn evicted for
+// capacity would drain — close only once its last in-flight RPC finishes
+// (e.g. refcounted checkout/release) — rather than being closed out from
+// under a caller. Worth revisiting if the retryable eviction failures show
+// up in practice.
 func newAteomDialer(size int) *AteomDialer {
 	return &AteomDialer{
 		conns: lru.NewWithEvictionFunc(size, func(_ lru.Key, value interface{}) {
