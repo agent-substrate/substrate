@@ -54,7 +54,7 @@ func TestValidateListWorkersRequest(t *testing.T) {
 // will fail loudly as each one is filled in — at which point the corresponding
 // case moves to a real test.
 func TestWorkerAPIUnimplemented(t *testing.T) {
-	s := &Service{}
+	s := &RPCService{}
 	ctx := context.Background()
 
 	tests := []struct {

@@ -47,7 +47,7 @@ import (
 // resulting store row is keyed by.
 const testPodUID = "11111111-1111-1111-1111-111111111111"
 
-// setupSyncerTest sets up a real store with fake Redis and a fake K8s client with informer.
+// setupSyncerTest sets up a real PostgreSQL store and a fake K8s client with informer.
 func setupSyncerTest(t *testing.T, ctx context.Context, initPools ...*atev1alpha1.WorkerPool) (store.Interface, *fake.Clientset, *atefake.Clientset, func()) {
 	persistence, fakeK8s, fakeAte, _, cleanup := setupSyncerTestWithStore(t, ctx, nil, initPools...)
 	return persistence, fakeK8s, fakeAte, cleanup
@@ -105,12 +105,12 @@ func TestSyncer_Lifecycle(t *testing.T) {
 
 	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, pool)
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()
 
-	// 1. Verify no workers in Redis initially
+	// 1. Verify no workers in the store initially.
 	workers, err := persistence.ListWorkers(context.Background(), store.ListOptions{PageSize: 1000})
 	if err != nil {
 		t.Fatalf("failed to list workers: %v", err)
@@ -144,7 +144,7 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	err = wait.PollUntilContextTimeout(context.Background(), 50*time.Millisecond, 500*time.Millisecond, true, func(ctx context.Context) (bool, error) {
 		_, err := persistence.GetWorker(ctx, testPodUID)
 		if err == nil {
-			return false, fmt.Errorf("worker unexpectedly found in Redis")
+			return false, fmt.Errorf("worker unexpectedly found in store")
 		}
 		if !errors.Is(err, store.ErrNotFound) {
 			return false, err
@@ -190,7 +190,7 @@ func TestSyncer_Lifecycle(t *testing.T) {
 		return true, nil
 	})
 	if err != nil {
-		t.Fatalf("Worker not found in Redis after update: %v", err)
+		t.Fatalf("Worker not found in store after update: %v", err)
 	}
 
 	// 8. Delete it
@@ -211,7 +211,7 @@ func TestSyncer_Lifecycle(t *testing.T) {
 		return false, nil
 	})
 	if err != nil {
-		t.Fatalf("Worker still found in Redis after deletion: %v", err)
+		t.Fatalf("Worker still found in store after deletion: %v", err)
 	}
 }
 
@@ -232,7 +232,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 
 	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, workerPool)
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()
@@ -262,10 +262,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 		t.Fatalf("worker row not materialised: %v", err)
 	}
 	actorName := "actor-orphan"
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-orphan"}}); err != nil {
-		t.Fatalf("create atespace: %v", err)
-	}
-	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	createdActor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorName, Atespace: "team-orphan"}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
@@ -280,9 +277,6 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 			LatestSnapshot:              &ateapipb.ObjectRef{Atespace: "team-orphan", Name: "last"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("create actor: %v", err)
-	}
 	w, _ := persistence.GetWorker(ctx, testPodUID)
 	w.Status.Assignment = &ateapipb.ActorAssignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
@@ -340,7 +334,7 @@ func TestSyncer_OmittedFields(t *testing.T) {
 
 	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, pool)
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()
@@ -371,7 +365,7 @@ func TestSyncer_OmittedFields(t *testing.T) {
 		t.Fatalf("failed to create pod: %v", err)
 	}
 
-	// Verify that it is created in Redis with empty SandboxClass and empty Labels
+	// Verify that it is created in the store with empty SandboxClass and empty Labels.
 	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 2*time.Second, true, func(ctx context.Context) (bool, error) {
 		w, err := persistence.GetWorker(ctx, testPodUID)
 		if err != nil {
@@ -585,12 +579,7 @@ func TestReconcileDeadWorker(t *testing.T) {
 
 	ns, pool, pod := "ns-rdw", "pool1", "worker-rdw"
 	atespace, actorID := "team-rdw", "actor-rdw"
-
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
-		t.Fatalf("CreateAtespace() failed: %v", err)
-	}
-
-	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	createdActor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
@@ -600,9 +589,6 @@ func TestReconcileDeadWorker(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("create actor: %v", err)
-	}
 	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: "10.0.0.5",
@@ -645,12 +631,7 @@ func TestReconcileDeadWorker_IgnoresStaleIncarnationAssignment(t *testing.T) {
 
 	ns, pool, pod, uid := "ns-rdw", "pool1", "worker-rdw", "uid-rdw"
 	atespace, actorID := "team-rdw", "actor-rdw"
-
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
-		t.Fatalf("CreateAtespace() failed: %v", err)
-	}
-
-	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	createdActor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
@@ -660,9 +641,6 @@ func TestReconcileDeadWorker_IgnoresStaleIncarnationAssignment(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("create actor: %v", err)
-	}
 	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: uid},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod,
@@ -742,12 +720,7 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	// An orphan worker (no pod) whose actor is still RUNNING must be cleaned up.
 	const orphanUID = "22222222-2222-2222-2222-222222222222"
 	atespace, actorID := "team-recon", "actor-recon"
-
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
-		t.Fatalf("CreateAtespace() failed: %v", err)
-	}
-
-	createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	createdActor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
@@ -757,9 +730,6 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("create actor: %v", err)
-	}
 	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: orphanUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-orphan", Ip: "10.0.0.10",
@@ -975,12 +945,7 @@ func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 			s := &WorkerPoolSyncer{persistence: persistence}
 
 			atespace, actorID := "team-status", "actor-status"
-
-			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}}); err != nil {
-				t.Fatalf("CreateAtespace() failed: %v", err)
-			}
-
-			createdActor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+			createdActor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:               &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace},
 				ActorTemplateNamespace: ns,
 				ActorTemplateName:      "tmpl",
@@ -992,9 +957,6 @@ func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 					},
 				},
 			})
-			if err != nil {
-				t.Fatalf("create actor: %v", err)
-			}
 			if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 				Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: ip,
@@ -1086,7 +1048,7 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 		return cs
 	}, pool)
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()
@@ -1154,7 +1116,7 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 
 	// Touch the pod ONCE in K8s so the syncer reconciles it. The first reconcile's
 	// UpdateWorker hits ErrVersionConflict (injected by conflictStore), which requeues
-	// the key with backoff; the retry re-fetches the latest version from Redis.
+	// the key with backoff; the retry re-fetches the latest version from the store.
 	updatedPod, err := fakeK8s.CoreV1().Pods(ns).Get(context.Background(), podName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get pod: %v", err)
@@ -1167,7 +1129,7 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 		t.Fatalf("failed to update pod: %v", err)
 	}
 
-	// Verify that the worker in Redis eventually gets updated to the new SandboxClass despite the version conflict.
+	// Verify that the worker eventually gets updated to the new SandboxClass despite the version conflict.
 	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		w, err := persistence.GetWorker(ctx, testPodUID)
 		if err != nil {
@@ -1195,7 +1157,7 @@ func TestSyncer_RequeueOnMissingWorkerPool(t *testing.T) {
 
 	persistence, fakeK8s, fakeAte, syncer, cleanup := setupSyncerTestWithStore(t, ctx, nil) // no pools yet
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()
@@ -1282,7 +1244,7 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 
 	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, pool)
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()
@@ -1359,7 +1321,7 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 
 	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, pool)
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()
@@ -1459,7 +1421,7 @@ func TestSyncer_DeleteNeverEligiblePod(t *testing.T) {
 
 	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, pool)
 	defer func() {
-		// Stop syncer before closing store to prevent panics on closed miniredis.
+		// Stop the syncer before closing the store.
 		cancel()
 		cleanup()
 	}()

@@ -71,7 +71,6 @@ function usage() {
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
-  echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
@@ -97,14 +96,11 @@ function usage() {
   echo "  --create-actor-id-ca-certs-secret      Create actor ID CA certs secret"
   echo "  --create-egress-mitm-ca-pool-secret    Create egress MITM CA pool secret"
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
-  echo "  --create-valkey-ca-certs-secret        Create Valkey's combined client/server CA bundle"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
   echo ""
-  echo "PostgreSQL store (standalone operations; normally select it with"
-  echo "--deploy-ate-system --store-backend=postgres):"
+  echo "PostgreSQL configuration:"
   echo ""
-  echo "  --deploy-postgres                      Deploy the single-replica PostgreSQL StatefulSet"
   echo "  ATE_API_POSTGRES_CONNECTION_STRING     Use an external PostgreSQL instance and skip the bundled instance"
   echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
   echo ""
@@ -188,19 +184,6 @@ atenet_router() {
   esac
 }
 
-store_backend() {
-  local backend="${ATE_INSTALL_STORE_BACKEND:-${ATE_API_STORE_BACKEND:-redis}}"
-  case "${backend}" in
-    redis|postgres)
-      echo "${backend}"
-      ;;
-    *)
-      echo "Error: store backend must be redis or postgres, got '${backend}'" >&2
-      exit 1
-      ;;
-  esac
-}
-
 podcert_workers_per_signer() {
   local workers="${ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER:-1}"
   if ! [[ "${workers}" =~ ^[1-9][0-9]*$ ]]; then
@@ -224,7 +207,7 @@ default_postgres_connection_string() {
 }
 
 use_bundled_postgres() {
-  [[ "$(store_backend)" == "postgres" && -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" ]]
+  [[ -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" ]]
 }
 
 render_ate_system_manifests() {
@@ -245,7 +228,7 @@ render_ate_system_manifests() {
     kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   else
     # Build everything resolved with base manifests for GKE
-    run_ko resolve -f manifests/ate-install
+    kubectl kustomize manifests/ate-install/base --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   fi
 }
 
@@ -325,9 +308,6 @@ apply_otel_config() {
   fi
 }
 
-# Apply the opt-in PostgreSQL StatefulSet. On kind it goes through an overlay
-# that right-sizes the CPU request for a 4-vCPU node; see
-# manifests/ate-install/kind/postgres/kustomization.yaml.
 apply_postgres() {
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     kubectl kustomize manifests/ate-install/kind/postgres \
@@ -391,54 +371,6 @@ ca_pool_root_pem() {
   echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem
 }
 
-create_valkey_ca_certs_secret() {
-  log_step "create_valkey_ca_certs_secret"
-  # Valkey uses one CA file to verify certificates in both directions:
-  #   - servicedns CA: verifies Valkey peers.
-  #   - podidentity CA: verifies clients such as ateapi and Valkey's init job.
-  # Extract each root into its own variable: errexit cannot see a substitution
-  # failing inside printf's argument list, which would silently produce a CA
-  # file with a missing root.
-  local servicedns_root=""
-  servicedns_root=$(ca_pool_root_pem service-dns-ca-pool)
-  local podidentity_root=""
-  podidentity_root=$(ca_pool_root_pem pod-identity-ca-pool)
-  if [[ -z "${servicedns_root}" || -z "${podidentity_root}" ]]; then
-    echo "error: failed to extract a CA root for valkey-ca-certs" >&2
-    return 1
-  fi
-  local ca_certs=""
-  ca_certs=$(printf '%s\n%s\n' "${servicedns_root}" "${podidentity_root}")
-
-  run_kubectl create secret generic valkey-ca-certs \
-    --from-literal=ca.crt="${ca_certs}" \
-    -n ate-system \
-    --dry-run=client -o yaml \
-    | run_kubectl apply -f -
-}
-
-# deploy_postgres deploys only the experimental single-replica PostgreSQL
-# StatefulSet. Full-system installs select it with --store-backend=postgres.
-deploy_postgres() {
-  log_step "deploy_postgres"
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
-  run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
-    || create_podcertificate_controller_cas
-  run_kubectl get secret -n podcertificate-controller-system pod-identity-ca-pool >/dev/null 2>&1 \
-    || create_podcertificate_controller_cas
-  # The StatefulSet's projected serving certificate is issued by this
-  # controller. Applying it here makes --deploy-postgres usable on a fresh
-  # cluster as well as after --deploy-ate-system.
-  run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
-  apply_podcert_workers_override
-  run_kubectl rollout status deployment/podcertificate-controller \
-    -n podcertificate-controller-system --timeout=120s
-  wait_for_podcertificate_trust_bundles
-  apply_postgres
-  run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
-}
-
 create_jwt_authority_pool_secret() {
   log_step "create_jwt_authority_pool_secret"
   run_kubectl_ate admin make-jwt-pool \
@@ -457,9 +389,7 @@ create_actor_id_ca_pool_secret() {
 
 # The egress gateway has to verify actor client certificates, which means it
 # needs the actor-identity CA root. actor-id-ca-pool Secret containts both
-# root and CA signing key. This derives a cert-only Secret instead, following
-# exactly the pattern create_valkey_ca_certs_secret already uses for the
-# signer roots.
+# root and CA signing key. This derives a cert-only Secret for the signer root.
 #
 # TODO(liorlieberman): should this be published as ClusterTrustBundles?
 create_actor_id_ca_certs_secret() {
@@ -531,35 +461,15 @@ create_api_server_env_vars() {
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
-  local backend=""
-  local redis_address=""
-  local use_iam_auth="true"
-  local tls_server_name=""
-  local client_cert=""
   local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
   local postgres_schema="${ATE_API_POSTGRES_SCHEMA:-public}"
-  backend="$(store_backend)"
-  if [[ "${backend}" == "postgres" && -z "${postgres_connection_string}" ]]; then
+  if [[ -z "${postgres_connection_string}" ]]; then
     postgres_connection_string="$(default_postgres_connection_string)"
   fi
-  redis_address="valkey-cluster.ate-system.svc:6379"
-  use_iam_auth="false"
-  tls_server_name="valkey-cluster.ate-system.svc"
-  # The apiserver dials valkey as a client, so it presents a podidentity
-  # (SPIFFE) client cert rather than a servicedns serving cert.
-  client_cert="/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 
-  echo "STORE_BACKEND: ${backend}"
-  if [[ "${backend}" == "redis" ]]; then
-    echo "REDIS_ADDRESS: ${redis_address}"
-  fi
+  echo "POSTGRES_CONNECTION_STRING: ${postgres_connection_string}"
 
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
-    --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
-    --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
-    --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
-    --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
-    --from-literal=ATE_API_STORE_BACKEND="${backend}" \
     --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
     --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
     --dry-run=client -o yaml \
@@ -645,14 +555,6 @@ deploy_ate_system() {
   # schemas and RBAC (role.yaml has no other apply path).
   deploy_crds
 
-  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
-    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-      setup_csi
-    else
-      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
-    fi
-  fi
-
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
   run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
@@ -680,8 +582,18 @@ deploy_ate_system() {
 
   wait_for_podcertificate_trust_bundles
 
-  # The Kind overlays do not include the optional PostgreSQL manifest.
-  # Apply it only when no external connection string is set.
+  # CSI setup must run after podcertificate-controller is ready and trust bundles
+  # exist. The ghostunnel sidecar uses projected podCertificate and clusterTrustBundle
+  # volumes which cannot be fulfilled until podcertcontroller is actively signing,
+  # otherwise rollout of csi-hostpath-socat times out.
+  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      setup_csi
+    else
+      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+    fi
+  fi
+
   if use_bundled_postgres; then
     apply_postgres
   fi
@@ -697,16 +609,9 @@ deploy_ate_system() {
   apply_atenet_egress
 
   log_step "Waiting for ATE system components to be ready..."
-  case "$(store_backend)" in
-    redis)
-      run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout="$(rollout_timeout)"
-      ;;
-    postgres)
-      if use_bundled_postgres; then
-        run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
-      fi
-      ;;
-  esac
+  if use_bundled_postgres; then
+    run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+  fi
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
@@ -729,10 +634,7 @@ ensure_apiserver_prerequisites() {
     || create_actor_id_ca_certs_secret
   run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
     || create_podcertificate_controller_cas
-  run_kubectl get secret -n ate-system valkey-ca-certs >/dev/null 2>&1 \
-    || create_valkey_ca_certs_secret
-  # This ConfigMap carries the selected store backend, so always reconcile it
-  # to make switching --store-backend update an existing installation.
+  # Always reconcile the PostgreSQL connection settings.
   create_api_server_env_vars
   run_kubectl get configmap -n ate-system ate-api-authentication >/dev/null 2>&1 \
     || create_api_authentication_config
@@ -908,7 +810,6 @@ delete_ate_system() {
   fi
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/components/agentgateway/configmap.yaml
-  run_kubectl delete --ignore-not-found -f manifests/ate-install/valkey.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/postgres.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
 }
@@ -986,7 +887,7 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
-SETUP_CSI=false
+SETUP_CSI="${SETUP_CSI:-false}"
 BENCHMARK_WORKER_COUNT=1
 BENCHMARK_SANDBOX_CLASS=gvisor
 # Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).
@@ -1012,14 +913,6 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
         exit 1
       fi
       ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE="${prescan_args[$((i + 1))]}"
-      ;;
-    --store-backend=*) ATE_INSTALL_STORE_BACKEND="${prescan_args[i]#*=}" ;;
-    --store-backend)
-      if (( i + 1 >= ${#prescan_args[@]} )); then
-        echo "Error: --store-backend requires redis or postgres" >&2
-        exit 1
-      fi
-      ATE_INSTALL_STORE_BACKEND="${prescan_args[$((i + 1))]}"
       ;;
     --podcert-workers-per-signer=*) ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${prescan_args[i]#*=}" ;;
     --podcert-workers-per-signer)
@@ -1084,7 +977,6 @@ case "${BENCHMARK_SANDBOX_CLASS}" in
     exit 1
     ;;
 esac
-store_backend >/dev/null
 podcert_workers_per_signer >/dev/null
 rollout_timeout >/dev/null
 
@@ -1116,15 +1008,6 @@ while [[ "$#" -gt 0 ]]; do
     --experimental-use-sdsmint) ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --experimental-additional-egress-extproc-service=*) ;;
-    --store-backend=*) ATE_INSTALL_STORE_BACKEND="${1#*=}" ;;
-    --store-backend)
-      shift
-      if [[ "$#" -eq 0 ]]; then
-        echo "Error: --store-backend requires redis or postgres" >&2
-        exit 1
-      fi
-      ATE_INSTALL_STORE_BACKEND="$1"
-      ;;
     --podcert-workers-per-signer=*) ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${1#*=}" ;;
     --podcert-workers-per-signer)
       shift
@@ -1180,10 +1063,8 @@ while [[ "$#" -gt 0 ]]; do
     --create-actor-id-ca-certs-secret) create_actor_id_ca_certs_secret ;;
     --create-egress-mitm-ca-pool-secret) create_egress_mitm_ca_pool_secret ;;
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
-    --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;
     --create-api-authentication-config) create_api_authentication_config ;;
-    --deploy-postgres) deploy_postgres ;;
 
     *)
       # Invalid option, should usage and exit with an error.

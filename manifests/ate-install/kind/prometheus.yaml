@@ -107,6 +107,43 @@ data:
           - source_labels: [__meta_kubernetes_pod_phase]
             action: drop
             regex: Pending|Succeeded|Failed
+
+      # The two read ports of the collector: 8889 carries the substrate_*
+      # counts of the count connector, and 8888 the otelcol_* counters of the
+      # collector itself. The two go together: when a service reports zero
+      # volume, otelcol_receiver_accepted_* shows the difference between a
+      # service that sent nothing and data that never arrived.
+      #
+      # This job, and not the annotation job above, reads the collector. The
+      # annotation can name one port only, thus the collector pod carries no
+      # prometheus.io/scrape annotation. Read the two ports here instead.
+      #
+      # 8889 re-exports each metric that the pipelines push, and the pods of
+      # ate-api-server, atelet, and atenet-router already carry the annotation
+      # on 9090. Keep the substrate_* and otelcol_* names only, or every
+      # series of those services arrives twice and sum() gives double.
+      - job_name: otel-collector-self
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - otel-system
+        relabel_configs:
+          - source_labels:
+              - __meta_kubernetes_pod_label_app
+              - __meta_kubernetes_pod_container_port_number
+            action: keep
+            regex: opentelemetry-collector;(8888|8889)
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            action: keep
+            regex: (substrate|otelcol)_.*
 ---
 apiVersion: apps/v1
 kind: Deployment

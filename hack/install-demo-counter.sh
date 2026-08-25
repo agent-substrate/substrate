@@ -43,9 +43,16 @@ demo-counter_deploy() {
   local ext_vol_mount_cmd=("-e" "/\${EXTERNAL_VOLUME_MOUNTS}/d")
   local ext_vol_spec_cmd=("-e" "/\${EXTERNAL_VOLUMES}/d")
   if [[ "${with_external_volume}" == "true" ]]; then
+    # csi-hostpath-sc only exists when hack/setup-csi-hostpath-kind.sh has run (via SETUP_CSI=true).
+    # Otherwise fall back to the default "standard" StorageClass.
+    local storage_class="standard"
+    if [[ "${SETUP_CSI:-false}" == "true" ]]; then
+      storage_class="csi-hostpath-sc"
+    fi
+
     validate_cmd=("-e" "s|\${VALIDATE_EXISTING_FILE_PATH_ARG}|    - --validate-existing-file-path=/external-data/test.txt|g")
     ext_vol_mount_cmd=("-e" "s|\${EXTERNAL_VOLUME_MOUNTS}|    - name: external-data\n      mountPath: /external-data|g")
-    ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|  - name: external-data\n    externalVolumeTemplate:\n      capacity: 1Gi\n      storageClassName: standard|g")
+    ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|  - name: external-data\n    externalVolumeTemplate:\n      capacity: 1Gi\n      storageClassName: ${storage_class}|g")
   fi
 
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \

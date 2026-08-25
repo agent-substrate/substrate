@@ -19,8 +19,8 @@
 #   http://telemetry-meter.benchmarking.svc.cluster.local:4317
 # for the duration of a measurement, then scrape :8889 for
 #
-#   substrate_spans_total{svc="..."}       the spans from each service
-#   substrate_datapoints_total{svc="..."}  the datapoints from each service
+#   substrate_spans_total{service_name="..."}       spans from each service
+#   substrate_datapoints_total{service_name="..."}  datapoints from each service
 #
 # Scrape :8888 for the otelcol_* receiver counters of the meter.
 #
@@ -62,32 +62,15 @@ data:
       # and the Prometheus exporter reads a new start timestamp as a reset of
       # the counter. Without deltatocumulative the counters do not accumulate,
       # and each scrape shows only the last batch.
+      #
+      # max_streams bounds the memory. A stream is for each process and
+      # count, and not for each service, because serverboot gives each
+      # process its own service.instance.id. 24 processes held 51 streams, at
+      # approximately 5 KiB each. Above the limit new streams drop with no log
+      # line and the totals become too low; README.md holds the pass criteria
+      # that catch it.
       deltatocumulative:
-
-      # The count connector reads the attributes of a span or a datapoint. It
-      # does not read the attributes of the resource, thus service.name is not
-      # visible to it. Copy service.name to a datapoint attribute. Without this
-      # copy the connector has nothing to group by, and it counts all the
-      # services into one bucket.
-      #
-      # This is not a correction for the scrape configuration. honor_labels
-      # changes what Prometheus does with the labels of a scrape, and a scrape
-      # occurs after the connector counts. Thus honor_labels cannot give the
-      # connector an attribute to count by, and it is not an alternative to
-      # this transform.
-      #
-      # The name is svc, and not job, because Prometheus sets job to the name
-      # of the scrape job.
-      transform/svc:
-        error_mode: ignore
-        trace_statements:
-          - context: span
-            statements:
-              - set(attributes["svc"], resource.attributes["service.name"])
-        metric_statements:
-          - context: datapoint
-            statements:
-              - set(attributes["svc"], resource.attributes["service.name"])
+        max_streams: 20000
 
     connectors:
       count:
@@ -95,16 +78,21 @@ data:
           substrate_spans:
             description: Spans received, by emitting service.
             attributes:
+              # The connector reads each key from the attributes of the item,
+              # then the scope, then the resource, thus service.name resolves
+              # from the resource and no transform in front of it is needed.
+              # The Prometheus exporter writes the key as service_name.
+              #
               # Without a default value, the connector removes each item that
               # has no service.name from the count. The item does not show as
               # unknown, and the totals are too low with no error message.
-              - key: svc
+              - key: service.name
                 default_value: unknown
         datapoints:
           substrate_datapoints:
             description: Metric datapoints received, by emitting service.
             attributes:
-              - key: svc
+              - key: service.name
                 default_value: unknown
 
     exporters:
@@ -128,16 +116,15 @@ data:
     service:
       pipelines:
         # The count pipelines and the forward pipelines read the same receiver.
-        # The collector sends a copy of the data to each pipeline, and it clones
-        # the data because transform/svc changes it. Thus the svc attribute that
-        # the count needs does not go to the managed collector.
+        # The count pipelines only count. The connector declares MutatesData
+        # false, thus it changes nothing that goes to the managed collector.
         #
         # memory_limiter is first in each pipeline that reads the receiver.
-        # metrics/counts has no limiter: a refusal there would remove the
+        # metrics/count-out has no limiter: a refusal there would remove the
         # measurement of the run.
         traces/count:
           receivers: [otlp]
-          processors: [memory_limiter, transform/svc]
+          processors: [memory_limiter]
           exporters: [count]
         traces/forward:
           receivers: [otlp]
@@ -145,13 +132,15 @@ data:
           exporters: [otlp/managed]
         metrics/count:
           receivers: [otlp]
-          processors: [memory_limiter, transform/svc]
+          processors: [memory_limiter]
           exporters: [count]
         metrics/forward:
           receivers: [otlp]
           processors: [memory_limiter]
           exporters: [otlp/managed]
-        metrics/counts:
+
+        # The counts that the connector makes, out to the Prometheus exporter.
+        metrics/count-out:
           receivers: [count]
           processors: [deltatocumulative]
           exporters: [prometheus]

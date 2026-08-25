@@ -40,7 +40,14 @@ var fixtureManifests = []string{
 // a WorkerPool that never gets a micro-VM worker.
 func renderFixture(t *testing.T, relPath string) (*v1alpha1.WorkerPool, *v1alpha1.ActorTemplate) {
 	t.Helper()
-	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket", "render"))
+	return decodeFixture(t, relPath, RenderFixtureManifest(t, relPath, "test-bucket", "render"))
+}
+
+// decodeFixture strict-decodes an already-rendered manifest, for callers that
+// render a fixture some way other than RenderFixtureManifest.
+func decodeFixture(t *testing.T, relPath, rendered string) (*v1alpha1.WorkerPool, *v1alpha1.ActorTemplate) {
+	t.Helper()
+	raw, err := os.ReadFile(rendered)
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
 	}

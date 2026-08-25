@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateActorTemplate(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := validateCreateActorTemplateRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -140,7 +140,7 @@ func validateCreateActorTemplateRequest(req *ateapipb.CreateActorTemplateRequest
 	return errs
 }
 
-func (s *Service) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := validateGetActorTemplateRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -169,7 +169,7 @@ func validateGetActorTemplateRequest(req *ateapipb.GetActorTemplateRequest) fiel
 	return errs
 }
 
-func (s *Service) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
+func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
 	if errs := validateListActorTemplatesRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -200,7 +200,7 @@ func validateListActorTemplatesRequest(req *ateapipb.ListActorTemplatesRequest) 
 	return errs
 }
 
-func (s *Service) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := validateDeleteActorTemplateRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}

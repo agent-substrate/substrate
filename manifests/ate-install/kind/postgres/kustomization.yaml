@@ -15,17 +15,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Deliberately not listed in ../kustomization.yaml: PostgreSQL is opt-in
-# (--store-backend=postgres; the default is redis), so hack/install-ate.sh
-# builds this overlay standalone at the point where it applies PostgreSQL.
 resources:
   - ../../postgres.yaml
 
 # The base reserves a full CPU for a single-replica database. On a kind node --
 # 4 vCPU on a GitHub runner -- that is a quarter of the node held for a test
-# database, and it is the largest single reason demo WorkerPools run out of
-# schedulable CPU. Only the request (what the scheduler subtracts) is lowered;
-# the 2-CPU limit is untouched, so postgres still bursts as far as it did.
+# database. Only the request (what the scheduler subtracts) is lowered; the
+# 2-CPU limit is untouched, so PostgreSQL can still burst as far as it did.
 patches:
   - patch: |-
       apiVersion: apps/v1

@@ -27,6 +27,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -48,7 +49,7 @@ func TestCreateActor_AtespaceDeletedAfterPrecheck(t *testing.T) {
 	if err := indexer.Add(&atev1alpha1.ActorTemplate{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "tmpl1"}}); err != nil {
 		t.Fatalf("add ActorTemplate: %v", err)
 	}
-	s := &Service{
+	s := &RPCService{
 		persistence:         &createActorErrorStore{err: store.ErrFailedPrecondition},
 		actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer),
 	}
@@ -405,7 +406,7 @@ func TestUpdateActor(t *testing.T) {
 			tt.stored.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
 			tt.stored.ActorTemplateNamespace = templateNS
 			tt.stored.ActorTemplateName = templateName
-			svc, created := serviceWithActor(t, tt.stored)
+			svc, created := rpcServiceWithActor(t, tt.stored)
 
 			tt.req.Metadata = created.GetMetadata()
 			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: tt.req})
@@ -439,14 +440,9 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
 
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
-	if _, err := persistence.CreateAtespace(ctx, atespace); err != nil {
-		t.Fatalf("seed CreateAtespace: %v", err)
-	}
-
 	// Actor A: what the client reads, and what its uid precondition names.
 	// Freshly created, so it sits at version 1.
-	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	original := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
@@ -455,14 +451,12 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPod: "pod-a"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
 
 	// A concurrent client deletes A and recreates the same atespace/name as a
 	// brand new actor B, in the window the handler used to leave open between
 	// its own read and the store's WATCH.
 	var recreated *ateapipb.Actor
+	var err error
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
@@ -486,7 +480,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &Service{persistence: racing}
+	svc := &RPCService{persistence: racing}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -528,19 +522,12 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
 
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
-	if _, err := persistence.CreateAtespace(ctx, atespace); err != nil {
-		t.Fatalf("seed CreateAtespace: %v", err)
-	}
-	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	original := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
 		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
-	if err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
 
 	// A suspend workflow bumps state (a field that a later update operation will not touch)
 	// inside the handler's read-modify-write window.
@@ -555,12 +542,12 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &Service{persistence: racing}
+	svc := &RPCService{persistence: racing}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
-	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
+	_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
 	if code := status.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
@@ -607,26 +594,15 @@ func withSelector(labels map[string]string) func(*ateapipb.UpdateActorRequest) {
 	}
 }
 
-// serviceWithActor seeds one actor in a miniredis-backed store and returns a
-// Service over it.
-func serviceWithActor(t *testing.T, actor *ateapipb.Actor) (*Service, *ateapipb.Actor) {
+// rpcServiceWithActor seeds one actor in a PostgreSQL-backed store and returns an
+// RPCService over it.
+func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ateapipb.Actor) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 
-	atespace := &ateapipb.Atespace{
-		Metadata: &ateapipb.ResourceMetadata{Name: actor.Metadata.Atespace},
-	}
-	_, err := persistence.CreateAtespace(context.Background(), atespace)
-	if err != nil {
-		t.Fatalf("Failed to CreateAtespace: %v", err)
-	}
-
-	created, err := persistence.CreateActor(context.Background(), actor)
-	if err != nil {
-		t.Fatalf("Failed to CreateActor: %v", err)
-	}
-	return &Service{persistence: persistence}, created
+	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
+	return &RPCService{persistence: persistence}, created
 }
 
 func TestValidateDeleteActorRequest(t *testing.T) {
@@ -773,6 +749,83 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateSuspendActorRequest(tt.req), tt.want)
+		})
+	}
+}
+
+// TestUpdateActor_RejectsUnknownFields checks that an update carrying a field
+// this binary has no descriptor for is refused.
+// Update replaces the whole object, so a field the server cannot see would
+// otherwise be persisted unexamined.
+func TestUpdateActor_RejectsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		// placeUnknownField attaches the unknown field somewhere in the request's actor.
+		placeUnknownField func(*ateapipb.Actor)
+		// wantPath is where the resulting error points.
+		wantPath *field.Path
+	}{
+		{
+			name:              "at the top level",
+			placeUnknownField: func(a *ateapipb.Actor) { a.ProtoReflect().SetUnknown(unknownField(9999)) },
+			wantPath:          field.NewPath("actor"),
+		},
+		{
+			name:              "nested in metadata",
+			placeUnknownField: func(a *ateapipb.Actor) { a.Metadata.ProtoReflect().SetUnknown(unknownField(9999)) },
+			wantPath:          field.NewPath("actor", "metadata"),
+		},
+		{
+			name: "nested in worker_selector",
+			placeUnknownField: func(a *ateapipb.Actor) {
+				a.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+				a.WorkerSelector.ProtoReflect().SetUnknown(unknownField(9999))
+			},
+			wantPath: field.NewPath("actor", "worker_selector"),
+		},
+		{
+			name: "nested in metadata.update_time",
+			placeUnknownField: func(a *ateapipb.Actor) {
+				a.Metadata.UpdateTime.ProtoReflect().SetUnknown(unknownField(9999))
+			},
+			wantPath: field.NewPath("actor", "metadata", "update_time"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, stored := rpcServiceWithActor(t, &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+			})
+
+			in := proto.Clone(stored).(*ateapipb.Actor)
+			tt.placeUnknownField(in)
+
+			_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: in})
+			wantErr := toGRPCStatusError(field.ErrorList{
+				field.Invalid(tt.wantPath, field.OmitValueType{}, ""),
+			})
+			if got, want := status.Code(err), status.Code(wantErr); got != want {
+				t.Fatalf("UpdateActor() error code = %v, want %v (error: %v)", got, want, err)
+			}
+			if got, want := status.Convert(err).Message(), status.Convert(wantErr).Message(); got != want {
+				t.Errorf("UpdateActor() error message = %q, want %q", got, want)
+			}
+
+			// The rejection happens before the store is touched, so the actor
+			// is left exactly as it was.
+			after, err := svc.GetActor(ctx, &ateapipb.GetActorRequest{
+				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
+			})
+			if err != nil {
+				t.Fatalf("GetActor() error = %v", err)
+			}
+			if diff := cmp.Diff(stored, after, protocmp.Transform()); diff != "" {
+				t.Errorf("actor changed despite the rejection (-want +got):\n%s", diff)
+			}
 		})
 	}
 }

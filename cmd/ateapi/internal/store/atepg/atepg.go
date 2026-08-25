@@ -73,12 +73,12 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
-	config, err := pgxpool.ParseConfig(dsn)
+	cfg, err := poolConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+		return nil, err
 	}
-	config.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
@@ -91,7 +91,7 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 		return nil, err
 	}
 
-	watchCfg := config.Copy()
+	watchCfg := cfg.Copy()
 	watchCfg.MaxConns = watchPoolMaxConns
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
@@ -127,6 +127,40 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 		return fmt.Errorf("committing PostgreSQL schema %q: %w", schema, err)
 	}
 	return nil
+}
+
+// poolConfig parses dsn into a pool configuration whose TLS material is read
+// from disk again for every new connection.
+//
+// pgx resolves sslcert, sslkey and sslrootcert once, when the connection
+// string is parsed, and pins the result for the life of the pool. The paths in
+// use here are projected pod certificates that the kubelet replaces about
+// every day, so a long-lived process would keep presenting the client
+// certificate it started with, and keep trusting only the CAs it started with,
+// until connections started failing. Re-parsing in BeforeConnect costs one
+// small file read per new connection and picks up every rotation.
+func poolConfig(dsn string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+	}
+	usesTLS := cfg.ConnConfig.TLSConfig != nil
+	for _, fallback := range cfg.ConnConfig.Fallbacks {
+		usesTLS = usesTLS || fallback.TLSConfig != nil
+	}
+	if !usesTLS {
+		return cfg, nil
+	}
+	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+		fresh, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			return fmt.Errorf("re-reading PostgreSQL TLS material: %w", err)
+		}
+		cc.TLSConfig = fresh.TLSConfig
+		cc.Fallbacks = fresh.Fallbacks
+		return nil
+	}
+	return cfg, nil
 }
 
 // NewPersistence wraps an already-open pool, applying pending migrations.

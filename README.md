@@ -91,7 +91,7 @@ To quickly set up the complete environment:
 # create cluster and local registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
 hack/create-kind-cluster.sh
 
-# install ate, valkey, rustfs
+# install ate, PostgreSQL, rustfs
 hack/install-ate-kind.sh --deploy-ate-system
 
 # install counter demo
@@ -128,7 +128,7 @@ curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i 
    gcloud auth application-default login --project=${PROJECT_ID}
    ```
 
-3. Provision the required GCP resources (GKE cluster, Redis, GCS, and IAM bindings):
+3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings):
    ```bash
    go run ./tools/setup-gcp bootstrap
    ```

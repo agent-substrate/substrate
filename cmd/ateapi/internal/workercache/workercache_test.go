@@ -241,7 +241,7 @@ func TestCache_MultipleDisconnects(t *testing.T) {
 
 func TestCache_WatchClosedOnListWorkersFailure(t *testing.T) {
 	fs := newFakeStore()
-	fs.listErr = errors.New("valkey unavailable")
+	fs.listErr = errors.New("store unavailable")
 	c := workercache.New(fs, time.Hour)
 
 	if err := c.Start(t.Context()); err == nil {
@@ -359,9 +359,9 @@ func TestCache_Relist_FailureIsNonFatal(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Make ListWorkers fail to simulate a transient Valkey error.
+	// Make ListWorkers fail to simulate a transient store error.
 	fs.mu.Lock()
-	fs.listErr = errors.New("valkey unavailable")
+	fs.listErr = errors.New("store unavailable")
 	fs.mu.Unlock()
 
 	// Wait long enough for at least one relist attempt.

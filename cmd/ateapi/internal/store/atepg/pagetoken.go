@@ -38,9 +38,8 @@ const (
 	kindWorker        resourceKind = "worker"
 )
 
-// pageToken is PostgreSQL's opaque keyset page token. Unlike ateredis's
-// shard/cursor token, it carries no database topology: just enough to resume
-// an ORDER BY ... WHERE (cols) > (last) scan.
+// pageToken is PostgreSQL's opaque keyset page token. It carries no database
+// topology: just enough to resume an ORDER BY ... WHERE (cols) > (last) scan.
 type pageToken struct {
 	Version int          `json:"v"`
 	Kind    resourceKind `json:"kind"`

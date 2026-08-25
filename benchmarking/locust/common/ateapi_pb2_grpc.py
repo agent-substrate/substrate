@@ -341,7 +341,7 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def CreateAtespace(self, request, context):
-        """Create a new Atespace. Substrate-native, stored in Redis.
+        """Create a new Atespace. Substrate-native, stored in database.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

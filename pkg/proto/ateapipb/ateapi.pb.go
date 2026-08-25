@@ -3614,7 +3614,7 @@ func (x *DeleteActorRequest) GetAnyState() bool {
 
 type GetActorSnapshotRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Snapshot      *ObjectRef             `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	ActorSnapshot *ObjectRef             `protobuf:"bytes,1,opt,name=actor_snapshot,json=actorSnapshot,proto3" json:"actor_snapshot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3649,18 +3649,18 @@ func (*GetActorSnapshotRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{51}
 }
 
-func (x *GetActorSnapshotRequest) GetSnapshot() *ObjectRef {
+func (x *GetActorSnapshotRequest) GetActorSnapshot() *ObjectRef {
 	if x != nil {
-		return x.Snapshot
+		return x.ActorSnapshot
 	}
 	return nil
 }
 
 type GetActorSnapshotTagRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tag           *ObjectRef             `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ActorSnapshotTag *ObjectRef             `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetActorSnapshotTagRequest) Reset() {
@@ -3693,9 +3693,9 @@ func (*GetActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{52}
 }
 
-func (x *GetActorSnapshotTagRequest) GetTag() *ObjectRef {
+func (x *GetActorSnapshotTagRequest) GetActorSnapshotTag() *ObjectRef {
 	if x != nil {
-		return x.Tag
+		return x.ActorSnapshotTag
 	}
 	return nil
 }
@@ -3761,11 +3761,11 @@ func (x *ListActorSnapshotsRequest) GetPageToken() string {
 }
 
 type ListActorSnapshotsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Snapshots     []*ActorSnapshot       `protobuf:"bytes,1,rep,name=snapshots,proto3" json:"snapshots,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ActorSnapshots []*ActorSnapshot       `protobuf:"bytes,1,rep,name=actor_snapshots,json=actorSnapshots,proto3" json:"actor_snapshots,omitempty"`
+	NextPageToken  string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ListActorSnapshotsResponse) Reset() {
@@ -3798,9 +3798,9 @@ func (*ListActorSnapshotsResponse) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{54}
 }
 
-func (x *ListActorSnapshotsResponse) GetSnapshots() []*ActorSnapshot {
+func (x *ListActorSnapshotsResponse) GetActorSnapshots() []*ActorSnapshot {
 	if x != nil {
-		return x.Snapshots
+		return x.ActorSnapshots
 	}
 	return nil
 }
@@ -3862,12 +3862,13 @@ func (x *CreateActorSnapshotTagRequest) GetActorSnapshotTag() *ActorSnapshotTag 
 type UpdateActorSnapshotTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The tag to update.
-	// tag.metadata.atespace and tag.metadata.name identify which resource to
-	// update.
-	// tag.metadata.version and tag.metadata.uid are required preconditions
-	Tag           *ActorSnapshotTag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// actor_snapshot_tag.metadata.atespace and actor_snapshot_tag.metadata.name
+	// identify which resource to update.
+	// actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
+	// are required preconditions
+	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *UpdateActorSnapshotTagRequest) Reset() {
@@ -3900,18 +3901,18 @@ func (*UpdateActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{56}
 }
 
-func (x *UpdateActorSnapshotTagRequest) GetTag() *ActorSnapshotTag {
+func (x *UpdateActorSnapshotTagRequest) GetActorSnapshotTag() *ActorSnapshotTag {
 	if x != nil {
-		return x.Tag
+		return x.ActorSnapshotTag
 	}
 	return nil
 }
 
 type DeleteActorSnapshotTagRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tag           *ObjectRef             `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ActorSnapshotTag *ObjectRef             `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *DeleteActorSnapshotTagRequest) Reset() {
@@ -3944,9 +3945,9 @@ func (*DeleteActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{57}
 }
 
-func (x *DeleteActorSnapshotTagRequest) GetTag() *ObjectRef {
+func (x *DeleteActorSnapshotTagRequest) GetActorSnapshotTag() *ObjectRef {
 	if x != nil {
-		return x.Tag
+		return x.ActorSnapshotTag
 	}
 	return nil
 }
@@ -5397,25 +5398,25 @@ const file_ateapi_proto_rawDesc = "" +
 	"\aresumed\x18\x02 \x01(\bR\aresumed\"Z\n" +
 	"\x12DeleteActorRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
-	"\tany_state\x18\x02 \x01(\bR\banyState\"H\n" +
-	"\x17GetActorSnapshotRequest\x12-\n" +
-	"\bsnapshot\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\bsnapshot\"A\n" +
-	"\x1aGetActorSnapshotTagRequest\x12#\n" +
-	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"s\n" +
+	"\tany_state\x18\x02 \x01(\bR\banyState\"S\n" +
+	"\x17GetActorSnapshotRequest\x128\n" +
+	"\x0eactor_snapshot\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\ractorSnapshot\"]\n" +
+	"\x1aGetActorSnapshotTagRequest\x12?\n" +
+	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x10actorSnapshotTag\"s\n" +
 	"\x19ListActorSnapshotsRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x03 \x01(\tR\tpageToken\"y\n" +
-	"\x1aListActorSnapshotsResponse\x123\n" +
-	"\tsnapshots\x18\x01 \x03(\v2\x15.ateapi.ActorSnapshotR\tsnapshots\x12&\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"\x84\x01\n" +
+	"\x1aListActorSnapshotsResponse\x12>\n" +
+	"\x0factor_snapshots\x18\x01 \x03(\v2\x15.ateapi.ActorSnapshotR\x0eactorSnapshots\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"g\n" +
 	"\x1dCreateActorSnapshotTagRequest\x12F\n" +
-	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"K\n" +
-	"\x1dUpdateActorSnapshotTagRequest\x12*\n" +
-	"\x03tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x03tag\"D\n" +
-	"\x1dDeleteActorSnapshotTagRequest\x12#\n" +
-	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\";\n" +
+	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"g\n" +
+	"\x1dUpdateActorSnapshotTagRequest\x12F\n" +
+	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"`\n" +
+	"\x1dDeleteActorSnapshotTagRequest\x12?\n" +
+	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x10actorSnapshotTag\";\n" +
 	"\rDeleteOptions\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12\x10\n" +
 	"\x03uid\x18\x02 \x01(\tR\x03uid\"P\n" +
@@ -5757,12 +5758,12 @@ var file_ateapi_proto_depIdxs = []int32{
 	21,  // 69: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
 	13,  // 70: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
 	21,  // 71: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
-	21,  // 72: ateapi.GetActorSnapshotRequest.snapshot:type_name -> ateapi.ObjectRef
-	21,  // 73: ateapi.GetActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
-	17,  // 74: ateapi.ListActorSnapshotsResponse.snapshots:type_name -> ateapi.ActorSnapshot
+	21,  // 72: ateapi.GetActorSnapshotRequest.actor_snapshot:type_name -> ateapi.ObjectRef
+	21,  // 73: ateapi.GetActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ObjectRef
+	17,  // 74: ateapi.ListActorSnapshotsResponse.actor_snapshots:type_name -> ateapi.ActorSnapshot
 	19,  // 75: ateapi.CreateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
-	19,  // 76: ateapi.UpdateActorSnapshotTagRequest.tag:type_name -> ateapi.ActorSnapshotTag
-	21,  // 77: ateapi.DeleteActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
+	19,  // 76: ateapi.UpdateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
+	21,  // 77: ateapi.DeleteActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ObjectRef
 	77,  // 78: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
 	21,  // 79: ateapi.GetWorkerRequest.worker:type_name -> ateapi.ObjectRef
 	77,  // 80: ateapi.CreateWorkerRequest.worker:type_name -> ateapi.Worker

@@ -241,6 +241,74 @@ func TestMintCertReadsThroughStaleWorkerCache(t *testing.T) {
 	}
 }
 
+// TestMintCertReadsThroughWorkerCacheMiss pins the read-through for a worker
+// the cache has never seen: a worker registered moments before assignment may
+// be committed to the store (possibly by another replica) before this
+// replica's cache has received the worker row at all. Absence from the cache
+// is stale data and must not deny by itself; absence from the store must.
+func TestMintCertReadsThroughWorkerCacheMiss(t *testing.T) {
+	for name, workerInStore := range map[string]bool{
+		"worker assigned in store but not yet in cache: authorized via read-through": true,
+		"worker in neither cache nor store: denial stands":                           false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+
+			// Phase 1: only the actor exists; the cache seeds with no workers
+			// and (via the inert watch) never learns of any.
+			seedActor(t, ctx, st, actorFixture{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, workerNode: testNode, noWorker: true})
+			workers := workercache.New(staleWatchStore{st}, time.Hour)
+			cacheCtx, cancel := context.WithCancel(ctx)
+			t.Cleanup(cancel)
+			if err := workers.Start(cacheCtx); err != nil {
+				t.Fatalf("start worker cache: %v", err)
+			}
+
+			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+			if err != nil {
+				t.Fatalf("read seeded actor: %v", err)
+			}
+			if workerInStore {
+				// Phase 2: register and assign the worker in the store only,
+				// after the cache stopped listening.
+				if err := st.CreateWorker(ctx, &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
+					WorkerNamespace: testPodNS,
+					WorkerPool:      testPool,
+					WorkerPod:       testWorkerPod,
+					WorkerPodUid:    testWorkerPodUID,
+					NodeName:        testNode,
+					Status: &ateapipb.WorkerStatus{
+						State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+						Assignment: &ateapipb.ActorAssignment{
+							Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
+							ActorUid: actor.GetMetadata().GetUid(),
+						},
+					},
+				}); err != nil {
+					t.Fatalf("register worker in store: %v", err)
+				}
+			}
+
+			srv := newTestServerWithCache(t, st, workers)
+			resp, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), mintCertRequest(t, actor.GetMetadata().GetUid()))
+
+			wantCode := codes.PermissionDenied
+			if workerInStore {
+				wantCode = codes.OK
+			}
+			if got := status.Code(err); got != wantCode {
+				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, wantCode)
+			}
+			if workerInStore && len(resp.GetActorCertificates()) == 0 {
+				t.Fatal("MintCert() returned no certificates")
+			}
+		})
+	}
+}
+
 // newTestServerWithCache is newTestServer with a caller-controlled worker
 // cache (e.g. one frozen at a stale state).
 func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercache.Cache) *Server {
@@ -343,13 +411,6 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 
-	atespace := &ateapipb.Atespace{
-		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace},
-	}
-	if _, err := st.CreateAtespace(ctx, atespace); err != nil {
-		t.Fatalf("seed atespace: %v", err)
-	}
-
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		Status:                 &ateapipb.ActorStatus{State: f.state},
@@ -369,10 +430,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 			WorkerPodUid:    testWorkerPodUID,
 		}
 	}
-	created, err := st.CreateActor(ctx, actor)
-	if err != nil {
-		t.Fatalf("seed actor: %v", err)
-	}
+	created := storetest.MustCreateActor(t, ctx, st, actor)
 
 	if f.noWorker {
 		return

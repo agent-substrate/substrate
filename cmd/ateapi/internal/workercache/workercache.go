@@ -37,7 +37,7 @@ const relistPageSize = 1000
 // Cache maintains an in-memory snapshot of all workers.
 //
 // TODO: add metrics — at minimum a gauge for worker count, a counter for
-// resync events, and a counter for failed PUBLISH operations (in ateredis).
+// resync events, and a counter for failed worker-watch notifications.
 type Cache struct {
 	store          workerListWatcher
 	relistInterval time.Duration

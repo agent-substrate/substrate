@@ -54,6 +54,25 @@ else
   echo "Warning: Kind node ${KIND_NODE} not running. Skipping directory cleanup."
 fi
 
+# 2 Expose CSI Controller over TCP Service.
+# This Service must be created before the driver pod deploys for the servicednssigner
+# because servicednssigner to issue a certificate.
+echo "Exposing CSI Controller over TCP Service..."
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: csi-hostpath-controller
+  namespace: default
+spec:
+  selector:
+    app.kubernetes.io/name: csi-hostpath-socat
+  ports:
+  - port: 50051
+    targetPort: 10000
+    name: grpc
+EOF
+
 # 3. Deploy the CSI Hostpath Driver
 echo "Deploying CSI Hostpath Driver..."
 # The apply might fail at snapshotclass due to missing CRDs. We catch and ignore this.
@@ -88,23 +107,6 @@ spec:
           type: DirectoryOrCreate
 "
 
-# 5. Create the TCP Service mapping port 50051 to socat port 10000
-echo "Exposing CSI Controller over TCP Service..."
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: csi-hostpath-controller
-  namespace: default
-spec:
-  selector:
-    app.kubernetes.io/name: csi-hostpath-socat
-  ports:
-  - port: 50051
-    targetPort: 10000
-    name: grpc
-EOF
-
 # 6. Create the StorageClass
 echo "Creating csi-hostpath-sc StorageClass..."
 kubectl apply -f "${DRIVER_DIR}/examples/csi-storageclass.yaml"
@@ -125,6 +127,10 @@ spec:
   driverName: hostpath.csi.k8s.io
   controllerEndpoint: tcp://csi-hostpath-controller.default.svc.cluster.local:50051
   nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-hostpath/csi.sock
+  tls:
+    enabled: true
+    usePodIdentity: true
+    serverName: csi-hostpath-controller.default.svc
 EOF
 
 # 9. Restart atelet to recreate image cache directories if they were wiped

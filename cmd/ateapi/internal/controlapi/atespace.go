@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
+func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
 	if errs := validateCreateAtespaceRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -74,7 +74,7 @@ func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) field.Er
 	return errs
 }
 
-func (s *Service) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest) (*ateapipb.Atespace, error) {
+func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest) (*ateapipb.Atespace, error) {
 	if errs := validateGetAtespaceRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -103,7 +103,7 @@ func validateGetAtespaceRequest(req *ateapipb.GetAtespaceRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespacesRequest) (*ateapipb.ListAtespacesResponse, error) {
+func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespacesRequest) (*ateapipb.ListAtespacesResponse, error) {
 	if errs := validateListAtespacesRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -129,7 +129,7 @@ func validateListAtespacesRequest(req *ateapipb.ListAtespacesRequest) field.Erro
 	return errs
 }
 
-func (s *Service) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) (*ateapipb.Atespace, error) {
+func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) (*ateapipb.Atespace, error) {
 	if errs := validateDeleteAtespaceRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}

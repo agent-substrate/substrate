@@ -37,12 +37,7 @@ import (
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
-	if _, err := st.CreateAtespace(ctx, atespace); err != nil {
-		t.Fatalf("Failed to CreateAtespace: %v", err)
-	}
-
-	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
+	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
@@ -56,9 +51,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 			},
 			InProgressSnapshotName: "reserved-snapshot",
 		},
-	}); err != nil {
-		t.Fatalf("seed actor: %v", err)
-	}
+	})
 }
 
 // seedWorker registers the worker referenced by seedActor's binding fields,
@@ -96,18 +89,13 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 // already cleared, e.g. by a prior release.
 func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
-	if _, err := st.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}); err != nil {
-		t.Fatalf("CreateAtespace: %v", err)
-	}
-	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
+	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			InProgressSnapshotName: "reserved-snapshot",
 		},
-	}); err != nil {
-		t.Fatalf("seed unbound actor: %v", err)
-	}
+	})
 }
 
 // assertCrashed reloads the actor and verifies it is CRASHED with its worker
@@ -467,12 +455,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 			},
 		},
 	}
-	if _, err := st.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actor.Metadata.Atespace}}); err != nil {
-		t.Fatalf("CreateAtespace: %v", err)
-	}
-	if _, err := st.CreateActor(ctx, actor); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
+	storetest.MustCreateActor(t, ctx, st, actor)
 
 	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); err != nil {
 		t.Fatalf("crashActor: %v", err)

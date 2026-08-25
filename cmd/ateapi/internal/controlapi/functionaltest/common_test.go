@@ -23,7 +23,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -33,8 +34,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -75,12 +74,11 @@ var (
 )
 
 type testContext struct {
-	mr                  *miniredis.Miniredis
-	service             *controlapi.Service
+	service             *controlapi.RPCService
 	client              ateapipb.ControlClient
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
-	persistence         *ateredis.Persistence
+	persistence         store.Interface
 	workerCache         *workercache.Cache
 	fakeAtelet          *FakeAteletServer
 	cleanup             func()
@@ -103,31 +101,23 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 // setupTestWithVolumePlugins is setupTest with the default mock volume plugin
 // replaced by plugins, keyed by driver name. Tests that need a failure-injecting
-// plugin pass it here rather than swapping it into the running Service, so each
+// plugin pass it here rather than swapping it into the running RPCService, so each
 // test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
-	// 1. Start Miniredis
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("failed to start miniredis: %v", err)
-	}
-
-	rdb := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: []string{mr.Addr()},
-	})
-	persistence := ateredis.NewPersistence(rdb)
+	// 1. Start an isolated PostgreSQL-backed store.
+	persistence, cleanupStore := storetest.SetupTestStore(t)
 
 	// 2. Initialize Clientsets using global cfg
 	k8sClient, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create k8s clientset: %v", err)
 	}
 
 	substrateClient, err := versioned.NewForConfig(cfg)
 	if err != nil {
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create substrate clientset: %v", err)
 	}
 
@@ -162,7 +152,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	wc := workercache.New(persistence, 5*time.Minute)
 	if err := wc.Start(ctx); err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to start worker cache: %v", err)
 	}
 
@@ -177,7 +167,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	instruments, err := controlapi.NewInstruments(sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader)).Meter("ateapi"))
 	if err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create metric instruments: %v", err)
 	}
 	volPlugins := plugins
@@ -191,7 +181,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 			mockDriverName: mockPlugin,
 		}
 	}
-	service := controlapi.NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
+	service := controlapi.NewRPCService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -200,7 +190,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to listen: %v", err)
 	}
 
@@ -214,7 +204,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	if err != nil {
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to connect: %v", err)
 	}
 
@@ -231,7 +221,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create namespace %s: %v", ns, err)
 	}
 
@@ -240,7 +230,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to seed test atespace %q: %v", testAtespace, err)
 	}
 
@@ -248,12 +238,10 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		rdb.Close()
-		mr.Close()
+		cleanupStore()
 	}
 
 	return &testContext{
-		mr:                  mr,
 		service:             service,
 		client:              client,
 		k8sClient:           k8sClient,
@@ -341,7 +329,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	}
 
 	const goldenSnapshot = "golden"
-	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+	storetest.MustCreateActorSnapshot(t, context.Background(), tc.persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
 		Status: &ateapipb.ActorSnapshotStatus{
 			ActorTemplateNamespace: ns,
@@ -350,9 +338,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			ContentScope:           ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			SnapshotUri:            "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
 		},
-	}); err != nil {
-		t.Fatalf("failed to create golden ActorSnapshot: %v", err)
-	}
+	})
 	createdTemplate.Status = atev1alpha1.ActorTemplateStatus{
 		GoldenSnapshot: goldenSnapshot,
 	}
@@ -537,6 +523,23 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		t.Fatalf("failed to wait for worker to appear in worker cache: %v", err)
 	}
 	return string(createdPod.UID)
+}
+
+// waitForWorkerAvailable waits for an assignment release to reach the worker
+// cache. Lifecycle RPCs commit the release to the store before the cache's
+// PostgreSQL watch processes the corresponding update.
+func waitForWorkerAvailable(t *testing.T, tc *testContext, workerName string) {
+	t.Helper()
+	err := wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
+		worker, err := tc.workerCache.Worker(workerName)
+		if err != nil {
+			return false, nil
+		}
+		return worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE && worker.GetStatus().GetAssignment() == nil, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for worker %s to become available: %v", workerName, err)
+	}
 }
 
 // createAteletPod creates an atelet pod on nodeName and marks it Running with

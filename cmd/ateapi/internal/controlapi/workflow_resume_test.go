@@ -75,16 +75,10 @@ func (s *lockCountingStore) AcquireLock(ctx context.Context, key string) (*store
 func TestResumeActor_RunningFastPathDoesNotAcquireLock(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
-		t.Fatalf("CreateAtespace: %v", err)
-	}
-	created, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
-	if err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
 	st := &lockCountingStore{Interface: persistence}
 	w := &ActorWorkflow{store: st}
 
@@ -211,16 +205,10 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorkerInBackground(t *testin
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
-		t.Fatalf("CreateAtespace: %v", err)
-	}
-	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
-	if err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
 
 	// stale-pod is claimed by this actor from a failed attempt but its sandbox
 	// class no longer matches the template; free-pod is eligible and free.
@@ -348,16 +336,10 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		t.Fatalf("UpdateWorker (concurrent claim): %v", err)
 	}
 
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
-		t.Fatalf("CreateAtespace: %v", err)
-	}
-	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
-	if err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
 
 	cacheCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -441,16 +423,10 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
-	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
-		t.Fatalf("CreateAtespace: %v", err)
-	}
-	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
-	if err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
 	cacheCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	wc := workercache.New(persistence, time.Minute)
@@ -987,15 +963,13 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			persistence := newTestPersistence(t)
 
 			if tt.seedGolden {
-				if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+				storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
 					Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: tt.goldenSnapshot},
 					Status: &ateapipb.ActorSnapshotStatus{
 						ContentScope: tt.goldenScope,
 						SnapshotUri:  goldenSnapshotURI,
 					},
-				}); err != nil {
-					t.Fatalf("CreateActorSnapshot(golden): %v", err)
-				}
+				})
 			}
 
 			var seedOpts []func(*ateapipb.Actor)
@@ -1004,7 +978,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 					a.Status.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "pause-1"}
 				})
 			} else {
-				snap, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+				snap := storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
 					Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: "snap-1"},
 					Status: &ateapipb.ActorSnapshotStatus{
 						SourceActor:  &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
@@ -1012,9 +986,6 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 						SnapshotUri:  "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
 					},
 				})
-				if err != nil {
-					t.Fatalf("CreateActorSnapshot: %v", err)
-				}
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
 					a.Status.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snap.GetMetadata().GetName()}
 				})
@@ -1068,15 +1039,13 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 	persistence := newTestPersistence(t)
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
-	if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+	storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
 		Status: &ateapipb.ActorSnapshotStatus{
 			ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			SnapshotUri:  "gs://bucket/golden-root/snapshots/ate-golden/golden-1",
 		},
-	}); err != nil {
-		t.Fatalf("CreateActorSnapshot(golden): %v", err)
-	}
+	})
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
