@@ -65,6 +65,16 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Describe the change and why it was needed**: The message is read on `main` long after the PR branch is gone, so it should stand on its own.
 - **No issue or PR references**: Leave out `#1234`, `Fixes #1234`, and GitHub URLs. GitHub renders them as cross-references on the linked thread, and rebases or force-pushes repeat them. Put that context in the pull request description instead, where it belongs to the review rather than to the permanent history.
 
+## Metrics
+
+`docs/metrics/registry/metrics.yaml` is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. It defines every metric instrument the ate system components emit, and the permitted values of each label. Read it to find an instrument or its labels.
+
+If you add or rename an instrument, or add a metric label, update it and run `hack/verify/verify-metrics.sh`. `make verify` runs the same check.
+
+`docs/metrics/substrate.yaml` holds the rules Weaver cannot express: the cardinality rules, the known exceptions, and the subsystems that emit no metrics. Read `blind_spots` before you attribute a fault to a component.
+
+See the [metric registry](docs/observability.md#the-metric-registry) section of the observability guide.
+
 ## Testing Instructions
 
 1. Write tests for all new code. We will not merge code that lacks tests.

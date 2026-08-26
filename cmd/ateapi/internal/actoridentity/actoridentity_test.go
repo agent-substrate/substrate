@@ -212,14 +212,17 @@ func TestMintCertReadsThroughStaleWorkerCache(t *testing.T) {
 				if err != nil {
 					t.Fatalf("read seeded worker: %v", err)
 				}
-				if worker.Status == nil {
-					worker.Status = &ateapipb.WorkerStatus{}
-				}
-				worker.Status.Assignment = &ateapipb.ActorAssignment{
-					Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
-					ActorUid: actor.GetMetadata().GetUid(),
-				}
-				if err := st.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion()); err != nil {
+				_, err = st.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+					if toUpdate.Status == nil {
+						toUpdate.Status = &ateapipb.WorkerStatus{}
+					}
+					toUpdate.Status.Assignment = &ateapipb.ActorAssignment{
+						Actor:    (resources.ActorRef{Atespace: testAtespace, Name: testActorName}).ToObjectRef(),
+						ActorUid: actor.GetMetadata().GetUid(),
+					}
+					return nil
+				})
+				if err != nil {
 					t.Fatalf("assign worker in store: %v", err)
 				}
 			}
@@ -273,7 +276,7 @@ func TestMintCertReadsThroughWorkerCacheMiss(t *testing.T) {
 			if workerInStore {
 				// Phase 2: register and assign the worker in the store only,
 				// after the cache stopped listening.
-				if err := st.CreateWorker(ctx, &ateapipb.Worker{
+				if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
 					Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 					WorkerNamespace: testPodNS,
 					WorkerPool:      testPool,
@@ -461,7 +464,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	if f.unassigned {
 		worker.Status.Assignment = nil
 	}
-	if err := st.CreateWorker(ctx, worker); err != nil {
+	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
 }
@@ -668,6 +671,16 @@ func TestMintCertAuthorization(t *testing.T) {
 			resp, err := srv.MintCert(ctxWithCert(callerCert), req)
 			if got := status.Code(err); got != tc.wantCode {
 				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, tc.wantCode)
+			}
+			if tc.wantCode == codes.PermissionDenied {
+				// Denials are deliberately indistinguishable (see denyMint): the
+				// message must not vary with why the mint was refused, or a
+				// caller could probe workers it is not entitled to.
+				msg := status.Convert(err).Message()
+				if msg != "caller is not permitted to mint actor credentials" &&
+					msg != "caller is not permitted to mint credentials for this actor" {
+					t.Errorf("MintCert() denial leaks its reason: %q", msg)
+				}
 			}
 			if tc.wantCode != codes.OK {
 				if resp != nil {

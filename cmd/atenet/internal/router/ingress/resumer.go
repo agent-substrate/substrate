@@ -182,15 +182,24 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		// one control-plane RPC per hot actor (see docs/request-parking.md).
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
 		defer bgCancel()
+		// The budget bounds the RETRY LOOP only — it never cancels an
+		// in-flight ResumeActor. ateapi durably claims the worker and marks
+		// the actor RESUMING before the expensive snapshot restore begins,
+		// rolls back neither on cancellation, and nothing reclaims a RESUMING
+		// actor whose worker pod is alive — a budget cancel therefore throws
+		// the restore away and strands the worker (#675). An attempt still
+		// running when the budget elapses is waited for and its real result
+		// classified below; ateapi's own server-side RPC deadline bounds it.
+		attemptCtx := context.WithoutCancel(bgCtx)
 
 		backoff := r.backoff
 
 		var resumeResp *ateapipb.ResumeActorResponse
 		var lastRetryErr error
 
-		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(ctx context.Context) (bool, error) {
+		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(context.Context) (bool, error) {
 			var err error
-			resumeResp, err = r.apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+			resumeResp, err = r.apiClient.ResumeActor(attemptCtx, &ateapipb.ResumeActorRequest{
 				Actor: actorRef.ToObjectRef(),
 			})
 			if err == nil {
@@ -205,18 +214,20 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		})
 
 		if err != nil {
-			// If the budget elapsed while we were still retrying a transient error,
-			// surface that underlying error rather than the generic wait/deadline
-			// error so the HTTP boundary maps it faithfully (e.g. 503 "no free
-			// workers available") instead of a misleading timeout. The wrapper marks
-			// the exhaustion explicitly for the parking wait-duration metric.
+			// If the budget elapsed while we were still blocked on a retryable
+			// condition, surface that underlying error rather than the generic
+			// wait/deadline error so the HTTP boundary maps it faithfully
+			// (e.g. 503 "no free workers available") instead of a misleading
+			// timeout. The wrapper marks the exhaustion explicitly for the
+			// parking wait-duration metric.
 			//
-			// Gate on bgCtx itself, not on errors.Is(err, context.DeadlineExceeded):
-			// when the deadline lands during an in-flight ResumeActor RPC, gRPC
-			// surfaces a *status* error with code DeadlineExceeded that does not
-			// match the context sentinel, which would misreport budget exhaustion
-			// as a 504. bgCtx is this loop's only deadline source, so checking it
-			// covers both landing spots (mid-RPC and between retries).
+			// wait.Interrupted covers the budget landing between retries; the
+			// bgCtx check covers an attempt that came back with a retryable
+			// error only after the budget had already elapsed (the loop then
+			// exits with the context error). The RPC itself is never canceled,
+			// so the loop cannot end before its first attempt has completed —
+			// lastRetryErr is always the attempt's real answer here, and a
+			// definitive error (NotFound, ...) still passes through untouched.
 			if lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)) {
 				return &resumeCallResult{leaderID: reqID, err: &budgetExhaustedError{lastErr: lastRetryErr}}, nil
 			}

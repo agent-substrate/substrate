@@ -328,7 +328,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	if stored.GetStatus().GetLocalSnapshotInfo() != nil {
 		t.Errorf("LocalSnapshotInfo = %v, want cleared", stored.GetStatus().GetLocalSnapshotInfo())
 	}
-	snapshot, err := persistence.GetActorSnapshot(ctx, "team-a", snapshotName)
+	snapshot, err := persistence.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: snapshotName})
 	if err != nil {
 		t.Fatalf("GetActorSnapshot: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 					},
 				},
 			}
-			if err := persistence.CreateWorker(ctx, worker); err != nil {
+			if _, err := persistence.CreateWorker(ctx, worker); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
 
@@ -467,7 +467,7 @@ func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
 		t.Errorf("in-progress snapshot fields not cleared: %q / %d", final.GetStatus().GetInProgressSnapshotName(), final.GetStatus().GetInProgressSnapshotSourceActorVersion())
 	}
 
-	snap, err := persistence.GetActorSnapshot(ctx, "team-a", final.GetStatus().GetLatestSnapshot().GetName())
+	snap, err := persistence.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: final.GetStatus().GetLatestSnapshot().GetName()})
 	if err != nil {
 		t.Fatalf("GetActorSnapshot: %v", err)
 	}

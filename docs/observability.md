@@ -123,6 +123,8 @@ An actor's **own** lines carry trace context only if the actor emits these field
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
 
+> [`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument. Read it when you need all the labels, the bucket limits, or the permitted values of a label. The table below does not have each instrument. The request-parking instruments and the actor resource-usage instruments are in the registry only. Refer to [The metric registry](#the-metric-registry).
+
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
@@ -175,11 +177,46 @@ On a failure, `ate.failure.reason` marks the phase that died and the `total`, an
 
 The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead.
 
+### The metric registry
+
+[`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument that the ate system components send, and the permitted values of each label. Use it as the only source of this data.
+
+It is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. Weaver reads it, resolves each `ref`, and refuses a group or an attribute that is not correct:
+
+```sh
+hack/verify/verify-metrics.sh              # the command that CI uses
+weaver registry check -r docs/metrics/registry   # the same command, direct
+```
+
+`make verify` runs the script. It uses a local `weaver` binary if there is one, and the official image if there is none.
+
+**To add or change an instrument:** change `metrics.yaml` and run the script.
+
+Two files, and not one:
+
+| File | Content | Who reads it |
+|---|---|---|
+| `docs/metrics/registry/manifest.yaml` | The name and the schema URL of the registry. | Weaver |
+| `docs/metrics/registry/metrics.yaml` | The `groups`: each metric, each attribute. | Weaver |
+| `docs/metrics/substrate.yaml` | The rules of Substrate that Weaver cannot hold. | A person, an agent |
+
+Weaver permits only `groups` and `imports` at the top level of a registry file, and it refuses a file that has any other top-level key. Thus `substrate.yaml` is beside the registry directory and not in it. It records:
+
+* **`upstream_semconv_version`** — the version of the upstream semantic conventions that Substrate borrows `error.type`, `file.name` and the `rpc.*` attributes from.
+* **`bridged_metric_families`** — the metrics that atecontroller exports but Substrate does not define, as prefixes. `controller_runtime_version` records the version of controller-runtime that the list comes from.
+* **`cardinality_rules`** — the rules that keep the number of series small. No rule is enforced at this time. Each rule says what could enforce it.
+* **`lint_exceptions`** — the known debt.
+* **`blind_spots`** — the subsystems with no metrics. Read this list before you give a cause to a fault. The store has no instruments, but each lifecycle operation uses it.
+
+**What the check does not do.** Weaver reads the registry, and not the Go code. Thus the build stays correct if a person adds an instrument to the code and not to the registry, or renames one in the code only. `weaver registry generate` could make `internal/ateattr` from the registry, which would remove that difference for the attributes. `weaver registry live-check` could compare the registry with the telemetry of the end-to-end tests. Both are future work.
+
 ### Bridged controller-runtime metrics (atecontroller)
 
-atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
+atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
 
 These can be used to answer whether the controller is keeping up, e.g. rising `workqueue_depth` or `workqueue_queue_duration_seconds` means reconciles are falling behind, and `controller_runtime_reconcile_errors_total` says which controller.
+
+`docs/metrics/substrate.yaml` records these as prefixes under `bridged_metric_families`, and not one metric at a time. The upstream library owns the names, the labels and the buckets, and a version bump can add a family. A copy in the registry becomes wrong with no signal. `controller_runtime_version` dates the list, thus a bump has an obvious place to check.
 
 Note that controller-runtime enables native histograms on `controller_runtime_reconcile_time_seconds`, `workqueue_queue_duration_seconds`, and `workqueue_work_duration_seconds`, so those three arrive as OTLP exponential histograms rather than fixed-bucket ones.
 

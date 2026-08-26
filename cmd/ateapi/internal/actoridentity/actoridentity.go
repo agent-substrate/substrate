@@ -307,11 +307,7 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 // validateWorkerRef checks the reference to the Worker the certificate is
 // minted for. Workers are global-scoped, so the reference carries no atespace.
 func validateWorkerRef(worker *ateapipb.ObjectRef) error {
-	fldPath := field.NewPath("worker")
-	if worker == nil {
-		return field.Required(fldPath, "")
-	}
-	return resources.ValidateGlobalObjectRef(worker, fldPath).ToAggregate()
+	return resources.ValidateGlobalObjectRef(worker, field.NewPath("worker")).ToAggregate()
 }
 
 // authorizeActor resolves the actor from the authenticated worker and verifies
@@ -368,7 +364,7 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *
 func (s *Server) denyMint(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest, reason string, args ...any) error {
 	slog.WarnContext(ctx, "ActorIdentity denied: "+reason,
 		append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
-	return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor: %s", reason)
+	return status.Error(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
 }
 
 var errAssignmentMismatch = errors.New("assignment mismatch")

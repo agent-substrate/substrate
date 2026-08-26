@@ -31,6 +31,10 @@ func TestValidateCreateAtespaceRequest(t *testing.T) {
 		&ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}},
 		nil,
 	}, {
+		"unknown field on atespace",
+		&ateapipb.CreateAtespaceRequest{Atespace: withUnknown(&ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}, 9999)},
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), field.OmitValueType{}, "")},
+	}, {
 		"missing atespace",
 		&ateapipb.CreateAtespaceRequest{},
 		field.ErrorList{field.Required(field.NewPath("atespace"), "")},

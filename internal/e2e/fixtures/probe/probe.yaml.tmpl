@@ -30,7 +30,7 @@ metadata:
   name: probe
   namespace: ate-e2e-probe${FIXTURE_SUFFIX}
   labels:
-    workload: probe
+    workload: probe${FIXTURE_SUFFIX}
 spec:
   replicas: 3
   ateomImage: ${ATEOM_IMAGE}
@@ -79,6 +79,6 @@ ${TEMPLATE_TRUST_BUNDLE}
 ${TEMPLATE_RESOURCES}
   workerSelector:
     matchLabels:
-      workload: probe
+      workload: probe${FIXTURE_SUFFIX}
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

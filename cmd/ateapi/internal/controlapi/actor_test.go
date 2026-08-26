@@ -86,6 +86,14 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validActor(nil),
 		nil,
 	}, {
+		"unknown field on actor",
+		validActor(func(a *ateapipb.Actor) { a.ProtoReflect().SetUnknown(unknownField(9999)) }),
+		field.ErrorList{field.Invalid(field.NewPath("actor"), field.OmitValueType{}, "")},
+	}, {
+		"unknown field nested in metadata",
+		validActor(func(a *ateapipb.Actor) { a.Metadata.ProtoReflect().SetUnknown(unknownField(9999)) }),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata"), field.OmitValueType{}, "")},
+	}, {
 		"missing actor",
 		&ateapipb.CreateActorRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor"), "")},

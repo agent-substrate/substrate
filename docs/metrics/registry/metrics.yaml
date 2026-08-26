@@ -1,0 +1,1187 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This file is an OpenTelemetry Weaver semantic convention registry. It defines
+# every metric instrument that the ate system components send, and the
+# permitted values of each label. Use it as the only source of this data.
+#
+# `weaver registry check -r docs/metrics/registry` validates this file.
+# `hack/verify/verify-metrics.sh` runs that command in CI.
+#
+# Weaver permits only `groups` and `imports` at the top level. Thus the rules
+# that Weaver cannot hold live in docs/metrics/substrate.yaml. That file is
+# outside this directory on purpose: Weaver reads each YAML file in the
+# registry directory and refuses a file with an unknown top-level key.
+#
+# The metrics section of docs/observability.md tells you how to use this file.
+
+groups:
+  # ---------------------------------------------------------------------------
+  # Attribute groups
+  # ---------------------------------------------------------------------------
+
+  - id: registry.ate.actor
+    type: attribute_group
+    brief: The labels of an actor.
+    attributes:
+      - id: ate.actor.operation.name
+        stability: development
+        brief: The actor lifecycle operation that ateapi did.
+        type:
+          members:
+            - id: create
+              stability: development
+              value: create
+              brief: ateapi made the actor record.
+            - id: resume
+              stability: development
+              value: resume
+              brief: ateapi put the actor on a worker.
+            - id: suspend
+              stability: development
+              value: suspend
+              brief: ateapi wrote the durable snapshot and released the worker.
+            - id: pause
+              stability: development
+              value: pause
+              brief: ateapi wrote a node-local snapshot.
+            - id: delete
+              stability: development
+              value: delete
+              brief: ateapi removed the actor record.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: The operation is not in this list. This is the default value.
+
+  - id: registry.ate.template
+    type: attribute_group
+    brief: >
+      The identity of an ActorTemplate. The values are not limited to a list.
+      But an operator makes each template. No value comes from a request. Thus
+      the number of values stays small.
+    attributes:
+      - id: ate.template.namespace
+        stability: development
+        type: string
+        brief: The Kubernetes namespace of the ActorTemplate of the actor.
+        examples: [ate-demo-counter]
+      - id: ate.template.name
+        stability: development
+        type: string
+        brief: The name of the ActorTemplate of the actor.
+        examples: [counter]
+
+  - id: registry.ate.workerpool
+    type: attribute_group
+    brief: >
+      The identity of a WorkerPool. The two keys identify a pool together. A
+      component sets both keys or no key. A WorkerPool has a namespace. Thus the
+      name alone puts the pools of different namespaces into the same series.
+    attributes:
+      - id: ate.workerpool.namespace
+        stability: development
+        type: string
+        brief: The Kubernetes namespace of the WorkerPool.
+        examples: [ate-demo-counter]
+      - id: ate.workerpool.name
+        stability: development
+        type: string
+        brief: The name of the WorkerPool.
+        examples: [counter]
+      - id: ate.worker.state
+        stability: development
+        brief: >
+          The assignment state of a worker. The key starts with worker and not
+          with the name of the pool. Thus you can add related keys later.
+        type:
+          members:
+            - id: idle
+              stability: development
+              value: idle
+              brief: No actor has this worker.
+            - id: assigned
+              stability: development
+              value: assigned
+              brief: An actor has this worker.
+
+  - id: registry.ate.sandbox
+    type: attribute_group
+    brief: >
+      The class of the sandbox. The class comes from the template. Thus it adds
+      no series to the template labels. It lets a dashboard group the data by
+      class without a list of the template names.
+    attributes:
+      - id: ate.sandbox.class
+        stability: development
+        brief: The sandbox runtime of the actor.
+        type:
+          members:
+            - id: gvisor
+              stability: development
+              value: gvisor
+              brief: A gVisor (runsc) sandbox.
+            - id: microvm
+              stability: development
+              value: microvm
+              brief: A micro-VM sandbox.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: >
+                The snapshot manifest has no class, or the class is not in this
+                list. The default is not gvisor. Thus a bad manifest stays
+                visible.
+
+  - id: registry.ate.snapshot
+    type: attribute_group
+    brief: >
+      The three snapshot keys are independent. They have the same meaning on
+      each instrument that has them. The kind key tells you which snapshot. The
+      scope key tells you which content. The phase key tells you which step.
+    attributes:
+      - id: ate.snapshot.kind
+        stability: development
+        brief: The snapshot that the operation reads or writes.
+        type:
+          members:
+            - id: local
+              stability: development
+              value: local
+              brief: A snapshot on the node. A pause writes it.
+            - id: latest
+              stability: development
+              value: latest
+              brief: The durable snapshot of the actor in object storage.
+            - id: golden
+              stability: development
+              value: golden
+              brief: The golden image of the ActorTemplate.
+            - id: boot
+              stability: development
+              value: boot
+              brief: A start from nothing. This is not a restore. It does not occur on the atelet histograms.
+      - id: ate.snapshot.scope
+        stability: development
+        brief: The content of the snapshot.
+        type:
+          members:
+            - id: full
+              stability: development
+              value: full
+              brief: All the guest state and all the data.
+            - id: data
+              stability: development
+              value: data
+              brief: Only the data of the actor.
+            - id: data_on_golden
+              stability: development
+              value: data_on_golden
+              brief: The data of the actor with the golden guest state. This occurs on a restore only.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: The value on the wire is not in this list.
+      - id: ate.snapshot.phase
+        stability: development
+        brief: >
+          The step of the operation that the component measured. The phases
+          occur at the same time. Thus they do not add up to the total. The
+          download occurs at the same time as the asset fetch and the OCI
+          unpack. Each phase is an independent measurement. A phase that did not
+          start is absent. It is not zero.
+        type:
+          members:
+            - id: volume_mount
+              stability: development
+              value: volume_mount
+              brief: Restore. atelet mounts the volumes of the actor.
+            - id: manifest_fetch
+              stability: development
+              value: manifest_fetch
+              brief: Restore. atelet reads the snapshot manifest.
+            - id: sandbox_assets
+              stability: development
+              value: sandbox_assets
+              brief: atelet gets or prepares the sandbox assets. This occurs on a restore and on a checkpoint.
+            - id: download
+              stability: development
+              value: download
+              brief: Restore. atelet downloads the snapshot from object storage.
+            - id: oci_unpack
+              stability: development
+              value: oci_unpack
+              brief: Restore. atelet unpacks the layers of the OCI image.
+            - id: ateom_restore
+              stability: development
+              value: ateom_restore
+              brief: Restore. This is the ateom restore call.
+            - id: ateom_checkpoint
+              stability: development
+              value: ateom_checkpoint
+              brief: Checkpoint. This is the ateom checkpoint call.
+            - id: persist
+              stability: development
+              value: persist
+              brief: >
+                Checkpoint. atelet writes the snapshot to its destination. It
+                uploads an external snapshot. It renames a local snapshot. The
+                ate.snapshot.kind key tells you which.
+            - id: total
+              stability: development
+              value: total
+              brief: The full operation. Use this value as the denominator. Do not add the phases together.
+
+  - id: registry.ate.failure
+    type: attribute_group
+    brief: >
+      The failure reasons of Substrate. These instruments use this key and not
+      error.type. The handler returns a domain error. The interceptor sets the
+      gRPC status only after the handler returns. Thus error.type shows Unknown
+      for almost each real failure.
+    attributes:
+      - id: ate.failure.reason
+        stability: development
+        brief: The cause of the failure.
+        type:
+          members:
+            - id: terminal_file_system_error
+              stability: development
+              value: TERMINAL_FILE_SYSTEM_ERROR
+              brief: A permanent file system fault on the node. Usually the disks of the node are full.
+            - id: invalid_sandbox_asset
+              stability: development
+              value: INVALID_SANDBOX_ASSET
+              brief: A sandbox asset is absent or bad.
+            - id: invalid_checkpoint_result
+              stability: development
+              value: INVALID_CHECKPOINT_RESULT
+              brief: ateom returned a checkpoint that is not valid.
+            - id: failed_save_snapshot
+              stability: development
+              value: FAILED_SAVE_SNAPSHOT
+              brief: atelet could not write the snapshot.
+            - id: invalid_object_url
+              stability: development
+              value: INVALID_OBJECT_URL
+              brief: The URL of the snapshot object is bad.
+            - id: failed_get_external_object
+              stability: development
+              value: FAILED_GET_EXTERNAL_OBJECT
+              brief: atelet could not read the snapshot from object storage. Usually the storage backend has a fault.
+            - id: invalid_container_config
+              stability: development
+              value: INVALID_CONTAINER_CONFIG
+              brief: The container configuration of the ActorTemplate is not valid.
+            - id: local_snapshot_gone
+              stability: development
+              value: LOCAL_SNAPSHOT_GONE
+              brief: The local snapshot on the node no longer exists.
+            - id: corrupted_assignment
+              stability: development
+              value: CORRUPTED_ASSIGNMENT
+              brief: Control plane. The worker assignment of the actor is not correct.
+            - id: worker_reassigned
+              stability: development
+              value: WORKER_REASSIGNED
+              brief: Control plane. A different actor got the worker.
+            - id: worker_pod_gone
+              stability: development
+              value: WORKER_POD_GONE
+              brief: Control plane. The worker pod no longer exists.
+            - id: unknown
+              stability: development
+              value: UNKNOWN
+              brief: >
+                An infrastructure failure with no reason. Substrate does not
+                make a value from the error message. Thus the list of values
+                stays short.
+
+  - id: registry.ate.scheduler
+    type: attribute_group
+    brief: The labels of a scheduler decision.
+    attributes:
+      - id: ate.scheduler.outcome
+        stability: development
+        brief: The result of one attempt to assign a worker.
+        type:
+          members:
+            - id: assigned
+              stability: development
+              value: assigned
+              brief: The scheduler assigned a worker.
+            - id: no_free_worker
+              stability: development
+              value: no_free_worker
+              brief: >
+                No free worker was available. This shows the capacity. It is not
+                a failure. Thus it has no error.type key.
+            - id: error
+              stability: development
+              value: error
+              brief: The attempt failed. Only this outcome has an error.type key.
+      - id: ate.scheduling.constraint
+        stability: development
+        brief: The type of constraint in the scheduling request.
+        type:
+          members:
+            - id: none
+              stability: development
+              value: none
+              brief: The request has no constraint.
+            - id: selector
+              stability: development
+              value: selector
+              brief: The request has a label selector for an actor or a template.
+            - id: required_nodes
+              stability: development
+              value: required_nodes
+              brief: The request names specific node VMs.
+
+  - id: registry.ate.router
+    type: attribute_group
+    brief: The labels of the atenet router.
+    attributes:
+      - id: ate.router.resume
+        stability: development
+        brief: >
+          The singleflight state of the resume of the actor. This key divides
+          the warm route from the cold start. Do not group the data across this
+          key when you measure the activation time.
+        type:
+          members:
+            - id: none
+              stability: development
+              value: none
+              brief: >
+                The actor was already in operation. The router only found its
+                location. This is the usual warm route.
+            - id: triggered
+              stability: development
+              value: triggered
+              brief: >
+                This request got the singleflight lock and did the resume. Its
+                time is the activation time. Its rate is the number of resumes
+                each second.
+            - id: joined
+              stability: development
+              value: joined
+              brief: >
+                A resume was already in operation. This request waited for it.
+                This value is separate because it is not a correct sample. One
+                cold start with 50 requests is one slow activation and not 51.
+      - id: ate.router.outcome
+        stability: development
+        brief: The result of the route attempt.
+        type:
+          members:
+            - id: ok
+              stability: development
+              value: ok
+              brief: The router found the worker endpoint.
+            - id: cancelled
+              stability: development
+              value: cancelled
+              brief: The client stopped the request.
+            - id: timeout
+              stability: development
+              value: timeout
+              brief: The time limit ended.
+            - id: no_capacity
+              stability: development
+              value: no_capacity
+              brief: >
+                The fleet had no free worker. This is a capacity problem and not
+                a defect. It shows the capacity pressure at the request edge.
+            - id: failed_precondition
+              stability: development
+              value: failed_precondition
+              brief: The state of the actor did not permit a route.
+            - id: lock_conflict
+              stability: development
+              value: lock_conflict
+              brief: A different writer had the actor.
+            - id: not_found
+              stability: development
+              value: not_found
+              brief: The actor does not exist.
+            - id: unavailable
+              stability: development
+              value: unavailable
+              brief: A dependency was not available.
+            - id: rate_limited
+              stability: development
+              value: rate_limited
+              brief: The router limited the rate of the request.
+            - id: resume_error
+              stability: development
+              value: resume_error
+              brief: >
+                The resume failed for a different reason. The router has a
+                defect. This is not the same as a full fleet.
+
+  - id: registry.ate.imagecache
+    type: attribute_group
+    brief: >
+      The labels of the image cache on the node. The key starts with the name of
+      the subsystem and not with actor. Each actor uses the same layer pool.
+    attributes:
+      - id: ate.imagecache.outcome
+        stability: development
+        brief: >
+          The result of one image lookup. Calculate the hit ratio as
+          hit / (hit + miss). Do not put the failures or the stopped lookups in
+          the denominator.
+        type:
+          members:
+            - id: hit
+              stability: development
+              value: hit
+              brief: The node has a complete image record. Each layer directory in the record is present.
+            - id: miss
+              stability: development
+              value: miss
+              brief: The lookup must pull the image. A miss also causes an unpack.
+            - id: error
+              stability: development
+              value: error
+              brief: The lookup failed. Only this outcome has an error.type key.
+            - id: cancelled
+              stability: development
+              value: cancelled
+              brief: The caller stopped the lookup. atelet counts it, because the pull started.
+            - id: timeout
+              stability: development
+              value: timeout
+              brief: The time limit of the caller ended.
+
+  - id: registry.ate.stats
+    type: attribute_group
+    brief: The labels of the resource measurements of the actors.
+    attributes:
+      - id: ate.stats.source
+        stability: development
+        brief: >
+          The source of the measurement. The two sources do not measure the same
+          thing. Thus you must group the data by this key. Do not add the
+          sources together.
+        type:
+          members:
+            - id: unspecified
+              stability: development
+              value: unspecified
+              brief: The source is not known.
+            - id: cgroup
+              stability: development
+              value: cgroup
+              brief: The measurement comes from the sandbox cgroup. It includes the load of the sandbox runtime.
+            - id: guest_agent
+              stability: development
+              value: guest-agent
+              brief: The measurement comes from the guest agent. It includes only the containers of the workload.
+
+  - id: registry.ate.deviation
+    type: attribute_group
+    brief: >
+      The attributes that do not agree with the conventions of Substrate. This
+      group makes the debt visible. Refer to lint_exceptions at the end of this
+      file.
+    attributes:
+      - id: outcome
+        stability: development
+        brief: >
+          The final state of a parked request. This key does not start with
+          ate., but each other metric label of Substrate starts with ate. A
+          change to ate.router.park.outcome needs a change to the dashboards at
+          the same time.
+        type:
+          members:
+            - id: served
+              stability: development
+              value: served
+              brief: The resume was correct and the router sent the request.
+            - id: budget_exhausted
+              stability: development
+              value: budget_exhausted
+              brief: The park budget ended while the request waited.
+            - id: timeout
+              stability: development
+              value: timeout
+              brief: The time limit of the request ended while it waited.
+            - id: canceled
+              stability: development
+              value: canceled
+              brief: The client disconnected while the request waited.
+            - id: error
+              stability: development
+              value: error
+              brief: The resume failed.
+
+  - id: registry.external
+    type: attribute_group
+    brief: The attributes of the upstream OpenTelemetry registry. Substrate uses them without a change of name.
+    annotations:
+      substrate:
+        owner: opentelemetry
+    attributes:
+      - id: error.type
+        stability: stable
+        type: string
+        brief: >
+          The class of a failure, on the same instrument. If this key is absent,
+          the operation was correct. Substrate does not add a separate counter
+          for the failures. At an RPC boundary this key holds the gRPC status
+          code. On ate.imagecache.requests it holds the HTTP status of the
+          registry.
+        examples: ["ResourceExhausted", "404", "_OTHER"]
+      - id: file.name
+        stability: stable
+        type: string
+        brief: The name of one image in a snapshot.
+        examples: [pages.img]
+      - id: rpc.method
+        stability: stable
+        type: string
+        brief: The gRPC method of the request.
+        examples: ["ateapi.Control/ResumeActor"]
+      - id: rpc.response.status_code
+        stability: stable
+        type: string
+        brief: The gRPC status that the server returned.
+        examples: ["OK", "ResourceExhausted"]
+
+  # ---------------------------------------------------------------------------
+  # Metrics. ateapi
+  # ---------------------------------------------------------------------------
+
+  - id: metric.ate.actor.crashes
+    type: metric
+    metric_name: ate.actor.crashes
+    instrument: counter
+    unit: "{crash}"
+    stability: development
+    brief: The number of actors that went to the ACTOR_STATE_CRASHED state, with the reasons.
+    note: >
+      This counter counts the moves into the CRASHED state of the state machine.
+      It does not count the crashes of a process. The CRASHED state is a
+      permanent loss of the actor. Substrate can also lose the data that it did
+      not write. Some moves into this state are not a loss of data. They are
+      careful responses to a control plane problem. The ate.failure.reason key
+      keeps these groups separate.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [errors]
+        code_anchor: cmd/ateapi/internal/controlapi/metrics.go
+        cuj: Some actors go to the CRASHED state. How many, and why?
+    attributes:
+      - ref: ate.actor.operation.name
+        requirement_level: required
+      - ref: ate.failure.reason
+        requirement_level: required
+      - ref: ate.template.namespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.sandbox.class
+        requirement_level: required
+      - ref: ate.workerpool.namespace
+        requirement_level:
+          conditionally_required: The actor has a worker. If the actor crashed before it got a worker, this key is absent.
+      - ref: ate.workerpool.name
+        requirement_level:
+          conditionally_required: The actor has a worker.
+
+  - id: metric.ate.workerpool.workers
+    type: metric
+    metric_name: ate.workerpool.workers
+    instrument: updowncounter
+    unit: "{worker}"
+    stability: development
+    brief: The number of workers in each pool, divided by state and by sandbox class.
+    note: >
+      ateapi reads this value with a callback. You can add the counts together.
+      The sum across the states is the size of the pool. The sum across the
+      pools is the size of the fleet. Thus this instrument is an UpDownCounter
+      and not a gauge. ateapi sets both states to 0 for each known pool. Thus a
+      full pool or an empty pool reports 0. An absent series would stop an alert
+      on idle == 0.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/controlapi/metrics.go
+        cuj: How many warm workers remain, and how many are in use?
+    attributes:
+      - ref: ate.workerpool.namespace
+        requirement_level: required
+      - ref: ate.workerpool.name
+        requirement_level: required
+      - ref: ate.worker.state
+        requirement_level: required
+      - ref: ate.sandbox.class
+        requirement_level: required
+
+  - id: metric.ate.actor.lifecycle.operation.duration
+    type: metric
+    metric_name: ate.actor.lifecycle.operation.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one actor lifecycle operation in ateapi, and whether the operation failed.
+    note: >
+      ateapi does not record a resume of an actor that is already in operation.
+      Thus this histogram counts the true activations and not the traffic of the
+      router. The set of labels changes with the operation. A resume has the
+      most labels. A delete has only the operation and error.type.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [latency, traffic]
+        code_anchor: cmd/ateapi/internal/controlapi/metrics.go
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+        cuj: Which actor operation is slow, and for which template or pool?
+    attributes:
+      - ref: ate.actor.operation.name
+        requirement_level: required
+      - ref: ate.template.namespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.workerpool.namespace
+        requirement_level:
+          conditionally_required: The actor has a worker.
+      - ref: ate.workerpool.name
+        requirement_level:
+          conditionally_required: The actor has a worker.
+      - ref: ate.sandbox.class
+        requirement_level:
+          conditionally_required: ateapi found the ActorTemplate.
+      - ref: ate.snapshot.kind
+        requirement_level:
+          conditionally_required: The operation is a resume. A suspend and a pause do not restore, thus this key is absent.
+      - ref: ate.snapshot.scope
+        requirement_level:
+          conditionally_required: The scope is known.
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The operation failed. If this key is absent, the operation was correct.
+
+  - id: metric.ate.scheduler.assignment.duration
+    type: metric
+    metric_name: ate.scheduler.assignment.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one attempt of the scheduler to assign a worker during a resume.
+    note: >
+      If a version conflict causes a second attempt, ateapi records only the
+      last attempt. The buckets are smaller than the buckets of the lifecycle
+      histogram. This step is a read of the cache and some writes to the store.
+      It is not a restore of some seconds. But the buckets go to 5 s. Thus you
+      can see a large delay in the store.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [latency, saturation]
+        code_anchor: cmd/ateapi/internal/controlapi/metrics.go
+        buckets: [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
+        cuj: Is the scheduler slow, or can it not find capacity?
+    attributes:
+      - ref: ate.scheduler.outcome
+        requirement_level: required
+      - ref: ate.workerpool.namespace
+        requirement_level:
+          conditionally_required: The scheduler assigned a worker. The no_free_worker outcome names no pool.
+      - ref: ate.workerpool.name
+        requirement_level:
+          conditionally_required: The scheduler assigned a worker.
+      - ref: ate.sandbox.class
+        requirement_level:
+          conditionally_required: >
+            The class is known. ateapi sets this key also on the no_free_worker
+            outcome. Thus the outcome names the capacity that ended.
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The outcome is error.
+
+  - id: metric.ate.scheduler.eligible_workers
+    type: metric
+    metric_name: ate.scheduler.eligible_workers
+    instrument: histogram
+    unit: "{worker}"
+    stability: development
+    brief: The number of free workers that remain after all the constraint filters, at each scheduling decision.
+    note: >
+      This is an early sign of low capacity. It warns you before the first
+      rejection. The rate of 503 errors tells you only after the users have a
+      fault. If no pool agrees with the constraints, ateapi sends one series
+      with the value 0. Both pool keys are empty in that series. Thus a
+      dashboard shows the "no workers are available" state with the series of
+      the pools. Only this instrument has the empty pair of pool keys.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/scheduling/metrics.go
+        buckets: [0, 1, 2, 3, 5, 10, 20, 50, 100, 250]
+        cuj: Resumes fail with a 503 error, but ate.workerpool.workers shows idle workers. Why?
+    attributes:
+      - ref: ate.workerpool.namespace
+        requirement_level: required
+      - ref: ate.workerpool.name
+        requirement_level: required
+      - ref: ate.sandbox.class
+        requirement_level: required
+      - ref: ate.scheduling.constraint
+        requirement_level: required
+
+  # ---------------------------------------------------------------------------
+  # Metrics. atelet
+  # ---------------------------------------------------------------------------
+
+  - id: metric.ate.actor.restore.duration
+    type: metric
+    metric_name: ate.actor.restore.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one phase of an actor restore on the worker node.
+    note: >
+      This instrument shows where the cold start time goes after ateapi hands
+      the work to atelet. The phases occur at the same time. They do not add up
+      to the total. Use the total phase as the denominator. If the operation
+      fails, atelet puts ate.failure.reason on the phase that failed and on the
+      total. It puts the key on no other phase. Thus you can still query the
+      phases that were correct.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency]
+        code_anchor: cmd/atelet/metrics.go
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        cuj: Cold starts are slow. Is the cause the download, the unpack, or ateom?
+    attributes:
+      - ref: ate.template.namespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.snapshot.scope
+        requirement_level: required
+      - ref: ate.snapshot.phase
+        requirement_level: required
+      - ref: ate.snapshot.kind
+        requirement_level:
+          conditionally_required: atelet read the snapshot manifest. The boot value does not occur on this instrument.
+      - ref: ate.sandbox.class
+        requirement_level:
+          conditionally_required: The class is known.
+      - ref: ate.failure.reason
+        requirement_level:
+          conditionally_required: The operation failed. The key occurs only on the phase that failed and on the total.
+
+  - id: metric.ate.actor.checkpoint.duration
+    type: metric
+    metric_name: ate.actor.checkpoint.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of one phase of an actor checkpoint on the worker node.
+    note: >
+      The phases are the same as the phases of the restore histogram. Thus you
+      can find the cause of a slow suspend in ateom or in the upload. The phases
+      occur at the same time. They do not add up to the total.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency]
+        code_anchor: cmd/atelet/metrics.go
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        cuj: Suspends are slow. Is the cause ateom or the upload?
+    attributes:
+      - ref: ate.template.namespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.snapshot.scope
+        requirement_level: required
+      - ref: ate.snapshot.phase
+        requirement_level: required
+      - ref: ate.snapshot.kind
+        requirement_level:
+          conditionally_required: The kind is known.
+      - ref: ate.sandbox.class
+        requirement_level:
+          conditionally_required: The class is known.
+      - ref: ate.failure.reason
+        requirement_level:
+          conditionally_required: The operation failed. The key occurs only on the phase that failed and on the total.
+
+  - id: metric.atelet.snapshot.size
+    type: metric
+    metric_name: atelet.snapshot.size
+    instrument: histogram
+    unit: By
+    stability: development
+    brief: The size in bytes of each gVisor snapshot image that a checkpoint writes, before compression.
+    note: >
+      atelet records one measurement for each image file. It does not record one
+      measurement for each checkpoint. Use the file.name key to compare the same
+      type of image.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/main.go
+        buckets: [1000000, 5000000, 10000000, 25000000, 50000000, 100000000, 250000000, 500000000, 1000000000, 2000000000, 5000000000, 10000000000]
+        cuj: The snapshots become larger. Which template, and which image?
+    attributes:
+      - ref: file.name
+        requirement_level: required
+      - ref: ate.template.namespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+
+  - id: metric.ate.actor.stats.cpu.time
+    type: metric
+    metric_name: ate.actor.stats.cpu.time
+    instrument: counter
+    unit: s
+    stability: development
+    brief: The total CPU time in seconds of the actors that are in operation.
+    note: >
+      This is a usual counter. The other three stats instruments use a callback.
+      atelet adds the increase of each actor to this counter. Thus the value
+      always increases. If a template leaves the node, its series keeps its last
+      value. It does not disappear. This is the behaviour that a rate() query
+      needs.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/statspoller.go
+        cuj: Which template uses the CPU of the node?
+    attributes: &actor_stats_attributes
+      - ref: ate.template.namespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.sandbox.class
+        requirement_level: required
+      - ref: ate.stats.source
+        requirement_level: required
+      - ref: ate.workerpool.namespace
+        requirement_level:
+          conditionally_required: The pool of the worker is known.
+      - ref: ate.workerpool.name
+        requirement_level:
+          conditionally_required: The pool of the worker is known.
+
+  - id: metric.ate.actor.stats.memory.usage
+    type: metric
+    metric_name: ate.actor.stats.memory.usage
+    instrument: gauge
+    unit: By
+    stability: development
+    brief: The total memory in bytes of the actors that are in operation, with the page cache that the node can release.
+    note: >
+      atelet reads this value with a callback. Each collection reports only the
+      groups of the last sweep. Thus a group disappears when the last actor of a
+      template leaves the node. A usual gauge would report the last value until
+      the process stops.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/statspoller.go
+        cuj: Is the node near to a memory limit, and which template is the cause?
+    attributes: *actor_stats_attributes
+
+  - id: metric.ate.actor.stats.memory.working_set
+    type: metric
+    metric_name: ate.actor.stats.memory.working_set
+    instrument: gauge
+    unit: By
+    stability: development
+    brief: The total working set in bytes of the actors that are in operation.
+    note: >
+      atelet reads this value with a callback. This value does not include the
+      page cache that the node can release. Thus compare this value with a
+      memory limit.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/statspoller.go
+        cuj: Which actors hold memory, and which actors only hold page cache?
+    attributes: *actor_stats_attributes
+
+  - id: metric.ate.actor.stats.sampled_actors
+    type: metric
+    metric_name: ate.actor.stats.sampled_actors
+    instrument: gauge
+    unit: "{actor}"
+    stability: development
+    brief: The number of actors in operation that have a current resource measurement.
+    note: >
+      atelet reads this value with a callback. This is the denominator of the
+      other three stats instruments. An average for each template is correct
+      only with this divisor. If this value decreases but the number of actors
+      does not decrease, the sweep cannot measure some actors.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [saturation]
+        code_anchor: cmd/atelet/statspoller.go
+        cuj: Do the resource numbers include each actor on the node?
+    attributes: *actor_stats_attributes
+
+  - id: metric.ate.imagecache.requests
+    type: metric
+    metric_name: ate.imagecache.requests
+    instrument: counter
+    unit: "{request}"
+    stability: development
+    brief: The number of image lookups in the image cache on the node, by outcome.
+    note: >
+      A miss causes a pull and an unpack. Thus the hit ratio of a node is an
+      early sign of the resume time. Calculate the ratio as hit / (hit + miss).
+      Do not put the failures or the stopped lookups in the denominator.
+    annotations:
+      substrate:
+        emitted_by: [atelet]
+        golden_signals: [latency, errors]
+        code_anchor: internal/imagecache/metrics.go
+        cuj: Cold starts became slower on one node. Does the image cache miss?
+    attributes:
+      - ref: ate.imagecache.outcome
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: >
+            The outcome is error. The key holds the HTTP status of the registry.
+            The permitted values are 401, 403, 404, 429, 500, 502, 503 and 504.
+            Each other status, and each failure with no status, reports _OTHER.
+
+  # ---------------------------------------------------------------------------
+  # Metrics. atecontroller
+  # ---------------------------------------------------------------------------
+
+  - id: metric.ate.workerpool.desired_workers
+    type: metric
+    metric_name: ate.workerpool.desired_workers
+    instrument: updowncounter
+    unit: "{worker}"
+    stability: development
+    brief: The number of worker pods that a WorkerPool asks for, from spec.replicas.
+    note: >
+      atecontroller reads this value with a callback. This is a separate
+      instrument and not a state key on a shared instrument. This agrees with
+      the Kubernetes conventions (k8s.deployment.desired_pods). The sum of
+      desired and ready has no meaning. But the sum of idle and assigned on
+      ate.workerpool.workers has a meaning.
+    annotations:
+      substrate:
+        emitted_by: [atecontroller]
+        golden_signals: [saturation]
+        code_anchor: cmd/atecontroller/internal/controllers/workerpool_controller.go
+        cuj: I made the pool larger. Did the new capacity arrive?
+    attributes: &workerpool_identity
+      - ref: ate.workerpool.namespace
+        requirement_level: required
+      - ref: ate.workerpool.name
+        requirement_level: required
+
+  - id: metric.ate.workerpool.ready_workers
+    type: metric
+    metric_name: ate.workerpool.ready_workers
+    instrument: updowncounter
+    unit: "{worker}"
+    stability: development
+    brief: The number of worker pods of a WorkerPool that are ready, from status.readyReplicas.
+    note: >
+      atecontroller reads this value with a callback. Compare this value with
+      desired_workers. If desired minus ready stays above 0 for some minutes,
+      the capacity did not arrive. The cause is usually an empty node pool, a
+      quota, or a worker pod that cannot start. An autoscaler without this value
+      cannot know whether its command had an effect.
+    annotations:
+      substrate:
+        emitted_by: [atecontroller]
+        golden_signals: [saturation]
+        code_anchor: cmd/atecontroller/internal/controllers/workerpool_controller.go
+        cuj: Substrate reports that it is full. Must the cluster give us more pods?
+    attributes: *workerpool_identity
+
+  # ---------------------------------------------------------------------------
+  # Metrics. atenet-router
+  # ---------------------------------------------------------------------------
+
+  - id: metric.atenet.router.route.duration
+    type: metric
+    metric_name: atenet.router.route.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: >
+      The time from the moment the router receives a request to the moment it
+      finds the worker endpoint. It does not include the work of the actor or
+      the response.
+    note: >
+      This is the measurement at the user boundary. Divide the data by
+      ate.router.resume before you read it. The triggered series is the
+      activation time. The none series is the usual warm route. A sum across the
+      two series puts milliseconds and tens of seconds in one distribution.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [latency, traffic, errors]
+        code_anchor: cmd/atenet/internal/router/extproc/metrics.go
+        buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30]
+        cuj: A request stopped or got a 503 error. Was the actor cold, was the fleet full, or has the router a defect?
+    attributes:
+      - ref: ate.template.namespace
+        requirement_level: required
+      - ref: ate.template.name
+        requirement_level: required
+      - ref: ate.router.outcome
+        requirement_level: required
+      - ref: ate.router.resume
+        requirement_level: required
+
+  - id: metric.atenet.router.parking.active
+    type: metric
+    metric_name: atenet.router.parking.active
+    instrument: updowncounter
+    unit: "{request}"
+    stability: development
+    brief: The number of requests that wait in the router for an actor resume.
+    note: This instrument has no labels. Compare the value with the configured maximum to see how near to full the parking area is.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [saturation]
+        code_anchor: cmd/atenet/internal/router/ingress/metrics.go
+        cuj: Does the router hold many resume requests, and how near to full is the parking area?
+    attributes: []
+
+  - id: metric.atenet.router.parking.wait.duration
+    type: metric
+    metric_name: atenet.router.parking.wait.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time that a request waited in the router before the router sent it, stopped it, or failed it.
+    note: >
+      The user pays this time with the route time. The outcome label of this
+      instrument does not start with ate. Refer to lint_exceptions.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [latency, saturation]
+        code_anchor: cmd/atenet/internal/router/ingress/metrics.go
+        buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 45, 60]
+        cuj: How much of the wait of the user is a queue, and how much is an activation?
+    attributes:
+      - ref: outcome
+        requirement_level: required
+
+  - id: metric.atenet.router.parking.rejected
+    type: metric
+    metric_name: atenet.router.parking.rejected
+    instrument: counter
+    unit: "{request}"
+    stability: development
+    brief: The number of requests that the router refused because the parking area was full.
+    note: >
+      This instrument has no labels. A rate above zero means that the router
+      sheds load. The router fails a request quickly instead of a queue with no
+      limit.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [errors, saturation]
+        code_anchor: cmd/atenet/internal/router/ingress/metrics.go
+        cuj: Does Substrate refuse requests at the edge?
+    attributes: []
+
+  # ---------------------------------------------------------------------------
+  # Metrics. Upstream instrumentation
+  # ---------------------------------------------------------------------------
+
+  - id: metric.rpc.server.call.duration
+    type: metric
+    metric_name: rpc.server.call.duration
+    instrument: histogram
+    unit: s
+    stability: stable
+    brief: The time, the rate and the errors of each gRPC method on the server.
+    note: >
+      The otelgrpc interceptor sends this instrument. The code of Substrate does
+      not make it. This instrument is the only instrumentation of ateom. ateom
+      has it on the gRPC interface that atelet calls.
+    annotations:
+      substrate:
+        emitted_by: [ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm]
+        golden_signals: [latency, traffic, errors]
+        source: external
+        instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
+        code_anchor: cmd/atenet/internal/router/xds.go
+        cuj: Which RPC is slow or fails, and on which component?
+    attributes:
+      - ref: rpc.method
+        requirement_level: required
+      - ref: rpc.response.status_code
+        requirement_level: required
+
+  - id: metric.rpc.client.call.duration
+    type: metric
+    metric_name: rpc.client.call.duration
+    instrument: histogram
+    unit: s
+    stability: stable
+    brief: The time, the rate and the errors of each gRPC method that a component calls.
+    note: >
+      This is the client half of rpc.server.call.duration. Compare the two to
+      find the time that the network and the queues add. If the client duration
+      is much larger than the server duration of the same method, the delay is
+      not in the handler.
+    annotations:
+      substrate:
+        emitted_by: [ateapi, atelet, atecontroller, atenet-router]
+        golden_signals: [latency, traffic, errors]
+        source: external
+        instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc
+        code_anchor: internal/ateclient/builder.go
+        cuj: A component waits on another component. Which call, and for how long?
+    attributes:
+      - ref: rpc.method
+        requirement_level: required
+      - ref: rpc.response.status_code
+        requirement_level: required
+  # ---------------------------------------------------------------------------
+  # The metrics that Substrate exports but does not define
+  #
+  # atecontroller gives the Prometheus registry of controller-runtime to its
+  # OTLP pipeline. Thus the controller_runtime_*, workqueue_*, certwatcher_*,
+  # rest_client_*, leader_election_*, go_* and process_* series leave the
+  # cluster with the metrics above.
+  #
+  # This registry does not define them, one by one or at all. The upstream
+  # library owns their names, their labels and their buckets, and a version
+  # bump changes the set. A copy here becomes wrong with no signal.
+  # docs/metrics/substrate.yaml records them as families, with the version of
+  # controller-runtime that the list comes from.
+  # ---------------------------------------------------------------------------

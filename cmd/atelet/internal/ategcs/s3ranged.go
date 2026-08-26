@@ -19,11 +19,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -43,7 +45,7 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 		Range: aws.String(byteRange(0, downloadChunkSize)),
 	})
 	if err != nil {
-		if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
+		if objectAbsent(err) {
 			return nil, fmt.Errorf("%w: Failed to get S3 Bucket:%q, Object:%q", ateerrors.ReasonFailedGetExternalObject, bucket, object)
 		}
 		return nil, err
@@ -96,4 +98,20 @@ func totalFromContentRange(cr *string) (int64, bool) {
 		return 0, false
 	}
 	return size, true
+}
+
+// objectAbsent reports whether err indicates the object or bucket does not exist.
+//
+// In addition to typed NoSuchKey errors, S3 and S3-compatible backends (e.g. MinIO,
+// R2, Ceph) may return generic 404 NotFound or NoSuchBucket responses. HTTP 403
+// (AccessDenied) is intentionally excluded to avoid misinterpreting permission
+// errors as missing objects.
+func objectAbsent(err error) bool {
+	if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
+		return true
+	}
+	if re, ok := errors.AsType[*awshttp.ResponseError](err); ok {
+		return re.HTTPStatusCode() == http.StatusNotFound
+	}
+	return false
 }

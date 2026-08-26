@@ -51,6 +51,10 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()},
 		nil,
 	}, {
+		"unknown field on actor_template",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: withUnknown(validActorTemplate(), 9999)},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template"), field.OmitValueType{}, "")},
+	}, {
 		"missing actor_template",
 		&ateapipb.CreateActorTemplateRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},

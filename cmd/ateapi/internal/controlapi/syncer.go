@@ -91,9 +91,9 @@ type workerPoolSyncerStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
-	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
-	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
-	DeleteWorker(ctx context.Context, name string) error
+	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
+	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
+	DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error)
 	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
 }
 
@@ -263,10 +263,10 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			},
 		}
-		// TODO(thockin): for now this is the only place Workers are
-		// created.  If/when this becomes a regular API, validation should
-		// move there.
-		if errs := resources.ValidateWorker(worker, nil); len(errs) > 0 {
+		// TODO: validateWorker now lives next to CreateWorker, which applies it
+		// too. Once this path calls the RPC instead of the store, the check
+		// here goes away and the errors below arrive as INVALID_ARGUMENT.
+		if errs := validateWorker(worker, nil); len(errs) > 0 {
 			// Terminal: the inputs are deterministic, retrying cannot help. A
 			// future pod event re-enqueues the key.
 			slog.ErrorContext(ctx, "Invalid worker", append(key.logAttrs(), slog.Any("err", errs.ToAggregate()))...)
@@ -274,7 +274,8 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		}
 		// ErrAlreadyExists means we lost a create race; requeue and converge
 		// via the update path.
-		return s.persistence.CreateWorker(ctx, worker)
+		_, err := s.persistence.CreateWorker(ctx, worker)
+		return err
 	}
 
 	changed := false
@@ -300,7 +301,13 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 
 	// ErrVersionConflict requeues the key; the retry re-fetches the worker at
 	// its new version.
-	return s.persistence.UpdateWorker(ctx, w, w.GetMetadata().GetVersion())
+	_, err = s.persistence.UpdateWorker(ctx, key.workerName(), store.PreconditionFrom(w), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Ip = w.GetIp()
+		toUpdate.SandboxClass = w.GetSandboxClass()
+		toUpdate.Labels = w.GetLabels()
+		return nil
+	})
+	return err
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
@@ -356,8 +363,11 @@ func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, key workerKey
 		return nil
 	}
 	slog.InfoContext(ctx, "Syncer: marking worker draining (pod deleting)", key.logAttrs()...)
-	worker.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-	return s.persistence.UpdateWorker(ctx, worker, worker.GetMetadata().GetVersion())
+	_, err = s.persistence.UpdateWorker(ctx, key.workerName(), store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+		return nil
+	})
+	return err
 }
 
 // reconcileDeadWorker cleans up a worker whose pod is gone. It releases the
@@ -370,7 +380,14 @@ func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, name string)
 	if err := s.releaseActorOnDeadWorker(ctx, name); err != nil {
 		return err
 	}
-	return s.persistence.DeleteWorker(ctx, name)
+	// The delete now reports absence rather than succeeding silently, but a
+	// worker already gone is exactly the state this is driving towards.
+	// Idempotency lives here, at the caller, so re-driving a reconcile is safe.
+	_, err := s.persistence.DeleteWorker(ctx, name, store.DeletePreconditions{})
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 // storedWorkerListBackoff and storedWorkerListCap are the exponential backoff

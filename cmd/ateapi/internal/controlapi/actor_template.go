@@ -76,6 +76,8 @@ func validateCreateActorTemplateRequest(req *ateapipb.CreateActorTemplateRequest
 		return errs
 	}
 
+	errs = append(errs, validateNoUnknownFields(template, templatePath)...)
+
 	// ActorTemplate is Atespaced: metadata.atespace and name are required + valid.
 	metaPath := templatePath.Child("metadata")
 	if val, p := template.GetMetadata().GetAtespace(), metaPath.Child("atespace"); val == "" {

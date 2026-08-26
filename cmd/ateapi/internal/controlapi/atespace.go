@@ -60,6 +60,8 @@ func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) field.Er
 		return errs
 	}
 
+	errs = append(errs, validateNoUnknownFields(atespace, atespacePath)...)
+
 	// Atespace is global-scoped: metadata.atespace must be empty, name required + valid.
 	metaPath := atespacePath.Child("metadata")
 	if val, p := atespace.GetMetadata().GetAtespace(), metaPath.Child("atespace"); val != "" {
@@ -92,15 +94,7 @@ func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceR
 
 func validateGetAtespaceRequest(req *ateapipb.GetAtespaceRequest) field.ErrorList {
 	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateGlobalObjectRef(val, fldPath)...)
-	}
-
-	return errs
+	return resources.ValidateGlobalObjectRef(req.GetAtespace(), fldPath.Child("atespace"))
 }
 
 func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespacesRequest) (*ateapipb.ListAtespacesResponse, error) {
@@ -159,13 +153,5 @@ func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAte
 
 func validateDeleteAtespaceRequest(req *ateapipb.DeleteAtespaceRequest) field.ErrorList {
 	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateGlobalObjectRef(val, fldPath)...)
-	}
-
-	return errs
+	return resources.ValidateGlobalObjectRef(req.GetAtespace(), fldPath.Child("atespace"))
 }
