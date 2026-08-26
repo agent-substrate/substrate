@@ -146,6 +146,18 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		seenUIDs[got.UID] = id
 	}
 
+	// Live refresh (#932): rotate the pool while both actors RUN — no
+	// suspend, no resume — and wait until each observes the new sanitized
+	// contents at the same path. atelet's informer rewrites the projected
+	// file (temp + rename at the stable path) for every running actor that
+	// projects the bundle, and both runtimes must surface the host-side
+	// rename on their next read (gVisor revalidating the bind mount through
+	// the gofer, the micro-VM through virtio-fs).
+	liveTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-live")
+	for _, id := range ids {
+		waitForTrust(t, ctx, rc, id, liveTrust)
+	}
+
 	// Full suspend/resume cycle of one actor (see the doc comment): the whoami
 	// calls above deliberately seeded the guest state a suspend records — the
 	// held fd from probe startup plus the freshly indexed file inodes — and the
@@ -154,9 +166,9 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// The trust bundle is rotated first, so the same cycle also proves the
 	// "bundle contents refresh on every Run/Restore" semantic end to end: the
 	// resumed actor must observe the NEW sanitized contents at the same path.
-	// (Live propagation to running actors, without a resume, is #932 PR 2;
-	// until then a running actor's file is the bundle as of its last
-	// Run/Restore.)
+	// The suspend deliberately does NOT wait for this rotation to propagate
+	// live: whether the live rewrite lands before or after the guest goes
+	// down, the resume must deliver the rotated contents.
 	rotatedTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
@@ -185,6 +197,28 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	if got.Trust != rotatedTrust {
 		t.Errorf("after suspend/resume: /run/ate/trust-bundle.pem = %q, want the rotated sanitized bundle %q (probe read error: %q)", got.Trust, rotatedTrust, got.Error)
 	}
+
+	// The other actor never cycled: the second rotation must reach it live,
+	// undisturbed by a sibling of the same bundle suspending and resuming.
+	waitForTrust(t, ctx, rc, ids[1], rotatedTrust)
+}
+
+// waitForTrust polls the probe until its projected trust bundle equals want:
+// the live-refresh chain (reconciler -> ClusterTrustBundle -> atelet informer
+// -> host rewrite -> guest revalidation) exposes no completion signal to wait
+// on.
+func waitForTrust(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	var got whoamiResponse
+	for time.Now().Before(deadline) {
+		got = whoami(t, ctx, rc, id)
+		if got.Trust == want {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("actor %q: timed out waiting for the live-refreshed trust bundle: /run/ate/trust-bundle.pem = %q, want %q (probe read error: %q)", id, got.Trust, want, got.Error)
 }
 
 // seenUIDFor returns the UID recorded for actor id in the first phase of the

@@ -139,14 +139,14 @@ func TestWriteSystemInfoVolume(t *testing.T) {
 	}
 
 	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
-	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
+	if _, err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume: %v", err)
 	}
 
 	// Overwrite with a different actor, as happens when a snapshot taken from
 	// one actor seeds another on resume: files must carry the new values.
 	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
-	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
+	if _, err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
 	}
 
@@ -200,7 +200,7 @@ func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
 	}
 
 	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
-	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
+	if _, err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
 	// Regenerate for a different actor, as a restore from a shared golden
 	// snapshot does.
 	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
-	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
+	if _, err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
 	}
 
@@ -259,7 +259,8 @@ func TestWriteSystemInfoVolume_TrustBundle(t *testing.T) {
 
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
 	ref := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	if err := writeSystemInfoVolume(ctx, root, ref, "uid-1", lister, si); err != nil {
+	projections, err := writeSystemInfoVolume(ctx, root, ref, "uid-1", lister, si)
+	if err != nil {
 		t.Fatalf("writeSystemInfoVolume: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(root, "trust/ca.pem"))
@@ -270,8 +271,14 @@ func TestWriteSystemInfoVolume_TrustBundle(t *testing.T) {
 		t.Errorf("content = %q, want the sanitized bundle", got)
 	}
 
+	// The returned projection is what Run/Restore hands to the refresher.
+	want := trustBundleProjection{Bundle: EgressTrustBundleName, Root: root, Path: "trust/ca.pem", AppliedHash: trustBundleHash(string(certPEM))}
+	if len(projections) != 1 || projections[0] != want {
+		t.Errorf("projections = %+v, want [%+v]", projections, want)
+	}
+
 	t.Run("resolution failure fails the write rather than produce an empty trust file", func(t *testing.T) {
-		err := writeSystemInfoVolume(ctx, filepath.Join(t.TempDir(), "vol2"), ref, "uid-1", ctbLister(t), si)
+		_, err := writeSystemInfoVolume(ctx, filepath.Join(t.TempDir(), "vol2"), ref, "uid-1", ctbLister(t), si)
 		if err == nil || !strings.Contains(err.Error(), "not found") {
 			t.Errorf("writeSystemInfoVolume = %v, want not-found resolution error", err)
 		}

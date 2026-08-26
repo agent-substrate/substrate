@@ -306,6 +306,17 @@ func main() {
 		csiDriverConfigLister,
 		clusterTrustBundleLister,
 	)
+
+	// Live refresh (#932): forward ClusterTrustBundle changes to the projected
+	// files of running actors. Adding the handler after cache sync is fine —
+	// client-go replays the existing object as an Add — and recovery then
+	// re-registers the projections of actors already running on this node (a
+	// restarted atelet must not freeze their bundles) and re-syncs them.
+	if _, err := coreFactory.Certificates().V1beta1().ClusterTrustBundles().Informer().AddEventHandler(wmService.trustBundles.eventHandler(ctx)); err != nil {
+		serverboot.Fatal(ctx, "Failed to watch ClusterTrustBundles for live refresh", err)
+	}
+	wmService.trustBundles.recoverFromDisk(ctx)
+
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
@@ -427,6 +438,7 @@ type AteomHerder struct {
 	volumePlugins            map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister    listersv1alpha1.CSIDriverConfigLister
 	clusterTrustBundleLister certlisters.ClusterTrustBundleLister
+	trustBundles             *trustBundleRefresher
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -452,6 +464,7 @@ func NewService(
 		volumePlugins:            volumePlugins,
 		csiDriverConfigLister:    csiDriverConfigLister,
 		clusterTrustBundleLister: clusterTrustBundleLister,
+		trustBundles:             newTrustBundleRefresher(clusterTrustBundleLister),
 	}
 	return wms
 }
@@ -490,11 +503,23 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
+	tbProjections, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
 		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
-	); err != nil {
+	)
+	if err != nil {
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
 	}
+
+	if err := s.trustBundles.Register(ctx, actorUID, tbProjections); err != nil {
+		return nil, fmt.Errorf("while registering trust-bundle projections: %w", err)
+	}
+	// The start can still fail below; leave no registration behind for a
+	// sandbox that never came up.
+	defer func() {
+		if err != nil {
+			s.trustBundles.Deregister(ctx, actorUID)
+		}
+	}()
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -644,6 +669,10 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		op.failedPhase = ateattr.SnapshotPhaseAteomCheckpoint
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
+
+	// The sandbox is down from here on (CheckpointWorkload deletes the
+	// containers): stop refreshing its trust-bundle projections.
+	s.trustBundles.Deregister(ctx, actorUID)
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
@@ -1077,6 +1106,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
 	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
+	var tbProjections []trustBundleProjection
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
 	var prepFailedPhase string
@@ -1138,7 +1168,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
 		t := time.Now()
-		err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+		tbProjections, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1156,6 +1186,17 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 		return nil, err
 	}
+
+	if err := s.trustBundles.Register(ctx, actorUID, tbProjections); err != nil {
+		return nil, fmt.Errorf("while registering trust-bundle projections: %w", err)
+	}
+	// The restore can still fail below; leave no registration behind for a
+	// sandbox that never came up.
+	defer func() {
+		if err != nil {
+			s.trustBundles.Deregister(ctx, actorUID)
+		}
+	}()
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -1222,6 +1263,10 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
+
+	// The actor dies whatever happens below; refreshing its trust-bundle
+	// projections serves nobody.
+	s.trustBundles.Deregister(ctx, actorUID)
 
 	var assetPaths map[string]string
 	sandboxRec, err := readSandboxRecord(actorUID)
@@ -1503,7 +1548,8 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with.
+// with. It returns the trustBundle projections it wrote, for the caller to
+// register with the trustBundleRefresher.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1511,21 +1557,24 @@ func (s *AteomHerder) prepareOCIBundles(
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
 	targetAteomUid string,
-) error {
+) ([]trustBundleProjection, error) {
 	// Prepare host folders for volume types that need them.
+	var tbProjections []trustBundleProjection
 	for _, vol := range spec.GetVolumes() {
 		switch volSrc := vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
-				return fmt.Errorf("while creating %q: %w", volPath, err)
+				return nil, fmt.Errorf("while creating %q: %w", volPath, err)
 			}
 
 		case *ateletpb.Volume_SystemInfo:
 			volRootHostPath := ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName())
-			if err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, s.clusterTrustBundleLister, volSrc.SystemInfo); err != nil {
-				return fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
+			projections, err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, s.clusterTrustBundleLister, volSrc.SystemInfo)
+			if err != nil {
+				return nil, fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
 			}
+			tbProjections = append(tbProjections, projections...)
 		}
 	}
 
@@ -1602,13 +1651,19 @@ func (s *AteomHerder) prepareOCIBundles(
 		})
 	}
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return tbProjections, nil
 }
 
 // writeSystemInfoVolume populates the root directory of a system-info volume
 // with one file per projected item. It runs on every Run/Restore, before the
 // sandbox starts, so the files carry the values of the actor actually being
-// started, no matter what checkpointed state it boots from.
+// started, no matter what checkpointed state it boots from. It returns the
+// trustBundle projections it wrote so the caller can register them with the
+// trustBundleRefresher, which rewrites them when the bundle changes while
+// the actor runs.
 //
 // Every file must be a plain file at a stable real path across regenerations:
 // the micro-VM virtiofsds run in find-paths migration mode, which re-binds
@@ -1617,32 +1672,37 @@ func (s *AteomHerder) prepareOCIBundles(
 // schemes (kubelet's atomic writer) move the payload files to a new
 // timestamped directory on every write and delete the old one, so guest
 // state from the snapshot could not re-bind. Per-file write-to-temp-and-
-// rename is atomic enough: this only runs while the sandbox is down, so no
-// reader can observe a partial write.
+// rename is atomic enough: a reader sees the old contents or the new, never
+// a partial write — which is also what lets the refresher rewrite trust
+// bundles underneath a running sandbox.
 //
-// TODO(#802): rotating data sources (identity JWTs, certificates) will need
-// these files refreshed while the actor runs, not just at Run/Restore — and
-// must keep the per-file rename discipline so visible paths never move.
-// actorMetadata never changes after start, so writing here is enough for it.
-//
-// TODO(#932): trustBundle projections currently refresh only here, on
-// Run/Restore; live refresh for running actors is PR 2 of that issue.
-func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, ctbLister certlisters.ClusterTrustBundleLister, si *ateletpb.SystemInfoVolume) error {
+// TODO(#802): other rotating data sources (identity JWTs, certificates) will
+// need the live refresh trust bundles have, keeping the same per-file rename
+// discipline so visible paths never move. actorMetadata never changes after
+// start, so writing here is enough for it.
+func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, ctbLister certlisters.ClusterTrustBundleLister, si *ateletpb.SystemInfoVolume) ([]trustBundleProjection, error) {
 	if err := os.MkdirAll(rootPath, 0o755); err != nil {
-		return fmt.Errorf("while creating %q: %w", rootPath, err)
+		return nil, fmt.Errorf("while creating %q: %w", rootPath, err)
 	}
 
+	var tbProjections []trustBundleProjection
 	for _, dataSourceAny := range si.GetDataSources() {
 		switch dataSource := dataSourceAny.GetDataSource().(type) {
 		case *ateletpb.SystemInfoDataSource_TrustBundle:
 			tb := dataSource.TrustBundle
-			pemBundle, err := resolveTrustBundle(ctbLister, tb.GetName())
+			pemBundle, appliedHash, err := resolveTrustBundle(ctbLister, tb.GetName())
 			if err != nil {
-				return fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
+				return nil, fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
 			}
 			if err := writeSystemInfoFile(rootPath, tb.GetPath(), pemBundle); err != nil {
-				return err
+				return nil, err
 			}
+			tbProjections = append(tbProjections, trustBundleProjection{
+				Bundle:      tb.GetName(),
+				Root:        rootPath,
+				Path:        tb.GetPath(),
+				AppliedHash: appliedHash,
+			})
 		case *ateletpb.SystemInfoDataSource_ActorMetadata:
 			for _, item := range dataSource.ActorMetadata.GetItems() {
 				var value string
@@ -1659,12 +1719,12 @@ func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resour
 					continue
 				}
 				if err := writeSystemInfoFile(rootPath, item.GetPath(), []byte(value)); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
 	}
-	return nil
+	return tbProjections, nil
 }
 
 // writeSystemInfoFile writes one projected file at relPath under rootPath via

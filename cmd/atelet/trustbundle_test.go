@@ -77,7 +77,7 @@ func TestResolveTrustBundle(t *testing.T) {
 			// only the CERTIFICATE block survives, and the duplicate is dropped.
 			Spec: certsv1beta1.ClusterTrustBundleSpec{TrustBundle: junk + string(certPEM) + string(certPEM)},
 		})
-		got, err := resolveTrustBundle(lister, EgressTrustBundleName)
+		got, _, err := resolveTrustBundle(lister, EgressTrustBundleName)
 		if err != nil {
 			t.Fatalf("resolveTrustBundle: %v", err)
 		}
@@ -93,14 +93,14 @@ func TestResolveTrustBundle(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "my-own-bundle"},
 			Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: string(certPEM)},
 		})
-		_, err := resolveTrustBundle(lister, "my-own-bundle")
+		_, _, err := resolveTrustBundle(lister, "my-own-bundle")
 		if err == nil || !strings.Contains(err.Error(), `"my-own-bundle"`) || !strings.Contains(err.Error(), "not supported") || !strings.Contains(err.Error(), EgressTrustBundleName) {
 			t.Errorf("error = %v, want unsupported-name error listing the allowlist", err)
 		}
 	})
 
 	t.Run("missing bundle fails naming it", func(t *testing.T) {
-		_, err := resolveTrustBundle(ctbLister(t), EgressTrustBundleName)
+		_, _, err := resolveTrustBundle(ctbLister(t), EgressTrustBundleName)
 		if err == nil || !strings.Contains(err.Error(), egressTrustBundleObjectName) || !strings.Contains(err.Error(), "not found") {
 			t.Errorf("error = %v, want not-found naming the backing object", err)
 		}
@@ -111,7 +111,7 @@ func TestResolveTrustBundle(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName},
 			Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: junk},
 		})
-		_, err := resolveTrustBundle(lister, EgressTrustBundleName)
+		_, _, err := resolveTrustBundle(lister, EgressTrustBundleName)
 		if err == nil || !strings.Contains(err.Error(), "unusable") {
 			t.Errorf("error = %v, want unusable-bundle error", err)
 		}
@@ -121,7 +121,7 @@ func TestResolveTrustBundle(t *testing.T) {
 		// A nil lister is a wiring bug (production always registers the
 		// informer at boot); it must fail the actor start, not panic the
 		// node daemon.
-		_, err := resolveTrustBundle(nil, EgressTrustBundleName)
+		_, _, err := resolveTrustBundle(nil, EgressTrustBundleName)
 		if err == nil || !strings.Contains(err.Error(), "no ClusterTrustBundle lister") {
 			t.Errorf("error = %v, want no-lister error", err)
 		}
