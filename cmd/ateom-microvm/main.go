@@ -263,7 +263,6 @@ func do(ctx context.Context) error {
 	ateompb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
 	readiness := &serverboot.Readiness{}
-	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination grace
 	// period) and propagate it into the guest so the actor can save its state and
@@ -284,6 +283,8 @@ func do(ctx context.Context) error {
 		// concurrent CheckpointWorkload) has completed, then unblocks svr.Serve below.
 		svr.GracefulStop()
 	}()
+
+	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
 
 	slog.InfoContext(ctx, "ateom-microvm serving", slog.String("socket", sockPath))
 	if err := svr.Serve(lis); err != nil {
