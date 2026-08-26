@@ -52,7 +52,7 @@ func (s *ServiceImpl) CreateAtespace(ctx context.Context, inAtespace *ateapipb.A
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Atespace %s already exists", inAtespace.Metadata.Name)
 		}
-		return nil, fmt.Errorf("while creating actor: %w", err)
+		return nil, fmt.Errorf("while recording atespace: %w", err)
 	}
 
 	return stored, nil

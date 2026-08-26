@@ -96,8 +96,9 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, ErrImmutableField if the mutated actor changed a field that is
-	// immutable for its lifetime, or the mutate's error verbatim otherwise.
+	// exhausted, or the mutate's error verbatim otherwise. Immutable fields
+	// are not checked here; the service layer enforces them via declarative
+	// validation before the write.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if

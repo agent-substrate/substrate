@@ -184,7 +184,7 @@ func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRe
 }
 
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
-	if errs := validateGetActorRequest(req); len(errs) > 0 {
+	if errs := validateGetActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
@@ -202,21 +202,14 @@ func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef)
 	return s.store.GetActor(ctx, actorRef)
 }
 
-func validateGetActorRequest(req *ateapipb.GetActorRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateGetActorRequest(ctx context.Context, req *ateapipb.GetActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_GetActorRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
-	if errs := validateListActorsRequest(req); len(errs) > 0 {
+	if errs := validateListActorsRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
@@ -235,20 +228,10 @@ func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts stor
 	return s.store.ListActors(ctx, atespace, opts)
 }
 
-func validateListActorsRequest(req *ateapipb.ListActorsRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	// An empty atespace is allowed here and means "all atespaces".
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val != "" {
-		errs = append(errs, resources.ValidateResourceName(val, fldPath)...)
-	}
-
-	if val, fldPath := req.PageSize, fldPath.Child("page_size"); val < 0 {
-		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
-	}
-
-	return errs
+func validateListActorsRequest(ctx context.Context, req *ateapipb.ListActorsRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ListActorsRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
@@ -343,7 +326,7 @@ func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 }
 
 func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
-	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
+	if errs := validateDeleteActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	start := time.Now()
@@ -376,21 +359,14 @@ func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	return s.store.DeleteActor(ctx, actorRef)
 }
 
-func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateDeleteActorRequest(ctx context.Context, req *ateapipb.DeleteActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_DeleteActorRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
-	if errs := validatePauseActorRequest(req); len(errs) > 0 {
+	if errs := validatePauseActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
@@ -411,21 +387,14 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 	return &ateapipb.PauseActorResponse{Actor: actor}, nil
 }
 
-func validatePauseActorRequest(req *ateapipb.PauseActorRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validatePauseActorRequest(ctx context.Context, req *ateapipb.PauseActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_PauseActorRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
-	if errs := validateResumeActorRequest(req); len(errs) > 0 {
+	if errs := validateResumeActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
@@ -446,21 +415,14 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	return &ateapipb.ResumeActorResponse{Actor: actor, Resumed: resumed}, nil
 }
 
-func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateResumeActorRequest(ctx context.Context, req *ateapipb.ResumeActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ResumeActorRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
-	if errs := validateSuspendActorRequest(req); len(errs) > 0 {
+	if errs := validateSuspendActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
@@ -480,16 +442,10 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
 }
 
-func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-	return errs
+func validateSuspendActorRequest(ctx context.Context, req *ateapipb.SuspendActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_SuspendActorRequest(ctx, op, nil, req, nil)
 }
 
 func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {

@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -462,7 +463,7 @@ func TestValidateGetActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.atespace",
 		&ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.name",
 		&ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1"}},
@@ -470,11 +471,11 @@ func TestValidateGetActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.name",
 		&ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateGetActorRequest(tt.req), tt.want)
+			assertValidateErr(t, validateGetActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -496,7 +497,7 @@ func TestValidateListActorsRequest(t *testing.T) {
 	}, {
 		"invalid atespace",
 		&ateapipb.ListActorsRequest{Atespace: "NS1"},
-		field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"valid, positive page_size",
 		&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: 10},
@@ -504,11 +505,19 @@ func TestValidateListActorsRequest(t *testing.T) {
 	}, {
 		"negative page_size",
 		&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: -1},
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "")},
+		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
+	}, {
+		"valid page_token",
+		&ateapipb.ListActorsRequest{Atespace: "ns1", PageToken: strings.Repeat("x", 256)},
+		nil,
+	}, {
+		"too-large page_token",
+		&ateapipb.ListActorsRequest{Atespace: "ns1", PageToken: strings.Repeat("x", 257)},
+		field.ErrorList{field.TooLongCharacters(field.NewPath("page_token"), "", 256).WithOrigin("maxLength")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateListActorsRequest(tt.req), tt.want)
+			assertValidateErr(t, validateListActorsRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -967,7 +976,7 @@ func TestValidateDeleteActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.atespace",
 		&ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.name",
 		&ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1"}},
@@ -975,11 +984,11 @@ func TestValidateDeleteActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.name",
 		&ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateDeleteActorRequest(tt.req), tt.want)
+			assertValidateErr(t, validateDeleteActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -1004,7 +1013,7 @@ func TestValidatePauseActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.atespace",
 		&ateapipb.PauseActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.name",
 		&ateapipb.PauseActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1"}},
@@ -1012,11 +1021,11 @@ func TestValidatePauseActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.name",
 		&ateapipb.PauseActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validatePauseActorRequest(tt.req), tt.want)
+			assertValidateErr(t, validatePauseActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -1041,7 +1050,7 @@ func TestValidateResumeActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.atespace",
 		&ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.name",
 		&ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1"}},
@@ -1049,11 +1058,11 @@ func TestValidateResumeActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.name",
 		&ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateResumeActorRequest(tt.req), tt.want)
+			assertValidateErr(t, validateResumeActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -1078,7 +1087,7 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.atespace",
 		&ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "atespace"), "NS1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.name",
 		&ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1"}},
@@ -1086,11 +1095,11 @@ func TestValidateSuspendActorRequest(t *testing.T) {
 	}, {
 		"invalid actor.name",
 		&ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"}},
-		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateSuspendActorRequest(tt.req), tt.want)
+			assertValidateErr(t, validateSuspendActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }

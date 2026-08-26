@@ -801,7 +801,8 @@ message DeleteActorTemplateRequest {
 }
 
 message GetActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
@@ -830,7 +831,8 @@ message UpdateActorRequest {
 }
 
 message SuspendActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
@@ -839,7 +841,8 @@ message SuspendActorResponse {
 }
 
 message PauseActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
@@ -848,7 +851,8 @@ message PauseActorResponse {
 }
 
 message ResumeActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
@@ -864,7 +868,8 @@ message ResumeActorResponse {
 }
 
 message DeleteActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
   bool any_state = 2;
 }
@@ -995,15 +1000,24 @@ message DrainWorkerRequest {
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
   // The atespace to list actors from. Empty lists across all atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string atespace = 1;
 
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 2;
 
   // Pagination token from a previous ListActors response.
   // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 3;
 }
 
