@@ -68,6 +68,7 @@ func NewRPCService(
 	dialer *AteletDialer,
 	instruments *Instruments,
 	egressGatewayAddress string,
+	actorIDJWTPoolFile string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 ) *RPCService {
 	impl := newServiceImpl(persistence, actorTemplateLister, storageClassLister)
@@ -80,7 +81,7 @@ func NewRPCService(
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, actorIDJWTPoolFile, s)
 	return s
 }
 

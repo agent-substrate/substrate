@@ -78,7 +78,11 @@ type ActorWorkflow struct {
 	storageClassLister   storagev1listers.StorageClassLister
 	instruments          *Instruments
 	egressGatewayAddress string
-	pluginRegistry       VolumePluginRegistry
+	// actorIDJWTPoolFile is the signing pool for actorIdentityToken data
+	// sources (mintActorIdentityTokens); empty means the deployment does not
+	// issue actor identity tokens and referencing templates fail actor start.
+	actorIDJWTPoolFile string
+	pluginRegistry     VolumePluginRegistry
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -92,6 +96,7 @@ func NewActorWorkflow(
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
 	egressGatewayAddress string,
+	actorIDJWTPoolFile string,
 	pluginRegistry VolumePluginRegistry,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
@@ -105,6 +110,7 @@ func NewActorWorkflow(
 		storageClassLister:   storageClassLister,
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
+		actorIDJWTPoolFile:   actorIDJWTPoolFile,
 		pluginRegistry:       pluginRegistry,
 	}
 }

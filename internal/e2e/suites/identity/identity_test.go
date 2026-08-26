@@ -16,9 +16,11 @@ package identity
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +42,7 @@ type whoamiResponse struct {
 	Atespace string `json:"atespace"`
 	UID      string `json:"uid"`
 	Trust    string `json:"trust"`
+	Token    string `json:"token"`
 	Hostname string `json:"hostname"`
 	// Held is the actor id read through a file descriptor the probe opened at
 	// startup and holds across checkpoints — the snapshot therefore carries an
@@ -130,6 +133,11 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q: /run/ate/trust-bundle.pem = %q, want the sanitized bundle %q (probe read error: %q)", id, got.Trust, wantTrust, got.Error)
 		}
 
+		// The projected identity token must be a JWT minted for THIS actor and
+		// the template's audience (unverified decode: signature correctness is
+		// covered by ateapi's unit tests; the e2e pins the binding).
+		assertTokenClaims(t, id, got)
+
 		// The projected UID must match the control plane's authoritative view
 		// of this actor, and be distinct per actor even though both actors
 		// were seeded from the same golden snapshot.
@@ -159,6 +167,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// Run/Restore.)
 	rotatedTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
+	tokenBeforeResume := whoami(t, ctx, rc, id).Token
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", id, err)
@@ -184,6 +193,62 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	}
 	if got.Trust != rotatedTrust {
 		t.Errorf("after suspend/resume: /run/ate/trust-bundle.pem = %q, want the rotated sanitized bundle %q (probe read error: %q)", got.Trust, rotatedTrust, got.Error)
+	}
+	// A resume is a new activation, and every activation mints a fresh token
+	// (new iat/jti) — a stale token here would mean the file rode the
+	// snapshot instead of being re-minted.
+	assertTokenClaims(t, id, got)
+	if got.Token == tokenBeforeResume {
+		t.Errorf("after suspend/resume: identity token unchanged; every Run/Restore must re-mint")
+	}
+}
+
+// tokenAudience mirrors probe.yaml.tmpl's actorIdentityToken audience.
+const tokenAudience = "ate-e2e.example.com"
+
+// assertTokenClaims decodes got.Token without verification and asserts it was
+// minted for actor id and the fixture's audience.
+func assertTokenClaims(t *testing.T, id string, got whoamiResponse) {
+	t.Helper()
+	if got.Token == "" {
+		t.Errorf("actor %q: /run/ate/token is empty (probe read error: %q)", id, got.Error)
+		return
+	}
+	parts := strings.Split(got.Token, ".")
+	if len(parts) != 3 {
+		t.Errorf("actor %q: token is not a compact JWS (%d parts)", id, len(parts))
+		return
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Errorf("actor %q: decoding token payload: %v", id, err)
+		return
+	}
+	var claims struct {
+		Sub string   `json:"sub"`
+		Aud []string `json:"aud"`
+		Exp int64    `json:"exp"`
+		Ate struct {
+			Atespace  string `json:"atespace"`
+			ActorName string `json:"actorName"`
+			ActorUID  string `json:"actorUid"`
+		} `json:"ate.dev"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Errorf("actor %q: unmarshaling token claims: %v", id, err)
+		return
+	}
+	if want := "atespaces:" + probeNamespace + ":actors:" + id; claims.Sub != want {
+		t.Errorf("actor %q: token sub = %q, want %q", id, claims.Sub, want)
+	}
+	if len(claims.Aud) != 1 || claims.Aud[0] != tokenAudience {
+		t.Errorf("actor %q: token aud = %v, want [%s]", id, claims.Aud, tokenAudience)
+	}
+	if exp := time.Unix(claims.Exp, 0); !exp.After(time.Now()) {
+		t.Errorf("actor %q: token already expired at %v", id, exp)
+	}
+	if claims.Ate.Atespace != probeNamespace || claims.Ate.ActorName != id {
+		t.Errorf("actor %q: token ate.dev identity = %s/%s, want %s/%s", id, claims.Ate.Atespace, claims.Ate.ActorName, probeNamespace, id)
 	}
 }
 

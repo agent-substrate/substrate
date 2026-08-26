@@ -1643,6 +1643,17 @@ func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resour
 			if err := writeSystemInfoFile(rootPath, tb.GetPath(), pemBundle); err != nil {
 				return err
 			}
+		case *ateletpb.SystemInfoDataSource_ActorIdentityToken:
+			tok := dataSource.ActorIdentityToken
+			// Same contract as trust bundles: ateapi mints before sending the
+			// spec, and an empty token file would fail the workload in far
+			// more confusing ways than failing the start does.
+			if len(tok.GetToken()) == 0 {
+				return fmt.Errorf("actor identity token projection %q has no minted token", tok.GetPath())
+			}
+			if err := writeSystemInfoFile(rootPath, tok.GetPath(), tok.GetToken()); err != nil {
+				return err
+			}
 		case *ateletpb.SystemInfoDataSource_ActorMetadata:
 			for _, item := range dataSource.ActorMetadata.GetItems() {
 				var value string

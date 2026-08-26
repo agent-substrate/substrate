@@ -242,6 +242,45 @@ func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
 	}
 }
 
+func TestWriteSystemInfoVolume_ActorIdentityToken(t *testing.T) {
+	ctx := context.Background()
+	token := []byte("eyJoZWFkZXIK.eyJwYXlsb2FkCg.c2lnbmF0dXJlCg")
+	si := &ateletpb.SystemInfoVolume{
+		DataSources: []*ateletpb.SystemInfoDataSource{
+			{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentityToken{
+				ActorIdentityToken: &ateletpb.ActorIdentityTokenDataSource{Path: "identity/token", Token: token},
+			}},
+		},
+	}
+
+	root := filepath.Join(t.TempDir(), "system-info", "vol1")
+	ref := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	if err := writeSystemInfoVolume(ctx, root, ref, "uid-1", nil, si); err != nil {
+		t.Fatalf("writeSystemInfoVolume: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "identity/token"))
+	if err != nil {
+		t.Fatalf("reading projected token: %v", err)
+	}
+	if string(got) != string(token) {
+		t.Errorf("content = %q, want %q", got, token)
+	}
+
+	t.Run("unminted token fails rather than write an empty file", func(t *testing.T) {
+		unminted := &ateletpb.SystemInfoVolume{
+			DataSources: []*ateletpb.SystemInfoDataSource{
+				{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentityToken{
+					ActorIdentityToken: &ateletpb.ActorIdentityTokenDataSource{Path: "token"},
+				}},
+			},
+		}
+		err := writeSystemInfoVolume(ctx, filepath.Join(t.TempDir(), "vol2"), ref, "uid-1", nil, unminted)
+		if err == nil || !strings.Contains(err.Error(), "no minted token") {
+			t.Errorf("writeSystemInfoVolume = %v, want no-minted-token error", err)
+		}
+	})
+}
+
 func TestWriteSystemInfoVolume_TrustBundle(t *testing.T) {
 	ctx := context.Background()
 	certPEM := testCertPEM(t)

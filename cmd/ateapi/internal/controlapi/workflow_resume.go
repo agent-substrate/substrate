@@ -664,6 +664,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	if err != nil {
 		return tele, err
 	}
+	// The spec is about to be sent to atelet, so mint referenced actor
+	// identity tokens into it now: the mint is part of this activation, and
+	// a missing signing pool fails the start.
+	if err := mintActorIdentityTokens(w.actorIDJWTPoolFile, actorTemplate, workloadSpec, actor); err != nil {
+		return tele, err
+	}
 	egressGateway := w.egressGateway()
 
 	// The actor's declared limits ride the RPC down to the sandbox so it is sized
