@@ -307,11 +307,10 @@ func main() {
 		clusterTrustBundleLister,
 	)
 
-	// Live refresh (#932): forward ClusterTrustBundle changes to the projected
-	// files of running actors. Adding the handler after cache sync is fine —
-	// client-go replays the existing object as an Add — and recovery then
-	// re-registers the projections of actors already running on this node (a
-	// restarted atelet must not freeze their bundles) and re-syncs them.
+	// Live-refresh projected trust bundles: bundle events rewrite the files
+	// of registered running actors. Adding the handler after cache sync is
+	// fine (client-go replays the object as an Add); recovery then
+	// re-registers the actors already running on this node.
 	if _, err := coreFactory.Certificates().V1beta1().ClusterTrustBundles().Informer().AddEventHandler(wmService.trustBundles.eventHandler(ctx)); err != nil {
 		serverboot.Fatal(ctx, "Failed to watch ClusterTrustBundles for live refresh", err)
 	}
@@ -503,23 +502,18 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	tbProjections, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
-	)
-	if err != nil {
-		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
-	}
-
-	if err := s.trustBundles.Register(ctx, actorUID, tbProjections); err != nil {
-		return nil, fmt.Errorf("while registering trust-bundle projections: %w", err)
-	}
-	// The start can still fail below; leave no registration behind for a
-	// sandbox that never came up.
+	// prepareOCIBundles registers trust-bundle projections; leave none behind
+	// for a sandbox that never came up.
 	defer func() {
 		if err != nil {
 			s.trustBundles.Deregister(ctx, actorUID)
 		}
 	}()
+	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
+		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
+	); err != nil {
+		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
+	}
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -1105,8 +1099,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
 	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
 	// copied to checkpointDir for the LOCAL case.
+	// prepareOCIBundles registers trust-bundle projections; leave none behind
+	// for a restore that fails.
+	defer func() {
+		if err != nil {
+			s.trustBundles.Deregister(ctx, actorUID)
+		}
+	}()
 	var assetPaths map[string]string
-	var tbProjections []trustBundleProjection
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
 	var prepFailedPhase string
@@ -1168,7 +1168,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
 		t := time.Now()
-		tbProjections, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+		err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1186,17 +1186,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 		return nil, err
 	}
-
-	if err := s.trustBundles.Register(ctx, actorUID, tbProjections); err != nil {
-		return nil, fmt.Errorf("while registering trust-bundle projections: %w", err)
-	}
-	// The restore can still fail below; leave no registration behind for a
-	// sandbox that never came up.
-	defer func() {
-		if err != nil {
-			s.trustBundles.Deregister(ctx, actorUID)
-		}
-	}()
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -1264,8 +1253,6 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	// The actor dies whatever happens below; refreshing its trust-bundle
-	// projections serves nobody.
 	s.trustBundles.Deregister(ctx, actorUID)
 
 	var assetPaths map[string]string
@@ -1548,8 +1535,8 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with. It returns the trustBundle projections it wrote, for the caller to
-// register with the trustBundleRefresher.
+// with. It also registers the trustBundle projections it writes for live
+// refresh; the caller deregisters if the start fails afterwards.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1557,7 +1544,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
 	targetAteomUid string,
-) ([]trustBundleProjection, error) {
+) error {
 	// Prepare host folders for volume types that need them.
 	var tbProjections []trustBundleProjection
 	for _, vol := range spec.GetVolumes() {
@@ -1565,14 +1552,14 @@ func (s *AteomHerder) prepareOCIBundles(
 		case *ateletpb.Volume_DurableDir:
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
-				return nil, fmt.Errorf("while creating %q: %w", volPath, err)
+				return fmt.Errorf("while creating %q: %w", volPath, err)
 			}
 
 		case *ateletpb.Volume_SystemInfo:
 			volRootHostPath := ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName())
 			projections, err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, s.clusterTrustBundleLister, volSrc.SystemInfo)
 			if err != nil {
-				return nil, fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
+				return fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
 			}
 			tbProjections = append(tbProjections, projections...)
 		}
@@ -1652,9 +1639,12 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return err
 	}
-	return tbProjections, nil
+	if err := s.trustBundles.Register(ctx, actorUID, tbProjections); err != nil {
+		return fmt.Errorf("while registering trust-bundle projections: %w", err)
+	}
+	return nil
 }
 
 // writeSystemInfoVolume populates the root directory of a system-info volume
