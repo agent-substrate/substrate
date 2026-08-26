@@ -13,10 +13,10 @@ metadata:
     kubernetes.io/os: linux
     cloud.google.com/gke-nodepool: default-pool
     cloud.google.com/gke-os-distribution: cos
-    failure-domain.beta.kubernetes.io/region: us-west1
-    failure-domain.beta.kubernetes.io/zone: us-west1-b
-    topology.kubernetes.io/region: us-west1
-    topology.kubernetes.io/zone: us-west1-b
+    failure-domain.beta.kubernetes.io/region: us-central1
+    failure-domain.beta.kubernetes.io/zone: us-central1-b
+    topology.kubernetes.io/region: us-central1
+    topology.kubernetes.io/zone: us-central1-b
     kubernetes.io/hostname: node-default-pool-something
   name: node-default-pool-something
   resourceVersion: "211582541"
