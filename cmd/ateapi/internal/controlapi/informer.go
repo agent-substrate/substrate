@@ -27,9 +27,7 @@ import (
 const (
 	ateletNamespace    = "ate-system"
 	byNamespaceAndName = "by-namespace-and-name"
-	byWorkerPool       = "by-worker-pool"
 	byNode             = "by-node"
-	workerPodLabel     = "ate.dev/worker-pool"
 )
 
 // AteletInformer creates a SharedInformerFactory and SharedIndexInformer for Atelet pods.
@@ -63,11 +61,6 @@ func WorkerPodInformer(kc kubernetes.Interface) (informers.SharedInformerFactory
 			pod := obj.(*corev1.Pod)
 			key := pod.ObjectMeta.Namespace + "/" + pod.ObjectMeta.Name
 			return []string{key}, nil
-		},
-		byWorkerPool: func(obj any) ([]string, error) {
-			pod := obj.(*corev1.Pod)
-			workerPoolRef := pod.ObjectMeta.Namespace + "/" + pod.ObjectMeta.Labels["ate.dev/worker-pool"]
-			return []string{workerPoolRef}, nil
 		},
 	})
 

@@ -52,7 +52,7 @@ const (
 // deterministic assertions and rotation) uses ReplaceEgressTrustPool.
 func EnsureEgressTrustBundle(t *testing.T, ctx context.Context, clients *Clients) {
 	t.Helper()
-	secret, _ := newEgressTrustPool(t, "ate-e2e-trust")
+	secret, _ := newEgressTrustPool(t)
 	createEgressTrustPool(t, ctx, clients, secret)
 	waitForEgressTrustBundle(t, ctx, clients, "")
 }
@@ -64,7 +64,7 @@ func EnsureEgressTrustBundle(t *testing.T, ctx context.Context, clients *Clients
 // Create-or-replace keeps reruns self-healing after a failed prior run.
 func ReplaceEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients, cn string) string {
 	t.Helper()
-	secret, wantPEM := newEgressTrustPool(t, cn)
+	secret, wantPEM := newEgressTrustPool(t)
 	if !createEgressTrustPool(t, ctx, clients, secret) {
 		// Took over an existing pool: overwrite its contents without adopting
 		// its cleanup, since whoever created it registered one already.
@@ -84,13 +84,13 @@ func ReplaceEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients,
 // newEgressTrustPool builds a fresh single-CA pool Secret — the shape
 // `kubectl-ate admin make-ca-pool` writes for the egress MITM CA — and the PEM
 // of its root certificate.
-func newEgressTrustPool(t *testing.T, cn string) (*corev1.Secret, string) {
+func newEgressTrustPool(t *testing.T) (*corev1.Secret, string) {
 	t.Helper()
-	ca, err := localca.GenerateCA(localca.GenerateOptions{ID: "mitm", CommonName: cn, KeyType: localca.KeyTypeECDSAP256})
+	ca, err := localca.GenerateCA("mitm", localca.KeyTypeECDSAP256, 365*24*time.Hour)
 	if err != nil {
 		t.Fatalf("generating CA for the egress pool: %v", err)
 	}
-	poolBytes, err := localca.Marshal(&localca.Pool{CAs: []*localca.CA{ca}})
+	poolBytes, err := localca.Marshal(&localca.ConcretePool{CAs: []*localca.CA{ca}})
 	if err != nil {
 		t.Fatalf("marshaling the egress pool: %v", err)
 	}

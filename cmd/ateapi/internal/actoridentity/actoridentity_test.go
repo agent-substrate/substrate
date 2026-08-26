@@ -23,9 +23,7 @@ import (
 	"crypto/x509/pkix"
 	"math/big"
 	"net/url"
-	"os"
 	"path"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -141,17 +139,13 @@ func ctxWithCert(cert *x509.Certificate) context.Context {
 func newTestServer(t *testing.T, st store.Interface) *Server {
 	t.Helper()
 
-	ca, err := localca.GenerateED25519CA("test-actor-ca")
+	ca, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("generate CA: %v", err)
 	}
-	poolBytes, err := localca.Marshal(&localca.Pool{CAs: []*localca.CA{ca}})
-	if err != nil {
-		t.Fatalf("marshal CA pool: %v", err)
-	}
-	poolFile := filepath.Join(t.TempDir(), "actor-ca-pool.json")
-	if err := os.WriteFile(poolFile, poolBytes, 0o600); err != nil {
-		t.Fatalf("write CA pool: %v", err)
+	pool := &localca.ConcretePool{
+		CAs:              []*localca.CA{ca},
+		ActiveForSigning: "test-actor-ca",
 	}
 
 	var workers *workercache.Cache
@@ -163,7 +157,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", "", poolFile, st, workers)
+	return New("issuer", "", pool, st, workers)
 }
 
 // staleWatchStore wraps a store with a WatchWorkers that never delivers,
@@ -317,19 +311,12 @@ func TestMintCertReadsThroughWorkerCacheMiss(t *testing.T) {
 func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercache.Cache) *Server {
 	t.Helper()
 
-	ca, err := localca.GenerateED25519CA("test-actor-ca")
+	ca, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("generate CA: %v", err)
 	}
-	poolBytes, err := localca.Marshal(&localca.Pool{CAs: []*localca.CA{ca}})
-	if err != nil {
-		t.Fatalf("marshal CA pool: %v", err)
-	}
-	poolFile := filepath.Join(t.TempDir(), "actor-ca-pool.json")
-	if err := os.WriteFile(poolFile, poolBytes, 0o600); err != nil {
-		t.Fatalf("write CA pool: %v", err)
-	}
-	return New("issuer", "", poolFile, st, workers)
+	pool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
+	return New("issuer", "", pool, st, workers)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
@@ -914,7 +901,17 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 	if err := workers.Start(cacheCtx); err != nil {
 		t.Fatal(err)
 	}
-	srv := New("issuer", "", filepath.Join(t.TempDir(), "missing.json"), st, workers)
+
+	ca, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("generate CA: %v", err)
+	}
+	pool := &localca.ConcretePool{
+		CAs:              []*localca.CA{ca},
+		ActiveForSigning: "test-actor-ca",
+	}
+
+	srv := New("issuer", "", pool, st, workers)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {

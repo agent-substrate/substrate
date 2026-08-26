@@ -747,7 +747,6 @@ spec:
         - "sdsmint"
         - "--uds-path=/var/run/sdsmint/sdsmint.sock"
         - "--ca-pool-path=/run/ca-state/mitm-pool.json"
-        - "--ca-id=mitm"
         # --leaf-cert-ttl sets two things at once. It stamps the leaf's notAfter,
         # and sdsmint derives the xDS resource TTL from that notAfter, a minute
         # short of it -- so at 15m, Envoy drops each cached secret after 14m and

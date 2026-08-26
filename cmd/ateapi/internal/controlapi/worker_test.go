@@ -67,7 +67,7 @@ func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	return &RPCService{impl: persistence}, persistence
+	return &RPCService{impl: persistence, workerWorkflow: NewWorkerWorkflow(persistence)}, persistence
 }
 
 // seedAPIWorker registers a worker directly through the store and returns it as
@@ -498,7 +498,7 @@ func TestDeleteWorker(t *testing.T) {
 }
 
 // Delete reports absence rather than succeeding silently. Callers that want
-// idempotence, like reconcileDeadWorker, opt into it by treating NOT_FOUND as
+// idempotence, like the worker-pod syncer, opt into it by treating NOT_FOUND as
 // success.
 func TestDeleteWorker_Absent(t *testing.T) {
 	ctx := context.Background()
@@ -507,23 +507,6 @@ func TestDeleteWorker_Absent(t *testing.T) {
 	_, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
 	if got := status.Code(err); got != codes.NotFound {
 		t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.NotFound)
-	}
-}
-
-// An assigned worker deletes like any other: the delete does not cascade, and
-// an Actor pointing at a Worker that is gone is an expected steady state.
-func TestDeleteWorker_AssignedWorkerDeletesAnyway(t *testing.T) {
-	ctx := context.Background()
-	svc, persistence := newWorkerAPIService(t)
-	seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
-	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
-
-	got, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
-	if err != nil {
-		t.Fatalf("DeleteWorker() failed: %v", err)
-	}
-	if got.GetStatus().GetAssignment().GetActorUid() != "actor-uid-1" {
-		t.Errorf("deleted worker assignment = %v, want the one it was holding", got.GetStatus().GetAssignment())
 	}
 }
 

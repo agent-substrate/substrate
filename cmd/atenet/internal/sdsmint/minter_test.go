@@ -18,46 +18,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/sdsmint/certauth"
 	"github.com/agent-substrate/substrate/internal/localca"
 )
 
-func quietLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-// testSigner builds a signer over a throwaway CA.
-func testSigner(t *testing.T) *certauth.Signer {
+func testMinter(t *testing.T, opts minterOptions) *minter {
 	t.Helper()
-	ca, err := localca.GenerateCA(localca.GenerateOptions{
-		ID:         "mitm",
-		CommonName: "sdsmint test CA",
-		KeyType:    localca.KeyTypeECDSAP256,
-		Lifetime:   time.Hour,
-	})
+
+	ca, err := localca.GenerateCA("mitm", localca.KeyTypeECDSAP256, time.Hour)
 	if err != nil {
 		t.Fatalf("generating test CA: %v", err)
 	}
-	signer, err := certauth.New(&localca.Pool{CAs: []*localca.CA{ca}}, "")
-	if err != nil {
-		t.Fatalf("certauth.New: %v", err)
+	pool := &localca.ConcretePool{
+		CAs:              []*localca.CA{ca},
+		ActiveForSigning: "mitm",
 	}
-	return signer
-}
 
-func testMinter(t *testing.T, opts minterOptions) *minter {
-	t.Helper()
-	if opts.Logger == nil {
-		opts.Logger = quietLogger()
-	}
-	m, err := newMinter(testSigner(t), opts)
+	m, err := newMinter(pool, opts)
 	if err != nil {
 		t.Fatalf("newMinter: %v", err)
 	}
