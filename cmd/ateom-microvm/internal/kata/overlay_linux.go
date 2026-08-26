@@ -135,7 +135,11 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		// guest-unlinked temp file held open across the suspend — and abort
 		// would make such snapshots permanently unrestorable. Under
 		// guest-error the stale reference degrades to EIO on access, and a
-		// fresh lookup at the stable path heals it.
+		// fresh lookup at the stable path heals it. The mode is daemon-wide:
+		// a path genuinely missing elsewhere in the share (a rootfs or
+		// durable-dir reconstruction gap) also surfaces as guest EIO instead
+		// of failing vm.restore; virtiofsd's log names the inodes it could
+		// not re-establish.
 		"--migration-on-error", "guest-error",
 	}
 }

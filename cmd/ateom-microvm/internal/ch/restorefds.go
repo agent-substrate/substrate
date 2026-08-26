@@ -195,13 +195,14 @@ func (c *Client) AddNetWithFDs(ctx context.Context, mac string, numQueues int, f
 	if _, _, err := conn.WriteMsgUnix([]byte(req), oob, nil); err != nil {
 		return fmt.Errorf("sending vm.add-net with fds: %w", err)
 	}
-	status, err := bufio.NewReader(conn).ReadString('\n')
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		return fmt.Errorf("reading vm.add-net response: %w", err)
 	}
-	parts := strings.SplitN(strings.TrimSpace(status), " ", 3)
-	if len(parts) < 2 || !strings.HasPrefix(parts[1], "2") {
-		return fmt.Errorf("vm.add-net failed: %s", strings.TrimSpace(status))
+	defer resp.Body.Close()
+	if !strings.HasPrefix(resp.Status, "2") {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("vm.add-net failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
