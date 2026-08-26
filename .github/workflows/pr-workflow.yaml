@@ -29,6 +29,10 @@ permissions:
 jobs:
   run-tests:
     runs-on: ubuntu-latest
+    # A lost reaper handshake gets a package's containers pruned mid-run
+    # (testcontainers-go#3827); a throwaway runner needs no reaping anyway.
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
