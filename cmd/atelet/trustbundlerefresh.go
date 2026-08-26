@@ -83,6 +83,9 @@ type trustBundleRefresher struct {
 	actorsDir string
 	stateFile func(actorUID string) string
 
+	// mu serializes registry mutations AND projection writes: Deregister
+	// returning only after an in-flight refresh finishes is what lets
+	// Checkpoint/Terminate wipe the actor's directories safely afterwards.
 	mu     sync.Mutex
 	actors map[string][]trustBundleProjection
 }
