@@ -95,7 +95,7 @@ To **resume** the notebook, you can either explicitly resume it via CLI:
 kubectl ate resume actor jupyter-notebook -a demo
 ```
 
-Or, even easier, you can rely on "transparent resume" — just refresh the page in your browser or make another request to the URL while it's suspended! Substrate will automatically restore its state and serve your request without any downtime. The kernel state (including any variables you defined) will be exactly as you left it.
+Or, even easier, you can rely on "transparent resume" — just refresh the page in your browser or make another request to the URL while it's suspended. Substrate will automatically restore its state and serve your request without any downtime. 
 
 ### Clean up
 
