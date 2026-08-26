@@ -169,24 +169,12 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorke
 	if errs := validateDeleteWorkerRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	name := req.GetWorker().GetName()
-
-	worker, err := s.impl.DeleteWorker(ctx, name, store.DeletePreconditions{
+	// The delete releases the Actor bound to this Worker before removing the
+	// record, so it is a workflow rather than a single store call.
+	return s.workerWorkflow.DeleteWorker(ctx, req.GetWorker().GetName(), store.DeletePreconditions{
 		UID:     req.GetOptions().GetUid(),
 		Version: req.GetOptions().GetVersion(),
 	})
-	if err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
-		case errors.Is(err, store.ErrUIDConflict):
-			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, req.GetOptions().GetUid())
-		case errors.Is(err, store.ErrVersionConflict):
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while deleting worker: %w", err)
-	}
-	return worker, nil
 }
 
 func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {

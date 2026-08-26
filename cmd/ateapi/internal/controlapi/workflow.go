@@ -122,6 +122,29 @@ type actorWorkflowStore interface {
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
+// WorkerWorkflow handles the multi-step operations on a Worker.
+//
+// Its steps reach across the Actor↔Worker binding, which an ActorWorkflow step
+// does from the other side: releasing the Actor bound to a Worker stays
+// in-process because there is no bind/release RPC.
+type WorkerWorkflow struct {
+	store workerWorkflowStore
+}
+
+// NewWorkerWorkflow creates a new WorkerWorkflow.
+func NewWorkerWorkflow(store workerWorkflowStore) *WorkerWorkflow {
+	return &WorkerWorkflow{store: store}
+}
+
+// workerWorkflowStore enumerates the exact storage methods needed by
+// WorkerWorkflow and nothing more.
+type workerWorkflowStore interface {
+	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
+	DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error)
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+}
+
 func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
 	leaseKey := "lease:actor:" + actorRef.Atespace + ":" + actorRef.Name
 
