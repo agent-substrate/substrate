@@ -111,7 +111,6 @@ func assertHCMWebsocketUpgrade(t *testing.T, l *listenerv3.Listener) {
 	}
 }
 
-
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
 	server := NewXdsServer(18000)
 	server.SetConfig(8081, 50052, "10.0.0.1")
@@ -217,7 +216,7 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 		l := raw.(*listenerv3.Listener)
 		assertDualStackIngress(t, l, 8081)
 
-			assertHCMWebsocketUpgrade(t, l)
+		assertHCMWebsocketUpgrade(t, l)
 	}
 }
 
@@ -412,16 +411,16 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	if raw, exists := listenersMap["connect_terminate"]; !exists {
 		t.Error("connect_terminate listener missing")
 	} else {
-			l := raw.(*listenerv3.Listener)
-			assertDualStackIngress(t, l, 8081)
-			assertHCMWebsocketUpgrade(t, l)
+		l := raw.(*listenerv3.Listener)
+		assertDualStackIngress(t, l, 8081)
+		assertHCMWebsocketUpgrade(t, l)
 	}
 	if raw, exists := listenersMap["connect_terminate_tls"]; !exists {
 		t.Error("connect_terminate_tls listener missing")
 	} else {
 		l := raw.(*listenerv3.Listener)
-			assertDualStackIngress(t, l, 8444)
-			assertHCMWebsocketUpgrade(t, l)
+		assertDualStackIngress(t, l, 8444)
+		assertHCMWebsocketUpgrade(t, l)
 		ts := l.GetFilterChains()[0].GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected connect_terminate_tls to be TLS-wrapped, got transport socket %q", ts.GetName())
