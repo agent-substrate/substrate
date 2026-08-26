@@ -81,4 +81,10 @@ func TestVirtiofsdArgs(t *testing.T) {
 	if slices.Contains(args, "--xattr") {
 		t.Errorf("args %v contain --xattr; the guest has no overlay to feed it to", args)
 	}
+	// Reverting to the default (abort) would make any snapshot whose guest
+	// references an unlinked inode — a live-rotated trust bundle, an unlinked
+	// temp file held open — permanently unrestorable.
+	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
+		t.Errorf("args %v do not set --migration-on-error guest-error", args)
+	}
 }

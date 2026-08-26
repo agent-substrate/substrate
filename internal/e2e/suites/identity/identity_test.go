@@ -63,10 +63,11 @@ type whoamiResponse struct {
 // state (the probe's startup-held fd, plus every inode the pre-suspend whoami
 // indexed) must re-bind to the regenerated files at the same paths. The
 // micro-VM lane enforces that the hardest: virtiofsd's find-paths migration
-// re-opens recorded paths on restore and its default --migration-on-error=abort
-// fails the resume outright if any path moved — a write scheme that relocates
-// real files (e.g. a timestamped-directory symlink swap) would make any actor
-// that ever touched a system-info file unable to resume.
+// re-opens recorded paths on restore, and a path that moved leaves the guest
+// reference faulty (EIO under --migration-on-error=guest-error), which the
+// held-fd assertion below catches — a write scheme that relocates real files
+// (e.g. a timestamped-directory symlink swap) would break every held fd of
+// any actor that ever touched a system-info file.
 func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {

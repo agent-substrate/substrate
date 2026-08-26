@@ -129,6 +129,14 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		"--thread-pool-size=1",
 		"--announce-submounts",
 		"--migration-mode", "find-paths",
+		// guest-error, not the default abort: the serialized FUSE state can
+		// reference inodes with no findable path — a system-info file
+		// live-rewritten under the guest (trust-bundle rotation), or a
+		// guest-unlinked temp file held open across the suspend — and abort
+		// would make such snapshots permanently unrestorable. Under
+		// guest-error the stale reference degrades to EIO on access, and a
+		// fresh lookup at the stable path heals it.
+		"--migration-on-error", "guest-error",
 	}
 }
 
