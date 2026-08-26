@@ -28,7 +28,6 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.18.6
 	github.com/myzhan/boomer v1.6.1-0.20250711115830-8a2c7ce4c7b1
-	github.com/myzhan/gomq/zmtp v0.0.0-20220926014711-4eea0d4a1e75
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/pelletier/go-toml/v2 v2.4.0
 	github.com/prometheus/client_golang v1.23.2
@@ -169,6 +168,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/myzhan/gomq v0.0.0-20220926014711-4eea0d4a1e75 // indirect
+	github.com/myzhan/gomq/zmtp v0.0.0-20220926014711-4eea0d4a1e75 // indirect
 	github.com/olekukonko/cat v0.0.0-20250911104152-50322a0618f6 // indirect
 	github.com/olekukonko/errors v1.2.0 // indirect
 	github.com/olekukonko/ll v0.1.6 // indirect

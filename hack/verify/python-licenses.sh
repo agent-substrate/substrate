@@ -30,7 +30,7 @@ cd "${ROOT}"
 # Python projects with a requirements.txt to check. Each entry is a directory
 # that contains requirements.txt; its venv lives at <dir>/venv. Discovered
 # dynamically from tracked/untracked (but not ignored) requirements.txt files,
-# excluding vendored trees and the LICENSES/ directory.
+# excluding vendored trees and the _LICENSES/ directory.
 PROJECTS=()
 while IFS= read -r line || [[ -n "${line}" ]]; do
   [[ -n "${line}" ]] && PROJECTS+=("${line}")
@@ -42,7 +42,7 @@ done < <(
     ':(glob)**/requirements.txt' \
     ':!:vendor/*' \
     ':!:**/vendor/*' \
-    ':!:LICENSES/*' \
+    ':!:_LICENSES/*' \
   | xargs -r -n1 dirname \
   | sort -u
 )

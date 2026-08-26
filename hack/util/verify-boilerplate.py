@@ -120,8 +120,8 @@ def main():
         if "vendor" in filepath:
             continue
 
-        # exclude top-level LICENSES directory
-        if filepath.startswith("LICENSES/"):
+        # exclude top-level _LICENSES directory
+        if filepath.startswith("_LICENSES/"):
             continue
 
         # exclude github config

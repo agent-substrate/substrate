@@ -39,7 +39,7 @@ files=(
         ':!:**/vendor/*' \
         ':!:third_party/*' \
         ':!:**/third_party/*' \
-        ':!:LICENSES/*' \
+        ':!:_LICENSES/*' \
         | sort \
         | uniq)
 )

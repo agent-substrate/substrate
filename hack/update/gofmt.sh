@@ -39,7 +39,7 @@ dirs=(
         ':!:**/vendor/*' \
         ':!:third_party/*' \
         ':!:**/third_party/*' \
-        ':!:LICENSES/*' \
+        ':!:_LICENSES/*' \
         | while read -r FILE; do dirname "${FILE}"; done \
         | sort \
         | uniq)
