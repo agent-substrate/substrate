@@ -129,17 +129,10 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		"--thread-pool-size=1",
 		"--announce-submounts",
 		"--migration-mode", "find-paths",
-		// guest-error, not the default abort: the serialized FUSE state can
-		// reference inodes with no findable path — a system-info file
-		// live-rewritten under the guest (trust-bundle rotation), or a
-		// guest-unlinked temp file held open across the suspend — and abort
-		// would make such snapshots permanently unrestorable. Under
-		// guest-error the stale reference degrades to EIO on access, and a
-		// fresh lookup at the stable path heals it. The mode is daemon-wide:
-		// a path genuinely missing elsewhere in the share (a rootfs or
-		// durable-dir reconstruction gap) also surfaces as guest EIO instead
-		// of failing vm.restore; virtiofsd's log names the inodes it could
-		// not re-establish.
+		// Not the default abort, which makes a snapshot unrestorable when
+		// the guest still references an inode with no findable path (a
+		// live-rewritten trust bundle, an unlinked temp file). guest-error
+		// degrades such references to EIO on access instead, share-wide.
 		"--migration-on-error", "guest-error",
 	}
 }

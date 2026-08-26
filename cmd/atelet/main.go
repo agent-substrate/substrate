@@ -282,10 +282,6 @@ func main() {
 	// only the egress trust bundle). The v1beta1 API is feature-gated: on a
 	// cluster that does not serve it, startup blocks at WaitForCacheSync
 	// below, with the reflector's errors naming the missing API.
-	//
-	// The resync is the refresher's retry loop: a projection whose rewrite
-	// failed gets no further event until the bundle changes again, so the
-	// periodic replay re-drives it (a no-op otherwise, see refreshBundle).
 	coreFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, trustBundleResyncPeriod,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
 			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()

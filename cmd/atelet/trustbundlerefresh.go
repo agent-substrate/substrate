@@ -34,18 +34,15 @@ import (
 // trustBundleProjectionsFileName is the per-actor record recoverFromDisk
 // rebuilds the registry from after an atelet restart. It sits beside (not
 // inside) the volume roots under SystemInfoVolumeRootsDir, sharing their
-// lifecycle: wiped by resetActorDirs, never snapshotted, never bind-mounted
-// into a container — though the micro-VM class serves the whole roots dir,
-// this file included, read-only into the guest's shared tree, so nothing
-// sensitive belongs here. The dot cannot collide with a volume root —
-// volume names are DNS labels.
+// lifecycle: wiped by resetActorDirs, never snapshotted. The micro-VM class
+// serves the whole roots dir into the guest read-only, so nothing sensitive
+// belongs here; the dot cannot collide with a volume root (DNS-label names).
 const trustBundleProjectionsFileName = "trust-bundle-projections.json"
 
 // trustBundleResyncPeriod is the ClusterTrustBundle informer's resync, and
-// with it the refresher's retry cadence: a projection whose rewrite failed
-// gets no further event until the bundle changes again, so the periodic
-// replay through refreshBundle re-drives it (the AppliedHash compare makes
-// it a no-op otherwise).
+// with it the refresher's retry cadence: a failed rewrite gets no further
+// event until the bundle changes again, so the periodic replay re-drives it
+// (a no-op otherwise, per the AppliedHash compare).
 const trustBundleResyncPeriod = 10 * time.Minute
 
 // trustBundleProjection is one projected trustBundle file of one actor.
