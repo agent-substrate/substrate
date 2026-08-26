@@ -1,0 +1,161 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Substrate Authorization Model Tests
+model_file: ./model.fga
+
+tuples:
+  # Workspace Roles (atespace:space-1)
+  - user: user:alice
+    relation: admin
+    object: atespace:space-1
+  - user: user:bob
+    relation: developer
+    object: atespace:space-1
+  - user: user:dave
+    relation: viewer
+    object: atespace:space-1
+
+  # Shared Template (actor_template:shared-template in atespace:shared)
+  - user: atespace:shared
+    relation: parent_atespace
+    object: actor_template:shared-template
+  - user: user:eve
+    relation: creator
+    object: actor_template:shared-template
+  - user: user:*
+    relation: can_instantiate
+    object: actor_template:shared-template
+
+  # Actor Instance (actor:runner-1 in atespace:space-1)
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: actor:runner-1
+  - user: actor_template:shared-template
+    relation: template
+    object: actor:runner-1
+  - user: user:charlie
+    relation: creator
+    object: actor:runner-1
+  - user: service_account:router
+    relation: can_invoke
+    object: actor:runner-1
+  - user: service_account:router
+    relation: can_resume
+    object: actor:runner-1
+  - user: actor:peer-1
+    relation: can_invoke
+    object: actor:runner-1
+  - user: actor:runner-1
+    relation: can_suspend
+    object: actor:runner-1
+    condition:
+      name: is_self_actor
+  - user: user:*
+    relation: can_update_standard_label
+    object: actor:runner-1
+    condition:
+      name: is_standard_label
+
+
+
+tests:
+  - name: 1. Template Instantiation (Wildcard Access)
+    check:
+      - user: user:eve
+        object: actor_template:shared-template
+        assertions:
+          operator: true
+      - user: user:bob
+        object: actor_template:shared-template
+        assertions:
+          can_instantiate: true
+
+  - name: 2. Cross-Tenant Isolation & Actor Creation
+    check:
+      - user: user:bob
+        object: atespace:space-1
+        assertions:
+          can_create_actor: true
+      - user: user:eve
+        object: actor:runner-1
+        assertions:
+          operator: false
+
+  - name: 3. Control-Plane Lifecycle (Get, Resume, Delete, Suspend)
+    check:
+      - user: user:dave
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_delete: false
+          can_resume: false
+      - user: service_account:router
+        object: actor:runner-1
+        assertions:
+          can_resume: true
+      - user: actor:runner-1
+        object: actor:runner-1
+        context:
+          target_actor: "actor:runner-1"
+          calling_actor: "actor:runner-1"
+        assertions:
+          can_suspend: true
+      - user: actor:runner-2
+        object: actor:runner-1
+        context:
+          target_actor: "actor:runner-1"
+          calling_actor: "actor:runner-2"
+        assertions:
+          can_suspend: false
+
+  - name: 4. Data-Plane Traffic Invocation (can_invoke)
+    check:
+      - user: service_account:router
+        object: actor:runner-1
+        assertions:
+          can_invoke: true
+      - user: actor:peer-1
+        object: actor:runner-1
+        assertions:
+          can_invoke: true
+      - user: user:charlie
+        object: actor:runner-1
+        assertions:
+          can_invoke: true
+      - user: user:dave
+        object: actor:runner-1
+        assertions:
+          can_invoke: false
+
+  - name: 5. ABAC System Label Protection
+    check:
+      - user: user:alice
+        object: actor:runner-1
+        context:
+          label_key: "substrate.ate.dev/system-tag"
+        assertions:
+          can_update_label: true
+      - user: user:charlie
+        object: actor:runner-1
+        context:
+          label_key: "environment"
+        assertions:
+          can_update_label: true
+      - user: user:charlie
+        object: actor:runner-1
+        context:
+          label_key: "security/level"
+        assertions:
+          can_update_label: false
