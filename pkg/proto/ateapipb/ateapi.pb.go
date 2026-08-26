@@ -1700,8 +1700,9 @@ type ActorTemplate struct {
 	// may use.
 	//
 	// +k8s:opaqueType
-	WorkerSelector  *Selector        `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
-	Containers      []*Container     `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
+	WorkerSelector *Selector    `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
+	Containers     []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
+	// +k8s:optional
 	Volumes         []*Volume        `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
 	// sandbox_config selects the sandbox runtime this version's actors run on.
@@ -2430,7 +2431,8 @@ type Volume struct {
 	// must be set.
 	DurableDir             *DurableDirVolumeSource `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
 	ExternalVolumeTemplate *ExternalVolumeTemplate `protobuf:"bytes,3,opt,name=external_volume_template,json=externalVolumeTemplate,proto3" json:"external_volume_template,omitempty"`
-	SystemInfo             *SystemInfoVolumeSource `protobuf:"bytes,5,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
+	// +k8s:optional
+	SystemInfo *SystemInfoVolumeSource `protobuf:"bytes,5,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
 	// type discriminates the source union: "DurableDir",
 	// "ExternalVolumeTemplate" or "SystemInfo".
 	Type          string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
@@ -2607,6 +2609,9 @@ type SystemInfoVolumeSource struct {
 	// data_sources lists the projections to place within the volume. At most
 	// one actor_metadata entry may appear, and file paths must be unique
 	// across all entries.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=8
 	DataSources   []*SystemInfoDataSource `protobuf:"bytes,1,rep,name=data_sources,json=dataSources,proto3" json:"data_sources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2652,8 +2657,13 @@ func (x *SystemInfoVolumeSource) GetDataSources() []*SystemInfoDataSource {
 type SystemInfoDataSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Exactly one of actor_metadata / trust_bundle must be set.
+	//
+	// +k8s:optional
+	// +k8s:unionMember
 	ActorMetadata *ActorMetadataDataSource `protobuf:"bytes,1,opt,name=actor_metadata,json=actorMetadata,proto3" json:"actor_metadata,omitempty"`
-	TrustBundle   *TrustBundleDataSource   `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3" json:"trust_bundle,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
+	TrustBundle   *TrustBundleDataSource `protobuf:"bytes,2,opt,name=trust_bundle,json=trustBundle,proto3" json:"trust_bundle,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2705,8 +2715,17 @@ func (x *SystemInfoDataSource) GetTrustBundle() *TrustBundleDataSource {
 // ActorMetadataDataSource projects the actor's identity fields to files, one
 // per item.
 type ActorMetadataDataSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Items         []*ActorMetadataItem   `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// items must not project the same field twice, and item paths must be
+	// unique.
+	//
+	// +k8s:required
+	// +k8s:minItems=1
+	// +k8s:maxItems=8
+	// +k8s:listType=atomic
+	// +k8s:unique=map
+	// +k8s:listMapKey=field
+	Items         []*ActorMetadataItem `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2751,9 +2770,13 @@ func (x *ActorMetadataDataSource) GetItems() []*ActorMetadataItem {
 // ActorMetadataItem projects one actor identity field to a file at path,
 // a clean relative Unix path from the root of the volume.
 type ActorMetadataItem struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Field         ActorMetadataField     `protobuf:"varint,1,opt,name=field,proto3,enum=ateapi.ActorMetadataField" json:"field,omitempty"`
-	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	Field ActorMetadataField `protobuf:"varint,1,opt,name=field,proto3,enum=ateapi.ActorMetadataField" json:"field,omitempty"`
+	// +k8s:required
+	// +k8s:minLength=1
+	// +k8s:maxLength=255
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2805,9 +2828,15 @@ func (x *ActorMetadataItem) GetPath() string {
 // TrustBundleDataSource projects the trust anchors of the named trust bundle
 // to a PEM file at path. Supported names are allowlisted in atelet.
 type TrustBundleDataSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	// +k8s:minLength=1
+	// +k8s:maxLength=253
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:required
+	// +k8s:minLength=1
+	// +k8s:maxLength=255
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3339,6 +3368,8 @@ type CreateActorTemplateRequest struct {
 	// The actor template version to create. Server-assigned metadata (uid,
 	// version, timestamps) is ignored, as are the status fields: the server
 	// initializes new versions to ACTOR_TEMPLATE_PHASE_INITIAL.
+	//
+	// +k8s:required
 	ActorTemplate *ActorTemplate `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
