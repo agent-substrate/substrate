@@ -351,9 +351,20 @@ func TestHandleRequestHeaders_FullLotServesRunningActor(t *testing.T) {
 
 	var resumeCalled bool
 	clientMock := &mockClient{
-		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+		resumeFn: func(
+			ctx context.Context,
+			in *ateapipb.ResumeActorRequest,
+			opts ...grpc.CallOption,
+		) (*ateapipb.ResumeActorResponse, error) {
 			resumeCalled = true
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"}}}}, nil
+			return &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					Status: &ateapipb.ActorStatus{
+						State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"},
+					},
+				},
+			}, nil
 		},
 	}
 
@@ -397,7 +408,11 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 
 		var resumeCalls atomic.Int32
 		clientMock := &mockClient{
-			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			resumeFn: func(
+				ctx context.Context,
+				in *ateapipb.ResumeActorRequest,
+				opts ...grpc.CallOption,
+			) (*ateapipb.ResumeActorResponse, error) {
 				resumeCalls.Add(1)
 				return nil, status.Error(codes.ResourceExhausted, "no free workers available")
 			},

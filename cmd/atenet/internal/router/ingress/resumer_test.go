@@ -586,7 +586,13 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 	testActorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 	runningResp := func() *ateapipb.ResumeActorResponse {
 		return &ateapipb.ResumeActorResponse{
-			Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
+			Actor: &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Name: testActorName},
+				Status: &ateapipb.ActorStatus{
+					State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+					WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP},
+				},
+			},
 			Resumed: true,
 		}
 	}
@@ -594,7 +600,11 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 	t.Run("FastFlightNeverEntersLot", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(
+					ctx context.Context,
+					in *ateapipb.ResumeActorRequest,
+					opts ...grpc.CallOption,
+				) (*ateapipb.ResumeActorResponse, error) {
 					return runningResp(), nil
 				},
 			}
@@ -629,7 +639,11 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			var mu sync.Mutex
 			var calls, activeDuringRetry int
 			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(
+					ctx context.Context,
+					in *ateapipb.ResumeActorRequest,
+					opts ...grpc.CallOption,
+				) (*ateapipb.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					n := calls
@@ -679,7 +693,11 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
 			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(
+					ctx context.Context,
+					in *ateapipb.ResumeActorRequest,
+					opts ...grpc.CallOption,
+				) (*ateapipb.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
@@ -717,7 +735,11 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			var calls int
 			proceed := make(chan struct{})
 			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(
+					ctx context.Context,
+					in *ateapipb.ResumeActorRequest,
+					opts ...grpc.CallOption,
+				) (*ateapipb.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					n := calls
@@ -778,7 +800,11 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			cfg := ParkedRequestConfig{Max: 1, Budget: 1 * time.Second}
 			lot := newParkingLot(cfg, nil)
 			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(
+					ctx context.Context,
+					in *ateapipb.ResumeActorRequest,
+					opts ...grpc.CallOption,
+				) (*ateapipb.ResumeActorResponse, error) {
 					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
 				},
 			}
@@ -806,7 +832,11 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			var mu sync.Mutex
 			var calls int
 			mock := &resumerMockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				resumeFn: func(
+					ctx context.Context,
+					in *ateapipb.ResumeActorRequest,
+					opts ...grpc.CallOption,
+				) (*ateapipb.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
 					n := calls
@@ -851,7 +881,11 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 		var mu sync.Mutex
 		var calls int
 		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			resumeFn: func(
+				ctx context.Context,
+				in *ateapipb.ResumeActorRequest,
+				opts ...grpc.CallOption,
+			) (*ateapipb.ResumeActorResponse, error) {
 				mu.Lock()
 				calls++
 				mu.Unlock()
