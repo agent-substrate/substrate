@@ -103,7 +103,15 @@ type testContext struct {
 // setupTest sets up a fully isolated test environment.
 func setupTest(t *testing.T, ns string) *testContext {
 	t.Helper()
-	return setupTestWithVolumePlugins(t, ns, nil)
+	return setupTestFull(t, ns, nil, false)
+}
+
+// setupTestWithEgressTrustInjection is setupTest with the service running
+// --inject-egress-trust-bundle, for pinning the injected volume in the wire
+// spec of each atelet RPC.
+func setupTestWithEgressTrustInjection(t *testing.T, ns string) *testContext {
+	t.Helper()
+	return setupTestFull(t, ns, nil, true)
 }
 
 // setupTestWithVolumePlugins is setupTest with the default mock volume plugin
@@ -111,6 +119,11 @@ func setupTest(t *testing.T, ns string) *testContext {
 // plugin pass it here rather than swapping it into the running RPCService, so each
 // test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
+	t.Helper()
+	return setupTestFull(t, ns, plugins, false)
+}
+
+func setupTestFull(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane, injectEgressTrustBundle bool) *testContext {
 	t.Helper()
 	// 1. Start an isolated PostgreSQL-backed store.
 	persistence, cleanupStore := storetest.SetupTestStore(t)
@@ -185,7 +198,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		}
 	}
 	objectStore := objectstoretest.New()
-	service := controlapi.NewRPCService(persistence, wc, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins, objectStore)
+	service := controlapi.NewRPCService(persistence, wc, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", injectEgressTrustBundle, volPlugins, objectStore)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(

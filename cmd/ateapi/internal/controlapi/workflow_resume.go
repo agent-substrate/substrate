@@ -657,7 +657,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	workloadSpec, err := w.workloadSpec(ctx, actorTemplate, actor)
 	if err != nil {
 		return tele, err
 	}

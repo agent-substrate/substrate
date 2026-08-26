@@ -15,6 +15,7 @@
 package controlapi
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -44,6 +45,22 @@ func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) 
 		return nil, nil
 	}
 	return out, nil
+}
+
+// workloadSpec lowers the template and applies deployment policy (the
+// injected egress trust volume). Every atelet RPC must build its spec here
+// so Run, Restore, Checkpoint, and Terminate agree on the volume set.
+func (w *ActorWorkflow) workloadSpec(ctx context.Context, actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
+	spec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	if err != nil {
+		return nil, err
+	}
+	if w.injectEgressTrustBundle {
+		if err := injectEgressTrustVolume(ctx, actor, spec); err != nil {
+			return nil, err
+		}
+	}
+	return spec, nil
 }
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;

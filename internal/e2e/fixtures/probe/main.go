@@ -46,6 +46,11 @@ const (
 	trustFile    = "/run/ate/trust-bundle.pem"
 )
 
+// injectedTrustFile is where ateapi's auto-injected egress trust volume
+// lands. Nothing in probe.yaml.tmpl declares it; that absence is what the
+// injection e2e asserts on.
+const injectedTrustFile = "/run/substrate/certs/egress-mitm.ate.dev.pem"
+
 // procStatus is where the kernel reports this process's capability sets. Asking
 // the kernel — rather than reading back the OCI spec atelet wrote — is the whole
 // point: it is what proves the sandbox actually applied the requested set.
@@ -295,8 +300,9 @@ func memTotalBytes() (int64, error) {
 
 // fetch GETs ?url= over the actor's normal egress path and reports the
 // outcome, doing TLS with the trust anchors selected by ?roots=: "bundle"
-// (the default) loads the projected trust bundle at trustFile, "system" uses
-// the image's system roots. TestActorEgressMITMTrust documents why each mode
+// (the default) loads the projected trust bundle at trustFile, "injected"
+// loads the auto-injected bundle at injectedTrustFile, "system" uses the
+// image's system roots. TestActorEgressMITMTrust documents why each mode
 // passes or fails. TLS failures land in the "error" field rather than the
 // HTTP status: a verification failure is a result for the suite to assert
 // on, not a broken probe.
@@ -308,20 +314,25 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, resp)
 		return
 	}
+	rootsFile := ""
 	roots := r.URL.Query().Get("roots")
 	switch roots {
-	case "", "bundle", "system":
+	case "", "bundle":
+		rootsFile = trustFile
+	case "injected":
+		rootsFile = injectedTrustFile
+	case "system":
 	default:
 		// Fail closed on typos: silently treating an unknown value as
 		// "bundle" would flip a suite's negative control into a positive
 		// fetch with a misleading failure message.
-		resp["error"] = "unknown roots value " + strconv.Quote(roots) + " (want bundle or system)"
+		resp["error"] = "unknown roots value " + strconv.Quote(roots) + " (want bundle, injected, or system)"
 		writeJSON(w, resp)
 		return
 	}
 	tlsCfg := &tls.Config{}
-	if roots != "system" {
-		b, err := os.ReadFile(trustFile)
+	if rootsFile != "" {
+		b, err := os.ReadFile(rootsFile)
 		if err != nil {
 			resp["error"] = "reading trust bundle: " + err.Error()
 			writeJSON(w, resp)
@@ -329,7 +340,7 @@ func fetch(w http.ResponseWriter, r *http.Request) {
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(b) {
-			resp["error"] = "no certificates parsed from " + trustFile
+			resp["error"] = "no certificates parsed from " + rootsFile
 			writeJSON(w, resp)
 			return
 		}

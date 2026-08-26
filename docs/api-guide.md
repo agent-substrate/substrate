@@ -203,6 +203,17 @@ spec:
 
 atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer dynamic refresh will later hang off) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated, with block headers stripped and the anchors deliberately shuffled — order carries no meaning, so consumers must not depend on it. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if the name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates. Bundle contents are re-resolved on every Run/Restore.
 
+##### The auto-injected egress trust volume
+
+A deployment that intercepts actor egress TLS (the MITM egress gateway) can run ateapi with `--inject-egress-trust-bundle`. Every actor then receives a read-only volume projecting the `egress-mitm.ate.dev` bundle to `/run/substrate/certs/egress-mitm.ate.dev.pem`, with no template involvement — the example above becomes unnecessary for the egress bundle.
+
+- The injected volume is named `trust.ate.dev`. Template volume names must be DNS labels, so no template volume can collide with it — like worker metadata keys under `ate.dev/`, names in the `ate.dev` domain belong to the platform.
+- A container that mounts one of its own volumes at `/run/substrate/certs` — or anywhere below it — keeps its mounts and receives no injected one: declaring the path is how a template takes ownership of it, the override rule kubelet applies to serviceaccount token mounts. (Mounts below the path opt out too because the injected parent bind would shadow them on the micro-VM runtime, which mounts binds grouped by volume kind rather than parent-first. An `image` volume mounted above the path opts the container out for the mirror-image reason: the micro-VM runtime binds image volumes after systemInfo, so that parent would shadow the injected mount.) Every opt-out is logged by ateapi with the actor, container, and colliding mount path. If every container opts out, no volume is injected at all.
+- Injection is fail-closed like any trustBundle projection: while the bundle is absent, actors that would receive the injection do not start. Enable the flag only in deployments that publish the bundle; `hack/install-ate.sh` passes it whenever an invocation that deploys ate-api-server runs under `--experimental-use-sdsmint`.
+- The volume is per-activation policy, not part of the template: it never appears in the ActorTemplate resource. Enable the flag at install time, before templates and workloads exist — it takes effect for sandboxes created afterwards (cold boots, and the golden snapshots captured from them). A snapshot taken under the other setting no longer matches the spec it would be restored with: gVisor refuses such a restore outright, and a micro-VM guest resumes its snapshotted mount table without the file until its next cold boot. Flipping the flag on a live deployment therefore means recreating templates (regenerating their goldens) and discarding paused or suspended actors.
+
+Workloads pick the anchors up by pointing their TLS stack at the file (for example `SSL_CERT_FILE=/run/substrate/certs/egress-mitm.ate.dev.pem` for OpenSSL-based stacks); substrate does not set environment variables on the actor's behalf.
+
 ### Container Fields
 
 Each entry in `containers` describes one process to run in the actor's sandbox.
