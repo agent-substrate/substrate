@@ -18,6 +18,7 @@ import (
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
@@ -103,7 +104,15 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			corev1ac.ContainerPort().
 				WithName("connect").
 				WithContainerPort(444).
+				WithProtocol(corev1.ProtocolTCP),
+			corev1ac.ContainerPort().
+				WithName("readyz").
+				WithContainerPort(8080).
 				WithProtocol(corev1.ProtocolTCP)).
+		WithReadinessProbe(corev1ac.Probe().
+			WithHTTPGet(corev1ac.HTTPGetAction().
+				WithPath("/readyz").
+				WithPort(intstr.FromString("readyz")))).
 		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
 		WithEnv(ateomContainerEnv(otel)...).
 		WithVolumeMounts(

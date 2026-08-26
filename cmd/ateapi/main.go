@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -160,9 +161,6 @@ func main() {
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
-	syncer := controlapi.NewWorkerPoolSyncer(persistence, workerPodInformer, workerPoolLister)
-	syncer.Start(ctx)
-
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	workerPodInformerFactory.Start(stopCh)
@@ -191,7 +189,12 @@ func main() {
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
-	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, *actorIDCAPoolFile, persistence, workerCache)
+	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "while loading the Actor ID CA", err)
+	}
+
+	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, actorIDCAPool, persistence, workerCache)
 	debugSrv := debugapi.NewService(persistence)
 
 	lisCfg := &net.ListenConfig{}

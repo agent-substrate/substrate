@@ -24,7 +24,6 @@ import (
 type config struct {
 	UDSPath     string
 	CAPoolPath  string
-	CAID        string
 	LeafCertTTL time.Duration
 	LogLevel    string
 }
@@ -42,7 +41,6 @@ func NewSdsmintCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&cfg.UDSPath, "uds-path", "", "unix socket to listen on; required, and the only transport offered, because leaf private keys transit this channel")
 	cmd.Flags().StringVar(&cfg.CAPoolPath, "ca-pool-path", "", "path to a localca pool JSON holding the MITM CA, the format substrate mounts its other CAs in")
-	cmd.Flags().StringVar(&cfg.CAID, "ca-id", "", "which CA in the pool to sign with; empty takes the first")
 	cmd.Flags().DurationVar(&cfg.LeafCertTTL, "leaf-cert-ttl", defaultTTL, "leaf certificate lifetime; the xDS resource TTL is derived from it at half its length, so an actively used name is re-minted about twice per lifetime and an idle one is dropped and not minted again")
 	cmd.Flags().StringVar(&cfg.LogLevel, "log-level", "info", "one of debug, info, warn, error")
 

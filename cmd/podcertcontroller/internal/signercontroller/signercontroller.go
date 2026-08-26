@@ -37,7 +37,7 @@ import (
 
 type SignerImpl interface {
 	SignerName() string
-	DesiredClusterTrustBundles() []*certsv1beta1.ClusterTrustBundle
+	DesiredClusterTrustBundles() ([]*certsv1beta1.ClusterTrustBundle, error)
 	MakeCert(context.Context, *certsv1beta1.PodCertificateRequest) error
 }
 
@@ -211,7 +211,14 @@ func (c *Controller) ensureBundles(ctx context.Context) {
 		return
 	}
 
-	wantCTBs := c.handler.DesiredClusterTrustBundles()
+	wantCTBs, err := c.handler.DesiredClusterTrustBundles()
+	if err != nil {
+		slog.ErrorContext(ctx, "Error while retrieving CA trust anchors",
+			slog.String("err", err.Error()),
+			slog.String("signer", c.handler.SignerName()),
+		)
+		return
+	}
 
 	for _, wantCTB := range wantCTBs {
 		ctb, err := c.kc.CertificatesV1beta1().ClusterTrustBundles().Get(ctx, wantCTB.ObjectMeta.Name, metav1.GetOptions{})

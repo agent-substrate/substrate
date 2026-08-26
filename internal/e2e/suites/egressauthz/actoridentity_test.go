@@ -129,9 +129,6 @@ func mintActorCredential(t *testing.T, ca *localca.CA, identity *substratex509.A
 	// first, then the chain leaf-first.
 	bundle := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
-	for _, intermediate := range ca.IntermediateCertificates {
-		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediate.Raw})...)
-	}
 	return bundle
 }
 

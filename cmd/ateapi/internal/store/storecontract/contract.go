@@ -77,6 +77,23 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 			Name:       "data",
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
 			Type:       "DurableDir",
+		}, {
+			Name: "system-info",
+			SystemInfo: &ateapipb.SystemInfoVolumeSource{
+				DataSources: []*ateapipb.SystemInfoDataSource{
+					{ActorMetadata: &ateapipb.ActorMetadataDataSource{
+						Items: []*ateapipb.ActorMetadataItem{{
+							Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME,
+							Path:  "actor-id",
+						}},
+					}},
+					{TrustBundle: &ateapipb.TrustBundleDataSource{
+						Name: "egress-mitm.ate.dev",
+						Path: "trust-bundle.pem",
+					}},
+				},
+			},
+			Type: "SystemInfo",
 		}},
 	}
 }
