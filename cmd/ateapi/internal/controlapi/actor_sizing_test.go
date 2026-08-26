@@ -70,8 +70,11 @@ func TestActorResourceLimits(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{Resources: tc.res}}
-			cpu, mem := actorResourceLimits(tmpl)
+			tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{Resources: tc.res}})
+			cpu, mem, err := actorResourceLimits(tmpl)
+			if err != nil {
+				t.Fatalf("actorResourceLimits() error: %v", err)
+			}
 			if cpu != tc.wantCPU || mem != tc.wantMemory {
 				t.Fatalf("actorResourceLimits() = (%d, %d), want (%d, %d)", cpu, mem, tc.wantCPU, tc.wantMemory)
 			}

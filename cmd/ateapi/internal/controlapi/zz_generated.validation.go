@@ -1621,6 +1621,7 @@ func Validate_Volume(
 		errs = append(errs, fn(fldPath.Child("system_info"), obj.SystemInfo, oldVal, oldObj != nil)...)
 	}
 
+	// field ateapipb.Volume.Image has no validation
 	// field ateapipb.Volume.Type has no validation
 	return errs
 }

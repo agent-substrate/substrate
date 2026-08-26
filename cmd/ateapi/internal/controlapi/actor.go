@@ -23,7 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
@@ -75,12 +74,16 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	// UX inconsistent, at best.  Is it actually worth checking at all?
 	templateNamespace := inActor.GetActorTemplateNamespace()
 	templateName := inActor.GetActorTemplateName()
-	template, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
+	crdTemplate, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
 		}
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+	}
+	template, err := actorTemplateFromCRD(crdTemplate)
+	if err != nil {
+		return nil, err
 	}
 
 	// If a source snapshot tag is requested, resolve it to a concrete
@@ -132,7 +135,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
-func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
+func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
 	tag, err := s.store.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
@@ -157,11 +160,11 @@ func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace s
 		return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
-	if snapshot.GetStatus().GetActorTemplateUid() != string(template.GetUID()) {
+	if snapshot.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
 	}
-	for _, volume := range template.Spec.Volumes {
-		if volume.ExternalVolumeTemplate != nil {
+	for _, volume := range template.GetVolumes() {
+		if volume.GetExternalVolumeTemplate() != nil {
 			// TODO: Permit cloning after CSI volume snapshots are supported.
 			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot cloning does not support external volumes")
 		}

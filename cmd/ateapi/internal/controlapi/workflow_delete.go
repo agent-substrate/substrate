@@ -23,7 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,13 +51,19 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	// is retained in the store in the DELETING state.
 	// TODO: Ensure GC collects all the remaining resources if the cleanup fails.
 	var errs []error
-	actorTemplate := (*atev1alpha1.ActorTemplate)(nil)
+	actorTemplate := (*ateapipb.ActorTemplate)(nil)
 	if actor.GetActorTemplateNamespace() != "" && actor.GetActorTemplateName() != "" {
 		tmpl, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
 		if err != nil && !k8serrors.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("while fetching actor template: %w", err))
 		}
-		actorTemplate = tmpl
+		// Cleanup stays best-effort: an unconvertible template is recorded and
+		// the remaining steps run without it, like a missing one.
+		if tmpl != nil {
+			if actorTemplate, err = actorTemplateFromCRD(tmpl); err != nil {
+				errs = append(errs, fmt.Errorf("while converting actor template: %w", err))
+			}
+		}
 	}
 
 	var atletTerminatedErr, volumesDetachedErr error
@@ -109,7 +114,7 @@ func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resourc
 }
 
 // ensureAteletTerminated calls atelet to terminate the workload.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
@@ -206,7 +211,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 }
 
 // ensureVolumesDetachedForDelete detaches external volumes.
-func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 

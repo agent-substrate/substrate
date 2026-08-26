@@ -613,6 +613,29 @@ message Container {
   ContainerReadyz readyz = 6;
 
   repeated VolumeMount volume_mounts = 7;
+
+  // security_context adjusts the container's security settings. Unset leaves
+  // the default capability set.
+  SecurityContext security_context = 8;
+
+  // resources carries this container's compute limits, enforced inside the
+  // actor's sandbox. Only cpu and memory limits are supported.
+  Resources resources = 9;
+}
+
+// SecurityContext holds security settings for a container's process,
+// modeling a subset of the Kubernetes container securityContext.
+message SecurityContext {
+  Capabilities capabilities = 1;
+}
+
+// Capabilities adjusts a container's Linux capabilities relative to the
+// default set. Drop applies first, then add, so a capability in both is
+// granted. Capabilities are named without the "CAP_" prefix; "ALL" in drop
+// removes the whole default set.
+message Capabilities {
+  repeated string add = 1;
+  repeated string drop = 2;
 }
 
 // EnvVar supplies one environment variable to a container. Values are not
@@ -647,17 +670,26 @@ message Volume {
   // name of the volume. Must be a DNS label.
   string name = 1;
 
-  // Exactly one of durable_dir / external_volume_template / system_info
-  // must be set.
+  // Exactly one of durable_dir / external_volume_template / image /
+  // system_info must be set.
   DurableDirVolumeSource durable_dir = 2;
   ExternalVolumeTemplate external_volume_template = 3;
 
   // +k8s:optional
   SystemInfoVolumeSource system_info = 5;
 
+  ImageVolumeSource image = 6;
+
   // type discriminates the source union: "DurableDir",
-  // "ExternalVolumeTemplate" or "SystemInfo".
+  // "ExternalVolumeTemplate", "Image" or "SystemInfo".
   string type = 4;
+}
+
+// ImageVolumeSource mounts the contents of an OCI image, read-only. The
+// reference must be pinned by digest: changing the image invalidates
+// snapshots.
+message ImageVolumeSource {
+  string reference = 1;
 }
 
 // DurableDirVolumeSource is a durable directory on rootfs that persists
