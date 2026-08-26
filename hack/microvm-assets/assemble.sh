@@ -36,6 +36,13 @@
 #
 # Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.0.0), CH_VER (v53.0),
 #      OUT (default ./bin/microvm-assets/$ARCH, under the gitignored bin/).
+#
+# Always re-downloads and overwrites — there is no incremental mode. It clears
+# $OUT/.asset-versions before the first write and re-stamps it with the versions that
+# produced the set only once the run completes, so the stamp is present only on a dir
+# assembled end-to-end by those pins. install-microvm-deps.sh uses it to decide whether
+# a cached $OUT is still current.
+# `--print-stamp` prints that stamp for the current env and exits without downloading.
 
 set -o errexit -o nounset -o pipefail
 
@@ -44,9 +51,10 @@ ROOT="$(git rev-parse --show-toplevel)"
 ARCH="${ARCH:-arm64}"
 KATA_VER="${KATA_VER:-4.0.0}"
 CH_VER="${CH_VER:-v53.0}"
+# Not env-overridable: the amd64 prebuilt zip URL and its sha below are pinned to
+# this exact release, so bumping it means editing all three together.
+VIRTIOFSD_VER="v1.14.0"
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 
 case "$ARCH" in
   arm64) CH_ASSET="cloud-hypervisor-static-aarch64" ;;
@@ -54,7 +62,31 @@ case "$ARCH" in
   *) echo "unsupported ARCH=$ARCH" >&2; exit 1 ;;
 esac
 
+# Identifies the asset set this script produces. Cleared before the first write into
+# $OUT and re-written to $OUT/$STAMP_FILE on success; install-microvm-deps.sh compares
+# it against what the current checkout would build, because the five filenames stay the
+# same when a pin moves and an asset dir from an older checkout is otherwise
+# indistinguishable from a current one.
+STAMP_FILE=".asset-versions"
+asset_stamp() {
+  printf 'arch=%s\nkata=%s\ncloud-hypervisor=%s\nvirtiofsd=%s\n' \
+    "$ARCH" "$KATA_VER" "$CH_VER" "$VIRTIOFSD_VER"
+}
+
+if [ "${1:-}" = "--print-stamp" ]; then
+  asset_stamp
+  exit 0
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
 mkdir -p "$OUT"
+# Drop any stamp before the first overwrite into $OUT. Assets are replaced in place,
+# so a run that dies partway leaves a dir mixing old and new bytes; the stamp it
+# inherited describes neither. Clearing it up front means an unstamped dir is the only
+# thing a failed run can leave, whatever the pins were before.
+rm -f "${OUT}/${STAMP_FILE}"
 cd "$WORK"
 
 echo ">> Downloading kata-static ${KATA_VER} (${ARCH})..."
@@ -73,12 +105,11 @@ curl -fSL -o "${OUT}/cloud-hypervisor" \
   "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VER}/${CH_ASSET}"
 chmod +x "${OUT}/cloud-hypervisor"
 
-# virtiofsd v1.14.0: first release with the vhost-0.16 / vhost-user-backend-0.22
-# snapshot-restore fix (REPLY_ACK) — the kata-bundled v1.13.3 (old vhost) hangs CH's
-# restore handshake, so this stays a separately-sourced asset. Upstream attaches a
-# prebuilt static binary to the release for x86_64 only; other arches build from the
-# release tag.
-VIRTIOFSD_VER="v1.14.0"
+# virtiofsd v1.14.0 (pinned at the top): first release with the vhost-0.16 /
+# vhost-user-backend-0.22 snapshot-restore fix (REPLY_ACK) — the kata-bundled v1.13.3
+# (old vhost) hangs CH's restore handshake, so this stays a separately-sourced asset.
+# Upstream attaches a prebuilt static binary to the release for x86_64 only; other
+# arches build from the release tag.
 # The x86_64-musl binary attached to the v1.14.0 release notes
 # (https://gitlab.com/virtio-fs/virtiofsd/-/releases/v1.14.0). 21523468 is the
 # gitlab.com project id of virtio-fs/virtiofsd: the /-/project/<id>/uploads/ form
@@ -117,6 +148,9 @@ cd "${OUT}"
 for f in cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml; do
   [ -f "$f" ] || { echo "MISSING: $f" >&2; exit 1; }
 done
+# Written only once all five are present, and only after the up-front rm, so the stamp
+# exists exactly when this dir was assembled end-to-end by these pins.
+asset_stamp > "${OUT}/${STAMP_FILE}"
 "${OUT}/virtiofsd" --version 2>/dev/null | head -1 || true
 echo
 echo ">> sha256 (paste the DOWNLOADED assets into counter-microvm.yaml.tmpl; that"

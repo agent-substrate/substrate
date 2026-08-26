@@ -71,7 +71,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	var tele restoreTelemetry
 	var wasRunning bool
 
-	// Recorded before the lock so lock contention still counts as an attempt.
+	// Recorded before the lease so lease contention still counts as an attempt.
 	// Clean already-running no-ops are skipped: the router resumes per routed
 	// request, and recording those would sample at router QPS and bury
 	// cold-resume latency.
@@ -86,7 +86,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	// Routed requests call ResumeActor even when the actor is already running.
 	// Read before taking the distributed lease so that hot-path checks do not
 	// upsert and delete a PostgreSQL lease row. Any state that needs work is read
-	// again under the lock below.
+	// again under the lease below.
 	actor, err = w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
@@ -95,14 +95,14 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return actor, false, nil
 	}
 
-	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
 	}
-	defer lock.Close()
+	defer lease.Close()
 
 	var src resumeSnapshotSource
-	actor, actorTemplate, src, err = w.loadActorForResume(lockCtx, actorRef, boot)
+	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef, boot)
 	if err != nil {
 		return nil, false, err
 	}
@@ -110,24 +110,24 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return actor, false, nil
 	}
 	var created *ateapipb.Actor
-	if created, err = w.ensureVolumesCreated(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = created
 	var worker *ateapipb.Worker
 	var assigned *ateapipb.Actor
-	if assigned, worker, err = w.ensureWorkerAssigned(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = assigned
-	if err = w.ensureVolumesAttached(lockCtx, actor, worker, actorTemplate); err != nil {
+	if err = w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate); err != nil {
 		return nil, false, err
 	}
-	if tele, err = w.ensureAteletRestored(lockCtx, actorRef, actor, actorTemplate, src); err != nil {
+	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
-	if running, err = w.finalizeRunning(lockCtx, actorRef); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -178,7 +178,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		return nil, nil, src, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 	if ref := actor.GetStatus().GetLatestSnapshot(); ref != nil {
-		snapshot, err := w.store.GetActorSnapshot(ctx, ref.GetAtespace(), ref.GetName())
+		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(ref))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, src, status.Error(codes.DataLoss, "ActorSnapshot data is missing")
 		}
@@ -190,7 +190,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		}
 		src.Scope = snapshot.GetStatus().GetContentScope()
 	} else if actorTemplate.Status.GoldenSnapshot != "" && !boot {
-		snapshot, err := w.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: resources.GoldenActorAtespace, Name: actorTemplate.Status.GoldenSnapshot})
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, src, status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 		}
@@ -225,7 +225,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			if actorTemplate.Status.GoldenSnapshot == "" {
 				return nil, nil, src, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
 			}
-			goldenSnapshot, err := w.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+			goldenSnapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: resources.GoldenActorAtespace, Name: actorTemplate.Status.GoldenSnapshot})
 			if errors.Is(err, store.ErrNotFound) {
 				return nil, nil, src, status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 			}
@@ -402,13 +402,14 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	}
 	if !w.scheduler.Applies(worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
-		release := proto.Clone(worker).(*ateapipb.Worker)
-		release.Status.Assignment = nil
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
 		// to the free pool instead of leaving it claimed forever — nothing else
 		// reclaims a healthy worker whose actor moved on to a different pool.
-		if err := w.store.UpdateWorker(ctx, release, release.GetMetadata().GetVersion()); err != nil {
+		if _, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status.Assignment = nil
+			return nil
+		}); err != nil {
 			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
@@ -473,10 +474,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			assignedWorker = worker
 			break
 		}
-		// Workers() returns pointers directly from the cache so we need to clone before
-		// mutating so that the cache is not corrupted if UpdateWorker fails.
+		// Workers() returns pointers directly from the cache, so clone before
+		// handing the worker to the goroutine: the mutation runs against the
+		// store's own copy, but the precondition and the log below read this one.
 		releaseWorker := proto.Clone(worker).(*ateapipb.Worker)
-		releaseWorker.Status.Assignment = nil
 		// The claimed worker is no longer eligible (e.g. the actor's
 		// worker_selector changed after the failed attempt); release it back
 		// to the free pool — nothing else reclaims a healthy worker whose
@@ -484,7 +485,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		go func(release *ateapipb.Worker) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := w.store.UpdateWorker(bgCtx, release, release.GetMetadata().GetVersion()); err != nil {
+			if _, err := w.store.UpdateWorker(bgCtx, release.GetMetadata().GetName(), store.PreconditionFrom(release), func(toUpdate *ateapipb.Worker) error {
+				toUpdate.Status.Assignment = nil
+				return nil
+			}); err != nil {
 				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",
 					slog.String("worker", release.GetWorkerNamespace()+"/"+release.GetWorkerPod()),
 					slog.Any("err", err))
@@ -505,10 +509,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
-	// Workers() returns pointers directly from the cache so we need to clone before
-	// mutating so that the cache is not corrupted if UpdateWorker fails.
-	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.Status.Assignment = &ateapipb.ActorAssignment{
+	assignment := &ateapipb.ActorAssignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: actor.GetActorTemplateNamespace(),
 			Name:      actor.GetActorTemplateName(),
@@ -520,13 +521,21 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		ActorUid: actor.GetMetadata().GetUid(),
 	}
 
-	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.GetMetadata().GetVersion()); err != nil {
+	// Workers() returns pointers directly from the cache, so the claim is written
+	// by mutating the store's own copy; the cached one is only read, for the
+	// version this claim is conditioned on.
+	stored, err := w.store.UpdateWorker(ctx, assignedWorker.GetMetadata().GetName(), store.PreconditionFrom(assignedWorker), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = assignment
+		return nil
+	})
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
 			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
 		}
 		return nil, nil, err
 	}
+	assignedWorker = stored
 
 	newAssignment := workerAssignmentFrom(assignedWorker)
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {

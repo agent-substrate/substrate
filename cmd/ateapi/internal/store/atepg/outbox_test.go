@@ -73,7 +73,7 @@ func TestConnect_DedicatedWatchPool(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "watchpool-pod",
 	}
-	if err := p.CreateWorker(ctx, worker); err != nil {
+	if _, err := p.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 	select {
@@ -141,7 +141,7 @@ func TestWorkerEvent_OnlyAfterCommit(t *testing.T) {
 	}
 
 	// The equivalent committed write must produce an event.
-	if err := s.CreateWorker(ctx, worker); err != nil {
+	if _, err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 	select {
@@ -359,7 +359,7 @@ func TestWorkerEvents_OneRowPerTransaction(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",
 	}
-	if err := s.CreateWorker(ctx, worker); err != nil {
+	if _, err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 	for i := 0; i < 10; i++ {
@@ -367,11 +367,13 @@ func TestWorkerEvents_OneRowPerTransaction(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if err := s.UpdateWorker(ctx, stored, stored.GetMetadata().GetVersion()); err != nil {
+		if _, err := s.UpdateWorker(ctx, "one-row-worker", store.PreconditionFrom(stored), func(*ateapipb.Worker) error {
+			return nil
+		}); err != nil {
 			t.Fatalf("UpdateWorker %d failed: %v", i, err)
 		}
 	}
-	if err := s.DeleteWorker(ctx, "one-row-worker"); err != nil {
+	if _, err := s.DeleteWorker(ctx, "one-row-worker", store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
 
@@ -413,7 +415,7 @@ func TestWatchWorkers_DeliveryFencedByOldestTransaction(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "fenced",
 	}
-	if err := s.CreateWorker(ctx, worker); err != nil {
+	if _, err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 
@@ -619,7 +621,7 @@ func TestWatchWorkers_ClosesWhenTrimmedPastCursor(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",
 	}
-	if err := s.CreateWorker(ctx, worker); err != nil {
+	if _, err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 	select {
@@ -704,7 +706,7 @@ func TestPartitionCreation_UnwedgesFromStrayedDefault(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "wedge-pod",
 	}
-	if err := s.CreateWorker(ctx, worker); err != nil {
+	if _, err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker during stall: %v", err)
 	}
 	var strays bool
@@ -787,7 +789,7 @@ func TestOutboxMaintenance_NoDeadlockWithConcurrentWriters(t *testing.T) {
 					Metadata:        &ateapipb.ResourceMetadata{Name: fmt.Sprintf("ddl-worker-%d-%d", g, i)},
 					WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: fmt.Sprintf("ddl-pod-%d-%d", g, i),
 				}
-				if err := s.CreateWorker(writerCtx, w); err != nil && writerCtx.Err() == nil {
+				if _, err := s.CreateWorker(writerCtx, w); err != nil && writerCtx.Err() == nil {
 					select {
 					case writerErr <- fmt.Errorf("writer %d iteration %d: %w", g, i, err):
 					default:
@@ -915,7 +917,7 @@ func TestWatchWorkers_BaselineDoesNotMaskOwedTrims(t *testing.T) {
 
 	// C: a LATER xid that commits BEFORE the subscribe — the baseline poison:
 	// a visible outbox row whose xid exceeds W's.
-	if err := s.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := s.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: "baseline-poison"},
 		WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "baseline-pod",
 	}); err != nil {

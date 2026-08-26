@@ -321,8 +321,9 @@ type actorBootParams struct {
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
-	// the RunWorkload / RestoreWorkload RPC. It sizes the VM (vCPUs, memory) and
-	// the guest container cgroup. Zero fields keep the kata defaults.
+	// the RunWorkload / RestoreWorkload RPC. It sizes the VM itself (vCPUs,
+	// memory); a container's own cgroup limit comes from its declared resources.
+	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
 }
 
@@ -449,14 +450,21 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay
 	// lower the host merges under the container's writable upper).
-	// Size the guest container cgroup to the post-reserve guest RAM (matching memMiB)
-	// so the in-guest cgroup limit binds against actual guest memory.
-	guestSize, err := s.guestSize(sz)
+	ctrs, err := s.buildActorContainers(actorUID, containers)
 	if err != nil {
 		return err
 	}
-	ctrs, err := s.buildActorContainers(actorUID, containers, guestSize)
-	if err != nil {
+
+	// Reject limits the guest can never satisfy, before the containers reach the
+	// agent. Restore does not repeat this: it resumes a snapshotted VM, and the
+	// template spec is immutable, so an actor's limits were validated when its
+	// golden was built.
+	if err := checkResourceEnvelope(ctrs, guestEnvelope{
+		memMiB:        memMiB,
+		vcpus:         vcpus,
+		declaredBytes: sz.MemoryBytes,
+		reserveMiB:    s.memReserveMiB,
+	}); err != nil {
 		return err
 	}
 
@@ -619,13 +627,13 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteomService) buildActorContainers(actorUID string, containers []*ateompb.Container, size sizing.SandboxSize) ([]actorContainer, error) {
+func (s *AteomService) buildActorContainers(actorUID string, containers []*ateompb.Container) ([]actorContainer, error) {
 	netnsPath := ateompath.AteomNetNSPath(s.podUID)
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
 		bundle := ateompath.OCIBundlePath(actorUID, cn)
-		spec, err := ensureKataCompatibleSpec(bundle, actorUID, netnsPath, size)
+		spec, err := ensureKataCompatibleSpec(bundle, actorUID, netnsPath)
 		if err != nil {
 			return nil, fmt.Errorf("while preparing kata OCI spec for %q: %w", cn, err)
 		}
@@ -748,47 +756,6 @@ func resolveGuestMemMiB(declaredBytes int64, reserveMiB, fallbackMiB int) (int, 
 			declaredMiB, reserveMiB, m, minGuestMemMiB)
 	}
 	return m, nil
-}
-
-// guestSize translates an actor's declared limits into the effective in-guest
-// limits: CPU passes through unchanged (kata-agent sets the CFS quota), while
-// memory is reduced by the VMM reserve so the container cgroup limit inside the
-// guest matches the guest VM's actual RAM rather than the (larger) outer limit.
-// An unset (zero) memory limit passes through unset.
-//
-// The VM's RAM is the real envelope; the per-container cgroup is belt-and-braces.
-// Every container in a multi-container actor gets the same limit — the whole
-// guest RAM — so containers are not bounded relative to each other, and because
-// the guest kernel, agent and init consume part of that RAM the workload reaches
-// the guest OOM killer just before the cgroup limit binds. Sizing the cgroup to
-// the guest's RAM keeps the two numbers from contradicting each other; enforcing
-// a per-container share would need those overheads subtracted first.
-//
-// CPU has no equivalent of the VMM reserve, so "unchanged" above is about the
-// number, not about what the workload gets. On gVisor the sentry is the workload
-// and shares the sandbox's cgroup leaf, so the declared limit covers everything
-// the sandbox costs the host. Here the limit reaches the guest cgroup intact, but
-// cloud-hypervisor's vCPU threads, virtiofsd and ateom are host processes drawing
-// on the same worker-pod CPU quota, and the scheduler's capacity check (>=) sets
-// none of it aside — so the workload runs on somewhat less than it declared, and
-// the in-guest quota is throttled by the host before it ever binds. The asymmetry
-// with memory is deliberate: an unreduced memory limit would push the pod past its
-// own and get it OOM-killed, whereas CPU is compressible, so the shortfall only
-// slows the workload down. Carving out a CPU reserve is left for a follow-up.
-//
-// An error means the declared limit cannot be honored (see resolveGuestMemMiB);
-// callers must not fall back to the unreduced size, which is the mismatch this
-// translation exists to avoid.
-func (s *AteomService) guestSize(sz sizing.SandboxSize) (sizing.SandboxSize, error) {
-	if sz.MemoryBytes <= 0 {
-		return sz, nil
-	}
-	memMiB, err := resolveGuestMemMiB(sz.MemoryBytes, s.memReserveMiB, 0)
-	if err != nil {
-		return sz, err
-	}
-	sz.MemoryBytes = int64(memMiB) * 1024 * 1024
-	return sz, nil
 }
 
 // agentInit reports whether to boot the kata agent as the guest's PID 1, from what

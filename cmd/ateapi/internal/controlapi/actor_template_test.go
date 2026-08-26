@@ -51,6 +51,10 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()},
 		nil,
 	}, {
+		"unknown field on actor_template",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: withUnknown(validActorTemplate(), 9999)},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template"), field.OmitValueType{}, "")},
+	}, {
 		"missing actor_template",
 		&ateapipb.CreateActorTemplateRequest{},
 		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},
@@ -172,7 +176,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{persistence: persistence}
+	s := &RPCService{impl: persistence}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -202,7 +206,7 @@ func TestCreateActorTemplate(t *testing.T) {
 // guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{persistence: persistence}
+	s := &RPCService{impl: persistence}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {

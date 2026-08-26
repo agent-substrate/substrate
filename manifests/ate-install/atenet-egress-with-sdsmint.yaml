@@ -167,6 +167,8 @@ data:
                       cluster_name: ext_proc_server
                     timeout: 2s
                   failure_mode_allow: false
+                  # Set ext_proc timeout to 5s (from default 200ms) to handle slower ext_proc transactions.
+                  message_timeout: 5s
                   # How the ext_proc server tells egress from ingress. It applies
                   # opposite trust models to the two directions, and dispatches on
                   # this Envoy-asserted filter chain name so that no client can

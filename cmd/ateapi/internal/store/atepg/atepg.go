@@ -54,7 +54,7 @@ type Persistence struct {
 	// and the partition-maintenance loop.
 	watchPool             *pgxpool.Pool
 	ownsWatchPool         bool
-	lockTTL               time.Duration
+	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
 	maintenanceDone       chan struct{}
@@ -175,7 +175,7 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
-	p := &Persistence{pool: pool, watchPool: watchPool, lockTTL: defaultLockTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	p := &Persistence{pool: pool, watchPool: watchPool, leaseTTL: defaultLeaseTTL, pollFailureCloseAfter: outboxPollFailureCloseAfter, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
 	// Cover the partition lead before accepting writes; from then on the
 	// maintenance loop keeps partitions ahead of the clock (and the
 	// DEFAULT partition catches writes if it ever falls behind).
@@ -214,6 +214,7 @@ type querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// TODO: EOL this in favor of setCreateMetadata
 func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
 	now := timestamppb.Now()
 	return &ateapipb.ResourceMetadata{
@@ -226,6 +227,14 @@ func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
 	}
 }
 
+func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
+	metadata.Uid = uuid.NewString()
+	metadata.Version = 1
+	metadata.CreateTime = timestamppb.Now()
+	metadata.UpdateTime = metadata.CreateTime
+}
+
+// TODO: EOL this in favor of setUpdateMetadata
 func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
 	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
 	metadata.Version++
@@ -243,6 +252,13 @@ func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.Res
 		return fmt.Errorf("%s version projection %d does not match proto metadata version %d", resource, version, metadata.GetVersion())
 	}
 	return nil
+}
+
+func setUpdateMetadata(newMeta, oldMeta *ateapipb.ResourceMetadata) {
+	newMeta.Uid = oldMeta.Uid
+	newMeta.Version = oldMeta.Version + 1
+	newMeta.CreateTime = oldMeta.CreateTime
+	newMeta.UpdateTime = timestamppb.Now()
 }
 
 func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }
@@ -431,14 +447,6 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 	return out, nil
 }
 
-func (p *Persistence) ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error) {
-	var exists bool
-	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM actor_templates WHERE atespace = $1 AND name = $2)`, templateRef.Atespace, templateRef.Name).Scan(&exists); err != nil {
-		return false, fmt.Errorf("checking actor template existence: %w", err)
-	}
-	return exists, nil
-}
-
 func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
 	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
 		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
@@ -600,8 +608,12 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
+	// TODO: doing a full clone here is wasteful - the caller already has to
+	// make modifications to the actor before passing it in, so we can safely
+	// mutate it in place.  This breaks some of the contract tests, so we can
+	// fix it later.
 	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	dbActor.Metadata = newCreateMetadata(atespace, name)
+	setCreateMetadata(dbActor.Metadata)
 
 	protoBytes, err := proto.Marshal(dbActor)
 	if err != nil {
@@ -642,30 +654,6 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 	return out, nil
 }
 
-// validateUpdateActorMutation reports whether an actor mutation changed fields
-// that are immutable for the lifetime of the stored actor.
-func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) error {
-	if stored, mutated := storedActor.GetMetadata().GetAtespace(), mutatedActor.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetMetadata().GetName(), mutatedActor.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetActorTemplateNamespace(), mutatedActor.GetActorTemplateNamespace(); stored != mutated {
-		return fmt.Errorf("actor_template_namespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
-		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetActorTemplate(), mutatedActor.GetActorTemplate(); !proto.Equal(stored, mutated) {
-		return fmt.Errorf("actor_template is immutable: mutation changed it from %v to %v", stored, mutated)
-	}
-	if stored, mutated := storedActor.GetSourceSnapshotTag(), mutatedActor.GetSourceSnapshotTag(); !proto.Equal(stored, mutated) {
-		return fmt.Errorf("source_snapshot_tag is immutable: mutation changed it from %v to %v", stored, mutated)
-	}
-	return nil
-}
-
 func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
@@ -693,16 +681,13 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
 		return nil, err
 	}
-	actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
+	oldMeta := proto.CloneOf(dbActor.Metadata)
 	if err := mutate(dbActor); err != nil {
 		return nil, err
 	}
-	if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
-		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
-	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	dbActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
+	setUpdateMetadata(dbActor.Metadata, oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {
@@ -901,7 +886,8 @@ func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 	return dbSnapshot, nil
 }
 
-func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
+func (p *Persistence) GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error) {
+	atespace, name := snapshotRef.Atespace, snapshotRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM actor_snapshots
@@ -918,7 +904,8 @@ func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name strin
 	return out, nil
 }
 
-func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
 		SELECT proto FROM actor_snapshot_tags
@@ -1045,7 +1032,8 @@ func (p *Persistence) listActorSnapshotsGlobal(ctx context.Context, pageSize int
 	return result, nextToken, nil
 }
 
-func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespace, snapshotName string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+	snapshotAtespace, snapshotName := snapshotRef.Atespace, snapshotRef.Name
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	tagName := tag.GetMetadata().GetName()
 	dbTag := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
@@ -1124,10 +1112,11 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 	return nil
 }
 
-func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
+	atespace, name := tagRef.Atespace, tagRef.Name
 	var currentUID string
 	var currentVersion int64
 	var currentBytes []byte
@@ -1182,7 +1171,8 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 	return dbTag, nil
 }
 
-func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+	atespace, name := tagRef.Atespace, tagRef.Name
 	var protoBytes []byte
 	if err := p.pool.QueryRow(ctx, `
 		DELETE FROM actor_snapshot_tags
@@ -1202,33 +1192,33 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 
 // --- Workers ---
 
-func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
+func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
 	// Workers are global-scoped, so the atespace is always empty.
 	dbWorker.Metadata = newCreateMetadata("", worker.GetMetadata().GetName())
 
 	protoBytes, err := proto.Marshal(dbWorker)
 	if err != nil {
-		return fmt.Errorf("marshaling worker: %w", err)
+		return nil, fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	err = p.writeAndAppendEvent(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	created, err := p.writeAndAppendEvent(ctx, store.WorkerEventCreated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
 			dbWorker.GetMetadata().GetName(), dbWorker.GetMetadata().GetUid(), dbWorker.GetMetadata().GetVersion(), protoBytes)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		return true, nil
+		return dbWorker, nil
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			return store.ErrAlreadyExists
+			return nil, store.ErrAlreadyExists
 		}
-		return fmt.Errorf("creating worker: %w", err)
+		return nil, fmt.Errorf("creating worker: %w", err)
 	}
-	return nil
+	return created, nil
 }
 
 func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker, error) {
@@ -1251,61 +1241,94 @@ func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapipb.Wor
 	return getWorkerRow(ctx, p.pool, name)
 }
 
-func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	name := worker.GetMetadata().GetName()
-
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	dbWorker.Metadata = newUpdateMetadata(worker.GetMetadata())
-	dbWorker.Metadata.Version = expectedVersion + 1
-
-	protoBytes, err := proto.Marshal(dbWorker)
-	if err != nil {
-		return fmt.Errorf("marshaling worker: %w", err)
+// getWorkerRowForUpdate reads the worker and holds its row lock for the rest of
+// tx, so nothing else can write the row between this read and the write that
+// follows it.
+func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.Worker, error) {
+	var protoBytes []byte
+	if err := tx.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1 FOR UPDATE`, name).Scan(&protoBytes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("locking worker %s for update: %w", name, err)
 	}
+	out := &ateapipb.Worker{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling worker: %w", err)
+	}
+	return out, nil
+}
 
-	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
-		var returned []byte
-		err := tx.QueryRow(ctx, `
+// UpdateWorker runs mutate against the worker read FOR UPDATE inside the write
+// transaction, so a concurrent writer blocks on the row lock rather than
+// interleaving. That is what makes an occupancy test inside mutate a
+// compare-and-set. The predicate cannot be pushed into SQL: the row stores an
+// opaque marshaled proto, so assignment is not addressable in a WHERE clause.
+func (p *Persistence) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	if err := precondition.Validate(); err != nil {
+		return nil, err
+	}
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+		dbWorker, err := getWorkerRowForUpdate(ctx, tx, name)
+		if err != nil {
+			return nil, err
+		}
+		if err := precondition.Check(dbWorker.GetMetadata()); err != nil {
+			return nil, err
+		}
+
+		// Snapshot the stored state before handing the worker to mutate.
+		// mutate is free to edit anything it is given.
+		workerBeforeMutation := proto.Clone(dbWorker).(*ateapipb.Worker)
+		if err := mutate(dbWorker); err != nil {
+			return nil, err
+		}
+		if err := store.CheckWorkerMutation(workerBeforeMutation, dbWorker); err != nil {
+			return nil, err
+		}
+		// Stored metadata is authoritative; discard any metadata edits made by
+		// the closure and derive the next revision from the row we locked.
+		dbWorker.Metadata = newUpdateMetadata(workerBeforeMutation.GetMetadata())
+
+		protoBytes, err := proto.Marshal(dbWorker)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling worker: %w", err)
+		}
+
+		commandTag, err := tx.Exec(ctx, `
 			UPDATE workers
 			SET version = $1, proto = $2
-			WHERE name = $3 AND version = $4
-			RETURNING proto`,
-			dbWorker.GetMetadata().GetVersion(), protoBytes, name, expectedVersion,
-		).Scan(&returned)
-		if err == nil {
-			return true, nil
+			WHERE name = $3`,
+			dbWorker.GetMetadata().GetVersion(), protoBytes, name)
+		if err != nil {
+			return nil, fmt.Errorf("updating worker %s: %w", name, err)
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return false, fmt.Errorf("updating worker %s: %w", name, err)
+		if commandTag.RowsAffected() != 1 {
+			return nil, fmt.Errorf("updating worker %s affected %d rows, want 1", name, commandTag.RowsAffected())
 		}
-
-		current, getErr := getWorkerRow(ctx, tx, name)
-		if getErr != nil {
-			return false, getErr
-		}
-		if current.GetMetadata().GetVersion() != expectedVersion {
-			return false, store.ErrVersionConflict
-		}
-		return false, fmt.Errorf("update worker %s: no row matched but current state is otherwise consistent", name)
+		return dbWorker, nil
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
-	deletedEvent := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
-		var protoBytes []byte
-		err := tx.QueryRow(ctx, `
-			DELETE FROM workers
-			WHERE name = $1
-			RETURNING proto`, name).Scan(&protoBytes)
+func (p *Persistence) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {
+	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+		// Locked rather than plainly read so the incarnation pre was evaluated
+		// against is the one the DELETE removes.
+		deleted, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				// Idempotent: nothing existed, so no event to publish either.
-				return false, nil
-			}
-			return false, fmt.Errorf("deleting worker %s: %w", name, err)
+			return nil, err
 		}
-		return true, nil
+		if err := pre.Check(deleted.GetMetadata()); err != nil {
+			return nil, err
+		}
+		commandTag, err := tx.Exec(ctx, `DELETE FROM workers WHERE name = $1`, name)
+		if err != nil {
+			return nil, fmt.Errorf("deleting worker %s: %w", name, err)
+		}
+		if commandTag.RowsAffected() != 1 {
+			return nil, fmt.Errorf("deleting worker %s affected %d rows, want 1", name, commandTag.RowsAffected())
+		}
+		return deleted, nil
 	})
 }
 
@@ -1361,14 +1384,14 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }
 
-// --- Workflow locks ---
+// --- Workflow leases ---
 
-// defaultLockTTL is how long a lock may go unrenewed before another client
+// defaultLeaseTTL is how long a lease may go unrenewed before another client
 // can reclaim it.
-const defaultLockTTL = 30 * time.Second
+const defaultLeaseTTL = 30 * time.Second
 
-func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
-	ttl := p.lockTTL
+func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
+	ttl := p.leaseTTL
 	token := uuid.NewString()
 	if err := p.cleanupExpiredLeases(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
@@ -1379,7 +1402,7 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 		return nil, err
 	}
 	if !acquired {
-		return nil, store.ErrLockConflict
+		return nil, store.ErrLeaseConflict
 	}
 
 	leaseCtx, cancel := context.WithCancel(ctx)
@@ -1387,7 +1410,7 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 	go func() {
 		defer close(renewalDone)
 		defer cancel()
-		p.renewLockLoop(leaseCtx, key, token, ttl)
+		p.renewLeaseLoop(leaseCtx, key, token, ttl)
 	}()
 
 	closeFn := func() {
@@ -1397,10 +1420,10 @@ func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock,
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
 		if err := p.releaseLease(releaseCtx, key, token); err != nil {
-			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lock, relying on TTL to reclaim it", "key", key, "error", err)
+			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lease, relying on TTL to reclaim it", "key", key, "error", err)
 		}
 	}
-	return store.NewLock(leaseCtx, closeFn), nil
+	return store.NewLease(leaseCtx, closeFn), nil
 }
 
 func (p *Persistence) cleanupExpiredLeases(ctx context.Context) error {
@@ -1424,7 +1447,7 @@ func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl t
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
-		return false, fmt.Errorf("acquiring lock for %q: %w", key, err)
+		return false, fmt.Errorf("acquiring lease for %q: %w", key, err)
 	}
 	return true, nil
 }
@@ -1435,7 +1458,7 @@ const (
 	renewDeadlineFraction   = 2.0 / 3.0
 )
 
-func (p *Persistence) renewLockLoop(ctx context.Context, key, token string, ttl time.Duration) {
+func (p *Persistence) renewLeaseLoop(ctx context.Context, key, token string, ttl time.Duration) {
 	interval := ttl / renewIntervalDivisor
 	renewDeadline := time.Duration(float64(ttl) * renewDeadlineFraction)
 
@@ -1469,7 +1492,7 @@ func (p *Persistence) tryRenewLease(ctx context.Context, key, token string, ttl 
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				slog.WarnContext(ctx, "failed to renew PostgreSQL lock before its deadline", "key", key)
+				slog.WarnContext(ctx, "failed to renew PostgreSQL lease before its deadline", "key", key)
 			}
 			return false
 		case <-retry.C:
@@ -1481,10 +1504,10 @@ func (p *Persistence) tryRenewLease(ctx context.Context, key, token string, ttl 
 			case err == nil && renewed:
 				return true
 			case err == nil:
-				slog.WarnContext(ctx, "PostgreSQL lock renewal found lease no longer owned", "key", key)
+				slog.WarnContext(ctx, "PostgreSQL lease renewal found lease no longer owned", "key", key)
 				return false
 			default:
-				slog.WarnContext(ctx, "failed to renew PostgreSQL lock, retrying", "key", key, "error", err)
+				slog.WarnContext(ctx, "failed to renew PostgreSQL lease, retrying", "key", key, "error", err)
 				retry.Reset(retryPeriod)
 			}
 		}
@@ -1502,14 +1525,14 @@ func (p *Persistence) renewLease(ctx context.Context, key, token string, ttl tim
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
 		}
-		return false, fmt.Errorf("renewing lock for %q: %w", key, err)
+		return false, fmt.Errorf("renewing lease for %q: %w", key, err)
 	}
 	return true, nil
 }
 
 func (p *Persistence) releaseLease(ctx context.Context, key, token string) error {
 	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE key = $1 AND token = $2`, key, token); err != nil {
-		return fmt.Errorf("releasing lock for %q: %w", key, err)
+		return fmt.Errorf("releasing lease for %q: %w", key, err)
 	}
 	return nil
 }

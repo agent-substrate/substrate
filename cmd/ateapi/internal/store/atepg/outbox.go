@@ -68,36 +68,40 @@ func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
 	return store.WorkerEvent{Type: eventType, Worker: worker}, nil
 }
 
-// writeAndAppendEvent runs fn inside a transaction, then--only if fn
-// reports a change worth publishing--appends the event to the worker_outbox
-// table in the same transaction, so watchers see it if and only if the
-// transaction commits.
-func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (changed bool, err error)) error {
+// writeAndAppendEvent runs fn inside a transaction, then--only if fn reports a
+// worker worth publishing--appends the event to the worker_outbox table in the
+// same transaction, so watchers see it if and only if the transaction commits.
+// fn returns the worker the event carries, or nil to skip the event; it is
+// returned from writeAndAppendEvent so callers get back what actually
+// committed. The worker comes from fn rather than from the caller because an
+// update only knows what it wrote once its mutation has run inside the
+// transaction.
+func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.WorkerEventType, fn func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error)) (*ateapipb.Worker, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
-	changed, err := fn(ctx, tx)
+	worker, err := fn(ctx, tx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if changed {
+	if worker != nil {
 		payload, err := marshalWorkerEvent(eventType, worker)
 		if err != nil {
-			return fmt.Errorf("marshaling worker event: %w", err)
+			return nil, fmt.Errorf("marshaling worker event: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO worker_outbox (payload) VALUES ($1)`, payload); err != nil {
-			return fmt.Errorf("appending worker outbox: %w", err)
+			return nil, fmt.Errorf("appending worker outbox: %w", err)
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("committing transaction: %w", err)
+		return nil, fmt.Errorf("committing transaction: %w", err)
 	}
-	return nil
+	return worker, nil
 }
 
 const (

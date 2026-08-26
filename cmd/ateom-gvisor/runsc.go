@@ -82,8 +82,9 @@ func (r *runsc) ensureContainerCgroupsPath(containerName string) error {
 		spec.Linux.CgroupsPath = "/" + containerName
 	}
 	// Right-size the per-container cgroup leaf to the actor's declared limits;
-	// runsc applies spec.Linux.Resources when it creates the leaf. Shared with the
-	// micro-VM runtime via internal/sizing.
+	// runsc applies spec.Linux.Resources when it creates the leaf. gVisor is the
+	// only caller: ateom-microvm sizes the VM itself and applies per-container
+	// limits through the kata-agent instead.
 	r.size.ApplyToOCISpec(&spec)
 	out, err := json.MarshalIndent(&spec, "", "  ")
 	if err != nil {

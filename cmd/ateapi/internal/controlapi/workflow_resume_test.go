@@ -62,24 +62,24 @@ func TestSchedulerRecordable(t *testing.T) {
 	}
 }
 
-type lockCountingStore struct {
+type leaseCountingStore struct {
 	store.Interface
 	acquireCalls int
 }
 
-func (s *lockCountingStore) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
+func (s *leaseCountingStore) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	s.acquireCalls++
-	return s.Interface.AcquireLock(ctx, key)
+	return s.Interface.AcquireLease(ctx, key)
 }
 
-func TestResumeActor_RunningFastPathDoesNotAcquireLock(t *testing.T) {
+func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
-	st := &lockCountingStore{Interface: persistence}
+	st := &leaseCountingStore{Interface: persistence}
 	w := &ActorWorkflow{store: st}
 
 	got, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
@@ -93,7 +93,7 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLock(t *testing.T) {
 		t.Errorf("ResumeActor actor = %v, want %v", got, created)
 	}
 	if st.acquireCalls != 0 {
-		t.Errorf("AcquireLock calls = %d, want 0", st.acquireCalls)
+		t.Errorf("AcquireLease calls = %d, want 0", st.acquireCalls)
 	}
 }
 
@@ -102,8 +102,8 @@ type updateWorkerErrorStore struct {
 	err error
 }
 
-func (s *updateWorkerErrorStore) UpdateWorker(context.Context, *ateapipb.Worker, int64) error {
-	return s.err
+func (s *updateWorkerErrorStore) UpdateWorker(context.Context, string, store.Precondition, func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	return nil, s.err
 }
 
 func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
@@ -162,7 +162,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 			},
 		},
 	}
-	if err := persistence.CreateWorker(ctx, worker); err != nil {
+	if _, err := persistence.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 
@@ -239,7 +239,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorkerInBackground(t *testin
 		},
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
-		if err := persistence.CreateWorker(ctx, w); err != nil {
+		if _, err := persistence.CreateWorker(ctx, w); err != nil {
 			t.Fatalf("CreateWorker(%s): %v", w.GetWorkerPod(), err)
 		}
 	}
@@ -314,7 +314,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		},
 	}
 	for _, w := range []*ateapipb.Worker{contested, fallback} {
-		if err := persistence.CreateWorker(ctx, w); err != nil {
+		if _, err := persistence.CreateWorker(ctx, w); err != nil {
 			t.Fatalf("CreateWorker(%s): %v", w.GetWorkerPod(), err)
 		}
 	}
@@ -327,12 +327,13 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 
 	// A concurrent resume of another actor wins the contested worker, bumping
 	// its stored version past the failed attempt's snapshot.
-	claimed := proto.Clone(beforeClaim).(*ateapipb.Worker)
-	claimed.Status.Assignment = &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "other"},
-		ActorUid: "other-actor-uid",
-	}
-	if err := persistence.UpdateWorker(ctx, claimed, claimed.GetMetadata().GetVersion()); err != nil {
+	if _, err := persistence.UpdateWorker(ctx, beforeClaim.GetMetadata().GetName(), store.PreconditionFrom(beforeClaim), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = &ateapipb.ActorAssignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "other"},
+			ActorUid: "other-actor-uid",
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("UpdateWorker (concurrent claim): %v", err)
 	}
 
@@ -401,16 +402,16 @@ func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resou
 	return c.Interface.UpdateActor(ctx, actorRef, precondition, mutate)
 }
 
-func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	c.once.Do(c.inject)
-	return c.Interface.UpdateActorSnapshotTag(ctx, atespace, name, precondition, mutate)
+	return c.Interface.UpdateActorSnapshotTag(ctx, tagRef, precondition, mutate)
 }
 
 // seedAssignFixture stores one free gvisor worker and a SUSPENDED actor and
 // returns the actor plus a started worker cache.
 func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Interface) (*ateapipb.Actor, *workercache.Cache) {
 	t.Helper()
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool",
@@ -785,7 +786,7 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
-			if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+			if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 				Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
 				WorkerNamespace: "worker-ns",
 				WorkerPool:      "pool",

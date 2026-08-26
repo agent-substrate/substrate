@@ -51,7 +51,7 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 		Resources:       in.GetResources(),
 		Status:          &ateapipb.ActorTemplateStatus{Phase: ateapipb.ActorTemplatePhase_ACTOR_TEMPLATE_PHASE_INITIAL},
 	}
-	stored, err := s.persistence.CreateActorTemplate(ctx, template)
+	stored, err := s.impl.CreateActorTemplate(ctx, template)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "ActorTemplate %s already exists", templateRef)
@@ -65,6 +65,11 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	return stored, nil
 }
 
+func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.CreateActorTemplate(ctx, template)
+}
+
 func validateCreateActorTemplateRequest(req *ateapipb.CreateActorTemplateRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -75,6 +80,8 @@ func validateCreateActorTemplateRequest(req *ateapipb.CreateActorTemplateRequest
 		errs = append(errs, field.Required(templatePath, ""))
 		return errs
 	}
+
+	errs = append(errs, validateNoUnknownFields(template, templatePath)...)
 
 	// ActorTemplate is Atespaced: metadata.atespace and name are required + valid.
 	metaPath := templatePath.Child("metadata")
@@ -146,7 +153,7 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActo
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
-	template, err := s.persistence.GetActorTemplate(ctx, templateRef)
+	template, err := s.impl.GetActorTemplate(ctx, templateRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
 	} else if err != nil {
@@ -154,6 +161,11 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActo
 	}
 
 	return template, nil
+}
+
+func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.GetActorTemplate(ctx, templateRef)
 }
 
 func validateGetActorTemplateRequest(req *ateapipb.GetActorTemplateRequest) field.ErrorList {
@@ -174,7 +186,7 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListA
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.persistence.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing actor templates in db: %w", err)
 	}
@@ -182,6 +194,11 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListA
 		ActorTemplates: page.Items,
 		NextPageToken:  page.NextPageToken,
 	}, nil
+}
+
+func (s *ServiceImpl) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+	// TODO: implement this
+	return s.store.ListActorTemplates(ctx, atespace, opts)
 }
 
 func validateListActorTemplatesRequest(req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
@@ -206,7 +223,7 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.Dele
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
-	deleted, err := s.persistence.DeleteActorTemplate(ctx, templateRef)
+	deleted, err := s.impl.DeleteActorTemplate(ctx, templateRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
@@ -220,6 +237,11 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.Dele
 	return deleted, nil
 }
 
+func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.DeleteActorTemplate(ctx, templateRef)
+}
+
 func validateDeleteActorTemplateRequest(req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -231,4 +253,31 @@ func validateDeleteActorTemplateRequest(req *ateapipb.DeleteActorTemplateRequest
 	}
 
 	return errs
+}
+
+func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if sel.MatchLabels != nil {
+		const maxSelectorMatchLabels = 10
+		if n := len(sel.MatchLabels); n > maxSelectorMatchLabels {
+			return field.ErrorList{field.TooMany(fldPath.Child("match_labels"), n, maxSelectorMatchLabels)}
+		}
+
+		for k, v := range sel.MatchLabels {
+			for _, msg := range content.IsLabelKey(k) {
+				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), k, msg))
+			}
+			for _, msg := range content.IsLabelValue(v) {
+				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), v, msg))
+			}
+		}
+	}
+
+	return errs
+}
+
+func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	// TODO: implement this
+	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
 }

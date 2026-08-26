@@ -277,16 +277,21 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 			LatestSnapshot:              &ateapipb.ObjectRef{Atespace: "team-orphan", Name: "last"},
 		},
 	})
-	w, _ := persistence.GetWorker(ctx, testPodUID)
-	w.Status.Assignment = &ateapipb.ActorAssignment{
-		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-			Namespace: ns,
-			Name:      "tmpl",
-		},
-		Actor:    &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
-		ActorUid: createdActor.GetMetadata().GetUid(),
+	observedWorker, err := persistence.GetWorker(ctx, testPodUID)
+	if err != nil {
+		t.Fatalf("get worker: %v", err)
 	}
-	if err := persistence.UpdateWorker(ctx, w, w.GetMetadata().GetVersion()); err != nil {
+	if _, err := persistence.UpdateWorker(ctx, testPodUID, store.PreconditionFrom(observedWorker), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = &ateapipb.ActorAssignment{
+			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+				Namespace: ns,
+				Name:      "tmpl",
+			},
+			Actor:    &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
+			ActorUid: createdActor.GetMetadata().GetUid(),
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("update worker: %v", err)
 	}
 
@@ -425,7 +430,7 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	s := setupReconcileTest(t, persistence)
 
 	ns, pool, pod, ip := "ns-drain", "pool1", "worker-drain", "10.0.0.2"
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: ip,
 		WorkerPodUid: testPodUID, NodeName: "node1",
@@ -472,7 +477,7 @@ func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
 	s := setupReconcileTest(t, persistence)
 
 	ns, pool, pod := "ns-drain-noip", "pool1", "worker-drain-noip"
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: "10.0.0.3",
 		WorkerPodUid: testPodUID, NodeName: "node1",
@@ -540,7 +545,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 	t.Run("already draining returns nil", func(t *testing.T) {
 		persistence, cleanup := storetest.SetupTestStore(t)
 		defer cleanup()
-		if err := persistence.CreateWorker(ctx, newWorker(ateapipb.WorkerState_WORKER_STATE_DRAINING)); err != nil {
+		if _, err := persistence.CreateWorker(ctx, newWorker(ateapipb.WorkerState_WORKER_STATE_DRAINING)); err != nil {
 			t.Fatalf("create worker: %v", err)
 		}
 		s := &WorkerPoolSyncer{persistence: persistence}
@@ -552,7 +557,7 @@ func TestMarkWorkerDraining(t *testing.T) {
 	t.Run("active worker marked draining", func(t *testing.T) {
 		persistence, cleanup := storetest.SetupTestStore(t)
 		defer cleanup()
-		if err := persistence.CreateWorker(ctx, newWorker(ateapipb.WorkerState_WORKER_STATE_ACTIVE)); err != nil {
+		if _, err := persistence.CreateWorker(ctx, newWorker(ateapipb.WorkerState_WORKER_STATE_ACTIVE)); err != nil {
 			t.Fatalf("create worker: %v", err)
 		}
 		s := &WorkerPoolSyncer{persistence: persistence}
@@ -589,7 +594,7 @@ func TestReconcileDeadWorker(t *testing.T) {
 			},
 		},
 	})
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: "10.0.0.5",
 		WorkerPodUid: testPodUID, NodeName: "node1",
@@ -641,7 +646,7 @@ func TestReconcileDeadWorker_IgnoresStaleIncarnationAssignment(t *testing.T) {
 			},
 		},
 	})
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: uid},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod,
 		WorkerPodUid: uid,
@@ -709,7 +714,7 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	}
 
 	// A worker whose pod is live must be preserved.
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: liveUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-live", Ip: "10.0.0.9",
 		WorkerPodUid: liveUID, NodeName: "node1", Status: &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE},
@@ -730,7 +735,7 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 			},
 		},
 	})
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: orphanUID},
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-orphan", Ip: "10.0.0.10",
 		WorkerPodUid: orphanUID, NodeName: "node1",
@@ -803,7 +808,7 @@ func TestSyncer_EnqueueStoredWorkers_RetriesTransientListError(t *testing.T) {
 	defer cleanup()
 
 	ns, pool := "ns-enq-retry", "pool1"
-	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-1", Ip: "10.0.0.10",
 		WorkerPodUid: "22222222-2222-2222-2222-222222222222", NodeName: "node1",
 		Status: &ateapipb.WorkerStatus{
@@ -957,7 +962,7 @@ func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 					},
 				},
 			})
-			if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+			if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 				Metadata:        &ateapipb.ResourceMetadata{Name: testPodUID},
 				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: ip,
 				WorkerPodUid: testPodUID, NodeName: "node1",
@@ -1000,15 +1005,14 @@ func TestReleaseActorOnDeadWorker_StateTransitions(t *testing.T) {
 type conflictStore struct {
 	store.Interface
 	conflictTriggered atomic.Bool
-	shouldInject      func(worker *ateapipb.Worker) bool
-	onUpdate          func(ctx context.Context, worker *ateapipb.Worker)
+	onUpdate          func(ctx context.Context, name string)
 }
 
-func (c *conflictStore) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	if c.shouldInject != nil && c.shouldInject(worker) && c.conflictTriggered.CompareAndSwap(false, true) {
-		c.onUpdate(ctx, worker)
+func (c *conflictStore) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	if c.onUpdate != nil && c.conflictTriggered.CompareAndSwap(false, true) {
+		c.onUpdate(ctx, name)
 	}
-	return c.Interface.UpdateWorker(ctx, worker, expectedVersion)
+	return c.Interface.UpdateWorker(ctx, name, precondition, mutate)
 }
 
 func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
@@ -1031,20 +1035,9 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 
 	var cs *conflictStore
 	persistence, fakeK8s, fakeAte, syncer, cleanup := setupSyncerTestWithStore(t, ctx, func(s store.Interface) store.Interface {
-		// Configure the injector before the syncer starts. It only fires for the
-		// update under test, so the initial worker creation cannot consume it.
-		cs = &conflictStore{
-			Interface: s,
-			shouldInject: func(w *ateapipb.Worker) bool {
-				return w.GetSandboxClass() == "microvm"
-			},
-			onUpdate: func(c context.Context, w *ateapipb.Worker) {
-				if cw, err := s.GetWorker(c, testPodUID); err == nil {
-					cw.NodeName = "node2"
-					_ = s.UpdateWorker(c, cw, cw.GetMetadata().GetVersion())
-				}
-			},
-		}
+		// The injector is wired in below, once the worker exists and the pool
+		// change is staged, so the initial worker creation cannot consume it.
+		cs = &conflictStore{Interface: s}
 		return cs
 	}, pool)
 	defer func() {
@@ -1114,6 +1107,23 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 		t.Fatalf("pool informer cache failed to update: %v", err)
 	}
 
+	// Configure conflictStore to inject a concurrent version bump in the store
+	// when the syncer calls UpdateWorker. The injected change lands on status.state:
+	// it is mutable, and unlike sandbox_class or labels the syncer's update path
+	// does not write it, so it survives the retry only if the retry re-read
+	// rather than replayed its stale copy.
+	cs.onUpdate = func(c context.Context, name string) {
+		observed, err := cs.Interface.GetWorker(c, name)
+		if err != nil {
+			t.Errorf("injecting conflict: get worker: %v", err)
+			return
+		}
+		_, _ = cs.Interface.UpdateWorker(c, name, store.PreconditionFrom(observed), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+			return nil
+		})
+	}
+
 	// Touch the pod ONCE in K8s so the syncer reconciles it. The first reconcile's
 	// UpdateWorker hits ErrVersionConflict (injected by conflictStore), which requeues
 	// the key with backoff; the retry re-fetches the latest version from the store.
@@ -1138,7 +1148,7 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 			}
 			return false, err
 		}
-		return w.SandboxClass == "microvm" && w.NodeName == "node2", nil
+		return w.SandboxClass == "microvm" && w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING, nil
 	})
 	if err != nil {
 		t.Fatalf("Worker failed to update SandboxClass after version conflict: %v", err)

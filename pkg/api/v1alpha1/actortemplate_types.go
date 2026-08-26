@@ -348,7 +348,45 @@ type Container struct {
 	//
 	// +optional
 	SecurityContext *SecurityContext `json:"securityContext,omitempty"`
+
+	// Resources are the compute limits for this container, enforced inside the
+	// actor's sandbox. Only cpu and memory are supported, and only on micro-VM
+	// actors: gVisor applies cgroup limits at the sandbox level, so a
+	// per-container cgroup there is created but stays empty.
+	//
+	// +optional
+	Resources *ContainerResources `json:"resources,omitempty"`
 }
+
+// ContainerResources are the resource limits for one actor container.
+//
+// Only limits are expressible. A request is a scheduling hint, and scheduling
+// happens at the pod level: the WorkerPool reserves capacity on a node, and
+// per-container limits subdivide a budget that is already held.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.limits.all(k, k == 'cpu' || k == 'memory')",message="only cpu and memory limits are supported"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('memory' in self.limits) || quantity(string(self.limits['memory'])).isGreaterThan(quantity('0'))",message="memory limit must be greater than zero"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('cpu' in self.limits) || quantity(string(self.limits['cpu'])).isGreaterThan(quantity('0'))",message="cpu limit must be greater than zero"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('cpu' in self.limits) || quantity(string(self.limits['cpu'])).isLessThan(quantity('1k'))",message="cpu limit must be less than 1000 cores"
+type ContainerResources struct {
+	// Limits is the maximum amount of compute resources allowed. Only cpu and
+	// memory are supported, and each must be greater than zero.
+	//
+	// A cpu limit below 10m is raised to 10m: the kernel rejects a CFS quota
+	// under 1ms, and the quota is expressed against a 100ms period.
+	//
+	// +optional
+	Limits ContainerResourceList `json:"limits,omitempty"`
+}
+
+// ContainerResourceList is the limits map for one actor container. It is a
+// named type so the bound below applies to the map itself, which also keeps the
+// CEL rules on ContainerResources inside the API server's cost budget: an
+// unbounded map makes the estimator assume the worst case and reject the whole
+// schema.
+//
+// +kubebuilder:validation:MaxProperties=2
+type ContainerResourceList map[corev1.ResourceName]resource.Quantity
 
 // ContainerReadyz configures the readiness signal for a container.
 type ContainerReadyz struct {
@@ -526,6 +564,7 @@ type SnapshotsConfig struct {
 // the runtime check. gVisor has no reserve, so this only applies to micro-VM.
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.resources) || !has(self.resources.limits) || !('memory' in self.resources.limits) || !quantity(self.resources.limits['memory']).isLessThan(quantity('256Mi'))",message="For sandboxClass 'microvm', spec.resources.limits.memory must be at least 256Mi (128Mi VMM reserve + 128Mi guest minimum); below this the VM cannot boot"
 // +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.all(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name)))",message="All volume mounts must refer to a volume defined in spec.volumes"
+// +kubebuilder:validation:XValidation:rule="!has(self.containers) || !self.containers.exists(c, has(c.resources)) || (has(self.sandboxClass) && self.sandboxClass == 'microvm')",message="container resources are only supported when sandboxClass is 'microvm'"
 type ActorTemplateSpec struct {
 	// Containers is the workload definition.
 	//

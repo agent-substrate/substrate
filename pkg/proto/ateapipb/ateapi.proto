@@ -82,6 +82,7 @@ service Control {
 
   // Mark a Worker as terminating so the scheduler stops routing new Actors to
   // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
+  // Returns ABORTED if another write lands on the Worker first; retry.
   rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
 
   // List Actors.
@@ -143,6 +144,14 @@ enum ActorSnapshotTagScope {
 // Selector matches worker pools by label.
 // Only equality-based matching is supported.
 message Selector {
+  // match_labels selects by exact equality on a set of labels.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:minProperties=1
+  // +k8s:maxProperties=10
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> match_labels = 1;
 }
 
@@ -150,23 +159,61 @@ message Selector {
 message ResourceMetadata {
   // atespace is the namespace the resource belongs to. Empty for global-scoped
   // resources. Caller-specified at creation and immutable thereafter.
+  //
+  // Atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`
+  // Non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string atespace = 1;
 
   // name is the resource's name, unique within its atespace (or globally, for
   // global-scoped resources). Caller-specified at creation and immutable thereafter.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string name = 2;
 
   // uid is a server-assigned, globally unique identifier for this resource.
   // Immutable throughout the lifecycle of the resource.
+  //
+  // This field is ignored during create operations and used as precondition
+  // for update operations.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  // +k8s:immutable
   string uid = 3;
 
   // version is increased on every mutation.
+  //
+  // This field is ignored during create operations and used as precondition
+  // for update operations.
+  //
+  // +k8s:optional
+  // +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+  // +k8s:minimum=1
+  // +k8s:update=NoUnset
   int64 version = 4;
 
   // create_time is the time the resource was created.
+  //
+  // This field is ignored on input.
+  //
+  // +k8s:optional
+  // +k8s:immutable
+  // TODO: validate that this is a valid timestamp
   google.protobuf.Timestamp create_time = 5;
 
   // update_time is the time the resource was last updated.
+  //
+  // This field is ignored on input.
+  //
+  // +k8s:optional
+  // +k8s:update=NoUnset
+  // TODO: validate that this is a valid timestamp
+  // TODO: validate that UpdateTime >= CreateTime
   google.protobuf.Timestamp update_time = 6;
 }
 
@@ -198,26 +245,48 @@ message ExternalVolume {
 
 message Actor {
   // Common resource metadata: atespace, name, uid, version, timestamps.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
   // TODO: delete both fields once we start using actor_template below.
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string actor_template_namespace = 2;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string actor_template_name = 3;
 
   // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
+  // +k8s:optional # TODO: this should be required?
+  // +k8s:subfield(atespace)=+k8s:required
+  // +k8s:immutable # TODO: is this mutable?
   ObjectRef actor_template = 4;
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
   // find eligible pools.
   // Changes take effect on the next ResumeActor call.
+  //
+  // +k8s:optional
   Selector worker_selector = 5;
 
   // The tag specified by the caller at CreateActor to seed this Actor from an
   // ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
   // once at creation and immutable afterward.
+  //
+  // +k8s:optional
+  // +k8s:subfield(atespace)=+k8s:required
+  // +k8s:immutable
   ObjectRef source_snapshot_tag = 6;
 
+  // status is the system-managed state of the Actor. It is updated by the
+  // server and ignored on input. It is always present in output.
+  //
+  // +k8s:optional
   ActorStatus status = 7;
 }
 
@@ -231,34 +300,51 @@ enum ActorState {
   ACTOR_STATE_PAUSED = 6;
   ACTOR_STATE_CRASHED = 7;
   ACTOR_STATE_DELETING = 8;
+  // Keep this in sync with ActorStatus.state's maximum.
 }
 
 message ActorStatus {
+  // state is the Actor's current lifecycle state.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=8 # keep this in sync with the ActorState enum
   ActorState state = 1;
 
   // worker_assignment points at the worker currently hosting this Actor.
   // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
+  // TODO: Add DV (optional, maxLength?)
   string in_progress_snapshot_name = 3;
 
   // The latest durable snapshot created for this Actor.
+  // +k8s:opaqueType
+  // TODO: Add DV (required?)
   ObjectRef latest_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
+  // TODO: Add DV (optional, need to recurse into this type)
   LocalSnapshotInfo local_snapshot_info = 5;
 
   // Actor version captured when the current durable snapshot began.
+  // TODO: Add DV (optional, minimum?)
   int64 in_progress_snapshot_source_actor_version = 6;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
+  // TODO: Add DV (optional, need to recurse into this type, immutable?)
   repeated ExternalVolume actor_volumes = 7;
 
+  // TODO: Add DV (optional, maxLength?)
   string in_progress_local_snapshot_name = 8;
 
   // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
   // the Actor was not created from a snapshot.
+  // TODO: Add DV (optional, need to recurse into this type, immutable?)
   ActorSourceSnapshotStatus source_snapshot = 9;
 }
 
@@ -267,6 +353,7 @@ message ActorStatus {
 message ActorSourceSnapshotStatus {
   // The (atespace, name) of the snapshot the tag resolved to at
   // creation time.
+  // +k8s:opaqueType
   ObjectRef snapshot = 1;
 
   // UID of the snapshot resolved at creation time.
@@ -288,32 +375,52 @@ message WorkerAssignment {
   // readers on a hot path do not have to fetch the Worker at all.
   //
   // Workers are global-scoped, so this carries no atespace.
+  //
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:required
   ObjectRef worker = 6;
 
   // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string worker_namespace = 1;
 
   // worker_pool is the name of the WorkerPool the worker belongs to.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string worker_pool = 2;
 
   // worker_pod is the name of the Kubernetes pod hosting the Actor.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string worker_pod = 3;
 
   // worker_pod_uid is the Kubernetes UID of worker_pod.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string worker_pod_uid = 4;
 
   // worker_pod_ip is the IP of worker_pod.
+  //
+  // +k8s:required
+  // +k8s:customValidation # until `format=k8s-ip` is supported
   string worker_pod_ip = 5;
 }
 
 // ActorSnapshot is an independently addressable durable Actor snapshot. Its
 // contents are immutable.
 message ActorSnapshot {
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
   ActorSnapshotStatus status = 2;
 }
 
 message ActorSnapshotStatus {
+  // +k8s:opaqueType
   ObjectRef source_actor = 1;
   string source_actor_uid = 2;
   int64 source_actor_version = 3;
@@ -323,6 +430,7 @@ message ActorSnapshotStatus {
   SnapshotContentScope content_scope = 7;
   string snapshot_uri = 8;
   // Immutable reference to the actor_template where the snapshot was created from.
+  // +k8s:opaqueType
   ObjectRef actor_template = 9;
 }
 
@@ -330,7 +438,9 @@ message ActorSnapshotStatus {
 // Its owning Atespace cannot be deleted until the tag is removed.
 message ActorSnapshotTag {
   // Common resource metadata: name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
+  // +k8s:opaqueType
   ObjectRef snapshot = 2;
   ActorSnapshotTagScope scope = 3;
 }
@@ -339,15 +449,28 @@ message ActorSnapshotTag {
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
   // Common resource metadata: name, uid, version, timestamps.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ResourceMetadata metadata = 1;
 }
 
 // ObjectRef references a Substrate resource by its (atespace, name) identity.
 message ObjectRef {
-  // The atespace where the resource lives. Empty if the resource is global-scoped.
+  // The atespace of the referenced resource. This field should be empty if the
+  // target resource is global-scoped, but references to objects in the same
+  // atespace as the referrer must still populate this field.
+  //
+  // References to atespaced resources should add `+k8s:subfield(atespace)=+k8s:required`
+  // References to non-atespaced resources should add `+k8s:subfield(atespace)=+k8s:forbidden`
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string atespace = 1;
-  // The name of the resource. Required. Unique within an atespace, or globally
-  // unique if the resource is global-scoped.
+
+  // The name of the referenced resource. This field is required.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 2;
 }
 
@@ -361,10 +484,13 @@ enum SandboxClass {
 
 message ActorTemplate {
   // Common resource metadata: atespace, name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // worker_selector restricts which worker pools actors from this template
   // may use.
+  //
+  // +k8s:opaqueType
   Selector worker_selector = 2;
 
   repeated Container containers = 3;
@@ -413,6 +539,7 @@ message ActorTemplateStatus {
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
   // READY.
+  // +k8s:opaqueType
   ObjectRef golden_snapshot = 3;
 
   // sandbox_assets is the referenced SandboxConfig's content frozen at
@@ -590,10 +717,14 @@ message AssetFile {
 
 message CreateAtespaceRequest {
   // The atespace to create.
+  //
+  // +k8s:required
   Atespace atespace = 1;
 }
 
 message GetAtespaceRequest {
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
 }
 
@@ -601,10 +732,16 @@ message ListAtespacesRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 1;
 
   // Pagination token from a previous ListAtespaces response.
   // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 2;
 }
 
@@ -617,6 +754,8 @@ message ListAtespacesResponse {
 }
 
 message DeleteAtespaceRequest {
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
 }
 
@@ -628,6 +767,7 @@ message CreateActorTemplateRequest {
 }
 
 message GetActorTemplateRequest {
+  // +k8s:opaqueType
   ObjectRef actor_template = 1;
 }
 
@@ -656,16 +796,20 @@ message ListActorTemplatesResponse {
 }
 
 message DeleteActorTemplateRequest {
+  // +k8s:opaqueType
   ObjectRef actor_template = 1;
 }
 
 message GetActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 }
 
 // Request to create a new Actor.
 message CreateActorRequest {
   // The actor to create.
+  //
+  // +k8s:required
   Actor actor = 1;
 }
 
@@ -677,10 +821,16 @@ message UpdateActorRequest {
   // actor.metadata.atespace and actor.metadata.name identify which resource to
   // update.
   // actor.metadata.version and actor.metadata.uid are required preconditions.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
   Actor actor = 1;
 }
 
 message SuspendActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 }
 
@@ -689,6 +839,7 @@ message SuspendActorResponse {
 }
 
 message PauseActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 }
 
@@ -697,6 +848,7 @@ message PauseActorResponse {
 }
 
 message ResumeActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
@@ -712,15 +864,18 @@ message ResumeActorResponse {
 }
 
 message DeleteActorRequest {
+  // +k8s:opaqueType
   ObjectRef actor = 1;
   bool any_state = 2;
 }
 
 message GetActorSnapshotRequest {
+  // +k8s:opaqueType
   ObjectRef actor_snapshot = 1;
 }
 
 message GetActorSnapshotTagRequest {
+  // +k8s:opaqueType
   ObjectRef actor_snapshot_tag = 1;
 }
 
@@ -752,6 +907,7 @@ message UpdateActorSnapshotTagRequest {
 }
 
 message DeleteActorSnapshotTagRequest {
+  // +k8s:opaqueType
   ObjectRef actor_snapshot_tag = 1;
 }
 
@@ -790,13 +946,13 @@ message ListWorkersResponse {
   string next_page_token = 2;
 }
 
-// TODO: every method below returns UNIMPLEMENTED. Workers are still created,
-// updated, and deleted by writing directly to the store from the
-// WorkerPoolSyncer and the actor workflows; migrating those callers onto these
-// RPCs lands in a follow-up change.
+// TODO: Workers are still created, updated, and deleted by writing directly to
+// the store from the WorkerPoolSyncer and the actor workflows; migrating those
+// callers onto the RPCs below lands in a follow-up change.
 
 message GetWorkerRequest {
   // The Worker to fetch. atespace is always empty; Workers are global-scoped.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 }
 
@@ -807,14 +963,22 @@ message CreateWorkerRequest {
 
 message UpdateWorkerRequest {
   // The Worker to update.
-  // worker.metadata.name identifies which resource to update.
-  // worker.metadata.version and worker.metadata.uid are optional preconditions
-  // and zero values skip the check.
+  // worker.metadata.name identifies which resource to update. atespace is
+  // always empty; Workers are global-scoped.
+  // worker.metadata.version and worker.metadata.uid are required preconditions.
+  //
+  // sandbox_class and labels are the only fields an update may change. Every
+  // other field is replaced with what the request carries, and a field left
+  // unset is cleared — so read the Worker, change what you mean to change, and
+  // send the whole thing back. A request that alters an immutable field, by
+  // changing it or by omitting it, returns INVALID_ARGUMENT naming the field.
+  // status is output-only and whatever it carries is ignored.
   Worker worker = 1;
 }
 
 message DeleteWorkerRequest {
   // The Worker to deregister.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 
   // Optional per-delete preconditions.
@@ -823,6 +987,7 @@ message DeleteWorkerRequest {
 
 message DrainWorkerRequest {
   // The Worker to mark as terminating.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 }
 
@@ -855,8 +1020,15 @@ message ListActorsResponse {
 // Global-scoped: metadata.atespace is always empty. metadata.name is assigned
 // by the control plane and is opaque to clients — never parse it or derive it
 // from anything else; read pod identity from the named fields below.
+//
+// sandbox_class and labels are the only mutable fields; every other field is
+// either immutable after creation or output-only. UpdateWorker replaces the
+// whole resource, so an immutable field that a request changes — including by
+// omitting it, which would clear it — is rejected with INVALID_ARGUMENT.
 message Worker {
-  // Common resource metadata: name, uid, version, timestamps.
+  // Output-only: name, uid, version and timestamps are all server-assigned.
+  // uid and version are echoed back on UpdateWorker as preconditions.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // Kubernetes coordinates. Immutable, set at creation.
@@ -867,13 +1039,17 @@ message Worker {
   string node_name = 6;
   string ip = 7;
 
+  // Mutable.
   string sandbox_class = 8;
   map<string, string> labels = 9;
 
-  // The compute capacity this worker can give an actor sandbox.
+  // The compute capacity this worker can give an actor sandbox. Immutable, set
+  // at creation: a worker pod's limits are fixed for its lifetime.
   WorkerCapacity capacity = 10;
 
-  // Server-managed state. Absent from Create/Update request payloads.
+  // Output-only server-managed state. Absent from Create/Update request
+  // payloads; whatever a request carries here is ignored. DrainWorker is the
+  // only way a client moves state, and assignment is the scheduler's.
   WorkerStatus status = 11;
 }
 
@@ -909,6 +1085,7 @@ message ActorAssignment {
   // ActorTemplates are Kubernetes CRDs rather than Substrate API resources, so
   // this stays a kube reference.
   KubeNamespacedObjectRef actor_template = 1;
+  // +k8s:opaqueType
   ObjectRef actor = 2;
   string actor_uid = 3;
 }
@@ -996,6 +1173,7 @@ message MintCertRequest {
   // This is the one caller that recovers a Worker name from a pod certificate:
   // the atelet has only the worker Pod's identity to go on. Everywhere else the
   // name is opaque and must be carried, not reconstructed.
+  // +k8s:opaqueType
   ObjectRef worker = 1;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.

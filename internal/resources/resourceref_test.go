@@ -27,8 +27,10 @@ import (
 // is expected.
 func TestRefAliasesAreDistinctTypes(t *testing.T) {
 	types := map[string]reflect.Type{
-		"ActorRef":         reflect.TypeFor[ActorRef](),
-		"ActorTemplateRef": reflect.TypeFor[ActorTemplateRef](),
+		"ActorRef":            reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef":    reflect.TypeFor[ActorTemplateRef](),
+		"ActorSnapshotRef":    reflect.TypeFor[ActorSnapshotRef](),
+		"ActorSnapshotTagRef": reflect.TypeFor[ActorSnapshotTagRef](),
 	}
 	seen := make(map[reflect.Type]string)
 	for name, typ := range types {
@@ -212,6 +214,96 @@ func TestActorTemplateRefFromActorTemplate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ActorTemplateRefFromActorTemplate(tt.template); got != tt.want {
 				t.Errorf("ActorTemplateRefFromActorTemplate() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActorSnapshotRefString(t *testing.T) {
+	got := ActorSnapshotRef{Atespace: "team-a", Name: "snap-1"}.String()
+	if want := "team-a/snap-1"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestActorSnapshotRefObjectRefRoundTrip(t *testing.T) {
+	snapshotRef := ActorSnapshotRef{Atespace: "team-a", Name: "snap-1"}
+
+	obj := snapshotRef.ToObjectRef()
+	if obj.GetAtespace() != "team-a" || obj.GetName() != "snap-1" {
+		t.Errorf("ToObjectRef() = (%q, %q), want (team-a, snap-1)", obj.GetAtespace(), obj.GetName())
+	}
+	if got := ActorSnapshotRefFromObjectRef(obj); got != snapshotRef {
+		t.Errorf("round-trip = %+v, want %+v", got, snapshotRef)
+	}
+}
+
+func TestActorSnapshotRefFromActorSnapshot(t *testing.T) {
+	tests := []struct {
+		name     string
+		snapshot *ateapipb.ActorSnapshot
+		want     ActorSnapshotRef
+	}{
+		{
+			name: "populated",
+			snapshot: &ateapipb.ActorSnapshot{Metadata: &ateapipb.ResourceMetadata{
+				Atespace: "team-a",
+				Name:     "snap-1",
+			}},
+			want: ActorSnapshotRef{Atespace: "team-a", Name: "snap-1"},
+		},
+		{"nil snapshot", nil, ActorSnapshotRef{}},
+		{"nil metadata", &ateapipb.ActorSnapshot{}, ActorSnapshotRef{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ActorSnapshotRefFromActorSnapshot(tt.snapshot); got != tt.want {
+				t.Errorf("ActorSnapshotRefFromActorSnapshot() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActorSnapshotTagRefString(t *testing.T) {
+	got := ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-1"}.String()
+	if want := "team-a/tag-1"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestActorSnapshotTagRefObjectRefRoundTrip(t *testing.T) {
+	tagRef := ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-1"}
+
+	obj := tagRef.ToObjectRef()
+	if obj.GetAtespace() != "team-a" || obj.GetName() != "tag-1" {
+		t.Errorf("ToObjectRef() = (%q, %q), want (team-a, tag-1)", obj.GetAtespace(), obj.GetName())
+	}
+	if got := ActorSnapshotTagRefFromObjectRef(obj); got != tagRef {
+		t.Errorf("round-trip = %+v, want %+v", got, tagRef)
+	}
+}
+
+func TestActorSnapshotTagRefFromActorSnapshotTag(t *testing.T) {
+	tests := []struct {
+		name string
+		tag  *ateapipb.ActorSnapshotTag
+		want ActorSnapshotTagRef
+	}{
+		{
+			name: "populated",
+			tag: &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{
+				Atespace: "team-a",
+				Name:     "tag-1",
+			}},
+			want: ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-1"},
+		},
+		{"nil tag", nil, ActorSnapshotTagRef{}},
+		{"nil metadata", &ateapipb.ActorSnapshotTag{}, ActorSnapshotTagRef{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ActorSnapshotTagRefFromActorSnapshotTag(tt.tag); got != tt.want {
+				t.Errorf("ActorSnapshotTagRefFromActorSnapshotTag() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

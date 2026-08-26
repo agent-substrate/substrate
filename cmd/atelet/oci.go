@@ -77,7 +77,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -149,7 +149,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	ociSpec := buildActorOCISpec(actorUID, containerName, resolvedArgs, resolvedEnv, annotations, netns, volumes, volumeMounts, capabilities)
+	ociSpec := buildActorOCISpec(actorUID, containerName, resolvedArgs, resolvedEnv, annotations, netns, volumes, volumeMounts, capabilities, resources)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -261,11 +261,41 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 	return argv, nil
 }
 
+const (
+	// cpuQuotaPeriodUS is the CFS period the CPU quota is expressed against: a
+	// container limited to N milli-cores may run for N/1000 of every period.
+	cpuQuotaPeriodUS = 100000
+	// cpuQuotaMinUS is the smallest quota the kernel accepts. tg_set_cfs_bandwidth
+	// rejects a quota below 1ms, so a limit under
+	// cpuQuotaMinUS*1000/cpuQuotaPeriodUS milli-cores (10m) is raised to this
+	// floor rather than producing a spec the guest refuses.
+	cpuQuotaMinUS = 1000
+)
+
+// ociResources maps the resolved limits onto the OCI spec's linux.resources.
+// Returns nil when nothing is set, so the spec carries no linux.resources at
+// all for a container that declares no limits.
+func ociResources(r *ateletpb.ResourceLimits) *specs.LinuxResources {
+	if r == nil || (r.GetMemoryBytes() <= 0 && r.GetCpuMillis() <= 0) {
+		return nil
+	}
+	out := &specs.LinuxResources{}
+	if b := r.GetMemoryBytes(); b > 0 {
+		out.Memory = &specs.LinuxMemory{Limit: &b}
+	}
+	if m := r.GetCpuMillis(); m > 0 {
+		quota := max(m*cpuQuotaPeriodUS/1000, cpuQuotaMinUS)
+		period := uint64(cpuQuotaPeriodUS)
+		out.CPU = &specs.LinuxCPU{Quota: &quota, Period: &period}
+	}
+	return out
+}
+
 // buildActorOCISpec assembles the OCI runtime spec for an actor container from
 // already-resolved args, env and capabilities (see resolveProcessArgs,
 // resolveActorEnv and resolveCapabilities). An empty capabilities set means the
 // process runs with none, which is what the pause container gets.
-func buildActorOCISpec(actorUID, containerName string, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string) *specs.Spec {
+func buildActorOCISpec(actorUID, containerName string, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) *specs.Spec {
 	mounts := []specs.Mount{
 		{
 			Destination: "/proc",
@@ -350,6 +380,7 @@ func buildActorOCISpec(actorUID, containerName string, args []string, env []stri
 					Type: "mount",
 				},
 			},
+			Resources: ociResources(resources),
 		},
 		Annotations: annotations,
 	}
