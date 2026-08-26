@@ -67,7 +67,7 @@ func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	return &RPCService{impl: persistence}, persistence
+	return &RPCService{impl: newServiceImpl(persistence, nil, nil)}, persistence
 }
 
 // seedAPIWorker registers a worker directly through the store and returns it as
@@ -136,11 +136,19 @@ func TestValidateListWorkersRequest(t *testing.T) {
 	}, {
 		"negative page_size",
 		&ateapipb.ListWorkersRequest{PageSize: -1},
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "")},
+		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
+	}, {
+		"valid page_token",
+		&ateapipb.ListWorkersRequest{PageToken: strings.Repeat("x", 256)},
+		nil,
+	}, {
+		"too-large page_token",
+		&ateapipb.ListWorkersRequest{PageToken: strings.Repeat("x", 257)},
+		field.ErrorList{field.TooLongCharacters(field.NewPath("page_token"), "", 256).WithOrigin("maxLength")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateListWorkersRequest(tt.req), tt.want)
+			assertValidateErr(t, validateListWorkersRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -625,6 +633,7 @@ func TestDrainWorker_Errors(t *testing.T) {
 	}{
 		{"absent", &ateapipb.DrainWorkerRequest{Worker: workerRef(apiWorkerName)}, codes.NotFound},
 		{"no ref", &ateapipb.DrainWorkerRequest{}, codes.InvalidArgument},
+		{"no name", &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{}}, codes.InvalidArgument},
 		{"atespace set", &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{Atespace: "team-a", Name: apiWorkerName}}, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
@@ -640,79 +649,95 @@ func TestDrainWorker_Errors(t *testing.T) {
 // TestValidateWorker pins the field paths validateWorker reports.
 // TestCreateWorker_InvalidArgument drives the same rules through the RPC, but
 // only observes the status code.
-func TestValidateWorker(t *testing.T) {
+func TestValidateCreateWorkerRequest(t *testing.T) {
+	// This test verifies validation of user input for creation. The RPC scrubs
+	// status before validating, so status is absent from the valid shape; when
+	// a request does carry one, it is validated like any other field.
 	tests := []struct {
-		name    string
-		mutate  func(*ateapipb.Worker) // nil leaves the worker valid
-		wantMsg string                 // empty means valid
+		name   string
+		mutate func(*ateapipb.Worker) // nil leaves the worker valid
+		want   field.ErrorList
 	}{{
 		name: "valid unassigned worker",
 	}, {
-		// status is output-only and every caller sets it itself, so it is not
-		// validated at all: a thoroughly malformed one still passes.
-		name: "status is not validated",
+		name: "status, when carried, is validated",
 		mutate: func(w *ateapipb.Worker) {
-			w.Status = &ateapipb.WorkerStatus{
-				State:      ateapipb.WorkerState(99),
-				Assignment: &ateapipb.ActorAssignment{Actor: &ateapipb.ObjectRef{Name: "actor"}},
-			}
+			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState(99)}
 		},
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "state"), nil, "").WithOrigin("maximum")},
 	}, {
-		name:    "missing worker_namespace",
-		mutate:  func(w *ateapipb.Worker) { w.WorkerNamespace = "" },
-		wantMsg: "worker.worker_namespace: Required value",
+		name: "status, when carried, needs a state",
+		mutate: func(w *ateapipb.Worker) {
+			w.Status = &ateapipb.WorkerStatus{}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "state"), "")},
 	}, {
-		name:    "invalid worker_namespace",
-		mutate:  func(w *ateapipb.Worker) { w.WorkerNamespace = "NS-1" },
-		wantMsg: "worker.worker_namespace: Invalid value",
+		name:   "absent capacity is allowed",
+		mutate: func(w *ateapipb.Worker) { w.Capacity = nil },
 	}, {
-		name:    "missing worker_pool",
-		mutate:  func(w *ateapipb.Worker) { w.WorkerPool = "" },
-		wantMsg: "worker.worker_pool: Required value",
+		name:   "missing worker_namespace",
+		mutate: func(w *ateapipb.Worker) { w.WorkerNamespace = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "worker_namespace"), "")},
 	}, {
-		name:    "missing worker_pod",
-		mutate:  func(w *ateapipb.Worker) { w.WorkerPod = "" },
-		wantMsg: "worker.worker_pod: Required value",
+		name:   "invalid worker_namespace",
+		mutate: func(w *ateapipb.Worker) { w.WorkerNamespace = "NS-1" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "worker_namespace"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		name:    "missing ip",
-		mutate:  func(w *ateapipb.Worker) { w.Ip = "" },
-		wantMsg: "worker.ip: Required value",
+		name:   "missing worker_pool",
+		mutate: func(w *ateapipb.Worker) { w.WorkerPool = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "worker_pool"), "")},
 	}, {
-		name:    "invalid ip",
-		mutate:  func(w *ateapipb.Worker) { w.Ip = "not-an-ip" },
-		wantMsg: "worker.ip: Invalid value",
+		name:   "invalid worker_pool",
+		mutate: func(w *ateapipb.Worker) { w.WorkerPool = "POOL_1" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "worker_pool"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		name:    "missing worker_pod_uid",
-		mutate:  func(w *ateapipb.Worker) { w.WorkerPodUid = "" },
-		wantMsg: "worker.worker_pod_uid: Required value",
+		name:   "missing worker_pod",
+		mutate: func(w *ateapipb.Worker) { w.WorkerPod = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "worker_pod"), "")},
 	}, {
-		name:    "invalid worker_pod_uid",
-		mutate:  func(w *ateapipb.Worker) { w.WorkerPodUid = "INVALID-UUID" },
-		wantMsg: "worker.worker_pod_uid: Invalid value",
+		name:   "invalid worker_pod",
+		mutate: func(w *ateapipb.Worker) { w.WorkerPod = "POD_1" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "worker_pod"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		name:    "missing node_name",
-		mutate:  func(w *ateapipb.Worker) { w.NodeName = "" },
-		wantMsg: "worker.node_name: Required value",
+		name:   "missing ip",
+		mutate: func(w *ateapipb.Worker) { w.Ip = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "ip"), "")},
 	}, {
-		name:    "invalid node_name",
-		mutate:  func(w *ateapipb.Worker) { w.NodeName = "NODE_NAME" },
-		wantMsg: "worker.node_name: Invalid value",
+		name:   "invalid ip",
+		mutate: func(w *ateapipb.Worker) { w.Ip = "not-an-ip" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "ip"), nil, "").WithOrigin("format=ip-strict")},
 	}, {
-		name:    "missing metadata",
-		mutate:  func(w *ateapipb.Worker) { w.Metadata = nil },
-		wantMsg: "worker.metadata.name: Required value",
+		name:   "missing worker_pod_uid",
+		mutate: func(w *ateapipb.Worker) { w.WorkerPodUid = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "worker_pod_uid"), "")},
 	}, {
-		name:    "missing metadata.name",
-		mutate:  func(w *ateapipb.Worker) { w.Metadata = &ateapipb.ResourceMetadata{} },
-		wantMsg: "worker.metadata.name: Required value",
+		name:   "invalid worker_pod_uid",
+		mutate: func(w *ateapipb.Worker) { w.WorkerPodUid = "INVALID-UUID" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		name:    "invalid metadata.name",
-		mutate:  func(w *ateapipb.Worker) { w.Metadata.Name = "Not A Name" },
-		wantMsg: "worker.metadata.name: Invalid value",
+		name:   "missing node_name",
+		mutate: func(w *ateapipb.Worker) { w.NodeName = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "node_name"), "")},
 	}, {
-		name:    "metadata.atespace set on a global-scoped Worker",
-		mutate:  func(w *ateapipb.Worker) { w.Metadata.Atespace = "team-a" },
-		wantMsg: "worker.metadata.atespace: Invalid value",
+		name:   "invalid node_name",
+		mutate: func(w *ateapipb.Worker) { w.NodeName = "NODE_NAME" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "node_name"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
+		name:   "missing metadata",
+		mutate: func(w *ateapipb.Worker) { w.Metadata = nil },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "metadata"), "")},
+	}, {
+		name:   "missing metadata.name",
+		mutate: func(w *ateapipb.Worker) { w.Metadata = &ateapipb.ResourceMetadata{} },
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "metadata", "name"), "")},
+	}, {
+		name:   "invalid metadata.name",
+		mutate: func(w *ateapipb.Worker) { w.Metadata.Name = "Not A Name" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name:   "metadata.atespace set on a global-scoped Worker",
+		mutate: func(w *ateapipb.Worker) { w.Metadata.Atespace = "team-a" },
+		want:   field.ErrorList{field.Forbidden(field.NewPath("worker", "metadata", "atespace"), "")},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -720,21 +745,218 @@ func TestValidateWorker(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(worker)
 			}
-			errs := validateWorker(worker, field.NewPath("worker"))
-			if tc.wantMsg == "" {
-				if len(errs) > 0 {
-					t.Fatalf("validateWorker() = %v, want no errors", errs)
-				}
-				return
-			}
-			// Any error may match: a case can trip more than one rule, so the
-			// wanted error is not always the first one reported.
-			for _, err := range errs {
-				if strings.Contains(err.Error(), tc.wantMsg) {
-					return
-				}
-			}
-			t.Errorf("validateWorker() = %v, want an error containing %q", errs, tc.wantMsg)
+			req := &ateapipb.CreateWorkerRequest{Worker: worker}
+			assertValidateErr(t, validateCreateWorkerRequest(context.Background(), req), tc.want)
 		})
+	}
+}
+
+// TestServiceImplUpdateWorker_ImmutableFields pins the immutable-field rule at
+// the layer that now owns it: declarative validation in ServiceImpl, which
+// every write path shares. It moved up from the store contract when the store
+// stopped enforcing immutability itself.
+func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	impl := newServiceImpl(persistence, nil, nil)
+
+	// Every case below is rejected, so nothing writes and this stays the
+	// current incarnation for all of them.
+	created := seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+
+	for _, tc := range []struct {
+		name   string
+		field  string
+		mutate func(*ateapipb.Worker)
+	}{
+		{"worker_namespace", "worker_namespace", func(w *ateapipb.Worker) { w.WorkerNamespace = "other-ns" }},
+		{"worker_pool", "worker_pool", func(w *ateapipb.Worker) { w.WorkerPool = "other-pool" }},
+		{"worker_pod", "worker_pod", func(w *ateapipb.Worker) { w.WorkerPod = "other-pod" }},
+		{"worker_pod_uid", "worker_pod_uid", func(w *ateapipb.Worker) { w.WorkerPodUid = apiOtherWorkerName }},
+		{"node_name", "node_name", func(w *ateapipb.Worker) { w.NodeName = "other-node" }},
+		{"ip", "ip", func(w *ateapipb.Worker) { w.Ip = "10.0.0.9" }},
+		{"capacity_changed", "capacity", func(w *ateapipb.Worker) { w.Capacity.CpuMilli = 4000 }},
+		// An update replaces the worker, so a caller that leaves capacity
+		// out is asking to clear it. That is a change like any other.
+		{"capacity_cleared", "capacity", func(w *ateapipb.Worker) { w.Capacity = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := impl.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+				tc.mutate(toUpdate)
+				return nil
+			})
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Fatalf("changing %s returned %v (err %v), want %v", tc.field, got, err, codes.InvalidArgument)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("error %v does not name the offending field %s", err, tc.field)
+			}
+			got, err := persistence.GetWorker(ctx, apiWorkerName)
+			if err != nil {
+				t.Fatalf("GetWorker failed: %v", err)
+			}
+			if got.GetMetadata().GetVersion() != 1 {
+				t.Errorf("rejected mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
+			}
+		})
+	}
+}
+
+func TestValidateDeleteWorkerRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapipb.DeleteWorkerRequest
+		want field.ErrorList
+	}{{
+		"valid, no options",
+		&ateapipb.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)},
+		nil,
+	}, {
+		"valid, both guards",
+		&ateapipb.DeleteWorkerRequest{
+			Worker:  workerRef(apiWorkerName),
+			Options: &ateapipb.DeleteOptions{Uid: apiOtherWorkerName, Version: 3},
+		},
+		nil,
+	}, {
+		"missing worker",
+		&ateapipb.DeleteWorkerRequest{},
+		field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		"missing worker.name",
+		&ateapipb.DeleteWorkerRequest{Worker: &ateapipb.ObjectRef{}},
+		field.ErrorList{field.Required(field.NewPath("worker", "name"), "")},
+	}, {
+		"worker.atespace must be empty",
+		&ateapipb.DeleteWorkerRequest{Worker: &ateapipb.ObjectRef{Atespace: "team-a", Name: apiWorkerName}},
+		field.ErrorList{field.Forbidden(field.NewPath("worker", "atespace"), "")},
+	}, {
+		"invalid options.uid",
+		&ateapipb.DeleteWorkerRequest{
+			Worker:  workerRef(apiWorkerName),
+			Options: &ateapipb.DeleteOptions{Uid: "not-a-uuid"},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("options", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"negative options.version",
+		&ateapipb.DeleteWorkerRequest{
+			Worker:  workerRef(apiWorkerName),
+			Options: &ateapipb.DeleteOptions{Version: -1},
+		},
+		field.ErrorList{field.Invalid(field.NewPath("options", "version"), nil, "").WithOrigin("minimum")},
+	}, {
+		// Zero values waive the guards, so they are never validated for shape.
+		"zero options are waived, not validated",
+		&ateapipb.DeleteWorkerRequest{
+			Worker:  workerRef(apiWorkerName),
+			Options: &ateapipb.DeleteOptions{},
+		},
+		nil,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateDeleteWorkerRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateUpdateWorkerRequest(t *testing.T) {
+	// This test verifies validation of user input for update. The worker body
+	// is deliberately not descended into here (updates are validated in two
+	// steps); only the metadata that addresses the resource is checked.
+	validReq := func(mods ...func(w *ateapipb.Worker)) *ateapipb.UpdateWorkerRequest {
+		worker := newAPIWorker(apiWorkerName)
+		worker.Metadata.Uid = apiOtherWorkerName
+		worker.Metadata.Version = 3
+		for _, m := range mods {
+			m(worker)
+		}
+		return &ateapipb.UpdateWorkerRequest{Worker: worker}
+	}
+
+	tests := []struct {
+		name string
+		req  *ateapipb.UpdateWorkerRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		validReq(),
+		nil,
+	}, {
+		// uid and version are preconditions the store requires; the request
+		// validation deliberately leaves their presence to the store.
+		"missing uid and version pass request validation",
+		validReq(func(w *ateapipb.Worker) { w.Metadata.Uid = ""; w.Metadata.Version = 0 }),
+		nil,
+	}, {
+		"missing worker",
+		&ateapipb.UpdateWorkerRequest{},
+		field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		"missing metadata",
+		validReq(func(w *ateapipb.Worker) { w.Metadata = nil }),
+		field.ErrorList{field.Required(field.NewPath("worker", "metadata"), "")},
+	}, {
+		"missing metadata.name",
+		validReq(func(w *ateapipb.Worker) { w.Metadata.Name = "" }),
+		field.ErrorList{field.Required(field.NewPath("worker", "metadata", "name"), "")},
+	}, {
+		"invalid metadata.name",
+		validReq(func(w *ateapipb.Worker) { w.Metadata.Name = "Not A Name" }),
+		field.ErrorList{field.Invalid(field.NewPath("worker", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid metadata.uid",
+		validReq(func(w *ateapipb.Worker) { w.Metadata.Uid = "not-a-uuid" }),
+		field.ErrorList{field.Invalid(field.NewPath("worker", "metadata", "uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"metadata.atespace set on a global-scoped Worker",
+		validReq(func(w *ateapipb.Worker) { w.Metadata.Atespace = "team-a" }),
+		field.ErrorList{field.Forbidden(field.NewPath("worker", "metadata", "atespace"), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateUpdateWorkerRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+// TestValidateWorkerUpdate_RequireStatus pins the final-object check that the
+// RPC path cannot reach: the server always sets status before storing, so only
+// a direct call shows the guard catching a worker without one.
+func TestValidateWorkerUpdate_RequireStatus(t *testing.T) {
+	oldVal := newAPIWorker(apiWorkerName)
+	oldVal.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	newVal := proto.Clone(oldVal).(*ateapipb.Worker)
+	newVal.Status = nil
+
+	want := field.ErrorList{field.Required(field.NewPath("worker", "status"), "")}
+	assertValidateErr(t, validateWorkerUpdate(context.Background(), field.NewPath("worker"), newVal, oldVal, true), want)
+
+	// Without requireStatus the same worker passes: status is optional in the
+	// schema, and clearing it is not otherwise constrained.
+	assertValidateErr(t, validateWorkerUpdate(context.Background(), field.NewPath("worker"), newVal, oldVal, false), nil)
+}
+
+// Server-assigned metadata carried on a create request is scrubbed rather than
+// rejected: the fields are documented as ignored on input, so even garbage in
+// them must not fail validation.
+func TestCreateWorker_IgnoresRequestMetadataServerFields(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newWorkerAPIService(t)
+
+	in := newAPIWorker(apiWorkerName)
+	in.Metadata.Uid = "not-a-uuid"
+	in.Metadata.Version = -5
+
+	got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: in})
+	if err != nil {
+		t.Fatalf("CreateWorker() failed: %v", err)
+	}
+	if got.GetMetadata().GetUid() == "" || got.GetMetadata().GetUid() == "not-a-uuid" {
+		t.Errorf("created worker uid = %q, want a server-assigned uid", got.GetMetadata().GetUid())
+	}
+	if got.GetMetadata().GetVersion() != 1 {
+		t.Errorf("created worker version = %d, want 1", got.GetMetadata().GetVersion())
 	}
 }

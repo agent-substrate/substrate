@@ -379,7 +379,7 @@ const (
 	// Ready; schedulable.
 	WorkerState_WORKER_STATE_ACTIVE WorkerState = 1
 	// Pod terminating. Not schedulable.
-	WorkerState_WORKER_STATE_DRAINING WorkerState = 2
+	WorkerState_WORKER_STATE_DRAINING WorkerState = 2 // Keep this in sync with WorkerStatus.state's maximum.
 )
 
 // Enum value maps for WorkerState.
@@ -4115,9 +4115,15 @@ func (x *DeleteActorSnapshotTagRequest) GetActorSnapshotTag() *ObjectRef {
 type DeleteOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// If non-zero, delete only if the server's current version matches.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
 	Version int64 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
 	// If non-empty, delete only if the server's current uid matches. Guards
 	// against name reuse across lifecycles.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
 	Uid           string `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4172,9 +4178,15 @@ type ListWorkersRequest struct {
 	// Requested page size; the server may return fewer, or occasionally
 	// slightly more. If unspecified, defaults to a server-chosen value;
 	// values above 1000 are coerced to 1000.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
 	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	// Pagination token from a previous ListWorkers response.
 	// Omit or leave empty for the first request.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=256
 	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4281,7 +4293,9 @@ func (x *ListWorkersResponse) GetNextPageToken() string {
 type GetWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to fetch. atespace is always empty; Workers are global-scoped.
-	// +k8s:opaqueType
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4327,6 +4341,8 @@ func (x *GetWorkerRequest) GetWorker() *ObjectRef {
 type CreateWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to register.
+	//
+	// +k8s:required
 	Worker        *Worker `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4382,6 +4398,11 @@ type UpdateWorkerRequest struct {
 	// send the whole thing back. A request that alters an immutable field, by
 	// changing it or by omitting it, returns INVALID_ARGUMENT naming the field.
 	// status is output-only and whatever it carries is ignored.
+	//
+	// +k8s:required
+	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:subfield(metadata)=+k8s:required
+	// +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
 	Worker        *Worker `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4427,9 +4448,13 @@ func (x *UpdateWorkerRequest) GetWorker() *Worker {
 type DeleteWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to deregister.
-	// +k8s:opaqueType
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Worker *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	// Optional per-delete preconditions.
+	//
+	// +k8s:optional
 	Options       *DeleteOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4482,7 +4507,9 @@ func (x *DeleteWorkerRequest) GetOptions() *DeleteOptions {
 type DrainWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker to mark as terminating.
-	// +k8s:opaqueType
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Worker        *ObjectRef `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4661,24 +4688,52 @@ type Worker struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Output-only: name, uid, version and timestamps are all server-assigned.
 	// uid and version are echoed back on UpdateWorker as preconditions.
-	// +k8s:opaqueType
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Kubernetes coordinates. Immutable, set at creation.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:immutable
 	WorkerNamespace string `protobuf:"bytes,2,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
-	WorkerPool      string `protobuf:"bytes,3,opt,name=worker_pool,json=workerPool,proto3" json:"worker_pool,omitempty"`
-	WorkerPod       string `protobuf:"bytes,4,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
-	WorkerPodUid    string `protobuf:"bytes,5,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
-	NodeName        string `protobuf:"bytes,6,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	Ip              string `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-long-name
+	// +k8s:immutable
+	WorkerPool string `protobuf:"bytes,3,opt,name=worker_pool,json=workerPool,proto3" json:"worker_pool,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-long-name
+	// +k8s:immutable
+	WorkerPod string `protobuf:"bytes,4,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-uuid
+	// +k8s:immutable
+	WorkerPodUid string `protobuf:"bytes,5,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-long-name
+	// +k8s:immutable
+	NodeName string `protobuf:"bytes,6,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	// +k8s:required
+	// +k8s:customValidation # until `format=k8s-ip` is supported
+	// +k8s:immutable
+	Ip string `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
 	// Mutable.
 	SandboxClass string            `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	Labels       map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// The compute capacity this worker can give an actor sandbox. Immutable, set
-	// at creation: a worker pod's limits are fixed for its lifetime.
+	// at creation: a worker pod's limits are fixed for its lifetime. An update
+	// replaces the worker rather than patching it, so a request that omits
+	// capacity is asking to clear it, which the immutability rule rejects.
+	//
+	// +k8s:optional
+	// +k8s:immutable
 	Capacity *WorkerCapacity `protobuf:"bytes,10,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	// Output-only server-managed state. Absent from Create/Update request
 	// payloads; whatever a request carries here is ignored. DrainWorker is the
 	// only way a client moves state, and assignment is the scheduler's.
+	//
+	// +k8s:optional
 	Status        *WorkerStatus `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4793,8 +4848,13 @@ func (x *Worker) GetStatus() *WorkerStatus {
 
 type WorkerStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	State WorkerState            `protobuf:"varint,1,opt,name=state,proto3,enum=ateapi.WorkerState" json:"state,omitempty"`
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the WorkerState enum
+	State WorkerState `protobuf:"varint,1,opt,name=state,proto3,enum=ateapi.WorkerState" json:"state,omitempty"`
 	// The Actor currently bound to this Worker, if any.
+	//
+	// +k8s:optional
 	Assignment    *ActorAssignment `protobuf:"bytes,2,opt,name=assignment,proto3" json:"assignment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

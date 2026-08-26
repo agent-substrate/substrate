@@ -263,10 +263,10 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 			},
 		}
-		// TODO: validateWorker now lives next to CreateWorker, which applies it
-		// too. Once this path calls the RPC instead of the store, the check
-		// here goes away and the errors below arrive as INVALID_ARGUMENT.
-		if errs := validateWorker(worker, nil); len(errs) > 0 {
+		// TODO: CreateWorker applies the same declarative validation. Once
+		// this path calls the RPC instead of the store, the check here goes
+		// away and the errors below arrive as INVALID_ARGUMENT.
+		if errs := validateWorkerCreate(ctx, nil, worker); len(errs) > 0 {
 			// Terminal: the inputs are deterministic, retrying cannot help. A
 			// future pod event re-enqueues the key.
 			slog.ErrorContext(ctx, "Invalid worker", append(key.logAttrs(), slog.Any("err", errs.ToAggregate()))...)
