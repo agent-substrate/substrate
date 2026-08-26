@@ -86,18 +86,26 @@ func trustBundleHash(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// resolveTrustBundle returns the sanitized PEM of the named trust bundle and
-// the trustBundleHash of the raw contents it was derived from. Every error
-// fails the actor start: an actor that declared a trust bundle must not
-// start without one.
-func resolveTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) ([]byte, string, error) {
+// resolvedTrustBundle is a trust bundle resolved for projection.
+type resolvedTrustBundle struct {
+	// PEM is the sanitized bundle to write.
+	PEM []byte
+	// RawHash is the trustBundleHash of the backing contents PEM was derived
+	// from: the change-detection key stored as a projection's AppliedHash.
+	RawHash string
+}
+
+// resolveTrustBundle resolves the named trust bundle for projection. Every
+// error fails the actor start: an actor that declared a trust bundle must
+// not start without one.
+func resolveTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (resolvedTrustBundle, error) {
 	objectName, raw, err := rawTrustBundle(lister, name)
 	if err != nil {
-		return nil, "", err
+		return resolvedTrustBundle{}, err
 	}
 	pemBundle, err := sanitizeTrustBundle(name, objectName, raw)
 	if err != nil {
-		return nil, "", err
+		return resolvedTrustBundle{}, err
 	}
-	return pemBundle, trustBundleHash(raw), nil
+	return resolvedTrustBundle{PEM: pemBundle, RawHash: trustBundleHash(raw)}, nil
 }

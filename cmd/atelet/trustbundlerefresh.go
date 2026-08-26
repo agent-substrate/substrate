@@ -30,13 +30,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// trustBundleProjectionsFileName is the per-actor record of the trustBundle
-// projections written at the actor's last Run/Restore, kept beside (not
-// inside) the volume roots under SystemInfoVolumeRootsDir: it shares their
-// lifecycle — wiped by resetActorDirs, never captured into snapshots, never
-// mounted — and recoverFromDisk rebuilds the refresh registry from it after
-// an atelet restart. The dot in the name cannot collide with a volume root:
-// volume names are DNS labels.
+// trustBundleProjectionsFileName is the per-actor record recoverFromDisk
+// rebuilds the registry from after an atelet restart. It sits beside (not
+// inside) the volume roots under SystemInfoVolumeRootsDir, sharing their
+// lifecycle: wiped by resetActorDirs, never mounted, never snapshotted. The
+// dot cannot collide with a volume root — volume names are DNS labels.
 const trustBundleProjectionsFileName = "trust-bundle-projections.json"
 
 // trustBundleProjection is one projected trustBundle file of one actor.
@@ -50,26 +48,21 @@ type trustBundleProjection struct {
 	Path string `json:"path"`
 	// AppliedHash is the trustBundleHash of the raw backing contents last
 	// projected to the file. Persisted so an atelet restart rewrites the file
-	// only if the bundle actually changed in between — a no-op rewrite would
-	// still replace the inode a suspended guest may need to re-bind.
+	// only if the bundle actually changed in between: a no-op rewrite still
+	// replaces an inode the guest may reference across a suspend.
 	AppliedHash string `json:"appliedHash"`
 }
 
-// trustBundleRefresher keeps the projected trust-bundle files of RUNNING
-// actors current: kubelet's live-update semantics for clusterTrustBundle
-// projections, with the write mechanism swapped for the per-file
-// temp-and-rename discipline of writeSystemInfoFile (see #803 — recorded
-// paths must never move). Run/Restore registers an actor's projections once
-// its volumes are populated; Checkpoint/Terminate deregister when the
-// sandbox goes down; in between, the ClusterTrustBundle informer's events
-// land here and stale files are rewritten in place.
+// trustBundleRefresher keeps running actors' projected trust-bundle files
+// current, matching kubelet's live-update semantics for clusterTrustBundle
+// projections but writing via writeSystemInfoFile's temp-and-rename so
+// visible paths never move. Run/Restore registers an actor's projections,
+// Checkpoint/Terminate deregister, and in between the ClusterTrustBundle
+// informer's events rewrite stale files in place.
 //
-// Failures refresh nothing and keep each file's last good contents —
-// fail-closed applies at actor start only, a running actor is never handed a
-// missing or empty bundle. The informer's watch machinery is the
-// reconciliation loop: reconnects relist the object, the relisted state
-// replays through the handler, and the AppliedHash compare makes replays
-// idempotent.
+// Refresh failures keep each file's last good contents; fail-closed applies
+// at actor start only. The informer's relist-on-reconnect is the
+// reconciliation loop, and the AppliedHash compare makes replays idempotent.
 type trustBundleRefresher struct {
 	lister certlisters.ClusterTrustBundleLister
 
@@ -95,12 +88,10 @@ func newTrustBundleRefresher(lister certlisters.ClusterTrustBundleLister) *trust
 
 // Register records the projections writeSystemInfoVolume just wrote for
 // actorUID, replacing any previous registration. It re-checks each bundle
-// against the lister before inserting the entry: an update whose event fired
-// after the initial projection write but before this registration reached no
-// handler, yet is already in the lister cache, so re-projecting here closes
-// that window. Resolution failures keep the just-written (at worst
-// just-superseded) contents, per the refresh contract; only write failures —
-// node filesystem trouble — fail the actor start.
+// against the lister first: an update whose event fired before the entry
+// existed reached no handler, but is already in the lister cache. Resolution
+// failures keep the just-written contents, per the refresh contract; write
+// failures (node filesystem trouble) fail the actor start.
 func (r *trustBundleRefresher) Register(ctx context.Context, actorUID string, projections []trustBundleProjection) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -137,9 +128,8 @@ func (r *trustBundleRefresher) Register(ctx context.Context, actorUID string, pr
 	return nil
 }
 
-// Deregister drops actorUID's registration and its on-disk record. Callers
-// invoke it once the sandbox is down (or never came up): the projected files
-// have no reader anymore and the volume roots are about to be wiped.
+// Deregister drops actorUID's registration and its on-disk record, once the
+// sandbox is down (or never came up).
 func (r *trustBundleRefresher) Deregister(ctx context.Context, actorUID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -273,14 +263,12 @@ func (r *trustBundleRefresher) persistLocked(actorUID string) error {
 	return writeFileAtomic(r.stateFile(actorUID), b, 0o600)
 }
 
-// recoverFromDisk rebuilds the registry from the per-actor records after an
-// atelet restart — running sandboxes outlive atelet, and losing their
-// registrations would silently freeze their bundles until the next
-// Run/Restore. Each recovered bundle is re-synced immediately: the bundle
-// may have rotated while atelet was down, and no event replays for a change
-// the old process already observed. Records for actors that stopped while
-// atelet was down only cause writes into directories the next Run/Restore or
-// Terminate wipes.
+// recoverFromDisk rebuilds the registry after an atelet restart: running
+// sandboxes outlive atelet, and losing their registrations would silently
+// freeze their bundles until the next Run/Restore. Recovered bundles re-sync
+// immediately, applying any rotation missed while atelet was down. Records
+// of actors that stopped meanwhile only cause writes into directories the
+// next Run/Restore or Terminate wipes.
 func (r *trustBundleRefresher) recoverFromDisk(ctx context.Context) {
 	entries, err := os.ReadDir(r.actorsDir)
 	if err != nil {

@@ -1655,16 +1655,13 @@ func (s *AteomHerder) prepareOCIBundles(
 // trustBundleRefresher, which rewrites them when the bundle changes while
 // the actor runs.
 //
-// Every file must be a plain file at a stable real path across regenerations:
-// the micro-VM virtiofsds run in find-paths migration mode, which re-binds
-// the guest's FUSE state to files by the paths recorded at suspend, and
-// gVisor's gofer likewise re-opens files by path on restore. Symlink-swap
-// schemes (kubelet's atomic writer) move the payload files to a new
-// timestamped directory on every write and delete the old one, so guest
-// state from the snapshot could not re-bind. Per-file write-to-temp-and-
-// rename is atomic enough: a reader sees the old contents or the new, never
-// a partial write — which is also what lets the refresher rewrite trust
-// bundles underneath a running sandbox.
+// Every file must be a plain file at a stable real path across
+// regenerations: restore re-binds suspend-time guest state to files by
+// recorded path (virtiofsd find-paths, gVisor's gofer), so a scheme that
+// relocates files on write (kubelet's atomic writer) would leave that state
+// dangling. Per-file write-to-temp-and-rename is atomic enough — a reader
+// sees old contents or new, never partial — and is what lets the refresher
+// rewrite bundles under a running sandbox.
 //
 // TODO(#802): other rotating data sources (identity JWTs, certificates) will
 // need the live refresh trust bundles have, keeping the same per-file rename
@@ -1680,18 +1677,18 @@ func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resour
 		switch dataSource := dataSourceAny.GetDataSource().(type) {
 		case *ateletpb.SystemInfoDataSource_TrustBundle:
 			tb := dataSource.TrustBundle
-			pemBundle, appliedHash, err := resolveTrustBundle(ctbLister, tb.GetName())
+			resolved, err := resolveTrustBundle(ctbLister, tb.GetName())
 			if err != nil {
 				return nil, fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
 			}
-			if err := writeSystemInfoFile(rootPath, tb.GetPath(), pemBundle); err != nil {
+			if err := writeSystemInfoFile(rootPath, tb.GetPath(), resolved.PEM); err != nil {
 				return nil, err
 			}
 			tbProjections = append(tbProjections, trustBundleProjection{
 				Bundle:      tb.GetName(),
 				Root:        rootPath,
 				Path:        tb.GetPath(),
-				AppliedHash: appliedHash,
+				AppliedHash: resolved.RawHash,
 			})
 		case *ateletpb.SystemInfoDataSource_ActorMetadata:
 			for _, item := range dataSource.ActorMetadata.GetItems() {
