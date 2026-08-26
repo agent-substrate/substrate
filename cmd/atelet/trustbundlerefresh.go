@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -33,9 +34,19 @@ import (
 // trustBundleProjectionsFileName is the per-actor record recoverFromDisk
 // rebuilds the registry from after an atelet restart. It sits beside (not
 // inside) the volume roots under SystemInfoVolumeRootsDir, sharing their
-// lifecycle: wiped by resetActorDirs, never mounted, never snapshotted. The
-// dot cannot collide with a volume root — volume names are DNS labels.
+// lifecycle: wiped by resetActorDirs, never snapshotted, never bind-mounted
+// into a container — though the micro-VM class serves the whole roots dir,
+// this file included, read-only into the guest's shared tree, so nothing
+// sensitive belongs here. The dot cannot collide with a volume root —
+// volume names are DNS labels.
 const trustBundleProjectionsFileName = "trust-bundle-projections.json"
+
+// trustBundleResyncPeriod is the ClusterTrustBundle informer's resync, and
+// with it the refresher's retry cadence: a projection whose rewrite failed
+// gets no further event until the bundle changes again, so the periodic
+// replay through refreshBundle re-drives it (the AppliedHash compare makes
+// it a no-op otherwise).
+const trustBundleResyncPeriod = 10 * time.Minute
 
 // trustBundleProjection is one projected trustBundle file of one actor.
 type trustBundleProjection struct {
@@ -61,8 +72,9 @@ type trustBundleProjection struct {
 // informer's events rewrite stale files in place.
 //
 // Refresh failures keep each file's last good contents; fail-closed applies
-// at actor start only. The informer's relist-on-reconnect is the
-// reconciliation loop, and the AppliedHash compare makes replays idempotent.
+// at actor start only. The informer's periodic resync (trustBundleResyncPeriod)
+// retries failed rewrites, and the AppliedHash compare makes replays
+// idempotent.
 type trustBundleRefresher struct {
 	lister certlisters.ClusterTrustBundleLister
 
@@ -196,7 +208,7 @@ func bundleNamesFor(objectName string) []string {
 // refreshBundle re-projects bundleName for every registered projection whose
 // AppliedHash no longer matches the backing contents. Errors are logged and
 // leave last-good contents in place; per-file write errors don't stop the
-// remaining projections (the next event or relist retries them all).
+// remaining projections (the next event or resync retries them all).
 func (r *trustBundleRefresher) refreshBundle(ctx context.Context, bundleName string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -266,9 +278,10 @@ func (r *trustBundleRefresher) persistLocked(actorUID string) error {
 // recoverFromDisk rebuilds the registry after an atelet restart: running
 // sandboxes outlive atelet, and losing their registrations would silently
 // freeze their bundles until the next Run/Restore. Recovered bundles re-sync
-// immediately, applying any rotation missed while atelet was down. Records
-// of actors that stopped meanwhile only cause writes into directories the
-// next Run/Restore or Terminate wipes.
+// immediately, applying any rotation missed while atelet was down. A record
+// of an actor that stopped meanwhile only causes writes into orphaned
+// directories, until a later Run/Restore or Terminate for that actor clears
+// it.
 func (r *trustBundleRefresher) recoverFromDisk(ctx context.Context) {
 	entries, err := os.ReadDir(r.actorsDir)
 	if err != nil {

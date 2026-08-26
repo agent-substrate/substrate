@@ -282,7 +282,11 @@ func main() {
 	// only the egress trust bundle). The v1beta1 API is feature-gated: on a
 	// cluster that does not serve it, startup blocks at WaitForCacheSync
 	// below, with the reflector's errors naming the missing API.
-	coreFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 0,
+	//
+	// The resync is the refresher's retry loop: a projection whose rewrite
+	// failed gets no further event until the bundle changes again, so the
+	// periodic replay re-drives it (a no-op otherwise, see refreshBundle).
+	coreFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, trustBundleResyncPeriod,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
 			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
 		}))
@@ -308,9 +312,8 @@ func main() {
 	)
 
 	// Live-refresh projected trust bundles: bundle events rewrite the files
-	// of registered running actors. Adding the handler after cache sync is
-	// fine (client-go replays the object as an Add); recovery then
-	// re-registers the actors already running on this node.
+	// of registered running actors, and recovery re-registers the actors
+	// already running on this node.
 	if _, err := coreFactory.Certificates().V1beta1().ClusterTrustBundles().Informer().AddEventHandler(wmService.trustBundles.eventHandler(ctx)); err != nil {
 		serverboot.Fatal(ctx, "Failed to watch ClusterTrustBundles for live refresh", err)
 	}
@@ -1099,6 +1102,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
 	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
 	// copied to checkpointDir for the LOCAL case.
+
 	// prepareOCIBundles registers trust-bundle projections; leave none behind
 	// for a restore that fails.
 	defer func() {
@@ -1106,6 +1110,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			s.trustBundles.Deregister(ctx, actorUID)
 		}
 	}()
+
 	var assetPaths map[string]string
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
@@ -1253,8 +1258,6 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	s.trustBundles.Deregister(ctx, actorUID)
-
 	var assetPaths map[string]string
 	sandboxRec, err := readSandboxRecord(actorUID)
 	if err != nil {
@@ -1290,6 +1293,11 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 			return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 		}
 	}
+
+	// The sandbox is down: stop refreshing its trust-bundle projections. Not
+	// earlier — a Terminate that fails before teardown leaves the actor
+	// running, and it must keep refreshing until the retry succeeds.
+	s.trustBundles.Deregister(ctx, actorUID)
 
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {

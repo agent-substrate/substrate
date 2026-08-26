@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -220,6 +221,86 @@ func TestTrustBundleRefresher_Deregister(t *testing.T) {
 	r.refreshBundle(ctx, EgressTrustBundleName)
 	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certA {
 		t.Errorf("projected file = %q, refreshed after deregistration", got)
+	}
+}
+
+func TestTrustBundleRefresher_RegisterEmptyClearsStaleRegistration(t *testing.T) {
+	ctx := context.Background()
+	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
+	store := newCTBStore(t)
+	store.set(t, certA)
+	r, dir := testRefresher(t, store.lister)
+	if err := r.Register(ctx, "uid-1", projectTrustBundle(t, store.lister, dir, "uid-1", "trust", "ca.pem")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	// The actor comes back under a spec that no longer projects any bundle:
+	// prepareOCIBundles registers whatever was written, here nothing.
+	if err := r.Register(ctx, "uid-1", nil); err != nil {
+		t.Fatalf("Register(empty): %v", err)
+	}
+	if _, err := os.Stat(r.stateFile("uid-1")); !os.IsNotExist(err) {
+		t.Errorf("state file survives an empty registration (stat err: %v)", err)
+	}
+	store.set(t, certB)
+	r.refreshBundle(ctx, EgressTrustBundleName)
+	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certA {
+		t.Errorf("projected file = %q, refreshed after an empty registration", got)
+	}
+}
+
+func TestTrustBundleRefresher_WriteFailureIsolatedAndRetried(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based write-failure injection needs non-root")
+	}
+	ctx := context.Background()
+	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
+	store := newCTBStore(t)
+	store.set(t, certA)
+	r, dir := testRefresher(t, store.lister)
+	for _, uid := range []string{"uid-1", "uid-2"} {
+		if err := r.Register(ctx, uid, projectTrustBundle(t, store.lister, dir, uid, "trust", "ca.pem")); err != nil {
+			t.Fatalf("Register(%s): %v", uid, err)
+		}
+	}
+
+	// One actor's volume root refuses writes; the rotation must still reach
+	// the other actor.
+	blocked := filepath.Join(dir, "uid-1", "system-info", "trust")
+	if err := os.Chmod(blocked, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+	store.set(t, certB)
+	r.refreshBundle(ctx, EgressTrustBundleName)
+	if got := readProjected(t, dir, "uid-2", "trust", "ca.pem"); got != certB {
+		t.Errorf("healthy actor's file = %q, want the rotation despite the sibling's write failure", got)
+	}
+	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certA {
+		t.Errorf("blocked actor's file = %q, want last good contents", got)
+	}
+
+	// The failed write left AppliedHash stale, so the next replay of the same
+	// contents (in production, the informer resync) retries exactly it.
+	if err := os.Chmod(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.refreshBundle(ctx, EgressTrustBundleName)
+	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certB {
+		t.Errorf("blocked actor's file = %q after retry, want the rotation", got)
+	}
+}
+
+// TestNewTrustBundleRefresherPathLayout pins the production layout the tests
+// otherwise replace with temp-dir equivalents.
+func TestNewTrustBundleRefresherPathLayout(t *testing.T) {
+	r := newTrustBundleRefresher(nil)
+	if r.actorsDir != ateompath.ActorsDir {
+		t.Errorf("actorsDir = %q, want ateompath.ActorsDir %q", r.actorsDir, ateompath.ActorsDir)
+	}
+	want := filepath.Join(ateompath.SystemInfoVolumeRootsDir("uid-1"), trustBundleProjectionsFileName)
+	if got := r.stateFile("uid-1"); got != want {
+		t.Errorf("stateFile = %q, want %q", got, want)
 	}
 }
 
