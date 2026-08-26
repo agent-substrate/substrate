@@ -59,7 +59,7 @@ type templateReconcilerStore interface {
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error)
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
-	AcquireLock(ctx context.Context, key string) (*store.Lock, error)
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
 // goldenActorControl is the in-process slice of the Control service the
@@ -157,22 +157,22 @@ func (r *ActorTemplateReconciler) processNextWorkItem(ctx context.Context) bool 
 }
 
 // reconcileOne advances one template as far as it can go in this pass, holding
-// the template's lock so concurrent replicas don't interleave transitions. The
+// the template's lease so concurrent replicas don't interleave transitions. The
 // pass is level-triggered: each iteration re-derives the next action from the
 // observed golden actor rather than stored progress, so every action must be
 // reentrant. A positive requeueAfter asks the caller to revisit the template
 // once its snapshot deadline (or a transitional actor state) passes.
 func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resources.ActorTemplateRef) (requeueAfter time.Duration, err error) {
-	lock, err := r.persistence.AcquireLock(ctx, "lock:actortemplate:"+ref.Atespace+":"+ref.Name)
+	lease, err := r.persistence.AcquireLease(ctx, "lease:actortemplate:"+ref.Atespace+":"+ref.Name)
 	if err != nil {
-		if errors.Is(err, store.ErrLockConflict) {
+		if errors.Is(err, store.ErrLeaseConflict) {
 			// Another replica owns this template for now.
 			return 0, nil
 		}
-		return 0, fmt.Errorf("while acquiring lock: %w", err)
+		return 0, fmt.Errorf("while acquiring lease: %w", err)
 	}
-	defer lock.Close()
-	ctx = lock.Context()
+	defer lease.Close()
+	ctx = lease.Context()
 
 	tmpl, err := r.persistence.GetActorTemplate(ctx, ref)
 	if err != nil {

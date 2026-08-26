@@ -38,8 +38,8 @@ type fakeTemplateStore struct {
 	mu        sync.Mutex
 	templates map[resources.ActorTemplateRef]*ateapipb.ActorTemplate
 
-	// lockErr, when set, is returned by AcquireLock.
-	lockErr error
+	// leaseErr, when set, is returned by AcquireLease.
+	leaseErr error
 	// forcePageSize, when > 0, overrides the requested page size so tests
 	// can exercise the resync pagination loop.
 	forcePageSize int
@@ -116,12 +116,12 @@ func (s *fakeTemplateStore) UpdateActorTemplate(_ context.Context, ref resources
 	return proto.Clone(updated).(*ateapipb.ActorTemplate), nil
 }
 
-func (s *fakeTemplateStore) AcquireLock(ctx context.Context, _ string) (*store.Lock, error) {
-	if s.lockErr != nil {
-		return nil, s.lockErr
+func (s *fakeTemplateStore) AcquireLease(ctx context.Context, _ string) (*store.Lease, error) {
+	if s.leaseErr != nil {
+		return nil, s.leaseErr
 	}
-	lockCtx, cancel := context.WithCancel(ctx)
-	return store.NewLock(lockCtx, cancel), nil
+	leaseCtx, cancel := context.WithCancel(ctx)
+	return store.NewLease(leaseCtx, cancel), nil
 }
 
 // storedStatus returns the persisted status for ref, for assertions.
@@ -311,7 +311,7 @@ func TestReconcileOne(t *testing.T) {
 	tests := []struct {
 		name     string
 		template *ateapipb.ActorTemplate // nil: template absent from the store
-		lockErr  error
+		leaseErr error
 		control  *fakeGoldenControl
 
 		wantErr bool
@@ -474,16 +474,16 @@ func TestReconcileOne(t *testing.T) {
 			wantNotTrue:    []string{conditionReady, conditionFailed},
 		},
 		{
-			name:        "lock conflict yields without error",
+			name:        "lease conflict yields without error",
 			template:    testTemplate(),
-			lockErr:     store.ErrLockConflict,
+			leaseErr:    store.ErrLeaseConflict,
 			control:     &fakeGoldenControl{},
 			wantNotTrue: []string{conditionReady, conditionFailed},
 		},
 		{
-			name:        "lock error propagates",
+			name:        "lease error propagates",
 			template:    testTemplate(),
-			lockErr:     errors.New("store unavailable"),
+			leaseErr:    errors.New("store unavailable"),
 			control:     &fakeGoldenControl{},
 			wantErr:     true,
 			wantNotTrue: []string{conditionReady, conditionFailed},
@@ -514,7 +514,7 @@ func TestReconcileOne(t *testing.T) {
 			if tt.template != nil {
 				st = newFakeTemplateStore(tt.template)
 			}
-			st.lockErr = tt.lockErr
+			st.leaseErr = tt.leaseErr
 			r := newTestTemplateReconciler(st, tt.control)
 
 			requeueAfter, err := r.reconcileOne(context.Background(), testTemplateRef)
