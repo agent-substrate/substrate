@@ -33,12 +33,12 @@ import (
 )
 
 const (
-	templateResyncInterval = 5 * time.Second
+	templateResyncInterval = 20 * time.Second
 	templateListPageSize   = 100
 
 	// templateWorkerCount is the number of goroutines draining the work
 	// queue.
-	templateWorkerCount = 2
+	templateWorkerCount = 5
 
 	// goldenSnapshotWarmup is the default wall-clock delay between resuming
 	// the golden actor and taking its snapshot, for templates without a
@@ -183,7 +183,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		return 0, err
 	}
 
-	goldenRef := &ateapipb.ObjectRef{
+	goldenActorRef := &ateapipb.ObjectRef{
 		Atespace: tmpl.GetMetadata().GetAtespace(),
 		// Use the template's UID as golden actor's name to prevent collision
 		// when templates are recreated with the same name.
@@ -198,31 +198,15 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		if conditionIsTrue(conds, conditionReady) || conditionIsTrue(conds, conditionFailed) {
 			return 0, nil
 		}
-
 		// TODO: Freeze sandbox assets before creating the golden actor.
-		actor, err := r.control.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef})
-		if status.Code(err) == codes.NotFound {
-			// Golden actor has not yet been created.
-			if _, err := r.control.CreateActor(ctx, &ateapipb.CreateActorRequest{
-				Actor: &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{
-						Atespace: goldenRef.GetAtespace(),
-						Name:     goldenRef.GetName(),
-					},
-					ActorTemplate: ref.ToObjectRef(),
-				},
-			}); err != nil && status.Code(err) != codes.AlreadyExists {
-				if status.Code(err) == codes.InvalidArgument {
-					return 0, r.fail(ctx, tmpl, reasonGoldenActorInvalid, fmt.Sprintf("creating golden actor: %v", err))
-				}
-				// If the error is retriable, return an error here so the workqueue will retry.
-				return 0, fmt.Errorf("while creating golden actor: %w", err)
-			}
-			// Re-observe the freshly created actor at the beginning of the loop.
-			continue
-		}
+
+		actor, err := r.ensureActorExists(ctx, tmpl, goldenActorRef)
 		if err != nil {
-			return 0, fmt.Errorf("while getting golden actor: %w", err)
+			if status.Code(err) == codes.InvalidArgument {
+				// Invalid template spec; retrying can't help.
+				return 0, r.fail(ctx, tmpl, reasonGoldenActorInvalid, err.Error())
+			}
+			return 0, err
 		}
 
 		switch state := actor.GetStatus().GetState(); state {
@@ -249,7 +233,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				return rem, nil
 			}
 			// Warmup done: suspend the golden actor and record its snapshot.
-			snapshot, err := r.suspendActor(ctx, goldenRef)
+			snapshot, err := r.suspendActor(ctx, goldenActorRef)
 			if err != nil {
 				return 0, err
 			}
@@ -257,7 +241,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 			// A previous pass died mid-suspend; retry suspend.
-			snapshot, err := r.suspendActor(ctx, goldenRef)
+			snapshot, err := r.suspendActor(ctx, goldenActorRef)
 			if err != nil {
 				return 0, err
 			}
@@ -273,7 +257,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				// without being recorded.
 				return 0, r.saveGoldenSnapshot(ctx, tmpl, snapshot)
 			}
-			if _, err := r.control.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: goldenRef}); err != nil {
+			if _, err := r.control.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: goldenActorRef}); err != nil {
 				// A crash during resume is observed as CRASHED on the retry.
 				return 0, fmt.Errorf("while resuming golden actor: %w", err)
 			}
@@ -364,4 +348,30 @@ func goldenSnapshotWarmupFor(containers []*ateapipb.Container) time.Duration {
 		}
 	}
 	return 0
+}
+
+// ensureActorExists returns the golden actor, creating it first if it does
+// not exist yet.
+func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *ateapipb.ActorTemplate, goldenActorRef *ateapipb.ObjectRef) (*ateapipb.Actor, error) {
+	actor, err := r.control.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenActorRef})
+	if err == nil {
+		return actor, nil
+	}
+	if status.Code(err) != codes.NotFound {
+		return nil, fmt.Errorf("while getting golden actor: %w", err)
+	}
+	// Golden actor has not yet been created.
+	actor, err = r.control.CreateActor(ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: goldenActorRef.GetAtespace(),
+				Name:     goldenActorRef.GetName(),
+			},
+			ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while creating golden actor: %w", err)
+	}
+	return actor, nil
 }

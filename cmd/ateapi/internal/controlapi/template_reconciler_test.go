@@ -177,7 +177,12 @@ func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapipb.CreateA
 	if c.createErr != nil {
 		return nil, c.createErr
 	}
-	return req.GetActor(), nil
+	// Like the real Control service, return the stored actor: metadata plus
+	// a status observing the initial SUSPENDED state.
+	return &ateapipb.Actor{
+		Metadata: req.GetActor().GetMetadata(),
+		Status:   &ateapipb.ActorStatus{State: c.goldenState, LatestSnapshot: c.goldenSnapshot},
+	}, nil
 }
 
 func (c *fakeGoldenControl) GetActor(_ context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
@@ -405,14 +410,12 @@ func TestReconcileOne(t *testing.T) {
 			wantSnapshot: snapshot,
 		},
 		{
-			name:         "create AlreadyExists proceeds",
-			template:     testTemplate(),
-			control:      &fakeGoldenControl{createErr: status.Error(codes.AlreadyExists, "golden actor exists"), snapshot: snapshot},
-			wantTrue:     []string{conditionReady},
-			wantSnapshot: snapshot,
-			wantCreates:  1,
-			wantResumes:  1,
-			wantSuspends: 1,
+			name:        "create AlreadyExists requeues for the retry to observe",
+			template:    testTemplate(),
+			control:     &fakeGoldenControl{createErr: status.Error(codes.AlreadyExists, "golden actor exists")},
+			wantErr:     true,
+			wantNotTrue: []string{conditionReady, conditionFailed},
+			wantCreates: 1,
 		},
 		{
 			name:             "create InvalidArgument fails the template",
