@@ -42,13 +42,10 @@ func TestActorTemplateCRUD(t *testing.T) {
 			Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "1Gi"}}},
 			// Server-owned status on the request is ignored.
 			Status: &ateapipb.ActorTemplateStatus{
-				Conditions: []*ateapipb.Condition{{
-					Type:   "Ready",
-					Status: ateapipb.ConditionStatus_CONDITION_STATUS_TRUE,
-					Reason: "Forged",
-				}},
-				GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "sneaky"},
-				SandboxAssets:  &ateapipb.SandboxAssets{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "sneaky"},
+				},
+				SandboxAssets: &ateapipb.SandboxAssets{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 			},
 		},
 	})

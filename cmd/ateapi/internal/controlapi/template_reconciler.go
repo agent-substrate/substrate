@@ -114,12 +114,11 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 		}
 		for _, tmpl := range page.Items {
 			ref := resources.ActorTemplateRefFromActorTemplate(tmpl)
-			conds := tmpl.GetStatus().GetConditions()
-			if conditionIsTrue(conds, conditionReady) || conditionIsTrue(conds, conditionFailed) {
-				slog.DebugContext(ctx, "Skipping actor template", slog.String("ActorTemplate", ref.String()), slog.String("conditions", conditionsSummary(conds)))
+			if goldenSnapshotDone(tmpl.GetStatus().GetGoldenSnapshotStatus()) {
+				slog.DebugContext(ctx, "Skipping actor template with terminal golden snapshot status", slog.String("ActorTemplate", ref.String()))
 			} else {
 				r.queue.Add(ref)
-				slog.InfoContext(ctx, "Added actor template to work queue", slog.String("ActorTemplate", ref.String()), slog.String("conditions", conditionsSummary(conds)))
+				slog.InfoContext(ctx, "Added actor template to work queue", slog.String("ActorTemplate", ref.String()))
 			}
 		}
 		if page.NextPageToken == "" {
@@ -194,8 +193,13 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	// fact demands, and re-observes; the pass ends at a terminal condition,
 	// a deadline wait, or an error the workqueue retries.
 	for {
-		conds := tmpl.GetStatus().GetConditions()
-		if conditionIsTrue(conds, conditionReady) || conditionIsTrue(conds, conditionFailed) {
+		goldenSnapshotStatus := tmpl.GetStatus().GetGoldenSnapshotStatus()
+		if goldenSnapshotStatus.GetErrorMessage() != "" {
+			// The snapshot has already failed.
+			return 0, nil
+		}
+		if goldenSnapshotStatus.GetGoldenSnapshot() != nil {
+			// The golden snapshot exists already.
 			return 0, nil
 		}
 		// TODO: Freeze sandbox assets before creating the golden actor.
@@ -214,15 +218,15 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
-			takeAt := tmpl.GetStatus().GetTakeGoldenSnapshotAt()
+			takeAt := goldenSnapshotStatus.GetTakeGoldenSnapshotAt()
 			if takeAt == nil {
 				// Resumed, but the deadline write was lost (a replica died
 				// after ResumeActor). The elapsed warmup is unknowable, so
 				// restart the clock.
 				slog.WarnContext(ctx, "Golden actor running without a snapshot deadline; restarting warmup", slog.String("ActorTemplate", ref.String()))
 				deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
-				if tmpl, err = r.checkpoint(ctx, tmpl, func(templateStatus *ateapipb.ActorTemplateStatus) {
-					templateStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+				if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
+					snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
 				}); err != nil {
 					return 0, err
 				}
@@ -262,8 +266,8 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				return 0, fmt.Errorf("while resuming golden actor: %w", err)
 			}
 			deadline := time.Now().Add(goldenSnapshotWarmupFor(tmpl.GetContainers()))
-			if tmpl, err = r.checkpoint(ctx, tmpl, func(templateStatus *ateapipb.ActorTemplateStatus) {
-				templateStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
+			if tmpl, err = r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
+				snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(deadline)
 			}); err != nil {
 				return 0, err
 			}
@@ -294,44 +298,51 @@ func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *a
 	return snapshot, nil
 }
 
-// saveGoldenSnapshot records the golden snapshot and marks the template
-// Ready, ending the reconcile pass.
+// saveGoldenSnapshot records the golden snapshot, the terminal success state
+// that marks the template ready for use, ending the reconcile pass.
 func (r *ActorTemplateReconciler) saveGoldenSnapshot(ctx context.Context, observed *ateapipb.ActorTemplate, snapshot *ateapipb.ObjectRef) error {
-	_, err := r.checkpoint(ctx, observed, func(templateStatus *ateapipb.ActorTemplateStatus) {
-		templateStatus.GoldenSnapshot = snapshot
-		setCondition(&templateStatus.Conditions, conditionReady, ateapipb.ConditionStatus_CONDITION_STATUS_TRUE, conditionReady, "golden snapshot taken; template ready for use")
+	_, err := r.checkpoint(ctx, observed, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
+		snapshotStatus.GoldenSnapshot = snapshot
 	})
 	return err
 }
 
-// checkpoint commits a status mutation unless a concurrent writer already
-// drove the template to a terminal condition. The write is guarded by the
-// observed template's uid and version, so a stale observation surfaces as a
-// conflict for the workqueue to retry.
-func (r *ActorTemplateReconciler) checkpoint(ctx context.Context, observed *ateapipb.ActorTemplate, mutate func(*ateapipb.ActorTemplateStatus)) (*ateapipb.ActorTemplate, error) {
+// checkpoint commits a golden snapshot status mutation unless a concurrent
+// writer already drove the template to a terminal state. The write is guarded
+// by the observed template's uid and version, so a stale observation surfaces
+// as a conflict for the workqueue to retry.
+func (r *ActorTemplateReconciler) checkpoint(ctx context.Context, observed *ateapipb.ActorTemplate, mutate func(*ateapipb.GoldenSnapshotStatus)) (*ateapipb.ActorTemplate, error) {
 	ref := resources.ActorTemplateRefFromActorTemplate(observed)
 	updated, err := r.persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(observed), func(dbTemplate *ateapipb.ActorTemplate) error {
-		conds := dbTemplate.GetStatus().GetConditions()
-		if conditionIsTrue(conds, conditionReady) || conditionIsTrue(conds, conditionFailed) {
-			return fmt.Errorf("actor template reached a terminal condition concurrently")
+		if goldenSnapshotDone(dbTemplate.GetStatus().GetGoldenSnapshotStatus()) {
+			return fmt.Errorf("actor template reached a terminal golden snapshot state concurrently")
 		}
 		if dbTemplate.Status == nil {
 			dbTemplate.Status = &ateapipb.ActorTemplateStatus{}
 		}
-		mutate(dbTemplate.Status)
+		if dbTemplate.Status.GoldenSnapshotStatus == nil {
+			dbTemplate.Status.GoldenSnapshotStatus = &ateapipb.GoldenSnapshotStatus{}
+		}
+		mutate(dbTemplate.Status.GoldenSnapshotStatus)
 		return nil
 	})
 
 	return updated, err
 }
 
-// fail commits the terminal Failed condition with a machine-readable reason
-// and a human-readable message.
+// fail commits the terminal error message, prefixed with a machine-readable
+// reason.
 func (r *ActorTemplateReconciler) fail(ctx context.Context, observed *ateapipb.ActorTemplate, reason, msg string) error {
-	_, err := r.checkpoint(ctx, observed, func(templateStatus *ateapipb.ActorTemplateStatus) {
-		setCondition(&templateStatus.Conditions, conditionFailed, ateapipb.ConditionStatus_CONDITION_STATUS_TRUE, reason, msg)
+	_, err := r.checkpoint(ctx, observed, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
+		snapshotStatus.ErrorMessage = reason + ": " + msg
 	})
 	return err
+}
+
+// goldenSnapshotDone reports whether the golden snapshot build reached a
+// terminal state: the snapshot was recorded, or the build failed.
+func goldenSnapshotDone(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
+	return snapshotStatus.GetGoldenSnapshot() != nil || snapshotStatus.GetErrorMessage() != ""
 }
 
 // goldenSnapshotWarmupFor returns 0 when every container has a readyz probe

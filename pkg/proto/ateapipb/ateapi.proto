@@ -544,28 +544,27 @@ message Limits {
   string quantity = 2;
 }
 
-message ActorTemplateStatus {
-  // conditions record terminal observations about the golden-actor build,
-  // whose progress is otherwise derived from the golden actor itself:
-  // Ready (the golden snapshot is recorded in golden_snapshot and the
-  // version is usable) and Failed (the build failed, with the explanation
-  // in the condition's reason and message). Both are terminal.
-  repeated Condition conditions = 1;
-
+message GoldenSnapshotStatus {
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
   // READY.
   // +k8s:opaqueType
-  ObjectRef golden_snapshot = 3;
-
-  // sandbox_assets is the referenced SandboxConfig's content frozen at
-  // creation time.
-  SandboxAssets sandbox_assets = 4;
+  ObjectRef golden_snapshot = 1;
 
   // take_golden_snapshot_at is when the golden-actor warmup ends and the
   // golden snapshot may be taken. Mirrors the CRD's status.takeGoldenSnapshotAt
   // cmd/atecontroller/internal/controllers/actortemplate_controller.go
-  google.protobuf.Timestamp take_golden_snapshot_at = 5;
+  google.protobuf.Timestamp take_golden_snapshot_at = 2;
+
+  string error_message = 3;
+}
+
+message ActorTemplateStatus {
+  GoldenSnapshotStatus golden_snapshot_status = 1;
+
+  // sandbox_assets is the referenced SandboxConfig's content frozen at
+  // creation time.
+  SandboxAssets sandbox_assets = 2;
 }
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.

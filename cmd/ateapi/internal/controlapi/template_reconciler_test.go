@@ -240,7 +240,7 @@ const (
 
 var testTemplateRef = resources.ActorTemplateRef{Atespace: testAtespace, Name: testTemplateName}
 
-// testTemplate builds a template with empty conditions whose single container
+// testTemplate builds a template with an empty status whose single container
 // has a readyz probe, so goldenSnapshotWarmupFor returns 0 and reconcileOne
 // drives the golden actor to a snapshot without waiting for a warmup window.
 func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
@@ -263,21 +263,30 @@ func withoutReadyz(tmpl *ateapipb.ActorTemplate) {
 	}
 }
 
+// seededGoldenStatus returns the template's golden snapshot status, allocating
+// it so the with* options below can mutate it.
+func seededGoldenStatus(tmpl *ateapipb.ActorTemplate) *ateapipb.GoldenSnapshotStatus {
+	if tmpl.Status.GoldenSnapshotStatus == nil {
+		tmpl.Status.GoldenSnapshotStatus = &ateapipb.GoldenSnapshotStatus{}
+	}
+	return tmpl.Status.GoldenSnapshotStatus
+}
+
 func withSnapshotDeadline(at time.Time) func(*ateapipb.ActorTemplate) {
 	return func(tmpl *ateapipb.ActorTemplate) {
-		tmpl.Status.TakeGoldenSnapshotAt = timestamppb.New(at)
+		seededGoldenStatus(tmpl).TakeGoldenSnapshotAt = timestamppb.New(at)
 	}
 }
 
-func withReady() func(*ateapipb.ActorTemplate) {
+func withGoldenSnapshot(snapshot *ateapipb.ObjectRef) func(*ateapipb.ActorTemplate) {
 	return func(tmpl *ateapipb.ActorTemplate) {
-		setCondition(&tmpl.Status.Conditions, conditionReady, ateapipb.ConditionStatus_CONDITION_STATUS_TRUE, conditionReady, "")
+		seededGoldenStatus(tmpl).GoldenSnapshot = snapshot
 	}
 }
 
 func withFailed(reason string) func(*ateapipb.ActorTemplate) {
 	return func(tmpl *ateapipb.ActorTemplate) {
-		setCondition(&tmpl.Status.Conditions, conditionFailed, ateapipb.ConditionStatus_CONDITION_STATUS_TRUE, reason, "seeded failure")
+		seededGoldenStatus(tmpl).ErrorMessage = reason + ": seeded failure"
 	}
 }
 
@@ -319,15 +328,13 @@ func TestReconcileOne(t *testing.T) {
 		// both zero means exactly 0.
 		wantRequeueMin time.Duration
 		wantRequeueMax time.Duration
-		// wantTrue / wantNotTrue name conditions that must (not) be true in
-		// the stored status afterwards; checked when template is seeded.
-		wantTrue    []string
-		wantNotTrue []string
-		// wantFailedReason, when non-empty, must equal the Failed condition's
-		// reason; wantMessage must be a substring of its message.
+		// wantFailedReason and wantMessage, when non-empty, must be
+		// substrings of the stored error message; when both are empty the
+		// stored error message must be empty. Checked when template is seeded.
 		wantFailedReason string
 		wantMessage      string
-		// wantSnapshot, when non-nil, must equal the stored golden snapshot.
+		// wantSnapshot must equal the stored golden snapshot; nil means the
+		// snapshot must not be recorded.
 		wantSnapshot *ateapipb.ObjectRef
 		// wantDeadline asserts whether take_golden_snapshot_at is set.
 		wantDeadline bool
@@ -339,8 +346,6 @@ func TestReconcileOne(t *testing.T) {
 			name:         "happy path creates, resumes, and snapshots the golden actor",
 			template:     testTemplate(),
 			control:      &fakeGoldenControl{snapshot: snapshot},
-			wantTrue:     []string{conditionReady},
-			wantNotTrue:  []string{conditionFailed},
 			wantSnapshot: snapshot,
 			wantDeadline: true,
 			wantCreates:  1,
@@ -353,7 +358,6 @@ func TestReconcileOne(t *testing.T) {
 			control:        &fakeGoldenControl{snapshot: snapshot},
 			wantRequeueMin: goldenSnapshotWarmup - time.Second,
 			wantRequeueMax: goldenSnapshotWarmup,
-			wantNotTrue:    []string{conditionReady, conditionFailed},
 			wantDeadline:   true,
 			wantCreates:    1,
 			wantResumes:    1,
@@ -365,14 +369,12 @@ func TestReconcileOne(t *testing.T) {
 			control:        &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 			wantRequeueMin: 59 * time.Minute,
 			wantRequeueMax: time.Hour,
-			wantNotTrue:    []string{conditionReady},
 		},
 		{
 			name: "running golden actor is snapshotted once the deadline passed",
 			template: testTemplate(
 				withSnapshotDeadline(time.Now().Add(-time.Minute))),
 			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, snapshot: snapshot},
-			wantTrue:     []string{conditionReady},
 			wantSnapshot: snapshot,
 			wantSuspends: 1,
 		},
@@ -382,7 +384,6 @@ func TestReconcileOne(t *testing.T) {
 			control:        &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 			wantRequeueMin: goldenSnapshotWarmup - time.Second,
 			wantRequeueMax: goldenSnapshotWarmup,
-			wantNotTrue:    []string{conditionReady},
 			wantDeadline:   true,
 		},
 		{
@@ -391,14 +392,12 @@ func TestReconcileOne(t *testing.T) {
 				withSnapshotDeadline(time.Now().Add(-time.Minute))),
 			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, snapshot: nil},
 			wantErr:      true,
-			wantNotTrue:  []string{conditionReady},
 			wantSuspends: 1,
 		},
 		{
 			name:         "suspending golden actor is completed and recorded",
 			template:     testTemplate(),
 			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, snapshot: snapshot},
-			wantTrue:     []string{conditionReady},
 			wantSnapshot: snapshot,
 			wantSuspends: 1,
 		},
@@ -406,7 +405,6 @@ func TestReconcileOne(t *testing.T) {
 			name:         "suspended golden actor with a snapshot is recorded without more control calls",
 			template:     testTemplate(),
 			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: snapshot},
-			wantTrue:     []string{conditionReady},
 			wantSnapshot: snapshot,
 		},
 		{
@@ -414,14 +412,12 @@ func TestReconcileOne(t *testing.T) {
 			template:    testTemplate(),
 			control:     &fakeGoldenControl{createErr: status.Error(codes.AlreadyExists, "golden actor exists")},
 			wantErr:     true,
-			wantNotTrue: []string{conditionReady, conditionFailed},
 			wantCreates: 1,
 		},
 		{
 			name:             "create InvalidArgument fails the template",
 			template:         testTemplate(),
 			control:          &fakeGoldenControl{createErr: status.Error(codes.InvalidArgument, "bad spec")},
-			wantTrue:         []string{conditionFailed},
 			wantFailedReason: reasonGoldenActorInvalid,
 			wantMessage:      "creating golden actor",
 			wantCreates:      1,
@@ -431,14 +427,12 @@ func TestReconcileOne(t *testing.T) {
 			template:    testTemplate(),
 			control:     &fakeGoldenControl{createErr: status.Error(codes.Unavailable, "workers busy")},
 			wantErr:     true,
-			wantNotTrue: []string{conditionFailed},
 			wantCreates: 1,
 		},
 		{
 			name:             "crashed golden actor fails the template",
 			template:         testTemplate(),
 			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
-			wantTrue:         []string{conditionFailed},
 			wantFailedReason: reasonGoldenActorCrashed,
 			wantMessage:      "crashed",
 		},
@@ -447,21 +441,18 @@ func TestReconcileOne(t *testing.T) {
 			template:    testTemplate(),
 			control:     &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, resumeErr: status.Error(codes.Unavailable, "no workers")},
 			wantErr:     true,
-			wantNotTrue: []string{conditionFailed},
 			wantResumes: 1,
 		},
 		{
-			name:        "get failure requeues",
-			template:    testTemplate(),
-			control:     &fakeGoldenControl{getErr: status.Error(codes.Unavailable, "control plane down")},
-			wantErr:     true,
-			wantNotTrue: []string{conditionFailed},
+			name:     "get failure requeues",
+			template: testTemplate(),
+			control:  &fakeGoldenControl{getErr: status.Error(codes.Unavailable, "control plane down")},
+			wantErr:  true,
 		},
 		{
 			name:             "deleting golden actor fails the template",
 			template:         testTemplate(),
 			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_DELETING},
-			wantTrue:         []string{conditionFailed},
 			wantFailedReason: reasonUnexpectedState,
 			wantMessage:      "unexpected state",
 		},
@@ -471,41 +462,36 @@ func TestReconcileOne(t *testing.T) {
 			control:        &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED},
 			wantRequeueMin: templateResyncInterval,
 			wantRequeueMax: templateResyncInterval,
-			wantNotTrue:    []string{conditionReady, conditionFailed},
 		},
 		{
-			name:        "lease conflict yields without error",
-			template:    testTemplate(),
-			leaseErr:    store.ErrLeaseConflict,
-			control:     &fakeGoldenControl{},
-			wantNotTrue: []string{conditionReady, conditionFailed},
+			name:     "lease conflict yields without error",
+			template: testTemplate(),
+			leaseErr: store.ErrLeaseConflict,
+			control:  &fakeGoldenControl{},
 		},
 		{
-			name:        "lease error propagates",
-			template:    testTemplate(),
-			leaseErr:    errors.New("store unavailable"),
-			control:     &fakeGoldenControl{},
-			wantErr:     true,
-			wantNotTrue: []string{conditionReady, conditionFailed},
+			name:     "lease error propagates",
+			template: testTemplate(),
+			leaseErr: errors.New("store unavailable"),
+			control:  &fakeGoldenControl{},
+			wantErr:  true,
 		},
 		{
 			name:    "deleted template is a noop",
 			control: &fakeGoldenControl{},
 		},
 		{
-			name:        "terminal Ready is a noop",
-			template:    testTemplate(withReady()),
-			control:     &fakeGoldenControl{},
-			wantTrue:    []string{conditionReady},
-			wantNotTrue: []string{conditionFailed},
+			name:         "terminal golden snapshot is a noop",
+			template:     testTemplate(withGoldenSnapshot(snapshot)),
+			control:      &fakeGoldenControl{},
+			wantSnapshot: snapshot,
 		},
 		{
-			name:             "terminal Failed is a noop",
+			name:             "terminal error message is a noop",
 			template:         testTemplate(withFailed(reasonGoldenActorCrashed)),
 			control:          &fakeGoldenControl{},
-			wantTrue:         []string{conditionFailed},
-			wantNotTrue:      []string{conditionReady},
 			wantFailedReason: reasonGoldenActorCrashed,
+			wantMessage:      "seeded failure",
 		},
 	}
 	for _, tt := range tests {
@@ -531,30 +517,24 @@ func TestReconcileOne(t *testing.T) {
 			if tt.template == nil {
 				return
 			}
-			tmplStatus := st.storedStatus(t, testTemplateRef)
-			for _, cond := range tt.wantTrue {
-				if !conditionIsTrue(tmplStatus.GetConditions(), cond) {
-					t.Errorf("condition %s not true, want true (conditions: %s)", cond, conditionsSummary(tmplStatus.GetConditions()))
+			snapshotStatus := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus()
+			errorMessage := snapshotStatus.GetErrorMessage()
+			if tt.wantFailedReason == "" && tt.wantMessage == "" {
+				if errorMessage != "" {
+					t.Errorf("stored error message = %q, want empty", errorMessage)
+				}
+			} else {
+				if !strings.Contains(errorMessage, tt.wantFailedReason) {
+					t.Errorf("stored error message = %q, want it to contain reason %q", errorMessage, tt.wantFailedReason)
+				}
+				if !strings.Contains(errorMessage, tt.wantMessage) {
+					t.Errorf("stored error message = %q, want it to contain %q", errorMessage, tt.wantMessage)
 				}
 			}
-			for _, cond := range tt.wantNotTrue {
-				if conditionIsTrue(tmplStatus.GetConditions(), cond) {
-					t.Errorf("condition %s is true, want not true", cond)
-				}
+			if !proto.Equal(snapshotStatus.GetGoldenSnapshot(), tt.wantSnapshot) {
+				t.Errorf("stored golden snapshot = %v, want %v", snapshotStatus.GetGoldenSnapshot(), tt.wantSnapshot)
 			}
-			if tt.wantFailedReason != "" || tt.wantMessage != "" {
-				failed := findCondition(tmplStatus.GetConditions(), conditionFailed)
-				if tt.wantFailedReason != "" && failed.GetReason() != tt.wantFailedReason {
-					t.Errorf("Failed reason = %q, want %q", failed.GetReason(), tt.wantFailedReason)
-				}
-				if tt.wantMessage != "" && !strings.Contains(failed.GetMessage(), tt.wantMessage) {
-					t.Errorf("Failed message = %q, want it to contain %q", failed.GetMessage(), tt.wantMessage)
-				}
-			}
-			if tt.wantSnapshot != nil && !proto.Equal(tmplStatus.GetGoldenSnapshot(), tt.wantSnapshot) {
-				t.Errorf("stored golden snapshot = %v, want %v", tmplStatus.GetGoldenSnapshot(), tt.wantSnapshot)
-			}
-			if tt.wantDeadline && tmplStatus.GetTakeGoldenSnapshotAt() == nil {
+			if tt.wantDeadline && snapshotStatus.GetTakeGoldenSnapshotAt() == nil {
 				t.Error("stored take_golden_snapshot_at is nil, want set")
 			}
 		})
@@ -590,18 +570,18 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	if got := control.suspendReqs[0].GetActor().GetName(); got != testTemplateUID {
 		t.Errorf("suspended actor = %q, want %q", got, testTemplateUID)
 	}
-	if st.storedStatus(t, testTemplateRef).GetTakeGoldenSnapshotAt() == nil {
+	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetTakeGoldenSnapshotAt() == nil {
 		t.Error("stored take_golden_snapshot_at is nil, want set")
 	}
 }
 
-func TestCheckpoint_TerminalConditionErrors(t *testing.T) {
+func TestCheckpoint_TerminalStateErrors(t *testing.T) {
 	ctx := context.Background()
 	for _, seed := range []struct {
 		name string
 		opt  func(*ateapipb.ActorTemplate)
 	}{
-		{"ready", withReady()},
+		{"golden snapshot taken", withGoldenSnapshot(&ateapipb.ObjectRef{Atespace: "ate-golden", Name: "snap-1"})},
 		{"failed", withFailed(reasonGoldenActorCrashed)},
 	} {
 		t.Run(seed.name, func(t *testing.T) {
@@ -609,14 +589,14 @@ func TestCheckpoint_TerminalConditionErrors(t *testing.T) {
 			r := newTestTemplateReconciler(st, &fakeGoldenControl{})
 
 			// Checkpoint against a template a concurrent writer already
-			// drove to a terminal condition.
-			_, err := r.checkpoint(ctx, testTemplate(seed.opt), func(templateStatus *ateapipb.ActorTemplateStatus) {
-				templateStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
+			// drove to a terminal state.
+			_, err := r.checkpoint(ctx, testTemplate(seed.opt), func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
+				snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
 			})
 			if err == nil {
 				t.Fatal("checkpoint succeeded, want error for terminal template")
 			}
-			if st.storedStatus(t, testTemplateRef).GetTakeGoldenSnapshotAt() != nil {
+			if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetTakeGoldenSnapshotAt() != nil {
 				t.Error("take_golden_snapshot_at set, want store unchanged")
 			}
 		})
@@ -636,13 +616,13 @@ func TestCheckpoint_StaleObservationConflicts(t *testing.T) {
 		t.Fatalf("seeding concurrent update failed: %v", err)
 	}
 
-	_, err := r.checkpoint(ctx, testTemplate(), func(templateStatus *ateapipb.ActorTemplateStatus) {
-		templateStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
+	_, err := r.checkpoint(ctx, testTemplate(), func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
+		snapshotStatus.TakeGoldenSnapshotAt = timestamppb.New(time.Now())
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("checkpoint error = %v, want ErrVersionConflict", err)
 	}
-	if st.storedStatus(t, testTemplateRef).GetTakeGoldenSnapshotAt() != nil {
+	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetTakeGoldenSnapshotAt() != nil {
 		t.Error("take_golden_snapshot_at set, want store unchanged")
 	}
 }
@@ -669,7 +649,7 @@ func TestResync_QueuesOnlyActionableTemplates(t *testing.T) {
 	}{
 		{"empty status", nil, true},
 		{"mid warmup", []func(*ateapipb.ActorTemplate){withSnapshotDeadline(time.Now().Add(time.Hour))}, true},
-		{"ready", []func(*ateapipb.ActorTemplate){withReady()}, false},
+		{"golden snapshot taken", []func(*ateapipb.ActorTemplate){withGoldenSnapshot(&ateapipb.ObjectRef{Atespace: "ate-golden", Name: "snap-1"})}, false},
 		{"failed", []func(*ateapipb.ActorTemplate){withFailed(reasonGoldenActorCrashed)}, false},
 	}
 
