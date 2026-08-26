@@ -61,6 +61,35 @@ only to send the actors to a different address than the control plane.
 Keep the load generator on the usual collector. If you do not, the meter counts
 the telemetry of the load generator as telemetry from substrate.
 
+## On a kind cluster
+
+Do not install the meter on kind. The collector there is ours, thus
+[`manifests/ate-install/kind/otel-collector.yaml`](../../manifests/ate-install/kind/otel-collector.yaml)
+holds the same count connector and gives the same two counts. A meter in front
+of it would add a hop and measure nothing new. The meter exists for GKE only,
+where the managed collector cannot hold a connector.
+
+`hack/install-ate.sh` installs the collector and a Prometheus with it, thus a
+kind cluster needs no other step:
+
+```bash
+kubectl port-forward -n otel-system svc/prometheus 9090:9090
+```
+
+The queries below are the same. Three items differ:
+
+- Prometheus and the collector are in `otel-system`, and not in `benchmarking`.
+- Give no `--otlp-endpoint`. The kind `ate-otel-config` ConfigMap already names
+  the collector, and `benchmarking/workloads/deploy.sh` reads that ConfigMap,
+  thus the actors follow the control plane with no flag.
+- The kind ConfigMap sets `OTEL_METRIC_EXPORT_INTERVAL` to 10s, and not to the
+  60s of GKE. Thus a range of `[1m]` is sufficient there.
+
+`monitoring.yaml` and cAdvisor are for GKE. A kind cluster measures volume
+only: its collector is a single replica with no HPA, and the memory of a node
+is the memory of the machine, thus the cost figures do not carry to a real
+cluster.
+
 ## Read the numbers
 
 [`monitoring.yaml`](../monitoring.yaml) scrapes the meter. Read the values
@@ -73,18 +102,28 @@ kubectl port-forward -n benchmarking svc/prometheus 9090:9090
 
 | To find | Query |
 |---|---|
-| Spans/sec for each service | `sum by (svc) (rate(substrate_spans_total[5m]))` |
-| Datapoints/min for each service | `60 * sum by (svc) (rate(substrate_datapoints_total[5m]))` |
+| Spans/sec for each service | `sum by (service_name) (rate(substrate_spans_total[5m]))` |
+| Datapoints/min for each service | `60 * sum by (service_name) (rate(substrate_datapoints_total[5m]))` |
 | If the data arrived | `sum(rate(otelcol_receiver_accepted_spans[5m]))` |
 | If the collector rejected the data | `sum(rate(otelcol_receiver_refused_spans[5m]))` |
+| If the count dropped a series | `sum(otelcol_deltatocumulative_datapoints{error="limit"})` |
+| How near the stream limit is | `otelcol_deltatocumulative_streams_tracked / otelcol_deltatocumulative_streams_limit` |
 
 Keep the range at three times the 60s push interval or more. `[5m]` is a good
 default. A range less than 3m gives noise.
 
-Always read the last two counters. A service that reports zero volume gives no
+Always read the last four counters. A service that reports zero volume gives no
 data by itself: `accepted` must be more than zero and `refused` must be zero
 for the same window. If they are not, the zero shows that the data did not
 arrive, not that the service sent no data.
+
+The last two counters cover the different failure of `max_streams`. The count
+connector copies the resource to each count, and serverboot gives each process
+its own `service.instance.id`, thus one process holds one stream for each
+count. Above the limit `deltatocumulative` drops each new stream with no log
+line, and the series leaves the scrape. The volume then reads low and nothing
+reports an error. The dropped count must be zero, and the ratio must stay below
+1, for the whole window of a run.
 
 ## The meter is a tee
 
@@ -125,10 +164,13 @@ replicas is not, and the effect of connection stickiness disappears.
 the pass criteria:
 
 ```promql
-sum(rate(otelcol_receiver_refused_spans[5m]))   # must be 0
-sum(rate(otelcol_exporter_sent_spans[5m]))      # must be more than 0
-max_over_time(otelcol_exporter_queue_size[5m])  # must stay level
-absent(otelcol_exporter_sent_spans)             # must give no result
+sum(rate(otelcol_receiver_refused_spans[5m]))              # must be 0
+sum(rate(otelcol_exporter_sent_spans[5m]))                 # must be more than 0
+max_over_time(otelcol_exporter_queue_size[5m])             # must stay level
+absent(otelcol_exporter_sent_spans)                        # must give no result
+sum(otelcol_deltatocumulative_datapoints{error="limit"})   # must be 0
+otelcol_deltatocumulative_streams_tracked
+  / otelcol_deltatocumulative_streams_limit                # must stay below 1
 ```
 
 Do not use `otelcol_exporter_send_failed_spans` alone. The default
@@ -140,6 +182,12 @@ meter reports nothing at all.
 
 If the meter sheds data, the volume and the cost are both incorrect, and the
 two errors hide each other.
+
+`memory_limiter` and `GOMEMLIMIT` in [`meter.yaml`](meter.yaml) keep a meter
+that reaches its memory limit refusing data, and thus visible in
+`otelcol_receiver_refused_*`, rather than stopped by the kernel. Raise the
+container limit for a larger run: the limiter uses percentages and follows it,
+but `GOMEMLIMIT` is absolute and needs the new value.
 
 To make the meter terminal, delete the two forward pipelines in
 [`meter.yaml`](meter.yaml). Use a terminal meter for a long soak, to keep that

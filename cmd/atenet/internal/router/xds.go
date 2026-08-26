@@ -16,6 +16,7 @@ package router
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"net"
@@ -152,6 +153,7 @@ type XdsServer struct {
 	snapshot     cachev3.SnapshotCache
 	srv          serverv3.Server
 	versionCount int64
+	versionEpoch string
 
 	mu sync.Mutex
 
@@ -204,6 +206,7 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		xdsPort:               xdsPort,
 		snapshot:              cache,
 		srv:                   srv,
+		versionEpoch:          strconv.FormatInt(time.Now().Unix(), 10) + "-" + rand.Text()[:8],
 		extprocPort:           50051, // matches default extproc port
 		extprocAddr:           "127.0.0.1",
 		ingressPort:           8080,
@@ -408,7 +411,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	defer x.mu.Unlock()
 
 	x.versionCount++
-	ver := strconv.FormatInt(x.versionCount, 10)
+	ver := x.versionEpoch + "-" + strconv.FormatInt(x.versionCount, 10)
 
 	// connectEnabled is true when either CONNECT listener (plaintext or TLS) is
 	// configured; the main_internal cluster/listener only exist to serve them.
@@ -1105,6 +1108,27 @@ func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
 	}
 }
 
+// dualStackAdditionalAddresses returns the IPv6 half of a dual-stack ingress
+// listener, to pair with a primary 0.0.0.0 socket on the same port. Ipv4Compat
+// stays false: clearing IPV6_V6ONLY would collide with that primary.
+func dualStackAdditionalAddresses(port int) []*listenerv3.AdditionalAddress {
+	return []*listenerv3.AdditionalAddress{
+		{
+			Address: &corev3.Address{
+				Address: &corev3.Address_SocketAddress{
+					SocketAddress: &corev3.SocketAddress{
+						Address:    "::",
+						Ipv4Compat: false,
+						PortSpecifier: &corev3.SocketAddress_PortValue{
+							PortValue: uint32(port),
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func (x *XdsServer) buildListener() *listenerv3.Listener {
 	hcm := x.buildHcm("ingress_http", true)
 
@@ -1120,6 +1144,7 @@ func (x *XdsServer) buildListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.ingressPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1179,6 +1204,7 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.httpsPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1210,6 +1236,7 @@ func (x *XdsServer) buildConnectTerminateListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.connectPlainTextPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{
@@ -1243,6 +1270,7 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 				},
 			},
 		},
+		AdditionalAddresses: dualStackAdditionalAddresses(x.connectTLSPort),
 		FilterChains: []*listenerv3.FilterChain{
 			{
 				Filters: []*listenerv3.Filter{

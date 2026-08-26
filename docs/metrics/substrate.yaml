@@ -1,0 +1,237 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The rules and the notes of Substrate that the OpenTelemetry Weaver registry
+# cannot hold. Weaver permits only `groups` and `imports` at the top level of a
+# registry file, and it refuses a file with any other top-level key. Thus this
+# file is beside the registry directory and not in it.
+#
+# Nothing reads this file at this time. A person and an agent read it. Each
+# rule below says what could check it.
+#
+# The registry is docs/metrics/registry/. docs/observability.md tells you how
+# to use both files.
+
+registry_version: 1
+
+# The version of the upstream semantic conventions that Substrate borrows from.
+# Substrate takes error.type, file.name and the rpc.* attributes from it. This
+# is the only version that the code imports under cmd/, internal/ and pkg/.
+# It is not the version of this registry: manifest.yaml holds that.
+upstream_semconv_version: 1.40.0
+
+# -----------------------------------------------------------------------------
+# The metrics that Substrate exports but does not define
+#
+# atecontroller gives the Prometheus registry of controller-runtime to the OTLP
+# pipeline at cmd/atecontroller/main.go. Thus each family below leaves the
+# cluster with the ate.* metrics of Substrate.
+#
+# These families are here and not in the registry on purpose. The upstream
+# library owns the names, the labels and the buckets, and a version bump can
+# add a family or change one. A copy of each metric in the registry becomes
+# wrong with no signal: the first version of this list had 19 metrics and it
+# was missing 7 of them. A prefix stays correct.
+#
+# The labels of these metrics do not start with ate. The upstream library owns
+# them, and a rename would break the dashboards of that library.
+#
+# To read the list again after a bump of controller_runtime_version, find each
+# call of metrics.Registry.MustRegister in the module, and check which of those
+# packages `go list -deps ./cmd/atecontroller` links.
+# -----------------------------------------------------------------------------
+controller_runtime_version: v0.24.1
+
+bridged_metric_families:
+  - prefix: controller_runtime_reconcile_
+    emitted_by: [atecontroller]
+    source: sigs.k8s.io/controller-runtime/pkg/internal/controller/metrics
+    brief: >
+      The count, the errors, the panics, the timeouts and the time of the
+      reconciliations of each controller. Read reconcile_errors_total first to
+      find which controller fails.
+  - prefix: controller_runtime_
+    emitted_by: [atecontroller]
+    source: sigs.k8s.io/controller-runtime/pkg/internal/controller/metrics
+    brief: >
+      The workers of each controller: active_workers and
+      max_concurrent_reconciles. A controller at its limit does the work late
+      and not wrong.
+  - prefix: controller_runtime_webhook_
+    emitted_by: [atecontroller]
+    source: sigs.k8s.io/controller-runtime/pkg/webhook
+    brief: >
+      The requests, the time, the requests in operation and the panics of the
+      admission webhooks. The conversion webhooks add
+      controller_runtime_conversion_webhook_panics_total.
+  - prefix: workqueue_
+    emitted_by: [atecontroller]
+    source: sigs.k8s.io/controller-runtime/pkg/internal/metrics
+    brief: >
+      The queue of each controller: depth, adds_total, queue_duration_seconds,
+      work_duration_seconds, unfinished_work_seconds,
+      longest_running_processor_seconds and retries_total. A depth that grows
+      is the first sign that a controller cannot keep up. Compare
+      queue_duration_seconds with work_duration_seconds: if the wait is the
+      larger part, add workers; if the work is the larger part, make the
+      reconciliation faster.
+  - prefix: certwatcher_
+    emitted_by: [atecontroller]
+    source: sigs.k8s.io/controller-runtime/pkg/certwatcher/metrics
+    brief: >
+      The reads of the certificate from disk, and the errors of those reads. An
+      error rate above zero means that the webhook serves an old certificate.
+  - prefix: rest_client_
+    emitted_by: [atecontroller]
+    source: sigs.k8s.io/controller-runtime/pkg/metrics
+    brief: >
+      The calls to the Kubernetes API server, by code, method and host. The
+      code 429 means that the API server limits the rate of atecontroller. The
+      code 409 means a conflict of two writers on the same object.
+  - prefix: leader_election_
+    emitted_by: [atecontroller]
+    source: sigs.k8s.io/controller-runtime/pkg/metrics
+    brief: >
+      master_status is 1 on the replica that holds the lease. If no replica
+      reports 1, nothing reconciles and each controller metric stays at zero.
+      slowpath_total above zero means that the renewals are slow.
+  - prefix: go_
+    emitted_by: [atecontroller]
+    source: github.com/prometheus/client_golang/prometheus/collectors
+    brief: >
+      The full set of the Go runtime. atecontroller asks for MetricsAll. Thus
+      the set holds each metric of runtime/metrics, and not the small default
+      set. Use go_memstats_heap_inuse_bytes and go_goroutines first.
+  - prefix: process_
+    emitted_by: [atecontroller]
+    source: github.com/prometheus/client_golang/prometheus/collectors
+    brief: >
+      The CPU, the memory, the file descriptors and the start time of the
+      process. Use process_open_fds against process_max_fds to find a leak of
+      file descriptors.
+
+# -----------------------------------------------------------------------------
+# The rules that keep the number of series small
+#
+# No rule is enforced at this time. This PR adds the registry only. Each rule
+# says what could enforce it, so that a reader knows the difference between a
+# rule that a machine holds and a rule that a person holds.
+# -----------------------------------------------------------------------------
+cardinality_rules:
+  - id: no-actor-identity
+    brief: >
+      The name, the UID and the atespace of an actor are never metric labels.
+      They have too many values at the target of 1 billion actors. Put them on
+      spans and logs. The trace_id field connects a log to a metric.
+    enforced: false
+    could_be_enforced_by: >
+      A Weaver Rego policy can refuse a forbidden attribute in this registry. It
+      cannot see the Go code. A developer who adds ate.actor.name to a Record
+      call and does not change the registry breaks this rule with no signal. A
+      check of the Go source, or `weaver registry live-check` against the
+      telemetry of the end-to-end tests, would close that gap.
+    forbidden_attributes:
+      - ate.actor.name
+      - ate.actor.uid
+      - ate.atespace
+      - ate.actor.version
+      - ate.actor.container.name
+  - id: bounded-or-catalog-scoped
+    brief: >
+      Each ate.* metric label has a list of permitted values, or it names an
+      object that an operator made. The names of the templates and the pools
+      never come from a request.
+    enforced: false
+    could_be_enforced_by: >
+      A Weaver Rego policy can make each ate.* attribute of type string give a
+      reason. Only `weaver registry live-check` can count the values that occur.
+  - id: error-type-not-parallel-counters
+    brief: >
+      A component reports a failure with error.type or ate.failure.reason on the
+      same instrument. If the key is absent, the operation was correct. There
+      are no separate counters for the failures.
+    enforced: false
+    could_be_enforced_by: >
+      A Weaver Rego policy can refuse a metric name that ends with errors_total
+      and has a counterpart without the suffix.
+  - id: pool-keys-paired
+    brief: >
+      A component sets ate.workerpool.namespace and ate.workerpool.name
+      together, or it sets no pool key. One key alone does not identify a pool.
+      ate.scheduler.eligible_workers is the one exception. It sends both keys
+      empty to show that no worker is available.
+    enforced: false
+    could_be_enforced_by: >
+      A Weaver Rego policy can make the two keys occur together in this
+      registry. Only live-check can see a component that sends one key.
+
+# -----------------------------------------------------------------------------
+# The known differences from the rules above
+#
+# This file records them. It does not hide them.
+# -----------------------------------------------------------------------------
+lint_exceptions:
+  - attribute: outcome
+    metric: atenet.router.parking.wait.duration
+    rule: A metric label of Substrate must start with ate.
+    brief: >
+      This label is older than the naming convention of the router. A change to
+      ate.router.park.outcome needs a change to the dashboards at the same time.
+      atenet.router.route.duration had the same change before.
+
+# -----------------------------------------------------------------------------
+# The subsystems with no metrics. An agent that reads only the metrics gives the
+# cause of a fault to a subsystem that has metrics. Thus these subsystems are
+# part of the data.
+# -----------------------------------------------------------------------------
+blind_spots:
+  - area: store
+    code: cmd/ateapi/internal/store
+    brief: >
+      The store has no metrics. Each lifecycle operation uses the store. Thus a
+      delay in the store looks like unknown time in
+      ate.actor.lifecycle.operation.duration and
+      ate.scheduler.assignment.duration. If these two are slow and no phase
+      gives the cause, examine the store.
+  - area: worker cache
+    code: cmd/ateapi/internal/workercache
+    brief: >
+      The code has a TODO for metrics. If the view of the fleet is old, the
+      scheduler assigns a worker that is not in operation. This looks like a
+      resume failure with no cause in the scheduler data.
+  - area: actor population
+    brief: >
+      Nothing counts the actors by state. These metrics count the operations and
+      not the actors. They can count one actor more than one time. Issue #433
+      has the ate.actors instrument. It does not exist at this time.
+  - area: image cache cost and eviction
+    code: internal/imagecache
+    brief: >
+      The hit and miss counter exists. But the garbage collector (the 85% and
+      80% limits) and the time to prepare an image send nothing. Thus you cannot
+      see the disk pressure from the layer pool.
+  - area: atenet-dns
+    code: cmd/atenet/internal/dns.go
+    brief: >
+      There are no instruments, and the Corefile has no prometheus plugin. If a
+      reload fails, the answers stay old and no signal shows it.
+  - area: podcertcontroller
+    code: cmd/podcertcontroller
+    brief: This component has no metrics.
+  - area: golden snapshot pipeline
+    code: cmd/atecontroller/internal/controllers/actortemplate_controller.go
+    brief: The ActorTemplate controller has no instruments. Thus nothing measures a build of a golden image.
+  - area: router shutdown outcome
+    code: cmd/atenet/internal/router/drain.go
+    brief: The code has two TODOs. Nothing counts a drain that ends with an error.

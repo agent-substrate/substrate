@@ -29,6 +29,9 @@ WORKER_COUNT=1
 SANDBOX_CLASS=gvisor
 SKIP_BUILD=0
 OTLP_ENDPOINT=""
+# Empty keeps the default in workloads/deploy.sh (256Mi, the microvm minimum).
+ACTOR_MEMORY=""
+WAIT_TIMEOUT=""
 
 usage() {
   echo "Usage: $0 [options]"
@@ -41,6 +44,10 @@ usage() {
   echo "                          microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --otlp-endpoint URL     Forwarded to workloads/deploy.sh. The address to which an"
   echo "                          instrumented actor container sends telemetry."
+  echo "  --actor-memory SIZE     Forwarded to workloads/deploy.sh. Memory limit for the"
+  echo "                          benchmark ActorTemplates (default: 256Mi, the microvm minimum)."
+  echo "  --wait-timeout DURATION Forwarded to workloads/deploy.sh. The timeout for waiting"
+  echo "                          for the ateom workers to be ready (default: 300s)"
   echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
   echo "  -h|--help               Show this help message"
   echo ""
@@ -65,6 +72,10 @@ while [[ "$#" -gt 0 ]]; do
     --sandbox-class=*) SANDBOX_CLASS="${1#*=}" ;;
     --otlp-endpoint) shift; OTLP_ENDPOINT="$1" ;;
     --otlp-endpoint=*) OTLP_ENDPOINT="${1#*=}" ;;
+    --actor-memory) shift; ACTOR_MEMORY="$1" ;;
+    --actor-memory=*) ACTOR_MEMORY="${1#*=}" ;;
+    --wait-timeout) shift; WAIT_TIMEOUT="$1" ;;
+    --wait-timeout=*) WAIT_TIMEOUT="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -84,6 +95,11 @@ case "${SANDBOX_CLASS}" in
     ;;
 esac
 
+if [[ -n "${WAIT_TIMEOUT}" ]] && ! [[ "${WAIT_TIMEOUT}" =~ ^([0-9]+(h|m|s))+$ ]]; then
+  echo "Error: --wait-timeout must be a Go duration like 300s, 10m, or 1h30m, got '${WAIT_TIMEOUT}'" >&2
+  exit 1
+fi
+
 if [[ "${action}" == "deploy" ]]; then
   echo "=== Deploying benchmark workloads (worker_count=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS}) ==="
   # An empty OTLP_ENDPOINT must not become an empty --otlp-endpoint argument,
@@ -92,6 +108,12 @@ if [[ "${action}" == "deploy" ]]; then
   workload_args=(--deploy --worker-count "${WORKER_COUNT}" --sandbox-class "${SANDBOX_CLASS}")
   if [[ -n "${OTLP_ENDPOINT}" ]]; then
     workload_args+=(--otlp-endpoint "${OTLP_ENDPOINT}")
+  fi
+  if [[ -n "${ACTOR_MEMORY}" ]]; then
+    workload_args+=(--actor-memory "${ACTOR_MEMORY}")
+  fi
+  if [[ -n "${WAIT_TIMEOUT}" ]]; then
+    workload_args+=(--wait-timeout "${WAIT_TIMEOUT}")
   fi
   "${BENCHMARKING_DIR}/workloads/deploy.sh" "${workload_args[@]}"
 

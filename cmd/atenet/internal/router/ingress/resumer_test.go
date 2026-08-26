@@ -55,8 +55,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				resumeCalled++
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Status:           ateapipb.Actor_STATUS_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP},
+						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
 					},
 					Resumed: true,
 				}, nil
@@ -68,8 +67,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if actor.GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetWorkerAssignment().GetWorkerPodIp())
+		if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
+			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
 		}
 		if outcome != ResumeOutcomeTriggered {
 			t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
@@ -84,9 +83,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Metadata:         &ateapipb.ResourceMetadata{Name: testActorName},
-						Status:           ateapipb.Actor_STATUS_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP},
+						Metadata: &ateapipb.ResourceMetadata{Name: testActorName},
+						Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
 					},
 					Resumed: false,
 				}, nil
@@ -113,8 +111,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				}
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Status:           ateapipb.Actor_STATUS_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP},
+						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
 					},
 					Resumed: true,
 				}, nil
@@ -126,8 +123,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if actor.GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetWorkerAssignment().GetWorkerPodIp())
+		if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
+			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
 		}
 		if outcome != ResumeOutcomeTriggered {
 			t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
@@ -166,8 +163,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				time.Sleep(20 * time.Millisecond)
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Status:           ateapipb.Actor_STATUS_RUNNING,
-						WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP},
+						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
 					},
 					Resumed: true,
 				}, nil
@@ -196,8 +192,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			if errs[i] != nil {
 				t.Fatalf("request %d failed: %v", i, errs[i])
 			}
-			if results[i].GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("request %d expected IP %q, got %q", i, expectedIP, results[i].GetWorkerAssignment().GetWorkerPodIp())
+			if results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
+				t.Errorf("request %d expected IP %q, got %q", i, expectedIP, results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIp())
 			}
 			switch outcomes[i] {
 			case ResumeOutcomeTriggered:
@@ -249,7 +245,7 @@ func TestActorResumer_Parking(t *testing.T) {
 						return nil, status.Error(codes.FailedPrecondition, "no free workers available")
 					}
 					return &ateapipb.ResumeActorResponse{
-						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: ateapipb.Actor_STATUS_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
+						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
 					}, nil
 				},
 			}
@@ -259,8 +255,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if actor.GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetWorkerAssignment().GetWorkerPodIp())
+			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -319,7 +315,7 @@ func TestActorResumer_Parking(t *testing.T) {
 						return nil, status.Error(codes.Unavailable, "connection refused")
 					}
 					return &ateapipb.ResumeActorResponse{
-						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: ateapipb.Actor_STATUS_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
+						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
 					}, nil
 				},
 			}
@@ -329,8 +325,8 @@ func TestActorResumer_Parking(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if actor.GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetWorkerAssignment().GetWorkerPodIp())
+			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -366,40 +362,94 @@ func TestActorResumer_Parking(t *testing.T) {
 		})
 	})
 
-	t.Run("BudgetExpiryDuringInFlightRPC", func(t *testing.T) {
+	t.Run("InFlightAttemptRunsToCompletion", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
+			// The core of #675: an attempt still running when the budget
+			// elapses is NEVER canceled — ateapi has already claimed a worker
+			// for it, and canceling would discard the restore and strand that
+			// worker. The attempt runs to completion and its success is served,
+			// while no new attempt starts after the budget.
+			const budget = 300 * time.Millisecond
+			var mu sync.Mutex
+			var calls int
+			var attemptStarts []time.Duration
+			var ctxErrAtReturn error
+			base := time.Now()
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+					mu.Lock()
+					calls++
+					n := calls
+					attemptStarts = append(attemptStarts, time.Since(base))
+					mu.Unlock()
+					if n == 1 {
+						return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+					}
+					// The restore overshoots the budget, as it routinely does
+					// under CI node contention.
+					time.Sleep(budget)
+					mu.Lock()
+					ctxErrAtReturn = ctx.Err()
+					mu.Unlock()
+					return &ateapipb.ResumeActorResponse{
+						Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
+						Resumed: true,
+					}, nil
+				},
+			}
+
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: budget}))
+			actor, _, err := resumer.ResumeActor(context.Background(), testActorRef)
+			if err != nil {
+				t.Fatalf("expected the overshooting resume to be served, got %v", err)
+			}
+			if actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp())
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if ctxErrAtReturn != nil {
+				t.Errorf("the in-flight attempt's context was canceled (%v); the budget must never cancel an attempt", ctxErrAtReturn)
+			}
+			for i, s := range attemptStarts {
+				if s >= budget {
+					t.Errorf("attempt %d started at %v, after the %v budget: retries must stop at the budget", i+1, s, budget)
+				}
+			}
+		})
+	})
+
+	t.Run("LateRetryableErrorIsBudgetExhaustion", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			// An attempt that outlives the budget and then fails with a
+			// retryable error must classify as budget exhaustion — the
+			// meaningful capacity 503, not a generic timeout 504.
+			const budget = 300 * time.Millisecond
 			var mu sync.Mutex
 			var calls int
 			mock := &resumerMockClient{
 				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 					mu.Lock()
 					calls++
-					n := calls
 					mu.Unlock()
-					if n == 1 {
-						// First attempt: transient saturation, remembered as the
-						// last retryable error.
-						return nil, status.Error(codes.FailedPrecondition, "no free workers available")
-					}
-					// Later attempt: block until the park budget cancels the RPC,
-					// then return what a real gRPC client returns — a *status*
-					// error with code DeadlineExceeded that does NOT satisfy
-					// errors.Is(err, context.DeadlineExceeded).
-					<-ctx.Done()
-					return nil, status.FromContextError(ctx.Err()).Err()
+					time.Sleep(budget + 100*time.Millisecond)
+					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
 				},
 			}
 
-			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 300 * time.Millisecond}))
+			resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: budget}))
 			_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
-			// The deadline landed mid-RPC; the client must still see the capacity
-			// error (503 "no free workers available"), not a generic timeout (504).
-			if got := status.Code(err); got != codes.FailedPrecondition {
-				t.Errorf("expected FailedPrecondition when the budget lands mid-RPC, got %v (err=%v)", got, err)
+			if got := status.Code(err); got != codes.ResourceExhausted {
+				t.Errorf("expected ResourceExhausted after a late retryable failure, got %v (err=%v)", got, err)
 			}
-			var budget *budgetExhaustedError
-			if !errors.As(err, &budget) {
+			var budgetErr *budgetExhaustedError
+			if !errors.As(err, &budgetErr) {
 				t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if calls != 1 {
+				t.Errorf("expected exactly 1 attempt (no retry after the budget), got %d", calls)
 			}
 		})
 	})
@@ -465,7 +515,7 @@ func testCallerCancelDoesNotAbortFlight(t *testing.T) {
 			// Hold the flight open until the test releases it.
 			<-proceed
 			return &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: ateapipb.Actor_STATUS_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}},
+				Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: expectedIP}}},
 			}, nil
 		},
 	}
@@ -512,8 +562,8 @@ func testCallerCancelDoesNotAbortFlight(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("second caller: unexpected error: %v", res.err)
 	}
-	if res.actor.GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
-		t.Errorf("second caller IP = %q, want %q", res.actor.GetWorkerAssignment().GetWorkerPodIp(), expectedIP)
+	if res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp() != expectedIP {
+		t.Errorf("second caller IP = %q, want %q", res.actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp(), expectedIP)
 	}
 	mu.Lock()
 	defer mu.Unlock()

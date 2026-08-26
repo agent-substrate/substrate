@@ -121,9 +121,9 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 	}
 }
 
-// relayAttrKey duplicates serverboot's unexported constant. Keeping a literal
-// here is the point: if serverboot renames the attribute, the dashboards and
-// alerts keyed on it break too, and this test is where that shows up.
+// relayAttrKey duplicates ateattr.OTLPRelayKey. Keeping a literal here is the
+// point: if the registry renames the attribute, the dashboards and alerts keyed on
+// it break too, and this test is where that shows up.
 const relayAttrKey = "ate.otlp.relay"
 
 // TestEndToEndFallsBackToDirect is the other half of TestEndToEndThroughServerboot:

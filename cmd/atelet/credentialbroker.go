@@ -45,9 +45,8 @@ func (b *credentialBroker) MintActorCertificate(ctx context.Context, req *atelet
 		return nil, err
 	}
 	resp, err := b.actorIdentityClient.MintCert(ctx, &ateapipb.MintCertRequest{
-		WorkerNamespace:           workerIdentity.Namespace,
-		WorkerPod:                 workerIdentity.PodName,
-		WorkerPodUid:              workerIdentity.PodUID,
+		// Workers are global-scoped and named by their pod UID.
+		Worker:                    &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
 		ExpectedActorUid:          req.GetExpectedActorUid(),
 		CertificateSigningRequest: req.GetCertificateSigningRequest(),
 		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,

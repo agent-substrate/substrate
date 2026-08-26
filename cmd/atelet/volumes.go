@@ -31,9 +31,6 @@ import (
 
 func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
-		if vol.GetType() != ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL {
-			continue
-		}
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
@@ -57,9 +54,6 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	var errs []error
 	for _, vol := range volumes {
-		if vol.GetType() != ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL {
-			continue
-		}
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
@@ -74,7 +68,7 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 			continue
 		}
 		if err := plugin.UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
-			if status.Code(err) == codes.NotFound {
+			if status.Code(err) == codes.NotFound || errors.Is(err, os.ErrNotExist) {
 				slog.WarnContext(ctx, "Volume not found during unmount, assuming already unmounted", slog.String("volume_id", ext.GetStorageVolumeId()), slog.Any("error", err))
 			} else {
 				errs = append(errs, fmt.Errorf("failed to unmount volume %q from %q: %w", ext.GetStorageVolumeId(), hostPath, err))

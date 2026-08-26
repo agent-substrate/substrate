@@ -48,6 +48,9 @@ import (
 )
 
 const (
+	// agentgatewayClientCertificateAttribute is the PEM peer certificate agentgateway
+	// computes from the downstream TLS connection for ext_proc.
+	agentgatewayClientCertificateAttribute = "source.certificate"
 	// forwardedClientCertHeader is the header Envoy fills in with details of
 	// the mTLS peer, including the PEM chain it validated. The egress filter
 	// chain sets forward_client_cert_details: SANITIZE_SET, so whatever a
@@ -182,9 +185,9 @@ func (h *Handler) validateActor(ctx context.Context, identity *substratex509.Act
 	}
 
 	// The actor performing egress must actually be running.
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
-			"egress denied: actor %q/%q is %s, not running", atespace, actorName, actor.GetStatus())
+			"egress denied: actor %q/%q is %s, not running", atespace, actorName, actor.GetStatus().GetState())
 	}
 	return nil
 }
@@ -193,6 +196,13 @@ func (h *Handler) validateActor(ctx context.Context, identity *substratex509.Act
 // on the request into a verified ActorIdentity, or an error describing why it
 // cannot be trusted.
 func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (*substratex509.ActorIdentity, error) {
+	if certificate := md.Attribute(agentgatewayClientCertificateAttribute); certificate != "" {
+		chain, err := parseCertificateChainPEM([]byte(certificate))
+		if err != nil {
+			return nil, err
+		}
+		return h.verifyActorCertificate(chain)
+	}
 	header := md.Header(forwardedClientCertHeader)
 	if header == "" {
 		return nil, fmt.Errorf("request carries no %s header", forwardedClientCertHeader)
@@ -296,8 +306,12 @@ func parseXFCCChain(header string) ([]*x509.Certificate, error) {
 		return nil, fmt.Errorf("decoding the client certificate chain: %w", err)
 	}
 
+	return parseCertificateChainPEM([]byte(chainPEM))
+}
+
+func parseCertificateChainPEM(chainPEM []byte) ([]*x509.Certificate, error) {
 	var chain []*x509.Certificate
-	rest := []byte(chainPEM)
+	rest := chainPEM
 	for {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -314,7 +328,7 @@ func parseXFCCChain(header string) ([]*x509.Certificate, error) {
 		chain = append(chain, cert)
 	}
 	if len(chain) == 0 {
-		return nil, fmt.Errorf("%s carries no certificate", forwardedClientCertHeader)
+		return nil, fmt.Errorf("client certificate value carries no certificate")
 	}
 	return chain, nil
 }

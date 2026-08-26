@@ -3,10 +3,69 @@
 #
 # This exposes the hostpath's Unix domain csi.sock as a TCP port to the
 # outside world. The mapping from Unix domain socket to TCP is done
-# by socat.
+# by envoy.
 #
 # This is useful for testing with csi-sanity or csc.
 
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: csi-hostpath-envoy-config
+  namespace: default
+  labels:
+    app.kubernetes.io/instance: hostpath.csi.k8s.io
+    app.kubernetes.io/part-of: csi-driver-host-path
+    app.kubernetes.io/name: csi-hostpath-socat
+    app.kubernetes.io/component: envoy
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address: { address: 127.0.0.1, port_value: 15000 }
+    static_resources:
+      listeners:
+      - name: csi_tls_listener
+        address:
+          socket_address: { address: 0.0.0.0, port_value: 10000 }
+        filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                alpn_protocols:
+                - h2
+                tls_certificates:
+                - certificate_chain: { filename: /run/servicedns/credential-bundle.pem }
+                  private_key: { filename: /run/servicedns/credential-bundle.pem }
+                  watched_directory: { path: /run/servicedns }
+                validation_context:
+                  trusted_ca: { filename: /run/podidentity-ca/trust-bundle.pem }
+                  watched_directory: { path: /run/podidentity-ca }
+                  match_typed_subject_alt_names:
+                  - san_type: URI
+                    matcher:
+                      exact: "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
+          filters:
+          - name: envoy.filters.network.tcp_proxy
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+              stat_prefix: csi_proxy
+              cluster: csi_unix_socket
+      clusters:
+      - name: csi_unix_socket
+        connect_timeout: 0.25s
+        type: STATIC
+        load_assignment:
+          cluster_name: csi_unix_socket
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  pipe:
+                    path: /csi/csi.sock
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -65,23 +124,50 @@ spec:
                   - hostpath.csi.k8s.io
             topologyKey: kubernetes.io/hostname
       containers:
-        - name: socat
-          image: registry.k8s.io/sig-storage/hostpathplugin:v1.17.1
+        - name: envoy
+          image: envoyproxy/envoy:v1.34-latest
           command:
-          - socat
+            - "/usr/local/bin/envoy"
           args:
-            - tcp-listen:10000,fork,reuseaddr
-            - unix-connect:/csi/csi.sock
+            - "-c"
+            - "/etc/envoy/envoy.yaml"
           securityContext:
             # This is necessary only for systems with SELinux, where
             # non-privileged sidecar containers cannot access unix domain socket
             # created by privileged CSI driver container.
             privileged: true
           volumeMounts:
+          - mountPath: /etc/envoy
+            name: envoy-config
           - mountPath: /csi
             name: socket-dir
+          - mountPath: /run/servicedns
+            name: servicedns-certs
+            readOnly: true
+          - mountPath: /run/podidentity-ca
+            name: podidentity-ca
+            readOnly: true
       volumes:
         - hostPath:
             path: /var/lib/kubelet/plugins/csi-hostpath
             type: DirectoryOrCreate
           name: socket-dir
+        - name: envoy-config
+          configMap:
+            name: csi-hostpath-envoy-config
+        - name: servicedns-certs
+          projected:
+            sources:
+            - podCertificate:
+                signerName: servicedns.podcert.ate.dev/identity
+                keyType: ECDSAP256
+                credentialBundlePath: credential-bundle.pem
+        - name: podidentity-ca
+          projected:
+            sources:
+            - clusterTrustBundle:
+                signerName: podidentity.podcert.ate.dev/identity
+                labelSelector:
+                  matchLabels:
+                    podcert.ate.dev/canarying: live
+                path: trust-bundle.pem

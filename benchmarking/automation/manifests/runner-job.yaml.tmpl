@@ -81,14 +81,9 @@ spec:
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
-        - name: ATE_ATEAPI_CLIENT_AUTH
-          value: "${ATE_ATEAPI_CLIENT_AUTH}"
         volumeMounts:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
-          readOnly: true
-        - name: ateapi-token
-          mountPath: /run/ateapi-token
           readOnly: true
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
@@ -107,13 +102,6 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: ca.crt
-      - name: ateapi-token
-        projected:
-          sources:
-          - serviceAccountToken:
-              audience: api.ate-system.svc
-              expirationSeconds: 3600
-              path: token
       - name: podidentity
         projected:
           sources:

@@ -168,3 +168,45 @@ data:
                 key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                 root: /run/podidentity.podcert.ate.dev/trust-bundle.pem
                 insecureHost: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atenet-egress-agentgateway-config
+  namespace: ate-system
+data:
+  config.yaml: |
+    # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+    frontendPolicies:
+      connect:
+        mode: route
+
+    gateways:
+      egress:
+        port: 8443
+        protocol: HTTPS
+        tls:
+          cert: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+          key: /run/servicedns.podcert.ate.dev/credential-bundle.pem
+          root: /run/actor-id-ca-certs/ca.crt
+
+    routes:
+    - name: substrate-egress
+      gateways:
+      - egress
+      policies:
+        extProc:
+          host: 127.0.0.1:50051
+          failureMode: failClosed
+          requestAttributes:
+            ate.extproc.direction: "'egress'"
+            source.certificate: source.certificate
+          processingOptions:
+            requestHeaderMode: send
+            responseHeaderMode: skip
+            requestBodyMode: none
+            responseBodyMode: none
+            requestTrailerMode: skip
+            responseTrailerMode: skip
+      backends:
+      - dynamic: {}

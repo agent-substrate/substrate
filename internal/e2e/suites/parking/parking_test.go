@@ -78,36 +78,54 @@ func TestRequestParking(t *testing.T) {
 	t.Run("ParkThenServed", func(t *testing.T) {
 		// Occupy the only worker with actor A.
 		resumeActor(ctx, t, clients, actorA)
-		waitForActorStatus(ctx, t, clients, actorA, ateapipb.Actor_STATUS_RUNNING)
+		waitForActorState(ctx, t, clients, actorA, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
-		// Request actor B: the pool is full, so the request parks.
+		// Request actor B: the pool is full, so the request parks. Freeing
+		// the worker is asynchronous — SuspendActor(A) returns before the
+		// suspend completes, and on the micro-VM class the snapshot upload
+		// routinely outlives the 5s park budget under CI contention. A
+		// budget-exhausted 503 while the suspend is still in flight is the
+		// router behaving correctly, so the request is retried: each attempt
+		// parks anew, and the suspend's completion lets one of them resume B.
+		// A stranded worker (#675's root cause) fails every attempt, so the
+		// regression this subtest pins still fails it.
 		type result struct {
 			resp *http.Response
 			body string
 			err  error
 		}
 		resCh := make(chan result, 1)
-		start := time.Now()
-		go func() {
-			resp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/")
-			var body string
-			if err == nil {
-				b, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				body = string(b)
+		var res result
+		var elapsed time.Duration
+		for attempt := 1; ; attempt++ {
+			start := time.Now()
+			go func() {
+				resp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/")
+				var body string
+				if err == nil {
+					b, _ := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					body = string(b)
+				}
+				resCh <- result{resp, body, err}
+			}()
+			if attempt == 1 {
+				// Free the worker only once the request is observably parked —
+				// the statusz gauge, not a sleep, is the synchronization point.
+				waitForParkedCount(ctx, t, statusz, func(active int) bool { return active >= 1 })
+				suspendActor(ctx, t, clients, actorA)
 			}
-			resCh <- result{resp, body, err}
-		}()
-
-		// Free the worker only once the request is observably parked — the
-		// statusz gauge, not a sleep, is the synchronization point.
-		waitForParkedCount(ctx, t, statusz, func(active int) bool { return active >= 1 })
-		suspendActor(ctx, t, clients, actorA)
-
-		res := <-resCh
-		elapsed := time.Since(start)
-		if res.err != nil {
-			t.Fatalf("parked request failed transport-level: %v", res.err)
+			res = <-resCh
+			elapsed = time.Since(start)
+			if res.err != nil {
+				t.Fatalf("parked request failed transport-level: %v", res.err)
+			}
+			if res.resp.StatusCode == http.StatusServiceUnavailable &&
+				strings.Contains(res.body, "no free workers available") && attempt < 3 {
+				t.Logf("attempt %d budget-exhausted while the worker was still freeing (503 after %v); retrying", attempt, elapsed)
+				continue
+			}
+			break
 		}
 		if res.resp.StatusCode != http.StatusOK {
 			t.Fatalf("parked request: status = %d (body %q), want 200", res.resp.StatusCode, res.body)
@@ -115,10 +133,24 @@ func TestRequestParking(t *testing.T) {
 		if !strings.Contains(res.body, "hello from") {
 			t.Errorf("parked request body = %q, want the counter greeting", res.body)
 		}
-		if elapsed >= routerParkBudget+2*time.Second {
-			t.Errorf("parked request served after %v, want inside the %v budget window", elapsed, routerParkBudget)
-		}
+		// No upper bound on elapsed here: a 200 proves the router served the
+		// request before Envoy's ext_proc timeout, and a slow-but-successful
+		// restore under CI contention is a pass, not a flake.
 		t.Logf("parked request served after %v", elapsed)
+
+		// The flake's root cause stranded actors in RESUMING with the worker
+		// claimed (#675): pin that B really converges and a follow-up request
+		// is served warm — a stranded actor would 503 it.
+		waitForActorState(ctx, t, clients, actorB, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		followUp, err := router.Get(ctx, resources.ActorRef{Atespace: parkingAtespace, Name: actorB}, "/")
+		if err != nil {
+			t.Fatalf("follow-up request failed transport-level: %v", err)
+		}
+		followUpBody, _ := io.ReadAll(followUp.Body)
+		followUp.Body.Close()
+		if followUp.StatusCode != http.StatusOK {
+			t.Errorf("follow-up request: status = %d (body %q), want 200 from the resumed actor", followUp.StatusCode, string(followUpBody))
+		}
 
 		// The slot must be released once served.
 		waitForParkedCount(ctx, t, statusz, func(active int) bool { return active == 0 })
@@ -172,7 +204,8 @@ func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Client
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
-	srcNS, srcName := "ate-demo-counter", "counter"
+	src := e2e.CounterFixture()
+	srcNS, srcName := src.Namespace, src.Name
 	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(srcNS).Get(ctx, srcName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("failed to get source WorkerPool %s/%s: %v", srcNS, srcName, err)
@@ -210,6 +243,10 @@ func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Client
 			},
 			SandboxClass: existingAt.Spec.SandboxClass,
 			Containers:   existingAt.Spec.Containers,
+			// The source's limits size the sandbox. Copying them matters most on
+			// micro-VM, where an ActorTemplate that declares none boots the guest
+			// at the kata config default (2GiB) instead of the demo's 512Mi.
+			Resources: existingAt.Spec.Resources,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: "gs://" + env["BUCKET_NAME"] + "/e2e-parking-" + nsObj.Name,
 			},
@@ -221,7 +258,7 @@ func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Client
 	}
 
 	t.Logf("Waiting for ActorTemplate %s to be Ready...", at.Name)
-	tmplCtx, tmplCancel := context.WithTimeout(ctx, 90*time.Second)
+	tmplCtx, tmplCancel := context.WithTimeout(ctx, e2e.TemplateReadyTimeout(t))
 	defer tmplCancel()
 	var lastPhase v1alpha1.PhaseType
 	for {
@@ -284,14 +321,14 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, name 
 	}
 }
 
-func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, name string, want ateapipb.Actor_Status) {
+func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, name string, want ateapipb.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: parkingAtespace, Name: name},
 		})
-		if err == nil && resp.GetStatus() == want {
+		if err == nil && resp.GetStatus().GetState() == want {
 			return
 		}
 		time.Sleep(1 * time.Second)

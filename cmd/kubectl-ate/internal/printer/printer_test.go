@@ -68,11 +68,13 @@ func TestPrintActorsTo_Table(t *testing.T) {
 			},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
-			Status:                 ateapipb.Actor_STATUS_RUNNING,
-			WorkerAssignment: &ateapipb.WorkerAssignment{
-				WorkerNamespace: "worker-ns",
-				WorkerPod:       "pod-1",
-				WorkerPodIp:     "1.2.3.4",
+			Status: &ateapipb.ActorStatus{
+				State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPod:       "pod-1",
+					WorkerPodIp:     "1.2.3.4",
+				},
 			},
 		},
 	}
@@ -82,8 +84,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `ATESPACE   NAME   TEMPLATE             STATUS           ATEOM POD         ATEOM IP   VERSION   AGE
-team-a     id-1   default/template-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2         5m
+	expected := `ATESPACE   NAME   TEMPLATE             STATE                 ATEOM POD         ATEOM IP   VERSION   AGE
+team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4    2         5m
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -156,7 +158,7 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 			},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 		{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -166,7 +168,7 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 			},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
-			Status:                 ateapipb.Actor_STATUS_RUNNING,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 		},
 		{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -176,7 +178,7 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 			},
 			ActorTemplateNamespace: "other",
 			ActorTemplateName:      "template-2",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 	}
 
@@ -185,10 +187,10 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	}
 
 	// Sorted by atespace first, then template namespace, template name, name.
-	expected := `ATESPACE   NAME    TEMPLATE             STATUS             ATEOM POD   ATEOM IP   VERSION   AGE
-team-a     alpha   default/template-1   STATUS_RUNNING     <none>                 0         5m
-team-a     beta    other/template-2     STATUS_SUSPENDED   <none>                 0         5h
-team-b     zebra   default/template-1   STATUS_SUSPENDED   <none>                 0         3d
+	expected := `ATESPACE   NAME    TEMPLATE             STATE                   ATEOM POD   ATEOM IP   VERSION   AGE
+team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                 0         5m
+team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                 0         5h
+team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                 0         3d
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -211,14 +213,16 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "gvisor",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Namespace: "default",
-					Name:      "template-1",
-				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "space-1",
-					Name:     "id-1",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Namespace: "default",
+						Name:      "template-1",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "space-1",
+						Name:     "id-1",
+					},
 				},
 			},
 		},

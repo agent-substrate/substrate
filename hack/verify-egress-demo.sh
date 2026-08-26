@@ -20,9 +20,9 @@
 #
 # The egress demo Actor accepts {"url":"..."} and performs an HTTP GET. With
 # egress turned on, the Actor's outbound TCP is nftables-REDIRECTed
-# into atunnel, wrapped in mTLS + HTTP CONNECT, and sent to the Envoy egress
-# gateway, which terminates CONNECT and tunnels to the real destination. This
-# script drives that path and shows the gateway's access log proving the actor's
+# into atunnel, wrapped in mTLS + HTTP CONNECT, and sent to the egress gateway,
+# which terminates CONNECT and tunnels to the real destination. This script
+# drives that path and shows the ext_proc authentication log proving the actor's
 # client certificate + CONNECT authority were seen.
 set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"; cd "${ROOT}"
@@ -42,10 +42,8 @@ kubectl-ate --context "${CTX}" create actor "${ACTOR}" \
   --atespace "${ATESPACE}" --template ate-demo-egress/egress 2>/dev/null || true
 ${K} -n ate-system wait --for=condition=Ready "actor/${ACTOR}" 2>/dev/null || sleep 10
 
-echo "== snapshot gateway log offset =="
-# -c envoy explicitly: the gateway pod also runs the ext-proc sidecar, and the
-# [egress] access log belongs to Envoy.
-BEFORE=$(${K} -n ate-system logs deployment/atenet-egress -c envoy --tail=-1 2>/dev/null | wc -l | tr -d ' ')
+echo "== snapshot gateway authentication log offset =="
+BEFORE=$(${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 2>/dev/null | wc -l | tr -d ' ')
 
 echo "== drive actor egress: GET ${TARGET_URL} via the actor =="
 ${K} -n ate-system port-forward service/atenet-router 18000:80 >/tmp/pf.log 2>&1 &
@@ -57,30 +55,30 @@ RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:18000/ \
   -d "{\"url\":\"${TARGET_URL}\"}") || true
 echo "actor round-trip HTTP ${RESP} (200 = the actor fetched ${TARGET_URL} through egress)"
 
-echo "== NEW egress gateway access log lines (proof of CONNECT+mTLS+identity) =="
-# Envoy emits the CONNECT entry asynchronously (an external dst can land seconds
-# after the actor's response), so we poll. And the Actor's HTTP client keeps the
+echo "== NEW egress authentication log lines (proof of CONNECT+mTLS+identity) =="
+# The CONNECT can land seconds after the actor's response, so we poll. And the
+# Actor's HTTP client keeps the
 # tunnel alive: a repeat fetch to a host it already reached rides the open tunnel
-# and produces no new access-log entry at all, so a run against a warm actor
+# and produces no new authentication entry at all, so a run against a warm actor
 # would fail even though egress is working. Fall back to any tunnel already open
-# for this actor's SAN before declaring failure.
-SAN="atespace/${ATESPACE}/actor/${ACTOR}"
+# for this actor before declaring failure.
 NEW=""
 for _ in $(seq 1 15); do
-  NEW=$(${K} -n ate-system logs deployment/atenet-egress -c envoy --tail=-1 2>/dev/null \
-    | tail -n +"$((BEFORE + 1))" | grep '\[egress\]' || true)
+  NEW=$(${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 2>/dev/null \
+    | tail -n +"$((BEFORE + 1))" | grep 'egress identity authenticated' || true)
   [ -n "${NEW}" ] && break
   sleep 2
 done
 if [ -n "${NEW}" ]; then
   echo "${NEW}"
-elif ${K} -n ate-system logs deployment/atenet-egress -c envoy --tail=-1 2>/dev/null \
-  | grep -q "\[egress\].*${SAN}"; then
+elif ${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 2>/dev/null \
+  | grep 'egress identity authenticated' | grep -q "${ATESPACE}.*${ACTOR}\|${ACTOR}.*${ATESPACE}"; then
   echo "   no new CONNECT — the actor reused an already-open tunnel; its existing entries:"
-  ${K} -n ate-system logs deployment/atenet-egress -c envoy --tail=-1 | grep "\[egress\].*${SAN}" | tail -3
+  ${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 \
+    | grep 'egress identity authenticated' | grep "${ATESPACE}.*${ACTOR}\|${ACTOR}.*${ATESPACE}" | tail -3
 else
-  echo "!! no [egress] lines for ${SAN} — dumping recent gateway logs:"
-  ${K} -n ate-system logs deployment/atenet-egress -c envoy --tail=20
+  echo "!! no egress authentication lines for ${ATESPACE}/${ACTOR} — dumping recent ext_proc logs:"
+  ${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=20
   exit 1
 fi
-echo "== PASS: actor egress traversed the Envoy egress gateway =="
+echo "== PASS: actor egress traversed the egress gateway =="

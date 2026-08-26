@@ -424,13 +424,9 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
 	})
 
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
-		t.Fatalf("re-fetch WorkerPool: %v", err)
-	}
-	wp.Spec.Template.NodeSelector = map[string]string{"workload": "updated"}
-	if err := k8sClient.Update(ctx, wp); err != nil {
-		t.Fatalf("update WorkerPool template: %v", err)
-	}
+	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool template", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.NodeSelector = map[string]string{"workload": "updated"}
+	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
 		dep, err := getDeployment(ctx, wp)

@@ -22,6 +22,36 @@ The e2e tests assume you have a cluster set up with Agent Substrate installed,
 for example via `hack/install-ate.sh --deploy-ate-system` or
 `hack/install-ate-kind.sh --deploy-ate-system`.
 
+## Sandbox classes
+
+The suites are runtime-agnostic: the same tests run against gVisor and against
+the micro-VM (kata + cloud-hypervisor) sandbox class. `E2E_SANDBOX_CLASS`
+selects which, by repointing every fixture at its variant --- see
+`e2e.CounterFixture`, `e2e.EgressFixture` and `e2e.RenderFixtureManifest` in
+[sandbox.go](sandbox.go). Unset means gVisor.
+
+```shell
+# gVisor (the default), against the demos install-ate-kind.sh deploys
+$ hack/run-e2e-kind.sh -v -args --no-color
+
+# micro-VM, against the counter-microvm and egress-microvm demos
+$ E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh -v -args --no-color
+```
+
+The micro-VM lane needs its fixtures installed first, which also needs a node
+with `/dev/kvm` (`hack/create-kind-cluster.sh` detects one and labels the node):
+
+```shell
+$ hack/run-microvm-demo-kind.sh                        # counter-microvm + assets
+$ hack/install-ate-kind.sh --deploy-demo-egress-microvm # egress-microvm
+```
+
+A handful of knobs override the class defaults, mostly for a cluster that
+installs the fixtures elsewhere: `E2E_TEMPLATE_NAMESPACE` / `E2E_TEMPLATE_NAME`
+point the counter fixture somewhere else, and `E2E_TEMPLATE_READY_TIMEOUT`
+replaces the golden-snapshot budget (90s on gVisor, 10m on micro-VM, where the
+golden is a cloud-hypervisor cold boot plus a checkpoint).
+
 ## After a failure
 
 A suite deletes the namespaces it created only when it passed. A failed run

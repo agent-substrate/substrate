@@ -86,7 +86,10 @@ data:
     admin:
       address:
         socket_address:
-          address: 0.0.0.0
+          # ipv4_compat keeps `kubectl port-forward` to the admin port working;
+          # in-pod callers dial localhost and need no help.
+          address: "::"
+          ipv4_compat: true
           port_value: 9901
 
     node:
@@ -354,6 +357,7 @@ metadata:
   namespace: ate-system
 spec:
   type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: atenet-router
   ports:

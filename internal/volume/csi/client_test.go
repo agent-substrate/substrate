@@ -138,7 +138,7 @@ func TestNewCSIClient_TCP(t *testing.T) {
 
 	// Connect to the mock server using NewCSIClient
 	endpoint := "tcp://" + lis.Addr().String()
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}

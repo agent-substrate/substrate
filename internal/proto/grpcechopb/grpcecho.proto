@@ -1,0 +1,72 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package grpcecho;
+
+option go_package = "github.com/agent-substrate/substrate/internal/proto/grpcechopb";
+
+// Echo is the smallest service that can prove a gRPC request and its response
+// crossed a network path intact. It exists for the egress e2e coverage: the
+// origin is internal/e2e/fixtures/grpcecho and the client is the egress demo
+// actor, which reaches it through the egress gateway's CONNECT tunnel.
+//
+// One method per streaming shape, because they fail differently. A unary
+// response carries its status in trailers sent immediately after the message; a
+// server-stream holds the connection open across many frames; a bidirectional
+// stream has both directions carrying frames at once and then half-closes one
+// of them. A path that buffers, downgrades to HTTP/1.1, serializes the two
+// directions, or reaps an idle tunnel breaks one of these without touching the
+// others.
+service Echo {
+  // Echo returns the message it was sent.
+  rpc Echo(EchoRequest) returns (EchoResponse) {}
+
+  // EchoStream returns the message it was sent count times, one response per
+  // message, each numbered with its position in the stream.
+  rpc EchoStream(EchoStreamRequest) returns (stream EchoResponse) {}
+
+  // EchoBidi answers every request with one response, as each request arrives,
+  // numbered with its position in the stream. The caller decides how many to
+  // send and half-closes when it is done.
+  //
+  // Unlike EchoStream, the server must not wait for the client to finish: a
+  // caller that sends its next request only after reading the previous response
+  // deadlocks against an implementation -- or a relay -- that reads the request
+  // direction to exhaustion before writing anything back.
+  rpc EchoBidi(stream EchoRequest) returns (stream EchoResponse) {}
+}
+
+message EchoRequest {
+  // The message to be echoed back.
+  string message = 1;
+}
+
+message EchoStreamRequest {
+  // The message to be echoed back in every response.
+  string message = 1;
+
+  // How many responses to send. Must be positive.
+  int32 count = 2;
+}
+
+message EchoResponse {
+  // The message echoed back.
+  string message = 1;
+
+  // The response's zero-based position in the stream, so a caller can tell a
+  // reordered or deduplicated stream from an intact one. Always 0 for Echo.
+  int32 index = 2;
+}

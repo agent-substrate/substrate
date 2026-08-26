@@ -118,6 +118,20 @@ func TestDirectionOf(t *testing.T) {
 	}
 }
 
+func TestDirectionOfAgentgatewayAttribute(t *testing.T) {
+	req := connectRequest("", "")
+	req.Attributes = map[string]*structpb.Struct{
+		"envoy.filters.http.ext_proc": {
+			Fields: map[string]*structpb.Value{
+				directionAttribute: structpb.NewStringValue(string(DirectionEgress)),
+			},
+		},
+	}
+	if got := directionOf(req); got != DirectionEgress {
+		t.Errorf("directionOf() = %v, want %v", got, DirectionEgress)
+	}
+}
+
 // A request the client dresses up to look like egress must not be enough: only
 // the Envoy-asserted filter chain name selects the egress handler.
 func TestDirectionOfIgnoresClientSuppliedAttributeHeader(t *testing.T) {

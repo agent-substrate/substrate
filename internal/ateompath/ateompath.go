@@ -80,12 +80,15 @@ func AteletOTLPSocketPath() string {
 	)
 }
 
+// AteomsDir is the parent of every per-ateom directory. Each ateom creates
+// AteomPath(podUID) under it when it boots, so listing this directory is how a
+// scraper with no prior knowledge discovers the node's ateoms.
+func AteomsDir() string {
+	return filepath.Join(BasePath, "ateoms")
+}
+
 func AteomPath(podUID string) string {
-	return filepath.Join(
-		BasePath,
-		"ateoms",
-		podUID,
-	)
+	return filepath.Join(AteomsDir(), podUID)
 }
 
 func AteomSocketPath(podUID string) string {
@@ -110,18 +113,6 @@ func ActorPath(actorUID string) string {
 	return filepath.Join(
 		ActorsDir,
 		actorUID,
-	)
-}
-
-// ActorIdentityDirPath is the host directory atelet populates with the
-// actor's identity data (currently the single file "actor-id") and
-// bind-mounts read-only into the actor. It is per-actor and regenerated on
-// every resume, so (unlike the checkpointed process environment) it reflects
-// the correct ID after a restore from the golden snapshot.
-func ActorIdentityDirPath(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"identity",
 	)
 }
 
@@ -157,6 +148,19 @@ func OCIBundlePath(actorUID, containerName string) string {
 		OCIBundleDir(actorUID),
 		containerName,
 	)
+}
+
+// ImageVolumeMountPath returns where ateom composes one image volume for a
+// container. The path is per-container: containers of one actor may mount the
+// same volume, and each needs its own mount point inside its own bundle.
+func ImageVolumeMountPath(actorUID, containerName, volumeName string) string {
+	return ImageVolumeMountPathInBundle(OCIBundlePath(actorUID, containerName), volumeName)
+}
+
+// ImageVolumeMountPathInBundle returns the image volume mount path inside a
+// bundle path.
+func ImageVolumeMountPathInBundle(bundlePath, volumeName string) string {
+	return filepath.Join(bundlePath, "volumes", volumeName)
 }
 
 func RunscDebugLogDir(actorUID, containerName string) string {
@@ -207,6 +211,37 @@ func DurableDirVolumeMountsDir(actorUID string) string {
 func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
 	return filepath.Join(
 		DurableDirVolumeMountsDir(actorUID),
+		volumeName,
+	)
+}
+
+// SystemInfoVolumeRootsDir is the directory containing the per-volume root
+// directories of system-info volumes. Snapshots must capture durable-dir
+// data but never system-info contents, which atelet regenerates on every
+// Run/Restore; each sandbox class excludes them differently:
+//
+//   - micro-VM captures by location: its checkpoint tars all of
+//     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
+//     system-info roots are excluded by living in this separate directory.
+//   - gVisor captures by declaration: durable mounts are registered with
+//     the sandbox (mount-hint annotations for FULL checkpoints, the
+//     enumerated durable mount paths for DATA fscheckpoints); system-info
+//     mounts are plain undeclared binds, never captured regardless of host
+//     layout.
+//
+// The separate directory is therefore critical only for micro-VM.
+func SystemInfoVolumeRootsDir(actorUID string) string {
+	return filepath.Join(
+		ActorPath(actorUID),
+		"system-info",
+	)
+}
+
+// SystemInfoVolumeRoot returns the host path of the root directory for a
+// specific system-info volume.
+func SystemInfoVolumeRoot(actorUID, volumeName string) string {
+	return filepath.Join(
+		SystemInfoVolumeRootsDir(actorUID),
 		volumeName,
 	)
 }

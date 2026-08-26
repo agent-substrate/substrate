@@ -6,21 +6,23 @@ This guide explains how Agent Substrate achieves observability across these susp
 
 ## The Observability Model
 
-To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
-* `ate.dev/actor_name`: The name of the actor (e.g., `my-counter-1` or `test`).
-* `ate.dev/actor_atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
-* `ate.dev/actor_uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
-* `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
-* `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
-* `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
+To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods. These are the same `ate.*` keys the spans and metrics below use, defined once in [`internal/ateattr`](../internal/ateattr):
+* `ate.actor.name`: The name of the actor (e.g., `my-counter-1` or `test`).
+* `ate.atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
+* `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
+* `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
+* `ate.template.namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
+
+`ate.*` is reserved for Substrate. An actor's own log lines pass through untouched except for keys in that namespace, which are dropped before the record is written, so nothing a workload emits can be read as platform-issued attribution.
 
 ---
 
 ## 1. Logging
 
-Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.dev` metadata labels.
+Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
 
 ### Active Actor Inspection via CLI
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
@@ -65,6 +67,12 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
+#### Example 4: Filtering by Container
+An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor started`, `Actor checkpointing`, ...). `--container` (short form `-c`) restricts the output to the named container's logs:
+
+```bash
+kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
+```
 
 ---
 
@@ -77,21 +85,21 @@ Because the logging pipeline indexes the core metadata labels, you can query you
 To track the unified, continuous lifecycle of a single actor regardless of how many times it migrated across worker pods or was suspended/resumed:
 
 ```text
-labels."ate.dev/actor_name"="test"
+labels."ate.actor.name"="test"
 ```
 
 #### 2. Atespace-Centric View
 To monitor or debug all actor instances in a specific atespace (e.g., analyzing the collective behavior or error rates of all actors belonging to one tenant):
 
 ```text
-labels."ate.dev/actor_atespace"="ate-demo-counter"
+labels."ate.atespace"="ate-demo-counter"
 ```
 
 #### 3. Template-Centric View
 To monitor or debug all actor instances created from a specific ActorTemplate (e.g., analyzing the collective behavior or error rates of all counter actors). One atespace can run actors from many templates, so this is a distinct dimension from the atespace view above:
 
 ```text
-labels."ate.dev/actor_template_name"="counter"
+labels."ate.template.name"="counter"
 ```
 
 #### 4. Pod-Centric View
@@ -103,14 +111,24 @@ resource.labels.pod_name="counter-c995fdf4c-m7d96"
 
 ---
 
+### Joining Logs to Traces
+
+Substrate-emitted records carry top-level `trace_id`, `span_id`, and `trace_flags` in lowercase hex, the names the [OpenTelemetry spec](https://opentelemetry.io/docs/specs/otel/compatibility/logging_trace_context/) fixes for non-OTLP log formats. That covers component logs (every `slog.*Context` call, via [`internal/contextlogging`](../internal/contextlogging)) and the synthetic actor lifecycle records, so a suspend or resume log line joins the RPC that drove it.
+
+An actor's **own** lines carry trace context only if the actor emits these fields itself, in which case they pass through unchanged. Substrate cannot supply them: one forwarder goroutine covers a container's whole output stream and cannot tell which request produced a given line. Per-line correlation for actor logs arrives with the actor telemetry relay ([#853](https://github.com/agent-substrate/substrate/issues/853)), where the actor's own SDK carries the context.
+
+---
+
 ## 2. Metrics
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
 
+> [`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument. Read it when you need all the labels, the bucket limits, or the permitted values of a label. The table below does not have each instrument. The request-parking instruments and the actor resource-usage instruments are in the registry only. Refer to [The metric registry](#the-metric-registry).
+
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
-| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `STATUS_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
+| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.namespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.namespace`, `ate.template.name`) |
@@ -159,11 +177,46 @@ On a failure, `ate.failure.reason` marks the phase that died and the `total`, an
 
 The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind, scope, phase) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead.
 
+### The metric registry
+
+[`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument that the ate system components send, and the permitted values of each label. Use it as the only source of this data.
+
+It is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. Weaver reads it, resolves each `ref`, and refuses a group or an attribute that is not correct:
+
+```sh
+hack/verify/verify-metrics.sh              # the command that CI uses
+weaver registry check -r docs/metrics/registry   # the same command, direct
+```
+
+`make verify` runs the script. It uses a local `weaver` binary if there is one, and the official image if there is none.
+
+**To add or change an instrument:** change `metrics.yaml` and run the script.
+
+Two files, and not one:
+
+| File | Content | Who reads it |
+|---|---|---|
+| `docs/metrics/registry/manifest.yaml` | The name and the schema URL of the registry. | Weaver |
+| `docs/metrics/registry/metrics.yaml` | The `groups`: each metric, each attribute. | Weaver |
+| `docs/metrics/substrate.yaml` | The rules of Substrate that Weaver cannot hold. | A person, an agent |
+
+Weaver permits only `groups` and `imports` at the top level of a registry file, and it refuses a file that has any other top-level key. Thus `substrate.yaml` is beside the registry directory and not in it. It records:
+
+* **`upstream_semconv_version`** — the version of the upstream semantic conventions that Substrate borrows `error.type`, `file.name` and the `rpc.*` attributes from.
+* **`bridged_metric_families`** — the metrics that atecontroller exports but Substrate does not define, as prefixes. `controller_runtime_version` records the version of controller-runtime that the list comes from.
+* **`cardinality_rules`** — the rules that keep the number of series small. No rule is enforced at this time. Each rule says what could enforce it.
+* **`lint_exceptions`** — the known debt.
+* **`blind_spots`** — the subsystems with no metrics. Read this list before you give a cause to a fault. The store has no instruments, but each lifecycle operation uses it.
+
+**What the check does not do.** Weaver reads the registry, and not the Go code. Thus the build stays correct if a person adds an instrument to the code and not to the registry, or renames one in the code only. `weaver registry generate` could make `internal/ateattr` from the registry, which would remove that difference for the attributes. `weaver registry live-check` could compare the registry with the telemetry of the end-to-end tests. Both are future work.
+
 ### Bridged controller-runtime metrics (atecontroller)
 
-atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
+atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
 
 These can be used to answer whether the controller is keeping up, e.g. rising `workqueue_depth` or `workqueue_queue_duration_seconds` means reconciles are falling behind, and `controller_runtime_reconcile_errors_total` says which controller.
+
+`docs/metrics/substrate.yaml` records these as prefixes under `bridged_metric_families`, and not one metric at a time. The upstream library owns the names, the labels and the buckets, and a version bump can add a family. A copy in the registry becomes wrong with no signal. `controller_runtime_version` dates the list, thus a bump has an obvious place to check.
 
 Note that controller-runtime enables native histograms on `controller_runtime_reconcile_time_seconds`, `workqueue_queue_duration_seconds`, and `workqueue_work_duration_seconds`, so those three arrive as OTLP exponential histograms rather than fixed-bucket ones.
 

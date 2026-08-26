@@ -38,10 +38,17 @@ fi
 
 WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
+# Actor memory limit (ActorTemplate spec.resources.limits.memory). The default
+# is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
+# so benchmark actors do not inherit the 2 GiB kata default and drag its page
+# cache into every memory snapshot. Raise it for RAM-consuming suites.
+ACTOR_MEMORY="256Mi"
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
 OTLP_ENDPOINT=""
+# The timeout for waiting for the ateom worker pods to be ready.
+WAIT_TIMEOUT="300s"
 
 usage() {
   echo "Usage: $0 [options]"
@@ -52,9 +59,12 @@ usage() {
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
+  echo "                              the smallest size microvm admits)"
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
+  echo "  --wait-timeout DURATION     The timeout for waiting for the ateom workers to be ready (default: 300s)"
   echo "  -h, --help                  Show this help message"
 }
 
@@ -95,12 +105,13 @@ substitute() {
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
+      -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       "${MANIFEST_TEMPLATE}"
 }
 
 deploy() {
   resolve_otlp_endpoint
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, otlp_endpoint=${OTLP_ENDPOINT})..."
   # ActorTemplate.spec has the rule `self == oldSelf` (see
   # pkg/api/v1alpha1/actortemplate_types.go). Thus the API server rejects an
   # apply that changes a template. A value that changes for each run — the OTLP
@@ -110,6 +121,11 @@ deploy() {
   kubectl delete actortemplate --namespace=benchmark-workloads \
     --all --ignore-not-found
   substitute | hack/run-tool.sh ko apply -f -
+  echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT})..."
+  kubectl wait --for=create deployment/benchmark-ateom \
+    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT}"
+  kubectl rollout status deployment/benchmark-ateom \
+    --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT}"
 }
 
 delete() {
@@ -154,6 +170,20 @@ while [[ "$#" -gt 0 ]]; do
     --otlp-endpoint=*)
       OTLP_ENDPOINT="${1#*=}"
       ;;
+    --actor-memory)
+      shift
+      ACTOR_MEMORY="$1"
+      ;;
+    --actor-memory=*)
+      ACTOR_MEMORY="${1#*=}"
+      ;;
+    --wait-timeout)
+      shift
+      WAIT_TIMEOUT="$1"
+      ;;
+    --wait-timeout=*)
+      WAIT_TIMEOUT="${1#*=}"
+      ;;
     -h|--help)
       usage
       exit 0
@@ -174,6 +204,11 @@ case "${SANDBOX_CLASS}" in
     exit 1
     ;;
 esac
+
+if ! [[ "${WAIT_TIMEOUT}" =~ ^([0-9]+(h|m|s))+$ ]]; then
+  echo "Error: --wait-timeout must be a Go duration like 300s, 10m, or 1h30m, got '${WAIT_TIMEOUT}'" >&2
+  exit 1
+fi
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

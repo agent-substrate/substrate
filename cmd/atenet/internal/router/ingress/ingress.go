@@ -141,10 +141,10 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		Resume:            string(resumeOutcome),
 	}
 
-	workerIP := actor.GetWorkerAssignment().GetWorkerPodIp()
+	workerIP := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
-		slog.String("status", actor.GetStatus().String()),
+		slog.String("state", actor.GetStatus().GetState().String()),
 		slog.String("workerIP", workerIP))
 
 	if ip := net.ParseIP(workerIP); ip == nil {

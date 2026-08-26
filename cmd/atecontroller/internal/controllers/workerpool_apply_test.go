@@ -209,6 +209,42 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 	}
 }
 
+func TestBuildDeploymentApplyConfigMetadata(t *testing.T) {
+	wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+		Labels: map[string]atev1alpha1.WorkerPoolLabelValue{
+			"project":             "agent-substrate",
+			"team":                "compute",
+			"ate.dev/worker-pool": "incorrect",
+		},
+		Annotations: map[string]string{
+			"policy.example.com/exemption": "sandbox-host",
+		},
+	})
+
+	got := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
+	wantLabels := map[string]string{
+		"project":             "agent-substrate",
+		"team":                "compute",
+		"ate.dev/worker-pool": wp.Name,
+	}
+	wantAnnotations := map[string]string{
+		"policy.example.com/exemption": "sandbox-host",
+	}
+
+	if diff := cmp.Diff(wantLabels, got.Labels); diff != "" {
+		t.Errorf("Deployment labels mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantAnnotations, got.Annotations); diff != "" {
+		t.Errorf("Deployment annotations mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantLabels, got.Spec.Template.Labels); diff != "" {
+		t.Errorf("pod-template labels mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(wantAnnotations, got.Spec.Template.Annotations); diff != "" {
+		t.Errorf("pod-template annotations mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // TestMicroVMPodShape asserts the micro-VM sandbox class adds the /dev/kvm
 // device (volume + container mount) and node placement (nodeSelector +
 // toleration on ate.dev/sandboxClass); other classes get none of it.
@@ -735,6 +771,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithArgs(
 				"--pod-uid=$(POD_UID)",
 				"--atunnel-listen-address=0.0.0.0:443",
+				"--atunnel-connect-listen-address=0.0.0.0:444",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 				"--atunnel-egress-listen-address=0.0.0.0:15001",
@@ -743,7 +780,11 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithPorts(corev1ac.ContainerPort().
 				WithName("https").
 				WithContainerPort(443).
-				WithProtocol(corev1.ProtocolTCP)).
+				WithProtocol(corev1.ProtocolTCP),
+				corev1ac.ContainerPort().
+					WithName("connect").
+					WithContainerPort(444).
+					WithProtocol(corev1.ProtocolTCP)).
 			WithSecurityContext(corev1ac.SecurityContext().
 				WithRunAsUser(0).
 				WithRunAsGroup(0).
@@ -786,6 +827,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 	}
 
 	return appsv1ac.Deployment(wp.Name, wp.Namespace).
+		WithLabels(map[string]string{"ate.dev/worker-pool": wp.Name}).
 		WithOwnerReferences(metav1ac.OwnerReference().
 			WithAPIVersion(atev1alpha1.GroupVersion.String()).
 			WithKind("WorkerPool").

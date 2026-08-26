@@ -18,6 +18,7 @@ package imagecache
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -287,5 +288,72 @@ func TestSetupBundleRootfs_ManyLayers(t *testing.T) {
 
 	if err := UnmountAllUnder(bundle); err != nil {
 		t.Fatalf("UnmountAllUnder: %v", err)
+	}
+}
+
+// Image volumes reach identical content through both arms: one layer binds,
+// several overlay.
+func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+
+	for _, tc := range []struct {
+		name   string
+		layers int
+	}{
+		{"one layer binds", 1},
+		{"three layers overlay", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var layers []string
+			for i := range tc.layers {
+				dir := t.TempDir()
+				writeLayer(t, dir, map[string]string{
+					fmt.Sprintf("layer%d.txt", i): "content",
+					"shadowed.txt":                fmt.Sprintf("from-layer-%d", i),
+				}, nil)
+				layers = append(layers, dir)
+			}
+
+			bundle := t.TempDir()
+			if err := WriteSpec(bundle, &OverlaySpec{
+				Layers:       []string{layers[0]},
+				ImageVolumes: []ImageVolumeOverlay{{Name: "agent", Layers: layers}},
+			}); err != nil {
+				t.Fatalf("WriteSpec: %v", err)
+			}
+			if err := SetupBundleRootfs(bundle); err != nil {
+				t.Fatalf("SetupBundleRootfs: %v", err)
+			}
+			t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+			mnt := filepath.Join(bundle, "volumes", "agent")
+			for i := range tc.layers {
+				if _, err := os.Stat(filepath.Join(mnt, fmt.Sprintf("layer%d.txt", i))); err != nil {
+					t.Errorf("layer %d not visible in the volume: %v", i, err)
+				}
+			}
+			// Later layers win, same as the rootfs overlay.
+			want := fmt.Sprintf("from-layer-%d", tc.layers-1)
+			if got, err := os.ReadFile(filepath.Join(mnt, "shadowed.txt")); err != nil || string(got) != want {
+				t.Errorf("shadowed.txt = %q (%v), want %q", got, err, want)
+			}
+			// No upper on either arm, so there is nowhere for a write to go.
+			if err := os.WriteFile(filepath.Join(mnt, "nope.txt"), []byte("x"), 0o644); err == nil {
+				t.Error("write succeeded through a read-only image volume")
+			} else if !errors.Is(err, unix.EROFS) {
+				t.Errorf("write failed with %v, want EROFS", err)
+			}
+			// The shared pool must never see the attempt.
+			if _, err := os.Stat(filepath.Join(layers[tc.layers-1], layerFSDirName, "nope.txt")); err == nil {
+				t.Error("write leaked into the shared layer pool")
+			}
+
+			if err := UnmountAllUnder(bundle); err != nil {
+				t.Fatalf("UnmountAllUnder: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(mnt, "layer0.txt")); err == nil {
+				t.Error("volume still shows content after unmount")
+			}
+		})
 	}
 }

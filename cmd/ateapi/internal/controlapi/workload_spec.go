@@ -20,24 +20,98 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	corev1 "k8s.io/api/core/v1"
 )
+
+// toAteletResources resolves a container's declared limits into the scalars
+// atelet and the ateoms consume; everything downstream compares numbers.
+// Returns nil when the container declares no limits, so the OCI spec stays
+// untouched for templates that do not use them.
+func toAteletResources(r *atev1alpha1.ContainerResources) *ateletpb.ResourceLimits {
+	if r == nil || len(r.Limits) == 0 {
+		return nil
+	}
+	out := &ateletpb.ResourceLimits{}
+	if q, ok := r.Limits[corev1.ResourceMemory]; ok {
+		out.MemoryBytes = q.Value()
+	}
+	if q, ok := r.Limits[corev1.ResourceCPU]; ok {
+		out.CpuMillis = q.MilliValue()
+	}
+	if out.MemoryBytes == 0 && out.CpuMillis == 0 {
+		return nil
+	}
+	return out
+}
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
 func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
 	workloadSpec := &ateletpb.WorkloadSpec{}
 
-	// add volumes
+	// Convert volumes to atelet's representation.  ActorTemplate validation has
+	// already ensured that only one source is set.
 	for _, vol := range actorTemplate.Spec.Volumes {
-		// volume is durable-dir type
-		if vol.VolumeSource.DurableDir != nil {
+		switch {
+		case vol.VolumeSource.DurableDir != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
-				Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 				Source: &ateletpb.Volume_DurableDir{
 					DurableDir: &ateletpb.DurableDirVolume{},
 				},
 			})
+
+		case vol.VolumeSource.SystemInfo != nil:
+			ateletSystemInfo := &ateletpb.SystemInfoVolume{}
+			for _, dataSource := range vol.VolumeSource.SystemInfo.DataSources {
+				switch {
+				case dataSource.ActorMetadata != nil:
+					actorMetadata := &ateletpb.ActorMetadataDataSource{}
+					for _, item := range dataSource.ActorMetadata.Items {
+						actorMetadata.Items = append(actorMetadata.Items, &ateletpb.ActorMetadataItem{
+							Field: toAteletActorMetadataField(item.Field),
+							Path:  item.Path,
+						})
+					}
+					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
+						DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+							ActorMetadata: actorMetadata,
+						},
+					})
+				case dataSource.TrustBundle != nil:
+					// atelet resolves named trustBundles against its allowlist
+					// and ClusterTrustBundle informer at write time
+					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
+						DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
+							TrustBundle: &ateletpb.TrustBundleDataSource{
+								Name: dataSource.TrustBundle.Name,
+								Path: dataSource.TrustBundle.Path,
+							},
+						},
+					})
+				default:
+					continue // Drop unrecognized data sources
+				}
+			}
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name: vol.Name,
+				Source: &ateletpb.Volume_SystemInfo{
+					SystemInfo: ateletSystemInfo,
+				},
+			})
+
+		case vol.VolumeSource.Image != nil:
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name: vol.Name,
+				Source: &ateletpb.Volume_Image{
+					Image: &ateletpb.ImageVolumeSource{
+						Reference: vol.VolumeSource.Image.Reference,
+					},
+				},
+			})
+
+		default:
+			continue // Drop unrecognized volumes.
 		}
 	}
 
@@ -49,11 +123,13 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 
 	for _, ctr := range actorTemplate.Spec.Containers {
 		ateletCtr := &ateletpb.Container{
-			Name:    ctr.Name,
-			Image:   ctr.Image,
-			Command: ctr.Command,
-			Args:    ctr.Args,
-			Readyz:  toAteletReadyz(ctr.Readyz),
+			Name:            ctr.Name,
+			Image:           ctr.Image,
+			Command:         ctr.Command,
+			Args:            ctr.Args,
+			Readyz:          toAteletReadyz(ctr.Readyz),
+			SecurityContext: toAteletSecurityContext(ctr.SecurityContext),
+			Resources:       toAteletResources(ctr.Resources),
 		}
 		for _, env := range ctr.Env {
 			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvEntry{
@@ -91,7 +167,7 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *atev1a
 			var storageVolID string
 			var volType string
 			var volCtx map[string]string
-			for _, dbVol := range actor.GetActorVolumes() {
+			for _, dbVol := range actor.GetStatus().GetActorVolumes() {
 				if dbVol.GetVolumeName() == vol.Name {
 					storageVolID = dbVol.GetStorageVolumeId()
 					volType = dbVol.GetVolumeType()
@@ -104,7 +180,6 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *atev1a
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
-				Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 				Source: &ateletpb.Volume_External{
 					External: &ateletpb.ExternalVolumeSource{
 						StorageVolumeId: storageVolID,
@@ -132,6 +207,22 @@ func isVolumeMounted(volumeName string, template *atev1alpha1.ActorTemplate) boo
 // toAteletReadyz projects the CRD readyz field onto the ateletpb wire type.
 // Returns nil when the source is nil so containers without a probe stay
 // unchanged on the wire.
+// toAteletActorMetadataField projects the CRD field selector onto the atelet
+// wire enum. Unknown values map to UNSPECIFIED, which atelet skips; CRD enum
+// validation makes that unreachable for stored templates.
+func toAteletActorMetadataField(in atev1alpha1.ActorMetadataField) ateletpb.ActorMetadataField {
+	switch in {
+	case atev1alpha1.ActorMetadataFieldName:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME
+	case atev1alpha1.ActorMetadataFieldAtespace:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE
+	case atev1alpha1.ActorMetadataFieldUID:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID
+	default:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED
+	}
+}
+
 func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 	if in == nil {
 		return nil
@@ -142,6 +233,36 @@ func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 			Path: in.HTTPGet.Path,
 			Port: in.HTTPGet.Port,
 		}
+	}
+	return out
+}
+
+// toAteletSecurityContext projects the CRD securityContext onto the ateletpb
+// wire type. Returns nil when the source is nil or carries nothing, so
+// containers that set no security settings stay unchanged on the wire.
+func toAteletSecurityContext(in *atev1alpha1.SecurityContext) *ateletpb.SecurityContext {
+	if in == nil || in.Capabilities == nil {
+		return nil
+	}
+	caps := in.Capabilities
+	if len(caps.Add) == 0 && len(caps.Drop) == 0 {
+		return nil
+	}
+	return &ateletpb.SecurityContext{
+		Capabilities: &ateletpb.Capabilities{
+			Add:  capabilityNames(caps.Add),
+			Drop: capabilityNames(caps.Drop),
+		},
+	}
+}
+
+func capabilityNames(in []atev1alpha1.Capability) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		out = append(out, string(c))
 	}
 	return out
 }

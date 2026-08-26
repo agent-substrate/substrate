@@ -72,9 +72,9 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 }
 
 func worker(namespace, pool, class string, assigned bool) *ateapipb.Worker {
-	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class}
+	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class, Status: &ateapipb.WorkerStatus{}}
 	if assigned {
-		w.Assignment = &ateapipb.Assignment{}
+		w.Status.Assignment = &ateapipb.ActorAssignment{}
 	}
 	return w
 }
@@ -210,7 +210,9 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplateName:      "support-agent",
 		ActorTemplateNamespace: "ate-agents",
-		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
+		Status: &ateapipb.ActorStatus{
+			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
+		},
 	}
 	template := &atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},

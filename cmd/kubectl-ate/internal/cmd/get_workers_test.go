@@ -30,11 +30,13 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "microvm",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-1", Name: "counter"},
-				Actor:         &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
+			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-1", Name: "counter"},
+					Actor:         &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
+				},
 			},
-			Labels: map[string]string{"ate.dev/worker-pool": "counter"},
 		},
 		{
 			WorkerNamespace: "ns-1",
@@ -48,11 +50,13 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-3",
 			SandboxClass:    "gvisor",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-2", Name: "counter"},
-				Actor:         &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
+			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-2", Name: "counter"},
+					Actor:         &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
+				},
 			},
-			Labels: map[string]string{"ate.dev/worker-pool": "counter"},
 		},
 	}
 

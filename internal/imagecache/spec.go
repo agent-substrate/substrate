@@ -53,6 +53,23 @@ type OverlaySpec struct {
 	// that must exist for the runtime to attach them, e.g. the actor identity
 	// mount.
 	ExtraDirs []string `json:"extraDirs,omitempty"`
+	// ImageVolumes are read-only image contents to expose beside the rootfs,
+	// one per image-typed volume the container mounts. The consumer composes
+	// each at the volume's bundle-local mount point, which the OCI spec binds
+	// into the container.
+	ImageVolumes []ImageVolumeOverlay `json:"imageVolumes,omitempty"`
+}
+
+// ImageVolumeOverlay is one image volume's contents.
+type ImageVolumeOverlay struct {
+	// Name is the ActorTemplate's name for the volume.
+	Name string `json:"name"`
+	// ImageDigest is the manifest digest the volume's ref resolved to, in the
+	// same form and for the same reason as OverlaySpec.ImageDigest: the GC's
+	// root-set scan protects an image by digest.
+	ImageDigest string `json:"imageDigest,omitempty"`
+	// Layers are the cached layer directories, bottom-most first.
+	Layers []string `json:"layers"`
 }
 
 // WriteSpec writes spec into the bundle at bundlePath.

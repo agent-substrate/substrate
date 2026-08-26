@@ -91,7 +91,7 @@ To quickly set up the complete environment:
 # create cluster and local registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
 hack/create-kind-cluster.sh
 
-# install ate, valkey, rustfs
+# install ate, PostgreSQL, rustfs
 hack/install-ate-kind.sh --deploy-ate-system
 
 # install counter demo
@@ -128,7 +128,7 @@ curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i 
    gcloud auth application-default login --project=${PROJECT_ID}
    ```
 
-3. Provision the required GCP resources (GKE cluster, Redis, GCS, and IAM bindings):
+3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings):
    ```bash
    go run ./tools/setup-gcp bootstrap
    ```
@@ -197,6 +197,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
 * [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.
 * [Glossary](docs/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
+* [Integration Repositories](docs/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 * [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.

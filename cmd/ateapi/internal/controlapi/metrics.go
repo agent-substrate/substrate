@@ -42,7 +42,7 @@ func RegisterActorCrashes(meter metric.Meter) error {
 	counter, err := meter.Int64Counter(
 		actorCrashesMetric,
 		metric.WithUnit("{crash}"),
-		metric.WithDescription("Number of times actors transitioned to STATUS_CRASHED with failure reasons."),
+		metric.WithDescription("Number of times actors transitioned to ACTOR_STATE_CRASHED with failure reasons."),
 	)
 	if err != nil {
 		return fmt.Errorf("create %s counter: %w", actorCrashesMetric, err)
@@ -97,7 +97,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		}
 		for _, w := range ws {
 			state := ateattr.WorkerStateIdle
-			if w.GetAssignment() != nil {
+			if w.GetStatus().GetAssignment() != nil {
 				state = ateattr.WorkerStateAssigned
 			}
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, w.GetSandboxClass()}]++
@@ -186,7 +186,7 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate
 		ateattr.TemplateNameKey.String(actor.GetActorTemplateName()),
 		ateattr.TemplateNamespaceKey.String(actor.GetActorTemplateNamespace()),
 	}
-	ass := actor.GetWorkerAssignment()
+	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 	if template != nil {
 		attrs = append(attrs, ateattr.SandboxClassKey.String(string(template.Spec.SandboxClass)))

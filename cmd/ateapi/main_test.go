@@ -20,28 +20,15 @@ import (
 	"testing"
 )
 
-func TestConnectStoreRejectsUnknownBackend(t *testing.T) {
-	oldBackend := *storeBackend
-	t.Cleanup(func() { *storeBackend = oldBackend })
-	*storeBackend = "unknown"
-
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), `unknown --store-backend "unknown"`) {
-		t.Fatalf("connectStore() error = %v, want unknown-backend error", err)
-	}
-}
-
 func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
-	oldBackend, oldDSN := *storeBackend, *postgresConnectionString
+	oldDSN := *postgresConnectionString
 	t.Cleanup(func() {
-		*storeBackend = oldBackend
 		*postgresConnectionString = oldDSN
 	})
-	*storeBackend = "postgres"
 	*postgresConnectionString = ""
 
 	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "requires --postgres-connection-string") {
+	if err == nil || !strings.Contains(err.Error(), "--postgres-connection-string is required") {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
 	}
 }
