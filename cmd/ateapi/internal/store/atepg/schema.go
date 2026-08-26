@@ -165,6 +165,9 @@ func migrateToLatest(ctx context.Context, migrator *migrate.Migrate, latest uint
 	if !dirty && current >= latest {
 		return nil
 	}
+	if dirty && current > latest {
+		return fmt.Errorf("dirty PostgreSQL migration version %d is ahead of this binary's latest version %d, so an operator must recover it: %w", current, latest, migrate.ErrDirty{Version: int(current)})
+	}
 
 	previous := current
 	if err := migrator.Up(); errors.Is(err, migrate.ErrNoChange) {
@@ -175,19 +178,62 @@ func migrateToLatest(ctx context.Context, migrator *migrate.Migrate, latest uint
 		current, dirty = newCurrent, newDirty
 		return nil
 	} else if err != nil {
-		// A newer ateapi can finish while this replica waits for the migration
-		// lock. A clean version beyond this binary is compatible by policy.
-		newCurrent, newDirty, stateErr := migrator.Version()
-		if stateErr == nil {
-			current, dirty = newCurrent, newDirty
-			if !dirty && current > latest {
+		applyErr := fmt.Errorf("applying PostgreSQL migrations: %w", err)
+		recoveredCurrent, recoveredDirty, recovered, rollbackErr := rollbackToVersion(migrator, previous, latest)
+		current, dirty = recoveredCurrent, recoveredDirty
+		if rollbackErr != nil {
+			return errors.Join(applyErr, rollbackErr)
+		}
+		if !recovered {
+			if !dirty && current >= latest {
 				return nil
 			}
+			return applyErr
 		}
-		return fmt.Errorf("applying PostgreSQL migrations: %w", err)
+		return fmt.Errorf("rolled back PostgreSQL migrations to pre-run version %d: %w", current, applyErr)
 	}
 	current = latest
 	dirty = false
 	applied = int(latest - previous)
 	return nil
+}
+
+// rollbackToVersion clears a known dirty migration and runs down migrations for
+// each migration that completed after target.
+func rollbackToVersion(migrator *migrate.Migrate, target, latest uint) (current uint, dirty, recovered bool, err error) {
+	current, dirty, err = migrator.Version()
+	if errors.Is(err, migrate.ErrNilVersion) {
+		return 0, false, false, nil
+	}
+	if err != nil {
+		return 0, false, false, fmt.Errorf("reading PostgreSQL migration state for rollback: %w", err)
+	}
+	if !dirty {
+		return current, false, false, nil
+	}
+	if current > latest {
+		return current, true, false, fmt.Errorf("dirty PostgreSQL migration version %d is ahead of this binary's latest version %d, so an operator must recover it: %w", current, latest, migrate.ErrDirty{Version: int(current)})
+	}
+
+	cleanVersion := int(current) - 1
+	forceTarget := cleanVersion
+	if forceTarget < 1 {
+		forceTarget = -1
+	}
+	if err := migrator.Force(forceTarget); err != nil {
+		return current, true, false, fmt.Errorf("clearing dirty PostgreSQL migration version %d: %w", current, err)
+	}
+	if forceTarget < 0 {
+		return 0, false, true, nil
+	}
+	current = uint(cleanVersion)
+
+	steps := int(current) - int(target)
+	if steps <= 0 {
+		return current, false, true, nil
+	}
+	if err := migrator.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return current, false, true, fmt.Errorf("rolling back %d PostgreSQL migration(s) to version %d: %w", steps, target, err)
+	}
+	return target, false, true, nil
 }

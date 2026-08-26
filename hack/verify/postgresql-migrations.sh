@@ -47,13 +47,21 @@ for migration in "${migrations[@]}"; do
     printf 'Expected PostgreSQL migration version %06d, but found %s.\n' "${expected}" "${name}" >&2
     exit 1
   fi
+  down="${migration%.up.sql}.down.sql"
+  if [[ ! -f "${down}" ]]; then
+    echo "Add the matching PostgreSQL down migration ${down##*/}." >&2
+    exit 1
+  fi
   expected=$((expected + 1))
 done
 
-if compgen -G "${MIGRATIONS_DIR}/*.down.sql" >/dev/null; then
-  echo "Do not add PostgreSQL down migrations." >&2
-  exit 1
-fi
+for migration in "${MIGRATIONS_DIR}"/*.down.sql; do
+  up="${migration%.down.sql}.up.sql"
+  if [[ ! -f "${up}" ]]; then
+    echo "Add the matching PostgreSQL up migration ${up##*/}." >&2
+    exit 1
+  fi
+done
 
 if (( $# == 1 )) && ! git diff --quiet --no-renames --diff-filter=MD "$1" HEAD -- "${MIGRATIONS_DIR}"; then
   echo "Do not change or delete merged PostgreSQL migrations." >&2

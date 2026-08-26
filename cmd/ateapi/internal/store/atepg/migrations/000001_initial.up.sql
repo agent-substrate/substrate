@@ -14,14 +14,14 @@
 
 BEGIN;
 
-CREATE TABLE atespaces (
+CREATE TABLE IF NOT EXISTS atespaces (
     name     text PRIMARY KEY,
     uid      text NOT NULL,
     version  bigint NOT NULL,
     proto    bytea NOT NULL
 );
 
-CREATE TABLE actors (
+CREATE TABLE IF NOT EXISTS actors (
     atespace  text NOT NULL
         REFERENCES atespaces(name) ON DELETE RESTRICT,
     name      text NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE actors (
     PRIMARY KEY (atespace, name)
 );
 
-CREATE TABLE actor_templates (
+CREATE TABLE IF NOT EXISTS actor_templates (
     atespace  text NOT NULL
         REFERENCES atespaces(name) ON DELETE RESTRICT,
     name      text NOT NULL,
@@ -41,7 +41,7 @@ CREATE TABLE actor_templates (
     PRIMARY KEY (atespace, name)
 );
 
-CREATE TABLE actor_snapshots (
+CREATE TABLE IF NOT EXISTS actor_snapshots (
     atespace  text NOT NULL,
     name      text NOT NULL,
     uid       text NOT NULL,
@@ -50,7 +50,7 @@ CREATE TABLE actor_snapshots (
     PRIMARY KEY (atespace, name)
 );
 
-CREATE TABLE actor_snapshot_tags (
+CREATE TABLE IF NOT EXISTS actor_snapshot_tags (
     atespace           text NOT NULL,
     name               text NOT NULL,
     snapshot_atespace  text NOT NULL,
@@ -66,12 +66,12 @@ CREATE TABLE actor_snapshot_tags (
         REFERENCES actor_snapshots(atespace, name) ON DELETE RESTRICT
 );
 
-CREATE INDEX actor_snapshot_tags_snapshot_idx
+CREATE INDEX IF NOT EXISTS actor_snapshot_tags_snapshot_idx
     ON actor_snapshot_tags (snapshot_atespace, snapshot_name);
 
 -- Workers are global-scoped and named by their Kubernetes pod UID, so name
 -- alone is the primary key.
-CREATE TABLE workers (
+CREATE TABLE IF NOT EXISTS workers (
     name     text PRIMARY KEY,
     uid      text NOT NULL UNIQUE,
     version  bigint NOT NULL,
@@ -87,7 +87,7 @@ CREATE TABLE workers (
 -- 3. Durability (UNLOGGED): Skips WAL overhead. Crash recoveries trigger
 --    watchers to rebuild from the primary workers table. worker_outbox_trim
 --    remains LOGGED to preserve the high-water mark across restarts.
-CREATE TABLE worker_outbox (
+CREATE TABLE IF NOT EXISTS worker_outbox (
     xid         xid8 NOT NULL DEFAULT pg_current_xact_id(),
     -- MUST use clock_timestamp() instead of now(). now() freezes at tx start,
     -- causing slow transactions to route into expired partitions.
@@ -95,26 +95,26 @@ CREATE TABLE worker_outbox (
     payload     bytea NOT NULL
 ) PARTITION BY RANGE (created_at);
 
-CREATE INDEX worker_outbox_xid ON worker_outbox (xid);
+CREATE INDEX IF NOT EXISTS worker_outbox_xid ON worker_outbox (xid);
 
-CREATE UNLOGGED TABLE worker_outbox_default PARTITION OF worker_outbox DEFAULT
+CREATE UNLOGGED TABLE IF NOT EXISTS worker_outbox_default PARTITION OF worker_outbox DEFAULT
     WITH (autovacuum_enabled = off);
 
 -- Single-row high-water mark of retention: the greatest xid ever discarded
 -- from worker_outbox (dropped with an expired partition, or truncated
 -- with the DEFAULT partition). Watchers compare it against their cursor to
 -- detect exactly that unconsumed rows were discarded out from under them.
-CREATE TABLE worker_outbox_trim (
+CREATE TABLE IF NOT EXISTS worker_outbox_trim (
     id   boolean PRIMARY KEY DEFAULT true CHECK (id),
     xid  xid8 NOT NULL
 );
 
-CREATE TABLE leases (
+CREATE TABLE IF NOT EXISTS leases (
     key         text PRIMARY KEY,
     token       text NOT NULL,
     expires_at  timestamptz NOT NULL
 );
 
-CREATE INDEX leases_expires_at_idx ON leases (expires_at);
+CREATE INDEX IF NOT EXISTS leases_expires_at_idx ON leases (expires_at);
 
 COMMIT;

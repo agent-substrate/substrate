@@ -22,13 +22,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	migratedatabase "github.com/golang-migrate/migrate/v4/database"
 	migratepgx "github.com/golang-migrate/migrate/v4/database/pgx/v5"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/protobuf/testing/protocmp"
 
@@ -214,28 +217,8 @@ func TestMigrationsWaitForInProgressMigration(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() { result <- migrateToLatest(ctx, migrator, 1) }()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	timeout := time.NewTimer(5 * time.Second)
-	defer timeout.Stop()
-	for {
-		select {
-		case err := <-result:
-			t.Fatalf("migration returned before the advisory lock was released: %v", err)
-		case <-ticker.C:
-			var waiting bool
-			if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).Scan(&waiting); err != nil {
-				t.Fatalf("checking migration lock wait: %v", err)
-			}
-			if waiting {
-				goto release
-			}
-		case <-timeout.C:
-			t.Fatal("migration did not wait for the advisory lock")
-		}
-	}
+	waitForMigrationLockWait(t, ctx, pool)
 
-release:
 	if _, err := lockConn.Exec(ctx, `UPDATE "migration-lock-wait".schema_migrations SET dirty = false`); err != nil {
 		t.Fatalf("marking migration complete: %v", err)
 	}
@@ -251,6 +234,22 @@ release:
 	case <-time.After(5 * time.Second):
 		t.Fatal("migration did not finish after the advisory lock was released")
 	}
+}
+
+func waitForMigrationLockWait(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).Scan(&waiting); err != nil {
+			t.Fatalf("checking migration lock wait: %v", err)
+		}
+		if waiting {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("migration did not wait for the advisory lock")
 }
 
 func TestConnectUsesConfiguredSchema(t *testing.T) {
@@ -330,7 +329,7 @@ func TestMigrationSchemaStates(t *testing.T) {
 	pool := requirePool(t)
 	ctx := t.Context()
 
-	t.Run("ahead and clean", func(t *testing.T) {
+	t.Run("ahead", func(t *testing.T) {
 		if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`); err != nil {
 			t.Fatalf("resetting schema: %v", err)
 		}
@@ -354,6 +353,23 @@ func TestMigrationSchemaStates(t *testing.T) {
 		}
 		p.Close()
 		p.pool.Close()
+
+		if _, err := pool.Exec(ctx, `UPDATE "migration-ahead".schema_migrations SET dirty = true`); err != nil {
+			t.Fatalf("setting ahead dirty migration state: %v", err)
+		}
+		_, err = Connect(ctx, containerDSN, "migration-ahead")
+		var dirtyErr migrate.ErrDirty
+		if !errors.As(err, &dirtyErr) || dirtyErr.Version != 2 {
+			t.Fatalf("Connect error = %v, want migrate.ErrDirty at version 2", err)
+		}
+		var version int
+		var dirty bool
+		if err := pool.QueryRow(ctx, `SELECT version, dirty FROM "migration-ahead".schema_migrations`).Scan(&version, &dirty); err != nil {
+			t.Fatalf("reading ahead dirty migration state: %v", err)
+		}
+		if version != 2 || !dirty {
+			t.Fatalf("ahead migration state = (%d, %t), want (2, true)", version, dirty)
+		}
 	})
 
 	t.Run("dirty", func(t *testing.T) {
@@ -368,6 +384,9 @@ func TestMigrationSchemaStates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("creating current schema: %v", err)
 		}
+		if _, err := p.CreateAtespace(ctx, newTestAtespace("survives-recovery")); err != nil {
+			t.Fatalf("creating recovery test atespace: %v", err)
+		}
 		p.Close()
 		p.pool.Close()
 		if _, err := pool.Exec(ctx, `UPDATE "migration-dirty".schema_migrations SET dirty = true`); err != nil {
@@ -378,6 +397,31 @@ func TestMigrationSchemaStates(t *testing.T) {
 		var dirtyErr migrate.ErrDirty
 		if !errors.As(err, &dirtyErr) {
 			t.Fatalf("Connect error = %v, want migrate.ErrDirty", err)
+		}
+		var metadataRows int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM "migration-dirty".schema_migrations`).Scan(&metadataRows); err != nil {
+			t.Fatalf("reading reset migration state: %v", err)
+		}
+		if metadataRows != 0 {
+			t.Fatalf("migration metadata rows after reset = %d, want 0", metadataRows)
+		}
+
+		p, err = Connect(ctx, containerDSN, "migration-dirty")
+		if err != nil {
+			t.Fatalf("Connect after dirty-state reset failed: %v", err)
+		}
+		defer p.Close()
+		defer p.pool.Close()
+		if _, err := p.GetAtespace(ctx, "survives-recovery"); err != nil {
+			t.Fatalf("getting data after migration reapply: %v", err)
+		}
+		var version int
+		var dirty bool
+		if err := pool.QueryRow(ctx, `SELECT version, dirty FROM "migration-dirty".schema_migrations`).Scan(&version, &dirty); err != nil {
+			t.Fatalf("reading reapplied migration state: %v", err)
+		}
+		if version != 1 || dirty {
+			t.Fatalf("reapplied migration state = (%d, %t), want (1, false)", version, dirty)
 		}
 	})
 
@@ -404,6 +448,119 @@ func TestMigrationSchemaStates(t *testing.T) {
 			t.Error("Connect created migration metadata for an unsupported schema")
 		}
 	})
+}
+
+func TestMigrationFailureRollsBackToPreRunVersion(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "migration-rollback"
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-rollback" CASCADE; CREATE SCHEMA "migration-rollback"`); err != nil {
+		t.Fatalf("resetting schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-rollback" CASCADE`)
+	})
+
+	migrationPool, err := pgxpool.New(ctx, containerDSN+"&search_path="+schema)
+	if err != nil {
+		t.Fatalf("opening migration pool: %v", err)
+	}
+	files := fstest.MapFS{
+		"migrations/000001_create.up.sql":      {Data: []byte(`CREATE TABLE IF NOT EXISTS rollback_test (id integer PRIMARY KEY)`)},
+		"migrations/000001_create.down.sql":    {Data: []byte(`DROP TABLE IF EXISTS rollback_test`)},
+		"migrations/000002_add_value.up.sql":   {Data: []byte(`ALTER TABLE rollback_test ADD COLUMN IF NOT EXISTS value text`)},
+		"migrations/000002_add_value.down.sql": {Data: []byte(`ALTER TABLE rollback_test DROP COLUMN IF EXISTS value`)},
+		"migrations/000003_fail.up.sql":        {Data: []byte(`ALTER TABLE missing_table ADD COLUMN IF NOT EXISTS value text`)},
+		"migrations/000003_fail.down.sql":      {Data: []byte(`SELECT 1`)},
+	}
+	db := stdlib.OpenDBFromPool(migrationPool)
+	databaseDriver, err := migratepgx.WithInstance(db, &migratepgx.Config{})
+	if err != nil {
+		t.Fatalf("opening migration database: %v", err)
+	}
+	sourceDriver, err := iofs.New(files, "migrations")
+	if err != nil {
+		t.Fatalf("opening migration source: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", sourceDriver, "pgx5", databaseDriver)
+	if err != nil {
+		t.Fatalf("creating migrator: %v", err)
+	}
+	t.Cleanup(func() {
+		sourceErr, databaseErr := migrator.Close()
+		if err := errors.Join(sourceErr, databaseErr); err != nil {
+			t.Errorf("closing migrator: %v", err)
+		}
+		migrationPool.Close()
+	})
+
+	if err := migrator.Migrate(1); err != nil {
+		t.Fatalf("applying pre-run migration: %v", err)
+	}
+	if err := migrateToLatest(ctx, migrator, 3); err == nil {
+		t.Fatal("migration succeeded, want version 3 failure")
+	}
+	version, dirty, err := migrator.Version()
+	if err != nil {
+		t.Fatalf("reading rolled-back migration state: %v", err)
+	}
+	if version != 1 || dirty {
+		t.Fatalf("migration state = (%d, %t), want (1, false)", version, dirty)
+	}
+	var valueColumnExists bool
+	if err := migrationPool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'rollback_test' AND column_name = 'value'
+	)`, schema).Scan(&valueColumnExists); err != nil {
+		t.Fatalf("checking rolled-back column: %v", err)
+	}
+	if valueColumnExists {
+		t.Error("migration 2 column still exists after rollback to migration 1")
+	}
+}
+
+func TestInitialMigrationDown(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "migration-down"
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-down" CASCADE; CREATE SCHEMA "migration-down"`); err != nil {
+		t.Fatalf("resetting schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-down" CASCADE`)
+	})
+
+	migrationPool, err := pgxpool.New(ctx, containerDSN+"&search_path="+schema)
+	if err != nil {
+		t.Fatalf("opening migration pool: %v", err)
+	}
+	t.Cleanup(migrationPool.Close)
+	if err := applyMigrations(ctx, migrationPool); err != nil {
+		t.Fatalf("applying initial migration: %v", err)
+	}
+	migrator, _, err := openMigrator(migrationPool)
+	if err != nil {
+		t.Fatalf("opening migrator: %v", err)
+	}
+	t.Cleanup(func() {
+		sourceErr, databaseErr := migrator.Close()
+		if err := errors.Join(sourceErr, databaseErr); err != nil {
+			t.Errorf("closing migrator: %v", err)
+		}
+	})
+	if err := migrator.Down(); err != nil {
+		t.Fatalf("running initial down migration: %v", err)
+	}
+	if _, _, err := migrator.Version(); !errors.Is(err, migrate.ErrNilVersion) {
+		t.Fatalf("migration version after down = %v, want migrate.ErrNilVersion", err)
+	}
+	var tableExists bool
+	if err := migrationPool.QueryRow(ctx, `SELECT to_regclass('atespaces') IS NOT NULL`).Scan(&tableExists); err != nil {
+		t.Fatalf("checking table after down migration: %v", err)
+	}
+	if tableExists {
+		t.Error("atespaces still exists after the initial down migration")
+	}
 }
 
 func setupPostgresPersistence(t *testing.T) *Persistence {
