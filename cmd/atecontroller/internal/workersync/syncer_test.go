@@ -65,6 +65,13 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 			Phase:  corev1.PodRunning,
 			PodIP:  ip,
 			PodIPs: []corev1.PodIP{{IP: ip}},
+			// Eligibility requires Ready in addition to an IP: readiness is
+			// what says ateom is actually serving, not just that the sandbox
+			// got an address.
+			Conditions: []corev1.PodCondition{{
+				Type:   corev1.PodReady,
+				Status: corev1.ConditionTrue,
+			}},
 		}
 	}
 	return pod
@@ -690,6 +697,75 @@ func TestSyncer_DeleteNeverEligiblePod(t *testing.T) {
 	mustReconcile(t, ctx, s, key)
 	if got := api.names(); len(got) != 0 {
 		t.Errorf("registry holds %v, want it empty", got)
+	}
+}
+
+// TestSyncer_PodWithIPButNotReadyIsNotRegistered pins the readiness half of
+// the eligibility gate: an IP alone no longer registers a worker, because the
+// sandbox having an address says nothing about ateom serving yet (#1106).
+// Both not-Ready shapes are covered — condition absent (kubelet hasn't probed
+// yet) and condition explicitly False (probe failing).
+func TestSyncer_PodWithIPButNotReadyIsNotRegistered(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName := "ns-syncer-notready", "pool1"
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*corev1.Pod)
+	}{
+		{name: "no Ready condition", mutate: func(p *corev1.Pod) {
+			p.Status.Conditions = nil
+		}},
+		{name: "Ready=False", mutate: func(p *corev1.Pod) {
+			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeControl()
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			pod := workerPod(ns, "worker-notready-1", poolName, testPodUID, "10.0.0.9")
+			tc.mutate(pod)
+			key := seedPod(t, pods, pod)
+
+			mustReconcile(t, ctx, s, key)
+			if got := api.names(); len(got) != 0 {
+				t.Errorf("registry holds %v for a not-Ready pod, want it empty", got)
+			}
+		})
+	}
+}
+
+// TestSyncer_ReadinessFlapDoesNotDeregister pins that eligibility only gates
+// registration: once a worker exists, a readiness blip must not remove it —
+// a bound actor keeps running through a failed probe, and deregistering would
+// strand it.
+func TestSyncer_ReadinessFlapDoesNotDeregister(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName := "ns-syncer-flap", "worker-flap-1", "pool1"
+
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	pod := workerPod(ns, podName, poolName, testPodUID, "10.0.0.9")
+	key := seedPod(t, pods, pod)
+
+	mustReconcile(t, ctx, s, key)
+	if got := api.get(testPodUID); got == nil {
+		t.Fatalf("worker not registered for a Ready pod; registry holds %v", api.names())
+	}
+
+	notReady := pod.DeepCopy()
+	notReady.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
+	if err := pods.Update(notReady); err != nil {
+		t.Fatalf("updating pod: %v", err)
+	}
+
+	mustReconcile(t, ctx, s, key)
+	got := api.get(testPodUID)
+	if got == nil {
+		t.Fatalf("worker deregistered on a readiness flap; registry holds %v", api.names())
+	}
+	if got.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker marked DRAINING on a readiness flap, want it left ACTIVE")
 	}
 }
 

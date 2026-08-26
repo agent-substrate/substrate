@@ -237,7 +237,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		return s.markWorkerDraining(ctx, key)
 	}
 	if !isWorkerEligible(pod) {
-		// No IP yet; a later update event re-enqueues the pod.
+		// The pod has no IP or is not Ready yet; a later update event re-enqueues it.
 		return nil
 	}
 	return s.createOrUpdateWorker(ctx, key, pod)
@@ -316,7 +316,15 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
-	return pod.Status.PodIP != ""
+	if pod.Status.PodIP == "" {
+		return false
+	}
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // ateomContainerName is the name of the container in a worker pod that hosts the
