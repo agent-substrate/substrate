@@ -237,7 +237,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		return s.markWorkerDraining(ctx, key)
 	}
 	if !isWorkerEligible(pod) {
-		// No IP yet; a later update event re-enqueues the pod.
+		// The pod has no IP or is not Ready yet; a later update event re-enqueues it.
 		return nil
 	}
 	return s.createOrUpdateWorker(ctx, key, pod)

@@ -104,10 +104,15 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			corev1ac.ContainerPort().
 				WithName("connect").
 				WithContainerPort(444).
+				WithProtocol(corev1.ProtocolTCP),
+			corev1ac.ContainerPort().
+				WithName("readyz").
+				WithContainerPort(8080).
 				WithProtocol(corev1.ProtocolTCP)).
 		WithReadinessProbe(corev1ac.Probe().
-			WithTCPSocket(corev1ac.TCPSocketAction().
-				WithPort(intstr.FromString("https")))).
+			WithHTTPGet(corev1ac.HTTPGetAction().
+				WithPath("/readyz").
+				WithPort(intstr.FromString("readyz")))).
 		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
 		WithEnv(ateomContainerEnv(otel)...).
 		WithVolumeMounts(

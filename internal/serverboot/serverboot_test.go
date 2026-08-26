@@ -202,6 +202,23 @@ func TestReadyzStaticWithZeroValueReadiness(t *testing.T) {
 	}
 }
 
+func TestReadinessMux(t *testing.T) {
+	readiness := &Readiness{}
+	mux := readinessMux(readiness)
+
+	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz before drain = %d, want %d", got, http.StatusOK)
+	}
+	if got := getCode(t, mux, "/metrics"); got != http.StatusNotFound {
+		t.Errorf("/metrics = %d, want %d", got, http.StatusNotFound)
+	}
+
+	readiness.MarkNotReady()
+	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz during drain = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+}
+
 func TestReadyzAbsentWithoutReadiness(t *testing.T) {
 	mux := metricsMux(MetricsServerOptions{})
 	if got := getCode(t, mux, "/readyz"); got != http.StatusNotFound {

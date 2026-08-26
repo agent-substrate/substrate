@@ -486,6 +486,10 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	}
 	createdPod.Status.PodIPs = []corev1.PodIP{{IP: "127.0.0.1"}}
 	createdPod.Status.Phase = corev1.PodRunning
+	createdPod.Status.Conditions = []corev1.PodCondition{{
+		Type:   corev1.PodReady,
+		Status: corev1.ConditionTrue,
+	}}
 	_, err = tc.k8sClient.CoreV1().Pods(ns).UpdateStatus(context.Background(), createdPod, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("failed to update worker pod status: %v", err)

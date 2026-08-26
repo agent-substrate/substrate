@@ -275,6 +275,9 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning, PodIP: ip,
 				PodIPs: []corev1.PodIP{{IP: ip}},
+				Conditions: []corev1.PodCondition{{
+					Type: corev1.PodReady, Status: corev1.ConditionTrue,
+				}},
 			},
 		}, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
@@ -386,6 +389,9 @@ func TestSyncer_OmittedFields(t *testing.T) {
 			Phase:  corev1.PodRunning,
 			PodIP:  "127.0.0.1",
 			PodIPs: []corev1.PodIP{{IP: "127.0.0.1"}},
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionTrue,
+			}},
 		},
 	}
 
@@ -1087,6 +1093,9 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 			Phase:  corev1.PodRunning,
 			PodIP:  "10.0.0.1",
 			PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}},
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionTrue,
+			}},
 		},
 	}
 
@@ -1213,6 +1222,9 @@ func TestSyncer_RequeueOnMissingWorkerPool(t *testing.T) {
 			Phase:  corev1.PodRunning,
 			PodIP:  "10.0.0.5",
 			PodIPs: []corev1.PodIP{{IP: "10.0.0.5"}},
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionTrue,
+			}},
 		},
 	}
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
@@ -1300,6 +1312,9 @@ func TestSyncer_SoftDelete_ViaInformer(t *testing.T) {
 			Phase:  corev1.PodRunning,
 			PodIP:  "10.0.0.6",
 			PodIPs: []corev1.PodIP{{IP: "10.0.0.6"}},
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodReady, Status: corev1.ConditionTrue,
+			}},
 		},
 	}
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
@@ -1378,6 +1393,9 @@ func TestSyncer_PodRecreatedWithNewUID(t *testing.T) {
 				Phase:  corev1.PodRunning,
 				PodIP:  ip,
 				PodIPs: []corev1.PodIP{{IP: ip}},
+				Conditions: []corev1.PodCondition{{
+					Type: corev1.PodReady, Status: corev1.ConditionTrue,
+				}},
 			},
 		}
 	}
