@@ -312,9 +312,71 @@ data:
                       termination: "%CONNECTION_TERMINATION_DETAILS%"
               route_config:
                 name: local
+                # Two virtual hosts, split by whether the origin is inside the
+                # cluster. The split exists because the actor identity is only
+                # worth telling an origin that can tell it came from here:
+                # `internal` reaches the origin over mTLS with the gateway's own
+                # podidentity credential, so the origin authenticates the
+                # channel before it reads the header. `all` keeps today's
+                # one-way TLS to arbitrary internet origins, which authenticate
+                # this gateway not at all -- an identity header there would be
+                # one any client on the internet could forge straight to the
+                # same origin.
                 virtual_hosts:
+                - name: internal
+                  # Cluster-local DNS only. The actor dials a ClusterIP and
+                  # atunnel tunnels it by IP, so this name comes from the
+                  # tunneled request's own Host, which is the name the actor
+                  # asked for and the name dynamic_forward_proxy re-resolves.
+                  #
+                  # <service>.<namespace>.svc and nothing longer, because
+                  # auto_san_validation below checks that name against the
+                  # origin's SANs and the servicedns signer issues exactly that
+                  # form (cmd/podcertcontroller/internal/servicednssigner). An
+                  # actor that dials the .cluster.local FQDN falls through to
+                  # `all` and gets no header -- the same as today. Widening
+                  # this without widening the signer would not grant the header
+                  # to those requests, it would fail their handshake.
+                  domains:
+                  - "*.svc"
+                  # The actor's authenticated identity, for the origin to
+                  # attribute the request to. OVERWRITE_IF_EXISTS_OR_ADD is the
+                  # security property, not a style choice: the tunneled request
+                  # is the actor's to compose, so an actor that sets x-ate-actor
+                  # itself would otherwise name another actor to the origin.
+                  request_headers_to_add:
+                  - header:
+                      key: x-ate-actor
+                      value: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
+                    append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                    # An empty filter state renders as an empty header rather
+                    # than being dropped, and an origin reading "" as "no actor"
+                    # is indistinguishable from one reading it as "some actor
+                    # whose name did not render". Send nothing instead.
+                    keep_empty_value: false
+                  routes:
+                  - match:
+                      prefix: "/"
+                      headers:
+                      - name: content-type
+                        string_match:
+                          prefix: application/grpc
+                    route:
+                      cluster: egress_forward_proxy_internal_grpc
+                      timeout: 0s
+                  - match: { prefix: "/" }
+                    route:
+                      cluster: egress_forward_proxy_internal
+                      timeout: 0s
                 - name: all
                   domains: ["*"]
+                  # Strip what the internal host above adds, so an actor cannot
+                  # smuggle a substrate-issued-looking attribution header out to
+                  # an origin this gateway never vouches to. Every x-ate-*
+                  # header substrate defines belongs on this list; see
+                  # TestEgressManifestReservesTheActorHeader.
+                  request_headers_to_remove:
+                  - x-ate-actor
                   routes:
                   # Upgrade is what cannot cross an h2 upstream: forwarding one
                   # needs RFC 8441 extended CONNECT, which almost no origin
@@ -443,6 +505,16 @@ data:
                 virtual_hosts:
                 - name: all
                   domains: ["*"]
+                  # No x-ate-actor here, on any destination. This leg
+                  # re-originates in the clear, so there is no client
+                  # certificate to authenticate the gateway to the origin and
+                  # nothing stopping anything else on the network from sending
+                  # the same header -- an origin that trusted it would be
+                  # trusting a value it cannot attribute. Stripping is still
+                  # required: an actor's own header would otherwise arrive
+                  # looking platform-issued.
+                  request_headers_to_remove:
+                  - x-ate-actor
                   routes:
                   - match: { prefix: "/" }
                     route:
@@ -650,6 +722,89 @@ data:
               validation_context:
                 trusted_ca:
                   filename: /etc/ssl/certs/ca-certificates.crt
+
+      # The internal virtual host's upstreams. They differ from the two above in
+      # both directions of the handshake, and both differences are the point:
+      #
+      #  - they present the gateway's own podidentity credential, so the origin
+      #    can require a client certificate, verify it against the podidentity
+      #    trust bundle, and know the x-ate-actor header on the request was
+      #    written by this gateway rather than by whoever connected to it. The
+      #    header is worth nothing without this half.
+      #  - they validate the origin against the servicedns trust bundle instead
+      #    of the public roots, because that is what signs in-cluster service
+      #    DNS names (cmd/podcertcontroller/internal/servicednssigner). A
+      #    cluster-local origin has no publicly-rooted certificate, so the
+      #    public-root clusters above cannot complete this handshake at all.
+      #
+      # watched_directory names the podcert CSI mount the material is projected
+      # into, matching the downstream listener above. Envoy honors it for
+      # secrets delivered over SDS; these are read from the bootstrap, so today
+      # a rotation is picked up when the pod restarts.
+      - name: egress_forward_proxy_internal
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 5s
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: egress_dns_cache
+              dns_lookup_family: V4_ONLY
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            upstream_http_protocol_options:
+              auto_sni: true
+              auto_san_validation: true
+            explicit_http_config:
+              http_protocol_options: {}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              tls_certificates:
+              - certificate_chain: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+                private_key: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+                watched_directory: { path: /run/podidentity.podcert.ate.dev }
+              validation_context:
+                trusted_ca: { filename: /run/servicedns.podcert.ate.dev/trust-bundle.pem }
+                watched_directory: { path: /run/servicedns.podcert.ate.dev }
+
+      # The gRPC counterpart, same split as egress_forward_proxy_grpc: protocol
+      # from upstream ALPN rather than pinned to HTTP/1.1, so trailers survive.
+      - name: egress_forward_proxy_internal_grpc
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 5s
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: egress_dns_cache
+              dns_lookup_family: V4_ONLY
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            upstream_http_protocol_options:
+              auto_sni: true
+              auto_san_validation: true
+            auto_config:
+              http_protocol_options: {}
+              http2_protocol_options: {}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              tls_certificates:
+              - certificate_chain: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+                private_key: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+                watched_directory: { path: /run/podidentity.podcert.ate.dev }
+              validation_context:
+                trusted_ca: { filename: /run/servicedns.podcert.ate.dev/trust-bundle.pem }
+                watched_directory: { path: /run/servicedns.podcert.ate.dev }
 
       # The cleartext chain's upstream. Identical to egress_forward_proxy but
       # without the TLS transport socket: the actor sent plaintext and this

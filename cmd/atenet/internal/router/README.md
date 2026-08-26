@@ -39,6 +39,45 @@ Router has several responsibilities:
   `connect_terminate`/`main_internal` listeners and
   `ingress.Handler.HandleRequestHeaders`.
 
+## telling an origin which actor called
+
+An actor's egress is tunneled: everything it sends is composed by the actor,
+including any header naming itself. The one thing it does not control is the
+client certificate it presented to open the CONNECT, so that is where an
+attributable identity has to come from. The egress gateway copies the verified
+SPIFFE ID into the `ate.actor.identity` filter state, and the `mitm_internal`
+cluster's `internal_upstream` transport carries it across the CONNECT/MITM
+boundary — a header set on the CONNECT would not survive, and a header sent
+from inside the tunnel would be the actor's own claim.
+
+On the MITM leg the gateway forwards that identity to the origin as
+`x-ate-actor`, but only for cluster-local destinations, and only over mTLS:
+
+* Requests to `*.svc` match the `internal` virtual host, which overwrites
+  `x-ate-actor` with the authenticated value and routes to
+  `egress_forward_proxy_internal{,_grpc}`. Those clusters present the gateway's
+  podidentity credential and validate the origin against the servicedns trust
+  bundle, so the origin authenticates the gateway before it reads the header.
+  The suffix stops at `.svc` because those clusters also turn on
+  `auto_san_validation`, and the servicedns signer issues
+  `<service>.<namespace>.svc` and no longer form — an actor that dials the
+  `.cluster.local` FQDN falls through to `all`. Covering the FQDN means
+  widening `servicednssigner` first, not the route.
+* Every other virtual host on that listener strips `x-ate-actor`. An internet
+  origin authenticates this gateway not at all, so an identity header there is
+  one any client could forge; the cleartext leg has no client certificate to
+  offer, so it strips without adding.
+
+An origin must therefore require and verify a client certificate against the
+podidentity trust bundle before believing `x-ate-actor` — the header carries no
+proof on its own. The SPIFFE ID identifies the actor and its atespace, not its
+UID; the UID lives in the `ActorIdentity` X.509 extension, which the gateway
+does not forward.
+
+Both halves live in `manifests/ate-install/atenet-egress-with-sdsmint.yaml`,
+where the compiler sees neither. `egress/manifest_test.go` is what keeps them
+together.
+
 ## packages
 
 The ext_proc server handles both traffic directions, and they apply opposite
