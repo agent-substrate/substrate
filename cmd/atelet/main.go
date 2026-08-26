@@ -184,9 +184,7 @@ func main() {
 		}()
 	}
 
-	ateomDialer := &AteomDialer{
-		conns: lru.New(256),
-	}
+	ateomDialer := newAteomDialer(256)
 
 	var gcpRegistryAuthn authn.Authenticator
 	if *gcpAuthForImagePulls {
@@ -1563,6 +1561,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			nil, // pause is sandbox infra; it mounts no volumes.
 			nil,
 			nil, // pause only reaps; it needs no capabilities.
+			nil, // pause carries no user-declared limits.
 		); err != nil {
 			return wrapFileSystemErr("while creating pause OCI bundle", err)
 		}
@@ -1595,6 +1594,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				spec.GetVolumes(),
 				ctr.GetVolumeMounts(),
 				resolveCapabilities(ctr.GetSecurityContext().GetCapabilities()),
+				ctr.GetResources(),
 			); err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
@@ -1790,6 +1790,26 @@ func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
 
 type AteomDialer struct {
 	conns *lru.Cache
+}
+
+// newAteomDialer builds a dialer whose cache closes the connections it
+// evicts. A conn pushed out of the LRU without Close is not reclaimed: grpc
+// keeps most of its goroutines and buffers alive for the life of the process
+// (the channel idle timeout parks only one of them). Closing on eviction can
+// fail an RPC still in flight on a conn that aged to the LRU tail, but that
+// failure is visible and retryable, unlike the leak.
+//
+// TODO: Consider pool semantics instead of a cache: a conn evicted for
+// capacity would drain — close only once its last in-flight RPC finishes
+// (e.g. refcounted checkout/release) — rather than being closed out from
+// under a caller. Worth revisiting if the retryable eviction failures show
+// up in practice.
+func newAteomDialer(size int) *AteomDialer {
+	return &AteomDialer{
+		conns: lru.NewWithEvictionFunc(size, func(_ lru.Key, value interface{}) {
+			value.(*grpc.ClientConn).Close()
+		}),
+	}
 }
 
 func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.ClientConn, error) {

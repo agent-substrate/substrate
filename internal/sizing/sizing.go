@@ -13,13 +13,13 @@
 // limitations under the License.
 
 // Package sizing right-sizes a sandbox to the actor's declared resource limits.
-// The bulk of right-sizing is writing the correct cgroup values, which is
-// identical for the gVisor and micro-VM runtimes, so both ateom binaries share
-// this package: the actor's limits arrive over the ateom RPCs (RunWorkload /
-// RestoreWorkload) and ApplyToOCISpec writes them into the container OCI spec.
-// runsc then applies them to the host cgroup leaf (gVisor) and the kata-agent
-// applies them to the guest cgroup (micro-VM). The micro-VM additionally sizes
-// the VM itself from the same SandboxSize (see VCPUs).
+// The actor's limits arrive over the ateom RPCs (RunWorkload / RestoreWorkload)
+// as a SandboxSize. ateom-gvisor calls ApplyToOCISpec to write them into the
+// sandbox container's OCI spec, which runsc then applies to the host cgroup
+// leaf. ateom-microvm does not call ApplyToOCISpec: it uses SandboxSize only to
+// size the VM itself (VCPUs, and MemoryBytes via resolveGuestMemMiB). A
+// micro-VM container's own cgroup limit comes instead from that container's
+// declared `spec.containers[].resources`, written into its OCI spec by atelet.
 package sizing
 
 import (
@@ -72,10 +72,9 @@ func (s SandboxSize) VCPUs() int {
 
 // ApplyToOCISpec writes the pod's CPU/memory limits into the container OCI spec's
 // linux.resources so the sandbox cgroup is created with the right values. This is
-// the piece shared by both runtimes: runsc applies it to the host cgroup leaf
-// (gVisor) and the kata-agent applies it to the guest cgroup (micro-VM). Fields
-// that are unset in SandboxSize are left untouched, preserving any existing values
-// (e.g. the micro-VM's device allowlist and CPU shares).
+// the gVisor sandbox-cgroup path: only ateom-gvisor calls it, so runsc applies the
+// result to the host cgroup leaf. Fields that are unset in SandboxSize are left
+// untouched, preserving any existing values on the spec.
 func (s SandboxSize) ApplyToOCISpec(spec *specs.Spec) {
 	if s.MilliCPU <= 0 && s.MemoryBytes <= 0 {
 		return

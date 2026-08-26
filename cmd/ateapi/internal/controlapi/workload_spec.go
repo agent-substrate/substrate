@@ -20,7 +20,29 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	corev1 "k8s.io/api/core/v1"
 )
+
+// toAteletResources resolves a container's declared limits into the scalars
+// atelet and the ateoms consume; everything downstream compares numbers.
+// Returns nil when the container declares no limits, so the OCI spec stays
+// untouched for templates that do not use them.
+func toAteletResources(r *atev1alpha1.ContainerResources) *ateletpb.ResourceLimits {
+	if r == nil || len(r.Limits) == 0 {
+		return nil
+	}
+	out := &ateletpb.ResourceLimits{}
+	if q, ok := r.Limits[corev1.ResourceMemory]; ok {
+		out.MemoryBytes = q.Value()
+	}
+	if q, ok := r.Limits[corev1.ResourceCPU]; ok {
+		out.CpuMillis = q.MilliValue()
+	}
+	if out.MemoryBytes == 0 && out.CpuMillis == 0 {
+		return nil
+	}
+	return out
+}
 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
@@ -107,6 +129,7 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 			Args:            ctr.Args,
 			Readyz:          toAteletReadyz(ctr.Readyz),
 			SecurityContext: toAteletSecurityContext(ctr.SecurityContext),
+			Resources:       toAteletResources(ctr.Resources),
 		}
 		for _, env := range ctr.Env {
 			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvEntry{

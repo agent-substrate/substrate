@@ -205,7 +205,7 @@ func TestCreateActorSnapshotTag_MissingSnapshotIsNotFound(t *testing.T) {
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 	storetest.MustCreateAtespace(t, context.Background(), persistence, "team-a")
-	s := &RPCService{persistence: persistence}
+	s := &RPCService{impl: persistence}
 
 	_, err := s.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
@@ -308,7 +308,7 @@ func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 		t.Errorf("UpdateActorSnapshotTag error = %v (code %v), want code InvalidArgument", err, code)
 	}
 
-	current, err := svc.persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: "tag1"})
+	current, err := svc.impl.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: "tag1"})
 	if err != nil {
 		t.Fatalf("GetActorSnapshotTag: %v", err)
 	}
@@ -357,7 +357,7 @@ func rpcServiceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag
 	if err != nil {
 		t.Fatalf("Failed to CreateActorSnapshotTag: %v", err)
 	}
-	return &RPCService{persistence: persistence}, created
+	return &RPCService{impl: persistence}, created
 }
 
 // TestUpdateActorSnapshotTag_DeleteRecreateRace checks that an update is not
@@ -402,7 +402,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{persistence: racing}
+	svc := &RPCService{impl: racing}
 
 	// The client asserts "only update the tag with uid A". Its version guard is
 	// satisfied by B as well, because re-tagging resets the version to 1: the
@@ -463,7 +463,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{persistence: racing}
+	svc := &RPCService{impl: racing}
 
 	originalTag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err = svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{

@@ -236,15 +236,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if len(containers) > maxActorContainers {
 		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	// The VM's RAM comes from the snapshot, so a limit the current VMM reserve can
-	// no longer satisfy (e.g. --vmm-mem-reserve-mib was raised after the snapshot
-	// was taken) has to fail here rather than silently pair the guest with a cgroup
-	// limit larger than its RAM.
-	guestSize, err := s.guestSize(p.size)
-	if err != nil {
-		return err
-	}
-	ctrs, err := s.buildActorContainers(actorUID, containers, guestSize)
+	ctrs, err := s.buildActorContainers(actorUID, containers)
 	if err != nil {
 		return err
 	}

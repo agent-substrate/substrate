@@ -19,7 +19,7 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-OUTDIR="LICENSES" # under $ROOT
+OUTDIR="_LICENSES" # under $ROOT
 
 # Ensure the tool is built and up-to-date
 GO_LICENSES_BIN="$(bash "${ROOT}/hack/run-tool.sh" --print-bin-path go-licenses)"
@@ -37,9 +37,18 @@ targets=(
 )
 
 tmpfile="" # make shellcheck happy
-tmpfile="$(mktemp -t "update-licenses.XXXXXX")"
+tmpfile="$(mktemp "/tmp/update-licenses.XXXXXX")"
 # shellcheck disable=SC2064 # evaluate $tmpfile immediately
 trap "rm -f ${tmpfile}" EXIT
+
+# go-licenses is an old, decrepit tool which does not handle things like module
+# replacement well.  This trick somehow overcomes that.
+workdir="" # make shellcheck happy
+workdir="$(mktemp -d "/tmp/update-licenses.XXXXXX")"
+# shellcheck disable=SC2064 # evaluate $workdir immediately
+trap "rm -rf ${workdir}" EXIT
+export GOWORK="${workdir}/go.work"
+go work init . ./third_party/k8s.io/apimachinery
 
 for target in "${targets[@]}"; do
   IFS="/" read -r target_os target_arch <<< "${target}"
@@ -52,9 +61,9 @@ for target in "${targets[@]}"; do
   GOROOT=$(go env GOROOT) \
   CGO_ENABLED=1 \
   "${GO_LICENSES_BIN}" save ./... \
-      --include_tests \
       --force \
       --ignore=./vendor \
+      --ignore=./third_party \
       --save_path="${tmp_out}" > "${tmpfile}" 2>&1 || \
   {
     echo "Failed for ${target_os}/${target_arch}:" >&2
@@ -77,17 +86,17 @@ done
 # Collect upstream licenses for forked / copied-in third-party SOURCE under in-tree
 # third_party/ dirs. go-licenses only covers module dependencies (and treats our own
 # module — including these copies — as first-party), so mirror their LICENSE/NOTICE/
-# COPYING files into LICENSES/third_party/, keyed by their path under third_party/.
+# COPYING files into _LICENSES/third_party/, keyed by their path under third_party/.
 # `git ls-files` is used so gitignored paths (e.g. nested worktrees under .claude/,
 # bin/) are skipped automatically; vendor/ and the output dir hold module deps /
 # generated output (not forked source), so skip those too. Mirrors kubernetes
-# hack/update-vendor-licenses.sh (see its LICENSES/third_party/). License paths are
+# hack/update-vendor-licenses.sh (see its _LICENSES/third_party/). License paths are
 # plain ASCII, so newline-delimited iteration is safe.
 git ls-files --cached --others --exclude-standard \
   | { grep -iE '(^|/)third_party/.*(licen[sc]e|notice|copying)[^/]*$' || true; } \
   | while IFS= read -r f; do
       case "${f}" in vendor/* | "${OUTDIR}"/*) continue ;; esac
-      dest="${OUTDIR}/third_party/${f##*third_party/}" # e.g. LICENSES/third_party/kata/agentpb/LICENSE
+      dest="${OUTDIR}/third_party/${f##*third_party/}" # e.g. _LICENSES/third_party/kata/agentpb/LICENSE
       mkdir -p "$(dirname "${dest}")"
       cp "${f}" "${dest}"
     done

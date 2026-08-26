@@ -38,7 +38,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -58,12 +57,8 @@ func TestCreateActor_Success(t *testing.T) {
 
 	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
-			Atespace:   testAtespace,
-			Name:       "id1",
-			Uid:        "caller-supplied-uid",
-			Version:    999,
-			CreateTime: timestamppb.New(time.Unix(1, 0)),
-			UpdateTime: timestamppb.New(time.Unix(1, 0)),
+			Atespace: testAtespace,
+			Name:     "id1",
 		},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
@@ -698,7 +693,7 @@ func TestUpdateActor(t *testing.T) {
 	_, err = tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
 		Actor: updatedActor,
 	})
-	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor_template is immutable")
+	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor.actor_template: Invalid value: null: field is immutable")
 }
 
 // TestUpdateActor_Preconditions verifies the required version and uid guards
@@ -748,7 +743,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	unguarded := proto.Clone(created).(*ateapipb.Actor)
 	unguarded.Metadata.Uid, unguarded.Metadata.Version = "", 0
 	_, err := update(unguarded, "blind")
-	assertGrpcError(t, err, codes.InvalidArgument, "[actor.metadata.uid: Required value, actor.metadata.version: Required value]")
+	assertGrpcError(t, err, codes.InvalidArgument, "while updating actor test-atespace/id1: persistence: precondition required: uid")
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it
@@ -756,7 +751,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	otherLifecycle := proto.Clone(created).(*ateapipb.Actor)
 	otherLifecycle.Metadata.Uid = staleUID
 	_, err = update(otherLifecycle, "other-lifecycle")
-	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("actor %s/%s not found with uid %s", testAtespace, testActorID, staleUID))
+	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 
 	// Both guards matching the observed state: the update goes through, and
 	// moves the resource past the version observed above.
@@ -2599,7 +2594,7 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	}
 }
 
-func TestResumeActor_LockConflict(t *testing.T) {
+func TestResumeActor_LeaseConflict(t *testing.T) {
 	ns := namespaceForTest("ns-resume-conflict")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -2618,7 +2613,7 @@ func TestResumeActor_LockConflict(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	// Set a delay on the fake Atelet to hold the lock
+	// Set a delay on the fake Atelet to hold the lease
 	tc.fakeAtelet.RestoreDelay = 1 * time.Second
 
 	// Launch Request A in a goroutine
@@ -2630,10 +2625,10 @@ func TestResumeActor_LockConflict(t *testing.T) {
 		errChan <- err
 	}()
 
-	// Sleep a bit to ensure Request A acquired the lock
+	// Sleep a bit to ensure Request A acquired the lease
 	time.Sleep(200 * time.Millisecond)
 
-	// Launch Request B (should fail due to lock conflict)
+	// Launch Request B (should fail due to lease conflict)
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})

@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -138,43 +137,6 @@ func TestResolveGuestMemMiB(t *testing.T) {
 				t.Errorf("resolveGuestMemMiB(%dMiB) = %d, want %d", tc.declaredMiB, got, tc.wantMiB)
 			}
 		})
-	}
-}
-
-// guestSize translates an actor's declared limits to effective in-guest limits:
-// CPU is preserved while memory is reduced by the VMM reserve.
-func TestGuestSize(t *testing.T) {
-	const (
-		mib     = 1024 * 1024
-		reserve = 256
-	)
-	s := &AteomService{memReserveMiB: reserve}
-
-	// Declared memory limit is reduced by reserve.
-	got, err := s.guestSize(sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: 1024 * mib})
-	want := sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: (1024 - reserve) * mib}
-	if err != nil {
-		t.Fatalf("guestSize(1024MiB) unexpected error: %v", err)
-	}
-	if got != want {
-		t.Errorf("guestSize(1024MiB) = %+v, want %+v", got, want)
-	}
-
-	// Unset memory (0) is left unset.
-	gotUnset, err := s.guestSize(sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0})
-	wantUnset := sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0}
-	if err != nil {
-		t.Fatalf("guestSize(unset) unexpected error: %v", err)
-	}
-	if gotUnset != wantUnset {
-		t.Errorf("guestSize(unset) = %+v, want %+v", gotUnset, wantUnset)
-	}
-
-	// A limit the reserve leaves too small to boot errors rather than returning
-	// the unreduced size, which would leave the cgroup limit above the VM's RAM.
-	tooSmall := sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: (reserve + 1) * mib}
-	if gotErr, err := s.guestSize(tooSmall); err == nil {
-		t.Errorf("guestSize(%dMiB) = %+v, nil; want an error", reserve+1, gotErr)
 	}
 }
 

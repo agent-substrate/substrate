@@ -97,6 +97,103 @@ func TestActorTemplateValidation(t *testing.T) {
 		mutate:  func(at *ActorTemplate) {},
 		wantErr: false,
 	}, {
+		name: "container resources on a micro-VM template",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Containers[0].Resources = &ContainerResources{
+				Limits: ContainerResourceList{
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+				},
+			}
+		},
+		wantErr: false,
+		// The limits must survive the round-trip through the CRD schema, not
+		// merely be accepted: a pruned or renormalized quantity would leave the
+		// actor unlimited with no error anywhere.
+		verify: func(t *testing.T, at *ActorTemplate) {
+			got := at.Spec.Containers[0].Resources
+			if got == nil {
+				t.Fatal("Resources = nil after create, want the declared limits")
+			}
+			if q := got.Limits[corev1.ResourceMemory]; q.Value() != 268435456 {
+				t.Errorf("memory limit = %v (%d bytes), want 256Mi", q, q.Value())
+			}
+			if q := got.Limits[corev1.ResourceCPU]; q.MilliValue() != 200 {
+				t.Errorf("cpu limit = %v (%dm), want 200m", q, q.MilliValue())
+			}
+		},
+	}, {
+		name: "unsupported resource key",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Containers[0].Resources = &ContainerResources{
+				Limits: ContainerResourceList{"nvidia.com/gpu": resource.MustParse("1")},
+			}
+		},
+		wantErr: true,
+		errMsg:  "only cpu and memory limits are supported",
+	}, {
+		name: "negative memory limit",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Containers[0].Resources = &ContainerResources{
+				Limits: ContainerResourceList{corev1.ResourceMemory: resource.MustParse("-1Gi")},
+			}
+		},
+		wantErr: true,
+		errMsg:  "must be greater than zero",
+	}, {
+		name: "zero cpu limit",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Containers[0].Resources = &ContainerResources{
+				Limits: ContainerResourceList{corev1.ResourceCPU: resource.MustParse("0")},
+			}
+		},
+		wantErr: true,
+		errMsg:  "must be greater than zero",
+	}, {
+		name: "cpu limit large enough to overflow the quota conversion",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Containers[0].Resources = &ContainerResources{
+				Limits: ContainerResourceList{corev1.ResourceCPU: resource.MustParse("1e14")},
+			}
+		},
+		wantErr: true,
+		errMsg:  "less than 1000 cores",
+	}, {
+		name: "container resources on a gvisor template",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Resources = &ContainerResources{
+				Limits: ContainerResourceList{
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "container resources are only supported when sandboxClass is 'microvm'",
+	}, {
+		name: "container resources on one of several containers still gates the template",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers = append(at.Spec.Containers, Container{
+				Name:  "sidecar",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				Resources: &ContainerResources{
+					Limits: ContainerResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+				},
+			})
+		},
+		wantErr: true,
+		errMsg:  "container resources are only supported when sandboxClass is 'microvm'",
+	}, {
+		name: "no container resources is fine on gvisor",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Resources = nil
+		},
+		wantErr: false,
+	}, {
 		name: "missing SnapshotsConfig.Location",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.Location = ""

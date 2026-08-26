@@ -186,6 +186,40 @@ spec:
                       required:
                       - httpGet
                       type: object
+                    resources:
+                      description: |-
+                        Resources are the compute limits for this container, enforced inside the
+                        actor's sandbox. Only cpu and memory are supported, and only on micro-VM
+                        actors: gVisor applies cgroup limits at the sandbox level, so a
+                        per-container cgroup there is created but stays empty.
+                      properties:
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          description: |-
+                            Limits is the maximum amount of compute resources allowed. Only cpu and
+                            memory are supported, and each must be greater than zero.
+
+                            A cpu limit below 10m is raised to 10m: the kernel rejects a CFS quota
+                            under 1ms, and the quota is expressed against a 100ms period.
+                          maxProperties: 2
+                          type: object
+                      type: object
+                      x-kubernetes-validations:
+                      - message: only cpu and memory limits are supported
+                        rule: '!has(self.limits) || self.limits.all(k, k == ''cpu''
+                          || k == ''memory'')'
+                      - message: memory limit must be greater than zero
+                        rule: '!has(self.limits) || !(''memory'' in self.limits) ||
+                          quantity(string(self.limits[''memory''])).isGreaterThan(quantity(''0''))'
+                      - message: cpu limit must be greater than zero
+                        rule: '!has(self.limits) || !(''cpu'' in self.limits) || quantity(string(self.limits[''cpu''])).isGreaterThan(quantity(''0''))'
+                      - message: cpu limit must be less than 1000 cores
+                        rule: '!has(self.limits) || !(''cpu'' in self.limits) || quantity(string(self.limits[''cpu''])).isLessThan(quantity(''1k''))'
                     securityContext:
                       description: |-
                         securityContext holds security settings for this container. Unset leaves
@@ -735,6 +769,10 @@ spec:
               rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
                 || c.volumeMounts.all(vm, has(self.volumes) && self.volumes.exists(v,
                 v.name == vm.name)))'
+            - message: container resources are only supported when sandboxClass is
+                'microvm'
+              rule: '!has(self.containers) || !self.containers.exists(c, has(c.resources))
+                || (has(self.sandboxClass) && self.sandboxClass == ''microvm'')'
           status:
             description: status is the observed state of ActorTemplate
             properties:

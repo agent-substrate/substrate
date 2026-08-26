@@ -49,6 +49,7 @@ func TestBuildActorOCISpec_SystemInfoVolumeMounts(t *testing.T) {
 		volumes,
 		volumeMounts,
 		nil,
+		nil,
 	)
 	found := false
 	for _, m := range spec.Mounts {
@@ -224,6 +225,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		volumes,
 		durableDirs,
 		nil,
+		nil,
 	)
 
 	for _, vm := range durableDirs {
@@ -263,6 +265,7 @@ func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
 		"/run/netns/x",
 		volumes,
 		mounts,
+		nil,
 		nil,
 	)
 
@@ -367,7 +370,7 @@ func TestResolveCapabilities(t *testing.T) {
 // ambient stay empty — see the comment in buildActorOCISpec.
 func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 	want := []string{"CAP_CHOWN", "CAP_KILL"}
-	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want)
+	spec := buildActorOCISpec("actor_uid", "app", []string{"/app"}, nil, nil, "/run/netns/x", nil, nil, want, nil)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -400,7 +403,7 @@ func TestBuildActorOCISpec_Capabilities(t *testing.T) {
 
 // The pause container only reaps, so it is built with no capabilities at all.
 func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
-	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil)
+	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil, nil)
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -419,5 +422,83 @@ func TestBuildActorOCISpec_NoCapabilitiesForPause(t *testing.T) {
 		if len(set.got) != 0 {
 			t.Errorf("%s = %v, want empty", set.name, set.got)
 		}
+	}
+}
+
+func TestOCIResources(t *testing.T) {
+	if got := ociResources(nil); got != nil {
+		t.Errorf("ociResources(nil) = %v, want nil", got)
+	}
+	if got := ociResources(&ateletpb.ResourceLimits{}); got != nil {
+		t.Errorf("ociResources(zero) = %v, want nil so the spec is unchanged", got)
+	}
+
+	got := ociResources(&ateletpb.ResourceLimits{MemoryBytes: 268435456, CpuMillis: 200})
+	if got == nil {
+		t.Fatal("ociResources() = nil, want limits")
+	}
+	if got.Memory == nil || got.Memory.Limit == nil || *got.Memory.Limit != 268435456 {
+		t.Errorf("Memory.Limit = %v, want 268435456", got.Memory)
+	}
+	// Assert the ratio rather than the literal quota: retuning the period must
+	// keep quota/period equal to the declared milli-cores, and a test pinned to
+	// a literal would pass while every container silently got the wrong share.
+	if got.CPU == nil || got.CPU.Quota == nil || got.CPU.Period == nil {
+		t.Fatalf("CPU = %v, want a quota and period", got.CPU)
+	}
+	if millis := *got.CPU.Quota * 1000 / int64(*got.CPU.Period); millis != 200 {
+		t.Errorf("quota/period = %dm, want the declared 200m (quota=%d period=%d)",
+			millis, *got.CPU.Quota, *got.CPU.Period)
+	}
+	if *got.CPU.Period != cpuQuotaPeriodUS {
+		t.Errorf("CPU.Period = %d, want cpuQuotaPeriodUS (%d)", *got.CPU.Period, cpuQuotaPeriodUS)
+	}
+}
+
+// The kernel rejects a CFS quota below 1ms, so a cpu limit under 10m must be
+// raised to the floor rather than producing a spec the guest refuses with
+// EINVAL at container create.
+func TestOCIResources_ClampsQuotaToKernelMinimum(t *testing.T) {
+	for _, millis := range []int64{1, 5, 9} {
+		got := ociResources(&ateletpb.ResourceLimits{CpuMillis: millis})
+		if got == nil || got.CPU == nil || got.CPU.Quota == nil {
+			t.Fatalf("cpu=%dm: ociResources() = %v, want a quota", millis, got)
+		}
+		if *got.CPU.Quota < cpuQuotaMinUS {
+			t.Errorf("cpu=%dm: quota = %d, want at least the kernel minimum %d",
+				millis, *got.CPU.Quota, cpuQuotaMinUS)
+		}
+	}
+	// At the floor the quota is exact, not clamped.
+	got := ociResources(&ateletpb.ResourceLimits{CpuMillis: 10})
+	if *got.CPU.Quota != cpuQuotaMinUS {
+		t.Errorf("cpu=10m: quota = %d, want exactly %d", *got.CPU.Quota, cpuQuotaMinUS)
+	}
+}
+
+// A negative limit must not produce a non-nil but empty LinuxResources, which
+// would put a bare "resources": {} into the spec.
+func TestOCIResources_NegativeIsUnset(t *testing.T) {
+	if got := ociResources(&ateletpb.ResourceLimits{MemoryBytes: -1, CpuMillis: -1}); got != nil {
+		t.Errorf("ociResources(negative) = %+v, want nil", got)
+	}
+}
+
+// A template without limits must produce exactly the spec atelet emits today.
+func TestBuildActorOCISpec_NoResourcesLeavesLinuxUntouched(t *testing.T) {
+	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil, nil)
+	if spec.Linux.Resources != nil {
+		t.Errorf("Linux.Resources = %v, want nil when no limits are declared", spec.Linux.Resources)
+	}
+}
+
+func TestBuildActorOCISpec_ResourcesApplied(t *testing.T) {
+	spec := buildActorOCISpec("actor_uid", "pause", []string{"/pause"}, nil, nil, "/run/netns/x", nil, nil, nil,
+		&ateletpb.ResourceLimits{MemoryBytes: 67108864})
+	if spec.Linux.Resources == nil || spec.Linux.Resources.Memory == nil {
+		t.Fatalf("Linux.Resources = %v, want a memory limit", spec.Linux.Resources)
+	}
+	if *spec.Linux.Resources.Memory.Limit != 67108864 {
+		t.Errorf("Memory.Limit = %d, want 67108864", *spec.Linux.Resources.Memory.Limit)
 	}
 }

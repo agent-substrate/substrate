@@ -119,19 +119,19 @@ type actorWorkflowStore interface {
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
 	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
-	AcquireLock(ctx context.Context, key string) (*store.Lock, error)
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
-func (w *ActorWorkflow) acquireActorLock(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lock, error) {
-	lockKey := "lock:actor:" + actorRef.Atespace + ":" + actorRef.Name
+func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
+	leaseKey := "lease:actor:" + actorRef.Atespace + ":" + actorRef.Name
 
-	lock, err := w.store.AcquireLock(ctx, lockKey)
+	lease, err := w.store.AcquireLease(ctx, leaseKey)
 	if err != nil {
-		if errors.Is(err, store.ErrLockConflict) {
+		if errors.Is(err, store.ErrLeaseConflict) {
 			return nil, nil, status.Error(grpcCodes.Aborted, "another operation is in progress for this actor")
 		}
-		return nil, nil, fmt.Errorf("while acquiring lock: %w", err)
+		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}
 
-	return lock.Context(), lock, nil
+	return lease.Context(), lease, nil
 }

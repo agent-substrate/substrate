@@ -236,6 +236,10 @@ message Container {
   Readyz readyz = 5;
   repeated VolumeMount volume_mounts = 6;
   SecurityContext security_context = 8;
+
+  // resources are the cgroup limits for this container, resolved by
+  // ate-api-server from the ActorTemplate. Unset means no limits.
+  ResourceLimits resources = 9;
 }
 
 // SecurityContext holds security settings for a container's process.
@@ -248,6 +252,15 @@ message SecurityContext {
 message Capabilities {
   repeated string add = 1;
   repeated string drop = 2;
+}
+
+// ResourceLimits are the cgroup limits for one container. Scalars rather than a
+// map so each resource.Quantity is parsed exactly once, in ate-api-server.
+message ResourceLimits {
+  // memory_bytes is the memory limit in bytes. 0 means unset.
+  int64 memory_bytes = 1;
+  // cpu_millis is the CPU limit in milli-cores (1000 = one core). 0 means unset.
+  int64 cpu_millis = 2;
 }
 
 message EnvEntry {
