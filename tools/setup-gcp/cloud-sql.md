@@ -123,7 +123,9 @@ Optional environment variables:
 - `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH` — set `false` to fall back to password
   authentication through the proxy (still encrypted and identity-verified);
   you must then provide `ATE_API_POSTGRES_CONNECTION_STRING` with the
-  password yourself.
+  password yourself (the install script rejects `false` without an explicit
+  connection string — a synthesized passwordless DSN cannot log in once the
+  proxy stops injecting IAM tokens).
 - `ATE_API_POSTGRES_POOL_MAX_CONNS` — pgxpool connections per ateapi replica
   (default: `max(4, NumCPU)`); folded into the synthesized DSN as
   `pool_max_conns`.

@@ -470,6 +470,17 @@ create_api_server_env_vars() {
       # proxy on pod-local loopback; the proxy owns TLS and IAM database
       # authentication. The database username is the GSA email with the
       # .gserviceaccount.com suffix trimmed.
+      #
+      # The synthesized DSN is passwordless, which only logs in when the
+      # proxy injects an IAM token. With IAM auth disabled the operator must
+      # supply the credentials themselves; failing here beats a Postgres
+      # authentication error at pod startup.
+      if [[ "${ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH:-true}" == "false" ]]; then
+        echo "Error: ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false disables automatic IAM database" \
+          "authentication, so a passwordless DSN cannot be synthesized; set" \
+          "ATE_API_POSTGRES_CONNECTION_STRING explicitly (host=127.0.0.1 to stay on the proxy)" >&2
+        exit 1
+      fi
       if [[ -z "${ATE_API_POSTGRES_CLOUDSQL_GSA:-}" ]]; then
         echo "Error: ATE_API_POSTGRES_CLOUDSQL_INSTANCE requires ATE_API_POSTGRES_CLOUDSQL_GSA" \
           "(or an explicit ATE_API_POSTGRES_CONNECTION_STRING)" >&2
