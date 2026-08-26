@@ -71,11 +71,19 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) string 
 	// and delete consume the same file without any shell involved.
 	manifest := renderProbeManifest(t, bucket, name, cfg)
 	koApply(t, manifest)
+	namespace := FixtureName("ate-e2e-probe") + "-" + name
 
 	// Unlike the fixtures that live in a namespace CreateNamespace tears down,
 	// this one installs into a fixed namespace it shares with nothing, so it has
-	// to clean up after itself.
+	// to clean up after itself. A failed test keeps it, for the same reason
+	// CreateNamespace retains failed tests' namespaces: the worker pods are
+	// where the ateom (and micro-VM guest console + virtiofsd) logs live, and
+	// they are gone the moment the namespace is.
 	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("keeping probe fixture for diagnostics (delete with: kubectl delete namespace %s)", namespace)
+			return
+		}
 		// Deletion needs no image build, so go straight to kubectl. `ko delete`
 		// rejects this arg shape ("you may not specify resource arguments as
 		// well").
@@ -86,7 +94,7 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) string 
 		RunCmd(t, "kubectl", delArgs...)
 	})
 
-	return FixtureName("ate-e2e-probe") + "-" + name
+	return namespace
 }
 
 // renderProbeManifest renders the probe fixture for cfg. Split out of

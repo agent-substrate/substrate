@@ -19,7 +19,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -142,13 +144,16 @@ func (c *Client) RestoreWithNetFDs(ctx context.Context, sourceDir string, nets [
 		return fmt.Errorf("sending vm.restore with fds: %w", err)
 	}
 
-	status, err := bufio.NewReader(conn).ReadString('\n')
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		return fmt.Errorf("reading vm.restore response: %w", err)
 	}
-	parts := strings.SplitN(strings.TrimSpace(status), " ", 3)
-	if len(parts) < 2 || !strings.HasPrefix(parts[1], "2") {
-		return fmt.Errorf("vm.restore failed: %s", strings.TrimSpace(status))
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		// The body is CH's actual error (e.g. which device failed to restore);
+		// the status line alone says only "500".
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("vm.restore failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
