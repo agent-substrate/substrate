@@ -147,13 +147,13 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		seenUIDs[got.UID] = id
 	}
 
-	// Live refresh (#932): rotate the pool while both actors RUN — no
-	// suspend, no resume — and wait until each observes the new sanitized
-	// contents at the same path. atelet's informer rewrites the projected
-	// file (temp + rename at the stable path) for every running actor that
-	// projects the bundle, and both runtimes must surface the host-side
-	// rename on their next read (gVisor revalidating the bind mount through
-	// the gofer, the micro-VM through virtio-fs).
+	// Live refresh: rotate the pool while both actors RUN — no suspend, no
+	// resume — and wait until each observes the new sanitized contents at
+	// the same path. atelet's informer rewrites the projected file (temp +
+	// rename at the stable path) for every running actor that projects the
+	// bundle, and both runtimes must surface the host-side rename on their
+	// next read (gVisor revalidating the bind mount through the gofer, the
+	// micro-VM through virtio-fs).
 	liveTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-live")
 	for _, id := range ids {
 		waitForTrust(t, ctx, rc, id, liveTrust)
