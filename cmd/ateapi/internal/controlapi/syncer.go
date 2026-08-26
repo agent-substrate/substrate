@@ -160,7 +160,7 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 
 		// Reconcile the other direction: enqueue every stored worker so records
 		// whose pods no longer exist are cleaned up. This recovers delete events
-		// missed while ate-api-server was down — neither the watch relist nor
+		// missed while ate-api-server was down, neither the watch relist nor
 		// the resync period can replay a delete across a process restart,
 		// because the informer cache starts empty. Runs after the cache sync so
 		// the indexer is an authoritative snapshot of live pods.
@@ -221,7 +221,7 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	if pod.DeletionTimestamp != nil {
 		// The pod has entered Terminating: mark the worker DRAINING so the
 		// scheduler stops routing new actors to it. We deliberately do NOT touch
-		// the bound actor here — inside the pod ateom has received SIGTERM and is
+		// the bound actor here, inside the pod ateom has received SIGTERM and is
 		// gracefully shutting the actor down. Actor cleanup happens on the Pod
 		// Deleted event.
 		return s.markWorkerDraining(ctx, key)
@@ -348,7 +348,7 @@ func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler
 // stops routing new actors to it while its pod is Terminating. If the worker is
-// already gone or already draining there is nothing more to do — the Pod
+// already gone or already draining there is nothing more to do, the Pod
 // Deleted event will clean up the record. A version conflict is returned so the
 // caller requeues and retries against the updated record.
 func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, key workerKey) error {

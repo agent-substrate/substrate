@@ -421,7 +421,7 @@ func setupReconcileTest(t *testing.T, persistence store.Interface, initPools ...
 
 // TestSyncer_SoftDelete_MarksDraining verifies that a pod entering Terminating
 // (DeletionTimestamp set) flips its worker to STATE_DRAINING without deleting the
-// worker record or touching the bound actor — the actor is still gracefully
+// worker record or touching the bound actor, the actor is still gracefully
 // shutting down inside the pod.
 func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	ctx := context.Background()
