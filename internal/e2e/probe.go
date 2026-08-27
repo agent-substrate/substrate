@@ -70,7 +70,7 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) string 
 	// One manifest, rendered for the sandbox class under test, so both apply
 	// and delete consume the same file without any shell involved.
 	manifest := renderProbeManifest(t, bucket, name, cfg)
-	koApply(t, manifest)
+	KoApply(t, manifest)
 
 	// Unlike the fixtures that live in a namespace CreateNamespace tears down,
 	// this one installs into a fixed namespace it shares with nothing, so it has

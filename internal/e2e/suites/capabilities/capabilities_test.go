@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -136,25 +135,13 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 // suffix so the gVisor and micro-VM lanes never share one.
 func deployFixture(t *testing.T, bucket string) string {
 	t.Helper()
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-
 	namespace := e2e.FixtureName("ate-e2e") + "-capabilities"
 
 	// One manifest, rendered for the sandbox class under test (mirrors the
 	// sizing suite).
 	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl", bucket, "capabilities")
 
-	// Build/push the probe image and apply through the repo's pinned ko, as the
-	// identity suite does; CI does not install ko on PATH, and KO_CONFIG_PATH is
-	// required because ko resolves .ko.yaml from its working directory.
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
+	e2e.KoApply(t, manifest)
 
 	t.Cleanup(func() {
 		delArgs := []string{"delete", "--ignore-not-found", "-f", manifest}

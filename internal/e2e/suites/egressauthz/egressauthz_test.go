@@ -167,11 +167,7 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 		t.Fatalf("writing rendered egressprobe manifest: %v", err)
 	}
 
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
+	e2e.KoApply(t, manifest)
 
 	waitForProbeReady(t, ctx, ns)
 
