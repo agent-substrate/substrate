@@ -518,34 +518,27 @@ message Limits {
   string quantity = 2;
 }
 
-enum ActorTemplatePhase {
-  ACTOR_TEMPLATE_PHASE_UNSPECIFIED = 0;
-  ACTOR_TEMPLATE_PHASE_INITIAL = 1;
-  ACTOR_TEMPLATE_PHASE_RESUME_GOLDEN_ACTOR = 2;
-  ACTOR_TEMPLATE_PHASE_WAIT_GOLDEN_ACTOR = 3;
-  ACTOR_TEMPLATE_PHASE_READY = 4;
-  ACTOR_TEMPLATE_PHASE_FAILED = 5;
-}
-
-message ActorTemplateStatus {
-  // State machine, mirroring the ActorTemplate CRD PhaseType:
-  // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
-  // READY and FAILED are terminal; the version is only usable once READY.
-  ActorTemplatePhase phase = 1;
-
-  // message is a human-readable explanation of the current state, most
-  // useful when the ActorTemplate is FAILED.
-  string message = 2;
-
+message GoldenSnapshotStatus {
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
   // READY.
   // +k8s:opaqueType
-  ObjectRef golden_snapshot = 3;
+  ObjectRef golden_snapshot = 1;
+
+  // take_golden_snapshot_at is when the golden-actor warmup ends and the
+  // golden snapshot may be taken. Mirrors the CRD's status.takeGoldenSnapshotAt
+  // cmd/atecontroller/internal/controllers/actortemplate_controller.go
+  google.protobuf.Timestamp take_golden_snapshot_at = 2;
+
+  string error_message = 3;
+}
+
+message ActorTemplateStatus {
+  GoldenSnapshotStatus golden_snapshot_status = 1;
 
   // sandbox_assets is the referenced SandboxConfig's content frozen at
   // creation time.
-  SandboxAssets sandbox_assets = 4;
+  SandboxAssets sandbox_assets = 2;
 }
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
@@ -840,8 +833,7 @@ message DeleteAtespaceRequest {
 
 message CreateActorTemplateRequest {
   // The actor template version to create. Server-assigned metadata (uid,
-  // version, timestamps) is ignored, as are the status fields: the server
-  // initializes new versions to ACTOR_TEMPLATE_PHASE_INITIAL.
+  // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
   ActorTemplate actor_template = 1;

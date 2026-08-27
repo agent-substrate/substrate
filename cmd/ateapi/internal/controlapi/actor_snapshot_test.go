@@ -21,7 +21,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -485,84 +484,4 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 	if got, want := storedTag.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE; got != want {
 		t.Errorf("Stored scope = %v, want %v: the rejected update was applied anyway", got, want)
 	}
-}
-
-// TestUpdateActorSnapshotTag_RejectsUnknownFields checks that an update carrying
-// a field this binary has no descriptor for is refused.
-// Update replaces the whole object, so a field the server cannot see would
-// otherwise be persisted unexamined.
-func TestUpdateActorSnapshotTag_RejectsUnknownFields(t *testing.T) {
-	ctx := context.Background()
-
-	tests := []struct {
-		name string
-		// injectUnknownField attaches the unknown field somewhere in the request's tag.
-		injectUnknownField func(*ateapipb.ActorSnapshotTag)
-		// wantPath is where the resulting error points.
-		wantPath *field.Path
-	}{
-		{
-			name:               "at the top level",
-			injectUnknownField: func(tag *ateapipb.ActorSnapshotTag) { tag.ProtoReflect().SetUnknown(unknownField(9999)) },
-			wantPath:           field.NewPath("actor_snapshot_tag"),
-		},
-		{
-			name:               "nested in metadata",
-			injectUnknownField: func(tag *ateapipb.ActorSnapshotTag) { tag.Metadata.ProtoReflect().SetUnknown(unknownField(9999)) },
-			wantPath:           field.NewPath("actor_snapshot_tag", "metadata"),
-		},
-		{
-			name:               "nested in snapshot",
-			injectUnknownField: func(tag *ateapipb.ActorSnapshotTag) { tag.Snapshot.ProtoReflect().SetUnknown(unknownField(9999)) },
-			wantPath:           field.NewPath("actor_snapshot_tag", "snapshot"),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			svc, stored := rpcServiceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-1"},
-				Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-			})
-
-			in := proto.Clone(stored).(*ateapipb.ActorSnapshotTag)
-			tt.injectUnknownField(in)
-
-			_, err := svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{ActorSnapshotTag: in})
-			wantErr := toGRPCStatusError(field.ErrorList{
-				field.Invalid(tt.wantPath, field.OmitValueType{}, ""),
-			})
-			if got, want := status.Code(err), status.Code(wantErr); got != want {
-				t.Fatalf("UpdateActorSnapshotTag() error code = %v, want %v (error: %v)", got, want, err)
-			}
-			if got, want := status.Convert(err).Message(), status.Convert(wantErr).Message(); got != want {
-				t.Errorf("UpdateActorSnapshotTag() error message = %q, want %q", got, want)
-			}
-
-			// The rejection happens before the store is touched, so the tag is
-			// left exactly as it was.
-			after, err := svc.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{
-				ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag-1"},
-			})
-			if err != nil {
-				t.Fatalf("GetActorSnapshotTag() error = %v", err)
-			}
-			if diff := cmp.Diff(stored, after, protocmp.Transform()); diff != "" {
-				t.Errorf("tag changed despite the rejection (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestValidateCreateActorSnapshotTagRequestUnknownFields(t *testing.T) {
-	validTag := func() *ateapipb.ActorSnapshotTag {
-		return &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tag-1"},
-			Snapshot: &ateapipb.ObjectRef{Atespace: "team-a", Name: "snap-1"},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-		}
-	}
-	assertValidateErr(t, validateCreateActorSnapshotTagRequest(&ateapipb.CreateActorSnapshotTagRequest{ActorSnapshotTag: validTag()}), nil)
-	assertValidateErr(t,
-		validateCreateActorSnapshotTagRequest(&ateapipb.CreateActorSnapshotTagRequest{ActorSnapshotTag: withUnknown(validTag(), 9999)}),
-		field.ErrorList{field.Invalid(field.NewPath("actor_snapshot_tag"), field.OmitValueType{}, "")})
 }

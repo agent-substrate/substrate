@@ -184,7 +184,7 @@ The `ate.*` control-plane metric labels are either fixed value sets (operation, 
 It is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. Weaver reads it, resolves each `ref`, and refuses a group or an attribute that is not correct:
 
 ```sh
-hack/verify/verify-metrics.sh              # the command that CI uses
+hack/verify/metrics.sh                           # the command that CI uses
 weaver registry check -r docs/metrics/registry   # the same command, direct
 ```
 

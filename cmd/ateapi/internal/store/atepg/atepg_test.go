@@ -216,7 +216,9 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 		}); err != nil {
 			return fmt.Errorf("concurrent actor template update: %w", err)
 		}
-		toUpdate.Status = &ateapipb.ActorTemplateStatus{Message: "ready"}
+		toUpdate.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+			ErrorMessage: "LosingUpdate",
+		}}
 		return nil
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -232,8 +234,8 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
 		t.Errorf("worker selector tier = %q, want paid", got)
 	}
-	if got := stored.GetStatus().GetMessage(); got != "" {
-		t.Errorf("status message = %q, want empty: losing update was persisted", got)
+	if got := stored.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage(); got != "" {
+		t.Errorf("status error message = %q, want empty: losing update was persisted", got)
 	}
 }
 

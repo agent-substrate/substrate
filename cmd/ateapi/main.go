@@ -189,6 +189,10 @@ func main() {
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
+	// Drive stored ActorTemplates through the golden actor flow.
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, sandboxConfigLister)
+	templateReconciler.Start(shutdownCtx)
+
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
 		serverboot.Fatal(ctx, "while loading the Actor ID CA", err)
@@ -221,6 +225,7 @@ func main() {
 			ateapiauth.UnaryServerInterceptor(authCfg),
 			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 			ateinterceptors.ServerUnaryInterceptor,
+			ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
 		),
 		grpc.ChainStreamInterceptor(
 			ateapiauth.StreamServerInterceptor(authCfg),

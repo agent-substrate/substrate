@@ -61,9 +61,7 @@ func (s *ServiceImpl) CreateAtespace(ctx context.Context, inAtespace *ateapipb.A
 func validateCreateAtespaceRequest(ctx context.Context, req *ateapipb.CreateAtespaceRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
-	errs := Validate_CreateAtespaceRequest(ctx, op, nil, req, nil)
-	errs = append(errs, validateNoUnknownFields(req.Atespace, field.NewPath("atespace"))...)
-	return errs
+	return Validate_CreateAtespaceRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest) (*ateapipb.Atespace, error) {
