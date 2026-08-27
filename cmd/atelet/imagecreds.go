@@ -15,39 +15,22 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/google/go-containerregistry/pkg/authn"
-	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
 )
 
-// newImagePullCredentials picks how atelet authenticates image pulls: the
-// node's kubelet credential provider plugins (registry-agnostic, no
-// cloud-specific code) or the legacy GCP application default credentials,
-// which cover gcr.io and pkg.dev only. At most one is non-nil; neither means
-// anonymous pulls. The provider path wins when configured, since running both
-// would obscure which produced a credential.
-func newImagePullCredentials(ctx context.Context) (keychain authn.Keychain, gcpAuth authn.Authenticator, err error) {
-	if *imageCredentialProviderConfig != "" {
-		if *imageCredentialProviderBinDir == "" {
-			return nil, nil, fmt.Errorf("--image-credential-provider-bin-dir is required when --image-credential-provider-config is set")
-		}
-		kc, err := credentialprovider.New(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
-		if err != nil {
-			return nil, nil, err
-		}
-		return kc, nil, nil
+// newImagePullCredentials builds the keychain atelet authenticates image pulls
+// with, from the node's kubelet credential provider plugins. A nil keychain
+// means anonymous pulls, which is all an unconfigured node (kind, say) can do
+// and all a public registry needs.
+func newImagePullCredentials() (authn.Keychain, error) {
+	if *imageCredentialProviderConfig == "" {
+		return nil, nil
 	}
-
-	if *gcpAuthForImagePulls {
-		gcpAuth, err := googlecontainerauth.NewEnvAuthenticator(ctx)
-		if err != nil {
-			return nil, nil, fmt.Errorf("while creating GCP registry authenticator: %w", err)
-		}
-		return nil, gcpAuth, nil
+	if *imageCredentialProviderBinDir == "" {
+		return nil, fmt.Errorf("--image-credential-provider-bin-dir is required when --image-credential-provider-config is set")
 	}
-
-	return nil, nil, nil
+	return credentialprovider.New(*imageCredentialProviderConfig, *imageCredentialProviderBinDir)
 }

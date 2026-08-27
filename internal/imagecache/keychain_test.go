@@ -98,13 +98,13 @@ func TestEnsureImage_KeychainAuthenticatesPull(t *testing.T) {
 	}
 }
 
-func TestRemoteOptsKeychainTakesPrecedence(t *testing.T) {
+func TestRemoteOptsAttachesKeychain(t *testing.T) {
 	kc := &staticKeychain{auth: authn.Anonymous}
-	auth := authn.FromConfig(authn.AuthConfig{Username: "u"})
 
 	// remote.Option values are opaque, so assert on how many the store
 	// attaches: three unconditional ones (context, platform, retry backoff)
-	// plus at most one credential option.
+	// plus the keychain when one is set. The keychain is registry-agnostic --
+	// it decides for itself which registries it can authenticate.
 	const base = 3
 	for _, tc := range []struct {
 		name string
@@ -112,11 +112,9 @@ func TestRemoteOptsKeychainTakesPrecedence(t *testing.T) {
 		ref  string
 		want int
 	}{
-		{name: "no credentials", ref: "gcr.io/proj/img", want: base},
-		{name: "gcp authenticator, gcp registry", opts: []Option{WithAuthenticator(auth)}, ref: "gcr.io/proj/img", want: base + 1},
-		{name: "gcp authenticator, other registry", opts: []Option{WithAuthenticator(auth)}, ref: "quay.io/proj/img", want: base},
-		{name: "keychain, any registry", opts: []Option{WithKeychain(kc)}, ref: "quay.io/proj/img", want: base + 1},
-		{name: "keychain wins over authenticator", opts: []Option{WithKeychain(kc), WithAuthenticator(auth)}, ref: "quay.io/proj/img", want: base + 1},
+		{name: "no keychain", ref: "gcr.io/proj/img", want: base},
+		{name: "keychain, gcp registry", opts: []Option{WithKeychain(kc)}, ref: "gcr.io/proj/img", want: base + 1},
+		{name: "keychain, other registry", opts: []Option{WithKeychain(kc)}, ref: "quay.io/proj/img", want: base + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestStore(t, tc.opts...)
