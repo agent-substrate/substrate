@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -481,6 +482,12 @@ func TestValidateActorSnapshotRefRequests(t *testing.T) {
 			return field.ErrorList{field.Required(field.NewPath(root, "atespace"), "")}
 		},
 	}, {
+		"invalid atespace",
+		&ateapipb.ObjectRef{Atespace: "TEAM A", Name: "obj-1"},
+		func(root string) field.ErrorList {
+			return field.ErrorList{field.Invalid(field.NewPath(root, "atespace"), nil, "").WithOrigin("format=k8s-short-name")}
+		},
+	}, {
 		"missing name",
 		&ateapipb.ObjectRef{Atespace: "team-a"},
 		func(root string) field.ErrorList {
@@ -494,9 +501,54 @@ func TestValidateActorSnapshotRefRequests(t *testing.T) {
 		},
 	}}
 	for _, tc := range cases {
+		t.Run("GetActorSnapshot/"+tc.name, func(t *testing.T) {
+			got := validateGetActorSnapshotRequest(context.Background(), &ateapipb.GetActorSnapshotRequest{ActorSnapshot: tc.ref})
+			assertValidateErr(t, got, tc.want("actor_snapshot"))
+		})
+		t.Run("GetActorSnapshotTag/"+tc.name, func(t *testing.T) {
+			got := validateGetActorSnapshotTagRequest(context.Background(), &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: tc.ref})
+			assertValidateErr(t, got, tc.want("actor_snapshot_tag"))
+		})
 		t.Run("DeleteActorSnapshotTag/"+tc.name, func(t *testing.T) {
 			got := validateDeleteActorSnapshotTagRequest(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tc.ref})
 			assertValidateErr(t, got, tc.want("actor_snapshot_tag"))
+		})
+	}
+}
+
+func TestValidateListActorSnapshotsRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapipb.ListActorSnapshotsRequest
+		want field.ErrorList
+	}{{
+		"valid, atespace scoped",
+		&ateapipb.ListActorSnapshotsRequest{Atespace: "team-a"},
+		nil,
+	}, {
+		"valid, empty atespace means all atespaces",
+		&ateapipb.ListActorSnapshotsRequest{},
+		nil,
+	}, {
+		"invalid atespace",
+		&ateapipb.ListActorSnapshotsRequest{Atespace: "TEAM-A"},
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"negative page_size",
+		&ateapipb.ListActorSnapshotsRequest{PageSize: -1},
+		field.ErrorList{field.Invalid(field.NewPath("page_size"), nil, "").WithOrigin("minimum")},
+	}, {
+		"valid page_token",
+		&ateapipb.ListActorSnapshotsRequest{PageToken: strings.Repeat("x", 256)},
+		nil,
+	}, {
+		"too-large page_token",
+		&ateapipb.ListActorSnapshotsRequest{PageToken: strings.Repeat("x", 257)},
+		field.ErrorList{field.TooLongCharacters(field.NewPath("page_token"), "", 256).WithOrigin("maxLength")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateListActorSnapshotsRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -629,5 +681,76 @@ func TestCreateActorSnapshotTag_IgnoresRequestMetadataServerFields(t *testing.T)
 	}
 	if got.GetMetadata().GetVersion() != 1 {
 		t.Errorf("created tag version = %d, want 1", got.GetMetadata().GetVersion())
+	}
+}
+
+// TestReadActorSnapshotRPCs pins the Get and Delete RPC paths end to end:
+// a present resource round-trips, invalid refs are rejected by the generated
+// validation, and absent resources map to NOT_FOUND.
+func TestReadActorSnapshotRPCs(t *testing.T) {
+	ctx := context.Background()
+	svc, stored := rpcServiceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-1"},
+		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+	})
+
+	if _, err := svc.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{ActorSnapshot: stored.GetSnapshot()}); err != nil {
+		t.Errorf("GetActorSnapshot(existing) failed: %v", err)
+	}
+	got, err := svc.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{
+		ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tag-1"},
+	})
+	if err != nil {
+		t.Errorf("GetActorSnapshotTag(existing) failed: %v", err)
+	} else if got.GetMetadata().GetUid() != stored.GetMetadata().GetUid() {
+		t.Errorf("GetActorSnapshotTag() uid = %q, want the stored %q", got.GetMetadata().GetUid(), stored.GetMetadata().GetUid())
+	}
+
+	absent := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "no-such-thing"}
+	for _, tc := range []struct {
+		name string
+		call func() error
+		want codes.Code
+	}{{
+		"GetActorSnapshot absent",
+		func() error {
+			_, err := svc.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{ActorSnapshot: absent})
+			return err
+		},
+		codes.NotFound,
+	}, {
+		"GetActorSnapshot no ref",
+		func() error {
+			_, err := svc.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{})
+			return err
+		},
+		codes.InvalidArgument,
+	}, {
+		"GetActorSnapshotTag absent",
+		func() error {
+			_, err := svc.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: absent})
+			return err
+		},
+		codes.NotFound,
+	}, {
+		"GetActorSnapshotTag no ref",
+		func() error {
+			_, err := svc.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{})
+			return err
+		},
+		codes.InvalidArgument,
+	}, {
+		"DeleteActorSnapshotTag absent",
+		func() error {
+			_, err := svc.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: absent})
+			return err
+		},
+		codes.NotFound,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := status.Code(tc.call()); got != tc.want {
+				t.Errorf("code = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

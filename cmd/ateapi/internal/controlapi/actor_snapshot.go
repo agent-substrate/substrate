@@ -52,7 +52,7 @@ func (s *ServiceImpl) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 }
 
 func (s *RPCService) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActorSnapshotRequest) (*ateapipb.ActorSnapshot, error) {
-	if errs := validateGetActorSnapshotRequest(req); len(errs) > 0 {
+	if errs := validateGetActorSnapshotRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	snapshot, err := s.impl.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(req.GetActorSnapshot()))
@@ -70,21 +70,14 @@ func (s *ServiceImpl) GetActorSnapshot(ctx context.Context, snapshotRef resource
 	return s.store.GetActorSnapshot(ctx, snapshotRef)
 }
 
-func validateGetActorSnapshotRequest(req *ateapipb.GetActorSnapshotRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.ActorSnapshot, fldPath.Child("actor_snapshot"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateGetActorSnapshotRequest(ctx context.Context, req *ateapipb.GetActorSnapshotRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_GetActorSnapshotRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
-	if errs := validateGetActorSnapshotTagRequest(req); len(errs) > 0 {
+	if errs := validateGetActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	tag, err := s.impl.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag()))
@@ -102,21 +95,14 @@ func (s *ServiceImpl) GetActorSnapshotTag(ctx context.Context, tagRef resources.
 	return s.store.GetActorSnapshotTag(ctx, tagRef)
 }
 
-func validateGetActorSnapshotTagRequest(req *ateapipb.GetActorSnapshotTagRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.ActorSnapshotTag, fldPath.Child("actor_snapshot_tag"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateGetActorSnapshotTagRequest(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_GetActorSnapshotTagRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) ListActorSnapshots(ctx context.Context, req *ateapipb.ListActorSnapshotsRequest) (*ateapipb.ListActorSnapshotsResponse, error) {
-	if errs := validateListActorSnapshotsRequest(req); len(errs) > 0 {
+	if errs := validateListActorSnapshotsRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	page, err := s.impl.ListActorSnapshots(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -131,20 +117,10 @@ func (s *ServiceImpl) ListActorSnapshots(ctx context.Context, atespace string, o
 	return s.store.ListActorSnapshots(ctx, atespace, opts)
 }
 
-func validateListActorSnapshotsRequest(req *ateapipb.ListActorSnapshotsRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	// An empty atespace is allowed here and means "all atespaces".
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val != "" {
-		errs = append(errs, resources.ValidateResourceName(val, fldPath)...)
-	}
-
-	if val, fldPath := req.PageSize, fldPath.Child("page_size"); val < 0 {
-		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
-	}
-
-	return errs
+func validateListActorSnapshotsRequest(ctx context.Context, req *ateapipb.ListActorSnapshotsRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ListActorSnapshotsRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
