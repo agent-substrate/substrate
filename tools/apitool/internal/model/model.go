@@ -12,15 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package model provides the data model to represent metadata for the Substrate API.
+// Package model compiles a proto3 source file and provides the data model
+// to represent metadata for the Substrate API.
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
+
+// sourceFileName is an arbitrary internal label: Build only ever compiles
+// one file, so its logical name doesn't matter beyond being self-consistent
+// and appearing in error messages.
+const sourceFileName = "source.proto"
 
 // API is the whole documented surface of one proto file.
 type API struct {
@@ -108,19 +116,6 @@ type Message struct {
 	// example, ResourceMetadata's atespace, name, uid, version,
 	// create_time, update_time.
 	Fields []Field
-}
-
-// FieldsByType returns every field of m whose type is typeFullName, in
-// declaration order - the caller decides what to do with zero, one, or
-// more than one match.
-func (m Message) FieldsByType(typeFullName string) []Field {
-	var fields []Field
-	for _, f := range m.Fields {
-		if f.TypeKind == "message" && f.TypeFullName == typeFullName {
-			fields = append(fields, f)
-		}
-	}
-	return fields
 }
 
 // Field is one field declared on a Message.
@@ -237,9 +232,27 @@ type EnumValue struct {
 	Comment string
 }
 
-// Build walks fd into an API. Comments are populated only if fd came from
-// parser.BuildFileDescriptor.
-func Build(fd protoreflect.FileDescriptor) *API {
+// Build compiles source - a single, self-contained proto3 file's raw text -
+// with source info retained, and walks the result into an API.
+func Build(ctx context.Context, source string) (*API, error) {
+	compiler := protocompile.Compiler{
+		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
+			Accessor: protocompile.SourceAccessorFromMap(map[string]string{sourceFileName: source}),
+		}),
+		SourceInfoMode: protocompile.SourceInfoStandard,
+	}
+	files, err := compiler.Compile(ctx, sourceFileName)
+	if err != nil {
+		return nil, fmt.Errorf("while compiling proto source: %w", err)
+	}
+	if len(files) != 1 {
+		return nil, fmt.Errorf("expected exactly one compiled file, got %d", len(files))
+	}
+	return fromDescriptor(files[0]), nil
+}
+
+// fromDescriptor walks fd into an API.
+func fromDescriptor(fd protoreflect.FileDescriptor) *API {
 	api := &API{}
 
 	services := fd.Services()
@@ -489,8 +502,7 @@ type Resource struct {
 // Resources partitions api's methods by resource, matching each method's
 // name against resourceNames (see resourceForMethodName), in api.Messages
 // order. Fails if a method matches no resource name or multiple
-// equally-specific ones, or if a matched name has no corresponding message
-// - there's no proto annotation backing this, so these are the only checks.
+// equally-specific ones, or if a matched name has no corresponding message.
 func Resources(api *API) ([]Resource, error) {
 	// Pass 1: resolve every method to a resource name, and collect the
 	// names actually referenced.
@@ -537,68 +549,8 @@ func Resources(api *API) ([]Resource, error) {
 	return groups, nil
 }
 
-// AttrNode is one row of a message's field list, recursively including
-// child fields when the type expands. Children is nil for scalars, enums,
-// and external types.
-type AttrNode struct {
-	Field Field
-	// Path is the dotted field path from the root (for example,
-	// "source_snapshot.tag.atespace"), for identifying deeply nested rows.
-	Path     string
-	Children []AttrNode
-}
-
-// maxAttrTreeDepth bounds recursion independent of the cycle guard below.
-const maxAttrTreeDepth = 6
-
-// BuildAttrTree turns fields into an AttrNode tree, expanding each
-// message-typed field (or map value) against api's messages. Guards
-// against a cyclic schema by never re-expanding a type already on the
-// current path.
-func BuildAttrTree(api *API, fields []Field) []AttrNode {
-	messagesByName := make(map[string]*Message, len(api.Messages))
-	for i := range api.Messages {
-		messagesByName[api.Messages[i].FullName] = &api.Messages[i]
-	}
-	return buildAttrNodes(messagesByName, fields, "", map[string]bool{}, 0)
-}
-
-func buildAttrNodes(byName map[string]*Message, fields []Field, pathPrefix string, ancestors map[string]bool, depth int) []AttrNode {
-	nodes := make([]AttrNode, len(fields))
-	for i, f := range fields {
-		path := f.Name
-		if pathPrefix != "" {
-			path = pathPrefix + "." + f.Name
-		}
-		nodes[i] = AttrNode{Field: f, Path: path}
-
-		var childTypeName string
-		switch {
-		case f.TypeKind == "message":
-			childTypeName = f.TypeFullName
-		case f.MapValueKind == "message":
-			childTypeName = f.MapValueFullName
-		default:
-			continue
-		}
-		if depth >= maxAttrTreeDepth || ancestors[childTypeName] {
-			continue
-		}
-		child, ok := byName[childTypeName]
-		if !ok {
-			continue // external/well-known type: not expandable.
-		}
-
-		nextAncestors := make(map[string]bool, len(ancestors)+1)
-		for k := range ancestors {
-			nextAncestors[k] = true
-		}
-		nextAncestors[childTypeName] = true
-		nodes[i].Children = buildAttrNodes(byName, child.Fields, path, nextAncestors, depth+1)
-	}
-	return nodes
-}
-
+// TODO: We should consider adding proto options to attach this (and other)
+// metadata in the proto service descriptor itself.
 var resourceNames = []string{
 	"Actor",
 	"ActorSnapshot",
