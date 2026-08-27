@@ -139,6 +139,48 @@ func createTestAtespace(t *testing.T, s *Persistence, name string) {
 	}
 }
 
+func createTestActor(t *testing.T, s *Persistence, atespace, name string, state ateapipb.ActorState) *ateapipb.Actor {
+	t.Helper()
+	actor, err := s.CreateActor(context.Background(), &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+		ActorTemplateNamespace: "default",
+		ActorTemplateName:      "template-a",
+		Status:                 &ateapipb.ActorStatus{State: state},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor(%q/%q) failed: %v", atespace, name, err)
+	}
+	return actor
+}
+
+// setActorState transitions actor and returns the stored result, which carries
+// the version the next transition must guard on.
+func setActorState(t *testing.T, s *Persistence, actor *ateapipb.Actor, state ateapipb.ActorState) *ateapipb.Actor {
+	t.Helper()
+	actorRef := resources.ActorRefFromActor(actor)
+	updated, err := s.UpdateActor(context.Background(), actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.State = state
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor(%s) to %v failed: %v", actorRef, state, err)
+	}
+	return updated
+}
+
+// readActorState reads the projected state column directly. It is the value
+// CountActors aggregates, and no accessor on the store exposes it.
+func readActorState(t *testing.T, s *Persistence, actorRef resources.ActorRef) ateapipb.ActorState {
+	t.Helper()
+	var state int32
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT state FROM actors WHERE atespace = $1 AND name = $2`,
+		actorRef.Atespace, actorRef.Name).Scan(&state); err != nil {
+		t.Fatalf("reading the state column of %s: %v", actorRef, err)
+	}
+	return ateapipb.ActorState(state)
+}
+
 func createTestActorTemplate(t *testing.T, s *Persistence, atespace, name string) {
 	t.Helper()
 	if _, err := s.CreateActorTemplate(context.Background(), &ateapipb.ActorTemplate{
@@ -491,5 +533,41 @@ func TestAcquireLease_ConcurrentTakeover(t *testing.T) {
 	}
 	for lease := range winners {
 		lease.Close()
+	}
+}
+
+// TestActorStateColumnTracksProto guards the invariant CountActors rests on: the
+// projected column is written by the same statement as the proto, so no write
+// path can advance one without the other.
+func TestActorStateColumnTracksProto(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	createTestAtespace(t, s, "team-a")
+
+	const createdState = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	actor := createTestActor(t, s, "team-a", "actor-a", createdState)
+	actorRef := resources.ActorRefFromActor(actor)
+	if got := readActorState(t, s, actorRef); got != createdState {
+		t.Errorf("state column after create = %v, want %v", got, createdState)
+	}
+
+	// Sequential by construction: each transition guards on the version the
+	// previous one returned.
+	tests := []struct {
+		name  string
+		state ateapipb.ActorState
+	}{
+		{"resuming", ateapipb.ActorState_ACTOR_STATE_RESUMING},
+		{"running", ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		{"suspending", ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+		{"crashed", ateapipb.ActorState_ACTOR_STATE_CRASHED},
+		{"deleting", ateapipb.ActorState_ACTOR_STATE_DELETING},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actor = setActorState(t, s, actor, tt.state)
+			if got := readActorState(t, s, actorRef); got != tt.state {
+				t.Errorf("state column = %v, want %v", got, tt.state)
+			}
+		})
 	}
 }

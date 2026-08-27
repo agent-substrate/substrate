@@ -595,9 +595,10 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	}
 
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO actors (atespace, name, uid, version, proto)
-		VALUES ($1, $2, $3, $4, $5)`,
-		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)
+		INSERT INTO actors (atespace, name, uid, version, state, proto)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(),
+		int32(dbActor.GetStatus().GetState()), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -667,11 +668,14 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
+	// state rides the same statement as the proto, under the same version guard,
+	// so the projection cannot drift from the record it describes.
 	commandTag, err := p.pool.Exec(ctx, `
 			UPDATE actors
-			SET version = $1, proto = $2
-			WHERE atespace = $3 AND name = $4 AND uid = $5 AND version = $6`,
-		dbActor.GetMetadata().GetVersion(), updatedBytes, atespace, name, currentUID, currentVersion)
+			SET version = $1, proto = $2, state = $3
+			WHERE atespace = $4 AND name = $5 AND uid = $6 AND version = $7`,
+		dbActor.GetMetadata().GetVersion(), updatedBytes, int32(dbActor.GetStatus().GetState()),
+		atespace, name, currentUID, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
 	}
@@ -834,6 +838,34 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 		nextToken = encodePageToken(kindActor, "", []string{last.atespace, last.name})
 	}
 	return result, nextToken, nil
+}
+
+// CountActors tallies by the projected state column, so it never decodes a
+// proto. Deliberately a sequential scan: an index on state is faster only on a
+// freshly vacuumed table, and loses to the scan once ordinary transition churn
+// clears the visibility map.
+func (p *Persistence) CountActors(ctx context.Context) (store.ActorCounts, error) {
+	// Clock before the query: AsOf must never look fresher than the rows behind it.
+	counts := store.ActorCounts{ByState: make(map[ateapipb.ActorState]int64), AsOf: time.Now()}
+
+	rows, err := p.pool.Query(ctx, `SELECT state, count(*) FROM actors GROUP BY state`)
+	if err != nil {
+		return store.ActorCounts{}, fmt.Errorf("counting actors by state: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var state int32
+		var count int64
+		if err := rows.Scan(&state, &count); err != nil {
+			return store.ActorCounts{}, fmt.Errorf("scanning actor count row: %w", err)
+		}
+		counts.ByState[ateapipb.ActorState(state)] = count
+	}
+	if err := rows.Err(); err != nil {
+		return store.ActorCounts{}, fmt.Errorf("counting actors by state: %w", err)
+	}
+	return counts, nil
 }
 
 // --- Actor snapshots ---

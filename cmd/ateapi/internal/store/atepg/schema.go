@@ -16,6 +16,7 @@ package atepg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS actors (
     name      text NOT NULL,
     uid       text NOT NULL,
     version   bigint NOT NULL,
+    state     integer NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
 );
@@ -130,6 +132,29 @@ CREATE TABLE IF NOT EXISTS leases (
 CREATE INDEX IF NOT EXISTS leases_expires_at_idx ON leases (expires_at);
 `
 
+// checkActorsStateColumn rejects a database whose actors table predates the
+// state column. CREATE TABLE IF NOT EXISTS skips an existing table silently, so
+// the mismatch would otherwise surface as a bare column error on the first
+// insert.
+func checkActorsStateColumn(ctx context.Context, q querier) error {
+	var tableExists, stateExists bool
+	if err := q.QueryRow(ctx, `
+		SELECT
+			EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = current_schema() AND table_name = 'actors'),
+			EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = 'actors'
+				  AND column_name = 'state')`).Scan(&tableExists, &stateExists); err != nil {
+		return fmt.Errorf("inspecting the actors table: %w", err)
+	}
+	if tableExists && !stateExists {
+		return errors.New("actors table has no state column: this database predates it and atepg has no migrations, so recreate the database")
+	}
+	return nil
+}
+
 // applySchema idempotently creates atepg's tables.
 func applySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	tx, err := pool.Begin(ctx)
@@ -154,6 +179,9 @@ func applySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	// so serialize schema application with a transaction-scoped advisory lock.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent-substrate-atepg-schema'))`); err != nil {
 		return fmt.Errorf("locking atepg schema: %w", err)
+	}
+	if err := checkActorsStateColumn(ctx, tx); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, schema); err != nil {
 		return fmt.Errorf("applying atepg schema: %w", err)
