@@ -613,8 +613,81 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("worker_assignment"), obj.WorkerAssignment, oldVal, oldObj != nil)...)
 	}
 
-	// field ateapipb.ActorStatus.InProgressSnapshotName has no validation
-	// field ateapipb.ActorStatus.LatestSnapshot has no validation
+	{ // field ateapipb.ActorStatus.InProgressSnapshotName
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorStatus) *string {
+				return &oldObj.InProgressSnapshotName
+			})
+		errs = append(errs, fn(fldPath.Child("in_progress_snapshot_name"), &obj.InProgressSnapshotName, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ActorStatus.LatestSnapshot
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ObjectRef,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			// call the type's validation function
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorStatus) *ateapipb.ObjectRef {
+				return oldObj.LatestSnapshot
+			})
+		errs = append(errs, fn(fldPath.Child("latest_snapshot"), obj.LatestSnapshot, oldVal, oldObj != nil)...)
+	}
 
 	{ // field ateapipb.ActorStatus.LocalSnapshotInfo
 		fn := func(
@@ -646,7 +719,36 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("local_snapshot_info"), obj.LocalSnapshotInfo, oldVal, oldObj != nil)...)
 	}
 
-	// field ateapipb.ActorStatus.InProgressSnapshotSourceActorVersion has no validation
+	{ // field ateapipb.ActorStatus.InProgressSnapshotSourceActorVersion
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorStatus) *int64 {
+				return &oldObj.InProgressSnapshotSourceActorVersion
+			})
+		errs = append(errs, fn(fldPath.Child("in_progress_snapshot_source_actor_version"), &obj.InProgressSnapshotSourceActorVersion, oldVal, oldObj != nil)...)
+	}
 
 	{ // field ateapipb.ActorStatus.ActorVolumes
 		fn := func(
@@ -684,7 +786,36 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("actor_volumes"), obj.ActorVolumes, oldVal, oldObj != nil)...)
 	}
 
-	// field ateapipb.ActorStatus.InProgressLocalSnapshotName has no validation
+	{ // field ateapipb.ActorStatus.InProgressLocalSnapshotName
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorStatus) *string {
+				return &oldObj.InProgressLocalSnapshotName
+			})
+		errs = append(errs, fn(fldPath.Child("in_progress_local_snapshot_name"), &obj.InProgressLocalSnapshotName, oldVal, oldObj != nil)...)
+	}
 
 	{ // field ateapipb.ActorStatus.SourceSnapshot
 		fn := func(

@@ -456,3 +456,19 @@ func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVa
 	}
 	return errs
 }
+
+// This exists only because nested subfield tags are not supported yet.
+func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.Operation, fldPath *field.Path, actor, _ *ateapipb.Actor) field.ErrorList {
+	if actor == nil || actor.Metadata == nil {
+		return nil // handled by DV
+	}
+
+	// Updates are validated in 2 steps: first the update request and then the
+	// resource itself. DV for the request doesn't descend into the resource
+	// metadata.  Once DV supports nested subfield tags, this can be changed to
+	// something like:
+	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
+	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
+	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &actor.Metadata.Atespace, nil)...)
+	return errs
+}
