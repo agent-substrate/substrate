@@ -1168,8 +1168,10 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, tagRef resourc
 
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	// Workers are global-scoped, so the atespace is always empty.
-	dbWorker.Metadata = newCreateMetadata("", worker.GetMetadata().GetName())
+	if dbWorker.Metadata == nil {
+		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	setCreateMetadata(dbWorker.Metadata)
 
 	protoBytes, err := proto.Marshal(dbWorker)
 	if err != nil {
@@ -1260,7 +1262,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 		}
 		// Stored metadata is authoritative; discard any metadata edits made by
 		// the closure and derive the next revision from the row we locked.
-		dbWorker.Metadata = newUpdateMetadata(oldMeta)
+		setUpdateMetadata(dbWorker.Metadata, oldMeta)
 
 		protoBytes, err := proto.Marshal(dbWorker)
 		if err != nil {

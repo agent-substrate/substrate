@@ -1187,6 +1187,7 @@ enum WorkerState {
   WORKER_STATE_ACTIVE = 1;
   // Pod terminating. Not schedulable.
   WORKER_STATE_DRAINING = 2;
+  // Keep this in sync with WorkerStatus.state's maximum.
 }
 
 message WorkerStatus {
