@@ -858,10 +858,9 @@ type Actor struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	// The template is named by exactly one reference form: the legacy CRD
-	// namespace/name pair below, or the substrate actor_template ref. All
-	// three fields are declaratively optional; validateCreateActorRequest
-	// enforces the union.
+	// The template is named by the legacy CRD namespace/name pair below or by
+	// the substrate actor_template ref; actor_template takes precedence when
+	// set.
 	//
 	// TODO: delete both fields once we start using actor_template below.
 	// +k8s:optional

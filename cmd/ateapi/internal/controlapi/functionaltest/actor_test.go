@@ -270,17 +270,6 @@ func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
 	if got := status.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("CreateActor with an absent template ref = %v, want FailedPrecondition (err: %v)", got, err)
 	}
-
-	// The two reference forms are mutually exclusive.
-	_, err = tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "ref-actor-3"},
-		ActorTemplate:          &ateapipb.ObjectRef{Atespace: testAtespace, Name: "sub-tmpl"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
-	}})
-	if got := status.Code(err); got != codes.InvalidArgument {
-		t.Fatalf("CreateActor with both reference forms = %v, want InvalidArgument (err: %v)", got, err)
-	}
 }
 
 // TestCreateActor_Duplicate tests that creating an actor with an existing ID fails.
