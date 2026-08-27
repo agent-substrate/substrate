@@ -156,21 +156,6 @@ if [[ "${IP_FAMILY}" != "ipv4" &&
   exit 1
 fi
 
-# For ipv6 kind writes a kubeconfig pointing at [::1], the address it published
-# the apiserver on, which only works for a client on the Docker host itself: a
-# VM-hosted daemon (Lima on macOS) forwards the port to the *v4* loopback, so
-# every kubectl below fails at connect. localhost is a SAN on the apiserver
-# cert and lets the client pick a family that works from either side.
-if [[ "${IP_FAMILY}" == "ipv6" ]]; then
-  server="$(kubectl config view \
-    -o jsonpath="{.clusters[?(@.name==\"${KUBECTL_CONTEXT}\")].cluster.server}")"
-  if [[ "${server}" == "https://[::1]:"* ]]; then
-    echo "Repointing the kubeconfig for '${KUBECTL_CONTEXT}' at localhost..."
-    kubectl config set-cluster "${KUBECTL_CONTEXT}" \
-      --server="https://localhost:${server##*:}" >/dev/null
-  fi
-fi
-
 # 2.5 Enable Proxy ARP/NDP on kind nodes for gVisor loopback pod-to-pod networking
 echo "Enabling Proxy ARP/NDP on kind nodes..."
 for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
