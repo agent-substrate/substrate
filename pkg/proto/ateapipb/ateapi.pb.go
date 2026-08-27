@@ -1034,8 +1034,11 @@ type ActorStatus struct {
 	// TODO: Add DV (optional, maxLength?)
 	InProgressLocalSnapshotName string `protobuf:"bytes,8,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`
 	// How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
-	// the Actor was not created from a snapshot.
-	// TODO: Add DV (optional, need to recurse into this type, immutable?)
+	// the Actor was not created from a snapshot. Set once at creation and
+	// never changed afterward.
+	//
+	// +k8s:optional
+	// +k8s:update=NoModify # set at creation, never changed in place
 	SourceSnapshot *ActorSourceSnapshotStatus `protobuf:"bytes,9,opt,name=source_snapshot,json=sourceSnapshot,proto3" json:"source_snapshot,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1140,9 +1143,14 @@ type ActorSourceSnapshotStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The (atespace, name) of the snapshot the tag resolved to at
 	// creation time.
-	// +k8s:opaqueType
+	//
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
 	Snapshot *ObjectRef `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// UID of the snapshot resolved at creation time.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-uuid
 	SnapshotUid   string `protobuf:"bytes,2,opt,name=snapshot_uid,json=snapshotUid,proto3" json:"snapshot_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

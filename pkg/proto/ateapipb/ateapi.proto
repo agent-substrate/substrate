@@ -375,8 +375,11 @@ message ActorStatus {
   string in_progress_local_snapshot_name = 8;
 
   // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
-  // the Actor was not created from a snapshot.
-  // TODO: Add DV (optional, need to recurse into this type, immutable?)
+  // the Actor was not created from a snapshot. Set once at creation and
+  // never changed afterward.
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify # set at creation, never changed in place
   ActorSourceSnapshotStatus source_snapshot = 9;
 }
 
@@ -385,10 +388,15 @@ message ActorStatus {
 message ActorSourceSnapshotStatus {
   // The (atespace, name) of the snapshot the tag resolved to at
   // creation time.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef snapshot = 1;
 
   // UID of the snapshot resolved at creation time.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string snapshot_uid = 2;
 }
 
