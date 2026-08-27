@@ -1217,14 +1217,26 @@ message WorkerCapacity {
 message ActorAssignment {
   // ActorTemplates are Kubernetes CRDs rather than Substrate API resources, so
   // this stays a kube reference.
+  //
+  // +k8s:required
   KubeNamespacedObjectRef actor_template = 1;
-  // +k8s:opaqueType
+
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
 }
 
 message KubeNamespacedObjectRef {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string namespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string name = 2;
 }
 

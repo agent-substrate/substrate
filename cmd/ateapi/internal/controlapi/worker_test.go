@@ -656,6 +656,39 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		},
 		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "state"), "")},
 	}, {
+		name: "valid assignment, when carried, passes",
+		mutate: func(w *ateapipb.Worker) {
+			w.Status = &ateapipb.WorkerStatus{
+				State:      ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Assignment: newAPIAssignment(apiOtherWorkerName),
+			}
+		},
+	}, {
+		name: "assignment actor_uid must be a uuid",
+		mutate: func(w *ateapipb.Worker) {
+			w.Status = &ateapipb.WorkerStatus{
+				State:      ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Assignment: newAPIAssignment("not-a-uuid"),
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment", "actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "assignment actor ref needs an atespace",
+		mutate: func(w *ateapipb.Worker) {
+			assignment := newAPIAssignment(apiOtherWorkerName)
+			assignment.Actor.Atespace = ""
+			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Assignment: assignment}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "assignment", "actor", "atespace"), "")},
+	}, {
+		name: "assignment template name must be a long name",
+		mutate: func(w *ateapipb.Worker) {
+			assignment := newAPIAssignment(apiOtherWorkerName)
+			assignment.ActorTemplate.Name = "TMPL_1"
+			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Assignment: assignment}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment", "actor_template", "name"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
 		name:   "absent capacity is allowed",
 		mutate: func(w *ateapipb.Worker) { w.Capacity = nil },
 	}, {
@@ -942,5 +975,41 @@ func TestCreateWorker_IgnoresRequestMetadataServerFields(t *testing.T) {
 	}
 	if got.GetMetadata().GetVersion() != 1 {
 		t.Errorf("created worker version = %d, want 1", got.GetMetadata().GetVersion())
+	}
+}
+
+// TestServiceImplUpdateWorker_ValidatesAssignment pins that assignment writes
+// — which reach the store through ServiceImpl, the way the resume workflow
+// binds an Actor — are validated like any other worker update.
+func TestServiceImplUpdateWorker_ValidatesAssignment(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+	impl := newServiceImpl(persistence, nil, nil)
+	created := seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+
+	// A malformed assignment must not land.
+	_, err := impl.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = newAPIAssignment("not-a-uuid")
+		return nil
+	})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Fatalf("assigning a malformed uid returned %v (err %v), want %v", got, err, codes.InvalidArgument)
+	}
+
+	// A well-formed assignment lands, and releasing it lands too: assignment
+	// is optional, so clearing is not otherwise constrained.
+	assigned, err := impl.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = newAPIAssignment(apiOtherWorkerName)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("assigning a valid assignment failed: %v", err)
+	}
+	if _, err := impl.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(assigned), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = nil
+		return nil
+	}); err != nil {
+		t.Fatalf("releasing the assignment failed: %v", err)
 	}
 }
