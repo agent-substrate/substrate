@@ -205,7 +205,7 @@ func TestCreateActorSnapshotTag_MissingSnapshotIsNotFound(t *testing.T) {
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 	storetest.MustCreateAtespace(t, context.Background(), persistence, "team-a")
-	s := &RPCService{impl: persistence}
+	s := &RPCService{impl: newServiceImpl(persistence, nil, nil)}
 
 	_, err := s.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
@@ -357,7 +357,7 @@ func rpcServiceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag
 	if err != nil {
 		t.Fatalf("Failed to CreateActorSnapshotTag: %v", err)
 	}
-	return &RPCService{impl: persistence}, created
+	return &RPCService{impl: newServiceImpl(persistence, nil, nil)}, created
 }
 
 // TestUpdateActorSnapshotTag_DeleteRecreateRace checks that an update is not
@@ -402,7 +402,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: racing}
+	svc := &RPCService{impl: newServiceImpl(racing, nil, nil)}
 
 	// The client asserts "only update the tag with uid A". Its version guard is
 	// satisfied by B as well, because re-tagging resets the version to 1: the
@@ -463,7 +463,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: racing}
+	svc := &RPCService{impl: newServiceImpl(racing, nil, nil)}
 
 	originalTag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err = svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
@@ -565,4 +565,56 @@ func TestValidateCreateActorSnapshotTagRequestUnknownFields(t *testing.T) {
 	assertValidateErr(t,
 		validateCreateActorSnapshotTagRequest(&ateapipb.CreateActorSnapshotTagRequest{ActorSnapshotTag: withUnknown(validTag(), 9999)}),
 		field.ErrorList{field.Invalid(field.NewPath("actor_snapshot_tag"), field.OmitValueType{}, "")})
+}
+
+// TestServiceImplUpdateActorSnapshotTag_ImmutableFields pins the
+// immutable-snapshot rule at the layer that now owns it: declarative
+// validation in ServiceImpl, which every write path shares. The store no
+// longer enforces it.
+func TestServiceImplUpdateActorSnapshotTag_ImmutableFields(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+	impl := newServiceImpl(persistence, nil, nil)
+
+	snapshot := storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snap-1"},
+		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snap-1"},
+	})
+	created, err := persistence.CreateActorSnapshotTag(ctx,
+		resources.ActorSnapshotRef{Atespace: testAtespace, Name: snapshot.GetMetadata().GetName()},
+		&ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-1"},
+			Snapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: snapshot.GetMetadata().GetName()},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		})
+	if err != nil {
+		t.Fatalf("CreateActorSnapshotTag failed: %v", err)
+	}
+
+	tagRef := resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: "tag-1"}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ateapipb.ActorSnapshotTag)
+	}{
+		{"snapshot changed", func(tag *ateapipb.ActorSnapshotTag) { tag.Snapshot.Name = "some-other-snapshot" }},
+		{"snapshot cleared", func(tag *ateapipb.ActorSnapshotTag) { tag.Snapshot = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := impl.UpdateActorSnapshotTag(ctx, tagRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+				tc.mutate(toUpdate)
+				return nil
+			})
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Fatalf("%s returned %v (err %v), want %v", tc.name, got, err, codes.InvalidArgument)
+			}
+			got, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+			if err != nil {
+				t.Fatalf("GetActorSnapshotTag failed: %v", err)
+			}
+			if got.GetMetadata().GetVersion() != 1 {
+				t.Errorf("rejected mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
+			}
+		})
+	}
 }

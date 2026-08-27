@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -224,9 +225,6 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrImmutableField) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating actor snapshot tag %s/%s: %v", atespace, name, err)
-		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
@@ -245,8 +243,37 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 }
 
 func (s *ServiceImpl) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
-	// TODO: implement this
-	return s.store.UpdateActorSnapshotTag(ctx, tagRef, precondition, mutate)
+	return s.store.UpdateActorSnapshotTag(ctx, tagRef, precondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+		// Apply the mutation function to the stored value.
+		oldVal := proto.CloneOf(toUpdate)
+		if err := mutate(toUpdate); err != nil {
+			return err
+		}
+		newVal := toUpdate
+
+		// Validate the mutated value before doing any further work. This is
+		// what enforces the immutable fields, since only the stored tag gives
+		// declarative validation an old value to compare against.
+		if errs := validateActorSnapshotTagUpdate(ctx, field.NewPath("actor_snapshot_tag"), newVal, oldVal); len(errs) > 0 {
+			return toGRPCStatusError(errs)
+		}
+
+		// Do any further work on the resource. Unlike Actor and Worker there
+		// is no server-owned field to re-require, so until work lands here a
+		// second validation pass would repeat the one above verbatim; add it
+		// (mapping to toGRPCInternalError) together with the first such work.
+
+		return nil
+	})
+}
+
+// validateActorSnapshotTagUpdate validates an ActorSnapshotTag against the
+// previous stored value. It is what enforces the immutable fields, which need
+// an old value to compare against.
+func validateActorSnapshotTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorSnapshotTag) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Update}
+	return Validate_ActorSnapshotTag(ctx, op, fldPath, newVal, oldVal)
 }
 
 func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {

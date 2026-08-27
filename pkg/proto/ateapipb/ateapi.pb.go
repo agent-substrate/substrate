@@ -1516,10 +1516,23 @@ func (x *ActorSnapshotStatus) GetActorTemplate() *ObjectRef {
 type ActorSnapshotTag struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: name, uid, version, timestamps.
-	// +k8s:opaqueType
+	//
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	// +k8s:opaqueType
-	Snapshot      *ObjectRef            `protobuf:"bytes,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	// The ActorSnapshot this tag names. The tag keeps its address: the snapshot
+	// it points at cannot be changed.
+	//
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
+	// +k8s:immutable
+	Snapshot *ObjectRef `protobuf:"bytes,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	// scope is the only mutable field: UpdateActorSnapshotTag publishes or
+	// unpublishes the tag by changing it.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the ActorSnapshotTagScope enum
 	Scope         ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4317,6 +4330,7 @@ func (x *ListActorSnapshotsResponse) GetNextPageToken() string {
 type CreateActorSnapshotTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The tag to create.
+	// +k8s:opaqueType # until this request is converted to declarative validation
 	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -4368,6 +4382,8 @@ type UpdateActorSnapshotTagRequest struct {
 	// identify which resource to update.
 	// actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
 	// are required preconditions
+	//
+	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
 	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

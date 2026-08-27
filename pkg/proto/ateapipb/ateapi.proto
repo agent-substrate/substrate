@@ -438,10 +438,25 @@ message ActorSnapshotStatus {
 // Its owning Atespace cannot be deleted until the tag is removed.
 message ActorSnapshotTag {
   // Common resource metadata: name, uid, version, timestamps.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
-  // +k8s:opaqueType
+
+  // The ActorSnapshot this tag names. The tag keeps its address: the snapshot
+  // it points at cannot be changed.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  // +k8s:immutable
   ObjectRef snapshot = 2;
+
+  // scope is the only mutable field: UpdateActorSnapshotTag publishes or
+  // unpublishes the tag by changing it.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the ActorSnapshotTagScope enum
   ActorSnapshotTagScope scope = 3;
 }
 
@@ -973,6 +988,7 @@ message ListActorSnapshotsResponse {
 
 message CreateActorSnapshotTagRequest {
   // The tag to create.
+  // +k8s:opaqueType # until this request is converted to declarative validation
   ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
@@ -984,6 +1000,8 @@ message UpdateActorSnapshotTagRequest {
   // identify which resource to update.
   // actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
   // are required preconditions
+  //
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
   ActorSnapshotTag actor_snapshot_tag = 1;
 }
 

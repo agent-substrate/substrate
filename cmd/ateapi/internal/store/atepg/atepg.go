@@ -1070,22 +1070,6 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotRef re
 	return existing, nil
 }
 
-func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.ActorSnapshotTag) error {
-	if stored, mutated := storedTag.GetMetadata().GetAtespace(), mutatedTag.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetSnapshot().GetAtespace(), mutatedTag.GetSnapshot().GetAtespace(); stored != mutated {
-		return fmt.Errorf("snapshot.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetSnapshot().GetName(), mutatedTag.GetSnapshot().GetName(); stored != mutated {
-		return fmt.Errorf("snapshot.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	return nil
-}
-
 func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
@@ -1113,16 +1097,16 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, tagRef resourc
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
 		return nil, err
 	}
-	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.ActorSnapshotTag)
+	// Snapshot the stored metadata before handing the tag to mutate. mutate is
+	// free to edit anything it is given; immutable fields are the service
+	// layer's to enforce, via declarative validation.
+	oldMeta := proto.CloneOf(dbTag.GetMetadata())
 	if err := mutate(dbTag); err != nil {
 		return nil, err
 	}
-	if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, dbTag); err != nil {
-		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
-	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
+	dbTag.Metadata = newUpdateMetadata(oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {

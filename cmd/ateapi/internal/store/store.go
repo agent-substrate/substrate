@@ -141,8 +141,9 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, ErrImmutableField if the mutated tag changed a field that is
-	// immutable for its lifetime, or the mutate's error verbatim otherwise.
+	// exhausted, or the mutate's error verbatim otherwise. Immutable fields
+	// are not checked here; the service layer enforces them via declarative
+	// validation before the write.
 	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
