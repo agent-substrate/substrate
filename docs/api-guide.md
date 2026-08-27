@@ -437,7 +437,7 @@ spec:
 
 ### Micro-VM SandboxConfig
 
-A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `kata-shim`, `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, `kata-image`, and `kata-config` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes labeled `ate.dev/sandboxClass=microvm` (the controller adds the device mount and node placement automatically).
+A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `kata-shim`, `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, `kata-image`, and `kata-config` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them.
 
 See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 

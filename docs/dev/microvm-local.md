@@ -41,8 +41,13 @@ instead, or open up the device with `sudo chmod 666 /dev/kvm`.
 ```sh
 ./hack/create-kind-cluster.sh
 # Look for: "/dev/kvm found: micro-VM (kata + cloud-hypervisor) support will be enabled."
+```
 
-kubectl get nodes --show-labels | grep 'ate.dev/sandboxClass=microvm'
+Once the control plane is up, atelet advertises the device on each KVM-capable
+node, which is what places micro-VM workers:
+
+```sh
+kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.capacity.ate\.dev/kvm}{"\n"}{end}'
 ```
 
 ### 3. Run the microVM demo
