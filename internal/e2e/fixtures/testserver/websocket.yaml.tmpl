@@ -42,8 +42,8 @@ spec:
 ${TEMPLATE_SANDBOX_CLASS}
   containers:
   - name: websocket
-    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/websocket
-    command: ["/ko-app/websocket"]
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
+    args: ["websocket"]
     readyz:
       httpGet:
         path: /readyz

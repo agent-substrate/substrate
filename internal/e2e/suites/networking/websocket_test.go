@@ -42,7 +42,7 @@ func deployWebsocketFixture(t *testing.T) string {
 
 	namespace := e2e.FixtureName("ate-e2e") + "-websocket"
 	bucket := env["BUCKET_NAME"]
-	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/websocket/websocket.yaml.tmpl", bucket, "websocket")
+	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/testserver/websocket.yaml.tmpl", bucket, "websocket")
 
 	applyArgs := []string{"ko", "apply", "-f", manifest}
 	if e2e.KubeContext != "" {
