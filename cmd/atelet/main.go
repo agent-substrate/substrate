@@ -660,7 +660,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// all: the actor's current state was just captured by CheckpointWorkload,
 	// and the control plane tracks only a single local snapshot, which this
 	// checkpoint either overwrites (pause) or clears (suspend).
-	pruneLocalCheckpoints(ctx, actorUID)
+	//
+	// Best-effort: if this fail, the actor's terminate prunes again.
+	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
+		slog.WarnContext(ctx, "failed to prune superseded local checkpoints", slog.Any("actor", actorRef), slog.Any("err", err))
+	}
 
 	// Pruning stays outside the persist window: it collects superseded
 	// snapshots on both paths, so timing it as part of an external upload would
@@ -842,7 +846,9 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 
 	// The uploaded snapshot supersedes every local pause snapshot of this
 	// actor; free the node's disk (best-effort, like Checkpoint).
-	pruneLocalCheckpoints(ctx, req.GetActorUid())
+	if err := pruneLocalCheckpoints(ctx, req.GetActorUid()); err != nil {
+		slog.WarnContext(ctx, "failed to prune uploaded local checkpoints", slog.String("actorUID", req.GetActorUid()), slog.Any("err", err))
+	}
 
 	return &ateletpb.UploadPausedCheckpointResponse{}, nil
 }
@@ -1262,6 +1268,15 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, fmt.Errorf("failed to unmount external volumes during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	// The actor is gone, so no pause snapshot of it can ever be restored again.
+	// TODO(#664): this only removes local snapshots in one node. We should clean
+	// up the copies on any other NodeVmsWithLocalSnapshots. This is fine *as of
+	// the day this was written* because today NodeVmsWithLocalSnapshots has at
+	// most one item.
+	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
+		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
 
 	// Reset actor directories on the node
@@ -1812,6 +1827,11 @@ func newAteomDialer(size int) *AteomDialer {
 	}
 }
 
+// ateomSocketPath resolves a pod UID to the ateom socket atelet dials. A
+// variable because the real path is rooted at the node's BasePath, which a
+// test cannot serve on.
+var ateomSocketPath = ateompath.AteomSocketPath
+
 func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.ClientConn, error) {
 	key := podUID
 
@@ -1821,7 +1841,7 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	}
 
 	conn, err := grpc.NewClient(
-		"unix://"+ateompath.AteomSocketPath(podUID),
+		"unix://"+ateomSocketPath(podUID),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)

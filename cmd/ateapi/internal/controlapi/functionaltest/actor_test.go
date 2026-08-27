@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -3131,4 +3132,26 @@ func lifecycleOpAttributes(t *testing.T, tc *testContext, op string) attribute.S
 		t.Fatalf("datapoints for %s = %d (%v), want exactly one", op, len(got), got)
 	}
 	return got[0]
+}
+
+// TestCreateActor_RejectsUnknownRequestFields checks that a request carrying a
+// field this binary has no descriptor for is refused by the server-wide
+// interceptor before it reaches the handler.
+func TestCreateActor_RejectsUnknownRequestFields(t *testing.T) {
+	ns := namespaceForTest("ns-create-unknown-field")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	req := &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}}
+	unknown := protowire.AppendTag(nil, 9999, protowire.VarintType)
+	req.ProtoReflect().SetUnknown(protowire.AppendVarint(unknown, 42))
+
+	_, err := tc.client.CreateActor(context.Background(), req)
+	assertGrpcError(t, err, codes.InvalidArgument, "request: Invalid value: unknown field with protobuf tag 9999")
 }

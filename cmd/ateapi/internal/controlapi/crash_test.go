@@ -506,6 +506,32 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
 }
 
+// assertNoCrashMetricDatapoint fails if anything counted a crash. It is the
+// assertion for a path that transitions an actor without that being a fresh
+// crash — an actor already counted as crashed, or one that never crashed at all.
+func assertNoCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "ate.actor.crashes" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				t.Errorf("counted %d crash(es) with attrs %v, want none", dp.Value, dp.Attributes)
+			}
+		}
+	}
+}
+
 // failingUpdateWorkerStore wraps a store and fails every UpdateWorker call,
 // simulating a transient state-store error while releasing a worker.
 type failingUpdateWorkerStore struct {

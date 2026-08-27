@@ -28,9 +28,11 @@ cd "${ROOT}"
 
 REGISTRY_DIR="docs/metrics/registry"
 
-# Keep the version in sync with the digest below.
+# The version of weaver that this script accepts. It gates the local binary,
+# and it names the release to install. The digest below is what CI actually
+# pulls; keep this in sync with WEAVER_IMAGE.
 WEAVER_VERSION="v0.25.1"
-WEAVER_IMAGE="docker.io/otel/weaver:${WEAVER_VERSION}@sha256:9ad46ca9cd4fa5974b121f886aa3e9946a8ef8ea905001a96c018d21f9db87ca"
+WEAVER_IMAGE="docker.io/otel/weaver:v0.25.1@sha256:9ad46ca9cd4fa5974b121f886aa3e9946a8ef8ea905001a96c018d21f9db87ca"
 
 # Allow overriding the docker CLI, as hack/third_party/kubernetes does.
 DOCKER="${DOCKER:-docker}"

@@ -41,6 +41,7 @@ ATE_DEMOS=()
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-egress.sh
+source "${ROOT}"/hack/install-demo-jupyter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
@@ -418,11 +419,10 @@ create_actor_id_ca_certs_secret() {
 create_egress_mitm_ca_pool_secret() {
   log_step "create_egress_mitm_ca_pool_secret"
   run_kubectl_ate admin make-ca-pool \
-    --ca-id="mitm" \
+    --ca-id="1" \
     --name="egress-mitm-ca-pool" \
     --secret-namespace=ate-system \
-    --key-type=ecdsa-p256 \
-    --common-name="substrate egress MITM CA"
+    --key-type=ECDSAP256
 }
 
 # Only the sdsmint egress variant mounts this pool.
