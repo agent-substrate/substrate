@@ -1534,6 +1534,44 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Name must be a valid DNS label",
 	}, {
+		name: "Volumes: Volume Name empty is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "spec.volumes[0].name",
+	}, {
+		name: "Volumes: duplicate Volume Name is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("20Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/vol1"},
+			}
+		},
+		wantErr: true,
+		errMsg:  `Duplicate value: {"name":"vol1"}`,
+	}, {
 		name: "Volumes: VolumeMount Name with uppercase is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{

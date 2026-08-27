@@ -103,7 +103,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		LatestSnapshot: sourceSnapshotStatus.GetSnapshot(),
 		SourceSnapshot: sourceSnapshotStatus,
 	}
-	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
+	if errs := validateActorCreate(ctx, field.NewPath("actor"), outActor); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
 	}
 
@@ -478,6 +478,17 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorL
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
+	return errs
+}
+
+func validateActorCreate(ctx context.Context, fldPath *field.Path, val *ateapipb.Actor) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	errs := Validate_Actor(ctx, op, fldPath, val, nil)
+	// Status is optional in the schema, but is actually required to be set
+	// by the server. If it was specified, it was already validated above,
+	// but if it was not specified we need to flag that as an error.
+	errs = append(errs, validate.RequiredPointer(ctx, op, fldPath.Child("status"), val.GetStatus(), nil)...)
 	return errs
 }
 

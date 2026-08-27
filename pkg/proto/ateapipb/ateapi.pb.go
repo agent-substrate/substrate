@@ -773,11 +773,29 @@ func (x *ResourceMetadata) GetUpdateTime() *timestamppb.Timestamp {
 type ExternalVolume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Name of the volume specified in the actor template.
+	//
+	// +k8s:required
+	// +k8s:maxLength=63
+	// +k8s:immutable
 	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
 	// The globally unique volume_id returned from the storage system.
-	// This will be initially empty during volume creation
+	// This will be initially empty during volume creation. Must not contain
+	// disallowed unicode characters (U+0000-U+0008, U+000B, U+000C,
+	// U+000E-U+001F, U+007F-U+009F).
+	//
+	// +k8s:optional
+	// +k8s:update=NoModify
+	// +k8s:update=NoUnset
+	// +k8s:customValidation
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
-	// Internal volume plugin name or CSI driver name.
+	// Internal volume plugin name or CSI driver name. Required. Must be a valid
+	// DNS-1123 subdomain (optionally prefixed with "substrate.io/"), max 253
+	// characters.
+	//
+	// +k8s:required
+	// +k8s:maxLength=253
+	// +k8s:immutable
+	// +k8s:customValidation
 	VolumeType string                `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	Status     ExternalVolume_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.ExternalVolume_Status" json:"status,omitempty"`
 	// volume_context contains metadata returned by the CSI driver during volume
@@ -1413,7 +1431,10 @@ type ActorStatus struct {
 	InProgressSnapshotSourceActorVersion int64 `protobuf:"varint,6,opt,name=in_progress_snapshot_source_actor_version,json=inProgressSnapshotSourceActorVersion,proto3" json:"in_progress_snapshot_source_actor_version,omitempty"`
 	// Volumes attached to the actor. These volumes only live as long as the actor.
 	// They are deleted when the actor is deleted.
-	// TODO: Add DV (optional, need to recurse into this type, immutable?)
+	//
+	// +k8s:optional
+	// +k8s:listType=map
+	// +k8s:listMapKey=volume_name
 	ActorVolumes []*ExternalVolume `protobuf:"bytes,7,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
 	// TODO: Add DV (optional, maxLength?)
 	InProgressLocalSnapshotName string `protobuf:"bytes,8,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`

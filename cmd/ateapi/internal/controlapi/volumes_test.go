@@ -117,6 +117,13 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 	}
 }
 
+func TestInitialActorVolumes_NilTemplate(t *testing.T) {
+	_, err := initialActorVolumes(context.Background(), nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil template, got nil")
+	}
+}
+
 func TestCreateActorVolumes(t *testing.T) {
 	ctx := context.Background()
 

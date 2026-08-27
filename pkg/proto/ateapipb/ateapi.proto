@@ -232,13 +232,31 @@ message ResourceMetadata {
 
 message ExternalVolume {
   // Name of the volume specified in the actor template.
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  // +k8s:immutable
   string volume_name = 1;
 
   // The globally unique volume_id returned from the storage system.
-  // This will be initially empty during volume creation
+  // This will be initially empty during volume creation. Must not contain
+  // disallowed unicode characters (U+0000-U+0008, U+000B, U+000C,
+  // U+000E-U+001F, U+007F-U+009F).
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation
   string storage_volume_id = 2;
 
-  // Internal volume plugin name or CSI driver name.
+  // Internal volume plugin name or CSI driver name. Required. Must be a valid
+  // DNS-1123 subdomain (optionally prefixed with "substrate.io/"), max 253
+  // characters.
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:immutable
+  // +k8s:customValidation
   string volume_type = 3;
 
   enum Status {
@@ -483,7 +501,10 @@ message ActorStatus {
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
-  // TODO: Add DV (optional, need to recurse into this type, immutable?)
+  //
+  // +k8s:optional
+  // +k8s:listType=map
+  // +k8s:listMapKey=volume_name
   repeated ExternalVolume actor_volumes = 7;
 
   // TODO: Add DV (optional, maxLength?)
