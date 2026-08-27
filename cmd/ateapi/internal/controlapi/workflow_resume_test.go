@@ -141,6 +141,62 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	}
 }
 
+// TestAssignWorkerAttempt_StampsSubstrateTemplateRef verifies a ref-mode
+// actor's worker claim names the substrate template via actor_template_ref
+// and leaves the legacy kube reference unset.
+func TestAssignWorkerAttempt_StampsSubstrateTemplateRef(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-free")},
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod-free",
+		WorkerPodUid:    testWorkerUID("pod-free"),
+		SandboxClass:    "gvisor",
+		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE},
+	}
+	if _, err := persistence.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+
+	cacheCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wc := workercache.New(persistence, time.Minute)
+	if err := wc.Start(cacheCtx); err != nil {
+		t.Fatalf("workercache.Start: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	tmpl := &ateapipb.ActorTemplate{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "sub-tmpl"},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+	}
+	_, assigned, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	if err != nil {
+		t.Fatalf("assignWorkerAttempt: %v", err)
+	}
+
+	stored, err := persistence.GetWorker(ctx, assigned.GetMetadata().GetName())
+	if err != nil {
+		t.Fatalf("GetWorker: %v", err)
+	}
+	assignment := stored.GetStatus().GetAssignment()
+	if assignment.GetActorTemplateRef().GetAtespace() != "team-a" || assignment.GetActorTemplateRef().GetName() != "sub-tmpl" {
+		t.Errorf("assignment ActorTemplateRef = %v, want team-a/sub-tmpl", assignment.GetActorTemplateRef())
+	}
+	if assignment.GetActorTemplate() != nil {
+		t.Errorf("assignment legacy ActorTemplate = %v, want nil for a ref-mode actor", assignment.GetActorTemplate())
+	}
+}
+
 func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)

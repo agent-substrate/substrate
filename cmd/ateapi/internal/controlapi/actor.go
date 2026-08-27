@@ -28,7 +28,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -72,16 +71,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	// will still exist later.  Checking it here produces a nice error UX, but
 	// we still have to handle the template not existing later, which makes the
 	// UX inconsistent, at best.  Is it actually worth checking at all?
-	templateNamespace := inActor.GetActorTemplateNamespace()
-	templateName := inActor.GetActorTemplateName()
-	crdTemplate, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
-		}
-		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
-	}
-	template, err := actorTemplateFromCRD(crdTemplate)
+	template, err := resolveActorTemplate(ctx, s.store, s.actorTemplateLister, inActor)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +171,32 @@ func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace s
 func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
-	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
+	errs := Validate_CreateActorRequest(ctx, op, nil, req, nil)
+
+	// The template is named by exactly one reference form: the substrate
+	// actor_template ref, or the legacy CRD namespace/name pair. The
+	// declarative annotations mark all three fields optional, so the union
+	// is enforced here.
+	if actor := req.GetActor(); actor != nil {
+		actorPath := field.NewPath("actor")
+		if actor.GetActorTemplate() != nil {
+			if actor.GetActorTemplateNamespace() != "" {
+				errs = append(errs, field.Forbidden(actorPath.Child("actor_template_namespace"), "may not be set together with actor_template"))
+			}
+			if actor.GetActorTemplateName() != "" {
+				errs = append(errs, field.Forbidden(actorPath.Child("actor_template_name"), "may not be set together with actor_template"))
+			}
+		} else {
+			if actor.GetActorTemplateNamespace() == "" {
+				errs = append(errs, field.Required(actorPath.Child("actor_template_namespace"), ""))
+			}
+			if actor.GetActorTemplateName() == "" {
+				errs = append(errs, field.Required(actorPath.Child("actor_template_name"), ""))
+			}
+		}
+	}
+
+	return errs
 }
 
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {

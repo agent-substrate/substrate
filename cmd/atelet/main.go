@@ -76,7 +76,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -1869,12 +1868,6 @@ func validateRunRequest(req *ateletpb.RunRequest) error {
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
-	}
-	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))
-	}
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
@@ -1894,12 +1887,6 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
-	}
-	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))
-	}
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
@@ -1946,12 +1933,6 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
-	}
-	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))
-	}
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
@@ -2002,12 +1983,6 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
-	}
-	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))
-	}
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
@@ -2039,12 +2014,6 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
-	}
-	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))
-	}
 	errs = append(errs, resources.ValidateResourceName(req.GetLocalSnapshotName(), field.NewPath("local_snapshot_name"))...)
 	// Golden actors are never paused (the golden flow commits a running
 	// actor), so never promote a paused checkpoint to a golden snapshot.

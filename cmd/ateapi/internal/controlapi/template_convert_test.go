@@ -15,10 +15,14 @@
 package controlapi
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -28,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache"
 )
 
 // TestActorTemplateFromCRD pins the full CRD-to-proto projection: every field
@@ -229,4 +234,128 @@ func mustTemplateFromCRD(crd *atev1alpha1.ActorTemplate) *ateapipb.ActorTemplate
 		panic(err)
 	}
 	return out
+}
+
+// seedSubstrateTemplate stores a minimal substrate ActorTemplate in team-a.
+func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.Interface, name string) *ateapipb.ActorTemplate {
+	t.Helper()
+	stored, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: "gs://ate-snapshots/team-a/",
+		},
+		SandboxConfig: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "gvisor",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate: %v", err)
+	}
+	return stored
+}
+
+// TestResolveActorTemplate_PrefersSubstrateRef verifies the resolver reads
+// the substrate resource when the actor carries an actor_template reference,
+// and falls back to the converted CRD for legacy actors.
+func TestResolveActorTemplate_PrefersSubstrateRef(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(&atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "crd-tmpl", UID: types.UID("crd-uid-1")},
+	}); err != nil {
+		t.Fatalf("add template to indexer: %v", err)
+	}
+	lister := listersv1alpha1.NewActorTemplateLister(indexer)
+	stored := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+
+	t.Run("ref mode reads the store", func(t *testing.T) {
+		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}
+		got, err := resolveActorTemplate(ctx, persistence, lister, actor)
+		if err != nil {
+			t.Fatalf("resolveActorTemplate: %v", err)
+		}
+		if got.GetMetadata().GetUid() != stored.GetMetadata().GetUid() {
+			t.Errorf("template uid = %q, want the stored substrate template %q", got.GetMetadata().GetUid(), stored.GetMetadata().GetUid())
+		}
+	})
+
+	t.Run("ref to a missing template is FailedPrecondition", func(t *testing.T) {
+		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "absent"}}
+		_, err := resolveActorTemplate(ctx, persistence, lister, actor)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("status.Code = %v, want FailedPrecondition (err: %v)", got, err)
+		}
+	})
+
+	t.Run("legacy mode converts the CRD", func(t *testing.T) {
+		actor := &ateapipb.Actor{ActorTemplateNamespace: "ns", ActorTemplateName: "crd-tmpl"}
+		got, err := resolveActorTemplate(ctx, persistence, lister, actor)
+		if err != nil {
+			t.Fatalf("resolveActorTemplate: %v", err)
+		}
+		if got.GetMetadata().GetUid() != "crd-uid-1" {
+			t.Errorf("template uid = %q, want the CRD uid", got.GetMetadata().GetUid())
+		}
+		if got.GetMetadata().GetAtespace() != "ns" || got.GetMetadata().GetName() != "crd-tmpl" {
+			t.Errorf("template identity = %s/%s, want ns/crd-tmpl", got.GetMetadata().GetAtespace(), got.GetMetadata().GetName())
+		}
+	})
+}
+
+// TestResolveActorTemplate_NotFound verifies a vanished template (either
+// form) and an actor naming no template at all surface
+// errActorTemplateNotFound, so callers like delete can tolerate them.
+func TestResolveActorTemplate_NotFound(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	lister := listersv1alpha1.NewActorTemplateLister(indexer)
+	stored := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+
+	tests := []struct {
+		name         string
+		actor        *ateapipb.Actor
+		wantNotFound bool
+	}{
+		{"ref mode resolves", &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}, false},
+		{"ref to deleted template", &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone"}}, true},
+		{"legacy CRD gone", &ateapipb.Actor{ActorTemplateNamespace: "ns", ActorTemplateName: "gone"}, true},
+		{"no template named at all", &ateapipb.Actor{}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveActorTemplate(ctx, persistence, lister, tc.actor)
+			if tc.wantNotFound {
+				if !errors.Is(err, errActorTemplateNotFound) {
+					t.Fatalf("resolveActorTemplate err = %v, want errActorTemplateNotFound", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveActorTemplate: %v", err)
+			}
+			if got.GetMetadata().GetUid() != stored.GetMetadata().GetUid() {
+				t.Errorf("template uid = %q, want %q", got.GetMetadata().GetUid(), stored.GetMetadata().GetUid())
+			}
+		})
+	}
+}
+
+// TestActorTemplateObjectRef pins that snapshot and assignment records get a
+// fresh copy of the reference, never the actor's own message.
+func TestActorTemplateObjectRef(t *testing.T) {
+	if got := actorTemplateObjectRef(&ateapipb.Actor{}); got != nil {
+		t.Errorf("actorTemplateObjectRef(no ref) = %v, want nil", got)
+	}
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl1"}}
+	got := actorTemplateObjectRef(actor)
+	if got == actor.GetActorTemplate() {
+		t.Error("actorTemplateObjectRef aliases the actor's reference")
+	}
+	if got.GetAtespace() != "team-a" || got.GetName() != "tmpl1" {
+		t.Errorf("actorTemplateObjectRef = %v, want team-a/tmpl1", got)
+	}
 }

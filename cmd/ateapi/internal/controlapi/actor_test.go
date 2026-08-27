@@ -48,6 +48,11 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	withActorTemplate := withActorActorTemplate
 	withSourceSnapshotTag := withActorSourceSnapshotTag
 	withWorkerSelector := withActorWorkerSelector
+	// refOnly switches the fixture to the substrate reference form; the two
+	// template reference forms are mutually exclusive on create.
+	refOnly := func(a *ateapipb.Actor) {
+		a.ActorTemplateNamespace, a.ActorTemplateName = "", ""
+	}
 
 	tests := []struct {
 		name string
@@ -102,24 +107,31 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validReq(validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "invalid value" })),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_name"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		"valid actor.actor_template",
-		validReq(validActor(withActorTemplate("as", "tmpl"))),
+		"valid actor.actor_template instead of legacy pair",
+		validReq(validActor(refOnly, withActorTemplate("as", "tmpl"))),
 		nil,
 	}, {
+		"actor_template together with legacy pair",
+		validReq(validActor(withActorTemplate("as", "tmpl"))),
+		field.ErrorList{
+			field.Forbidden(field.NewPath("actor", "actor_template_namespace"), ""),
+			field.Forbidden(field.NewPath("actor", "actor_template_name"), ""),
+		},
+	}, {
 		"missing actor.actor_template.atespace",
-		validReq(validActor(withActorTemplate("", "tmpl"))),
+		validReq(validActor(refOnly, withActorTemplate("", "tmpl"))),
 		field.ErrorList{field.Required(field.NewPath("actor", "actor_template", "atespace"), "")},
 	}, {
 		"invalid actor.actor_template.atespace",
-		validReq(validActor(withActorTemplate("invalid value", "tmpl"))),
+		validReq(validActor(refOnly, withActorTemplate("invalid value", "tmpl"))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template", "atespace"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"missing actor.actor_template.name",
-		validReq(validActor(withActorTemplate("as", ""))),
+		validReq(validActor(refOnly, withActorTemplate("as", ""))),
 		field.ErrorList{field.Required(field.NewPath("actor", "actor_template", "name"), "")},
 	}, {
 		"invalid actor.actor_template.name",
-		validReq(validActor(withActorTemplate("as", "invalid value"))),
+		validReq(validActor(refOnly, withActorTemplate("as", "invalid value"))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"valid actor.source_snapshot_tag",
@@ -241,7 +253,6 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(),
 		validOutput(func(a *ateapipb.Actor) { a.ActorTemplateNamespace = "" }),
 		field.ErrorList{
-			field.Required(field.NewPath("actor_template_namespace"), ""),
 			field.Invalid(field.NewPath("actor_template_namespace"), nil, "").WithOrigin("immutable"),
 		},
 	}, {
@@ -254,7 +265,6 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(),
 		validOutput(func(a *ateapipb.Actor) { a.ActorTemplateName = "" }),
 		field.ErrorList{
-			field.Required(field.NewPath("actor_template_name"), ""),
 			field.Invalid(field.NewPath("actor_template_name"), nil, "").WithOrigin("immutable"),
 		},
 	}, {
@@ -858,7 +868,6 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 func validActor(mods ...func(*ateapipb.Actor)) *ateapipb.Actor {
 	a := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-		ActorTemplate:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
 	}
