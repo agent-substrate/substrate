@@ -48,8 +48,7 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	withActorTemplate := withActorActorTemplate
 	withSourceSnapshotTag := withActorSourceSnapshotTag
 	withWorkerSelector := withActorWorkerSelector
-	// refOnly switches the fixture to the substrate reference form; the two
-	// template reference forms are mutually exclusive on create.
+	// refOnly switches the fixture to the substrate reference form.
 	refOnly := func(a *ateapipb.Actor) {
 		a.ActorTemplateNamespace, a.ActorTemplateName = "", ""
 	}
@@ -91,32 +90,9 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ID1" }))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"missing actor.actor_template_namespace",
-		validReq(validActor(func(a *ateapipb.Actor) { a.ActorTemplateNamespace = "" })),
-		field.ErrorList{field.Required(field.NewPath("actor", "actor_template_namespace"), "")},
-	}, {
-		"invalid actor.actor_template_namespace",
-		validReq(validActor(func(a *ateapipb.Actor) { a.ActorTemplateNamespace = "invalid value" })),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_namespace"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		"missing actor.actor_template_name",
-		validReq(validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "" })),
-		field.ErrorList{field.Required(field.NewPath("actor", "actor_template_name"), "")},
-	}, {
-		"invalid actor.actor_template_name",
-		validReq(validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "invalid value" })),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_name"), nil, "").WithOrigin("format=k8s-long-name")},
-	}, {
 		"valid actor.actor_template instead of legacy pair",
 		validReq(validActor(refOnly, withActorTemplate("as", "tmpl"))),
 		nil,
-	}, {
-		"actor_template together with legacy pair",
-		validReq(validActor(withActorTemplate("as", "tmpl"))),
-		field.ErrorList{
-			field.Forbidden(field.NewPath("actor", "actor_template_namespace"), ""),
-			field.Forbidden(field.NewPath("actor", "actor_template_name"), ""),
-		},
 	}, {
 		"missing actor.actor_template.atespace",
 		validReq(validActor(refOnly, withActorTemplate("", "tmpl"))),

@@ -61,6 +61,7 @@ func resolveActorTemplate(ctx context.Context, st actorTemplateGetter, lister li
 		}
 		return template, nil
 	}
+	// TODO: remove this fallback when we cut over to substrate resources.
 	crd, err := lister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
 	if err != nil {
 		if k8serrors.IsNotFound(err) {

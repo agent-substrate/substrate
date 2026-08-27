@@ -827,7 +827,6 @@ func TestRPCBoundariesReject(t *testing.T) {
 		wantInvalidArgument(t, "Restore", err)
 	})
 	t.Run("Terminate", func(t *testing.T) {
-		const okTargetAteomUID = "123e4567-e89b-12d3-a456-426614174001"
 		t.Run("invalid ateom UID", func(t *testing.T) {
 			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 				Atespace: okAtespace, ActorName: okID,

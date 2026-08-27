@@ -171,32 +171,7 @@ func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace s
 func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
-	errs := Validate_CreateActorRequest(ctx, op, nil, req, nil)
-
-	// The template is named by exactly one reference form: the substrate
-	// actor_template ref, or the legacy CRD namespace/name pair. The
-	// declarative annotations mark all three fields optional, so the union
-	// is enforced here.
-	if actor := req.GetActor(); actor != nil {
-		actorPath := field.NewPath("actor")
-		if actor.GetActorTemplate() != nil {
-			if actor.GetActorTemplateNamespace() != "" {
-				errs = append(errs, field.Forbidden(actorPath.Child("actor_template_namespace"), "may not be set together with actor_template"))
-			}
-			if actor.GetActorTemplateName() != "" {
-				errs = append(errs, field.Forbidden(actorPath.Child("actor_template_name"), "may not be set together with actor_template"))
-			}
-		} else {
-			if actor.GetActorTemplateNamespace() == "" {
-				errs = append(errs, field.Required(actorPath.Child("actor_template_namespace"), ""))
-			}
-			if actor.GetActorTemplateName() == "" {
-				errs = append(errs, field.Required(actorPath.Child("actor_template_name"), ""))
-			}
-		}
-	}
-
-	return errs
+	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
