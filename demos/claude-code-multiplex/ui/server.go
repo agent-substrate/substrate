@@ -195,18 +195,18 @@ func newKubeClient() (*kubernetes.Clientset, error) {
 	return kubernetes.NewForConfig(cfg)
 }
 
-// actorStatusString maps the proto Status enum to the human-readable
+// actorStateString maps the proto State enum to the human-readable
 // phase string the UI's badge logic understands (running / suspended
 // / etc).
-func actorStatusString(s ateapipb.Actor_Status) string {
+func actorStateString(s ateapipb.ActorState) string {
 	switch s {
-	case ateapipb.Actor_STATUS_RESUMING:
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
 		return "Resuming"
-	case ateapipb.Actor_STATUS_RUNNING:
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING:
 		return "Running"
-	case ateapipb.Actor_STATUS_SUSPENDING:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
 		return "Suspending"
-	case ateapipb.Actor_STATUS_SUSPENDED:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 		return "Suspended"
 	default:
 		return "?"
@@ -218,7 +218,7 @@ func actorStatusString(s ateapipb.Actor_Status) string {
 // The UI's badgeFor() treats "running" as green; "idle" falls through
 // to the neutral badge, which is the right visual treatment.
 func workerPhase(w *ateapipb.Worker) string {
-	if w.Assignment != nil && w.Assignment.Actor != nil && w.Assignment.Actor.Name != "" {
+	if w.GetStatus().GetAssignment().GetActor().GetName() != "" {
 		return "Running"
 	}
 	return "Idle"
@@ -373,13 +373,13 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 		// Filter to the demo namespace when set — workers may live
 		// in their own pool namespace (worker_namespace) so we
 		// compare against actor_namespace too.
-		if wk.Assignment != nil && wk.Assignment.ActorTemplate != nil {
-			if ns, wkns := namespace, wk.Assignment.ActorTemplate.Namespace; ns != "" && wkns != "" && wkns != ns {
+		if tpl := wk.GetStatus().GetAssignment().GetActorTemplate(); tpl != nil {
+			if ns, wkns := namespace, tpl.GetNamespace(); ns != "" && wkns != "" && wkns != ns {
 				continue
 			}
 		}
 		ready := false
-		if wk.Assignment != nil && wk.Assignment.Actor != nil && wk.Assignment.Actor.Name != "" {
+		if wk.GetStatus().GetAssignment().GetActor().GetName() != "" {
 			ready = true
 		}
 		pods = append(pods, podSummary{
@@ -426,7 +426,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 		actors = append(actors, actorSummary{
 			Kind:    "Actor",
 			Name:    a.GetMetadata().GetName(),
-			Phase:   actorStatusString(a.GetStatus()),
+			Phase:   actorStateString(a.GetStatus().GetState()),
 			Message: msg,
 		})
 	}
@@ -501,7 +501,7 @@ func main() {
 	// verifies ateapi's serving cert against the live ClusterTrustBundle;
 	// an empty endpoint auto-port-forwards to svc/api in ate-system.
 	log.Printf("[ui] connecting to ateapi (endpoint=%q; empty = auto port-forward to svc/api)", ateapiAddr)
-	cli, err := ateclient.NewClient(context.Background(), "", "", ateapiAddr, false)
+	cli, err := ateclient.NewClient(context.Background(), "", "", ateapiAddr, "", false)
 	if err != nil {
 		log.Fatalf("connect ateapi: %v", err)
 	}

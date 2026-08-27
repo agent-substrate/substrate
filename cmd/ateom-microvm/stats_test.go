@@ -41,7 +41,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 	tests := []struct {
 		name string
 		p    actorBootParams
-		want ateomstats.ActorAttribution
+		want resources.ActorAttribution
 	}{
 		{
 			name: "fully populated",
@@ -51,7 +51,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 				templateNS:   "template-ns-d",
 				templateName: "template-name-e",
 			},
-			want: ateomstats.ActorAttribution{
+			want: resources.ActorAttribution{
 				Ref:               resources.ActorRef{Atespace: "atespace-a", Name: "actor-b"},
 				UID:               "uid-c",
 				TemplateNamespace: "template-ns-d",
@@ -61,7 +61,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 		{
 			name: "zero params",
 			p:    actorBootParams{},
-			want: ateomstats.ActorAttribution{},
+			want: resources.ActorAttribution{},
 		},
 	}
 
@@ -110,7 +110,7 @@ func TestActorBootParamsAttributionMatchesRequest(t *testing.T) {
 // here is everything GetWorkloadStats does with the result, which is where the
 // polling loop will actually live.
 
-var testActor = ateomstats.ActorAttribution{
+var testActor = resources.ActorAttribution{
 	Ref:               resources.ActorRef{Atespace: "space-a", Name: "actor-a"},
 	UID:               "uid-a",
 	TemplateNamespace: "ns-a",
@@ -123,6 +123,12 @@ type fakeAgent struct {
 	stats map[string]*agentpb.CgroupStats
 	errs  map[string]error
 
+	// onCall, when set, runs at the top of every StatsContainer. It is how a
+	// test interleaves a lifecycle transition with the handlers' lock-free
+	// read: the handler has loaded activeActor by the time the agent is asked,
+	// so flipping it here lands in the window the re-check guards.
+	onCall func()
+
 	// calls records the container ids asked for, in order, so a test can tell
 	// "summed two containers" from "read one twice".
 	calls []string
@@ -132,6 +138,9 @@ type fakeAgent struct {
 }
 
 func (f *fakeAgent) StatsContainer(ctx context.Context, containerID string) (*agentpb.CgroupStats, error) {
+	if f.onCall != nil {
+		f.onCall()
+	}
 	f.calls = append(f.calls, containerID)
 	_, ok := ctx.Deadline()
 	f.deadlines = append(f.deadlines, ok)
@@ -154,9 +163,11 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 }
 
 // newStatsService builds a service executing testActor with the given guest
-// containers published to GetWorkloadStats.
+// containers published to GetWorkloadStats. lock is constructed like NewService
+// does, since it is a pointer with no usable zero value and
+// TestGetWorkloadStatsDoesNotTakeLock holds it.
 func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
-	s := &AteomService{}
+	s := &AteomService{lock: newCancelableMutex()}
 	s.activeActor.Store(&testActor)
 	s.guestStats.Store(&guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})
 	return s
@@ -175,13 +186,13 @@ func TestGetWorkloadStats(t *testing.T) {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
 
-	if got.GetObservedAtUnixNano() < before || got.GetObservedAtUnixNano() > after {
-		t.Errorf("GetWorkloadStats() observed_at_unix_nano = %d, want within [%d, %d]", got.GetObservedAtUnixNano(), before, after)
+	if got.GetSample().GetObservedAtUnixNano() < before || got.GetSample().GetObservedAtUnixNano() > after {
+		t.Errorf("GetWorkloadStats() observed_at_unix_nano = %d, want within [%d, %d]", got.GetSample().GetObservedAtUnixNano(), before, after)
 	}
 	// Checked above; zeroed so the rest can be compared as a whole.
-	got.ObservedAtUnixNano = 0
+	got.GetSample().ObservedAtUnixNano = 0
 
-	want := &ateompb.GetWorkloadStatsResponse{
+	want := &ateompb.GetWorkloadStatsResponse{Sample: &ateompb.WorkloadStatsSample{
 		Atespace:               "space-a",
 		ActorName:              "actor-a",
 		ActorUid:               "uid-a",
@@ -193,7 +204,7 @@ func TestGetWorkloadStats(t *testing.T) {
 		MemoryPeakBytes:        209715200,
 		MemoryWorkingSetBytes:  136314880,
 		CpuUsageUsec:           1234567,
-	}
+	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("GetWorkloadStats() mismatch (-want +got):\n%s", diff)
 	}
@@ -207,7 +218,7 @@ func TestGetWorkloadStats(t *testing.T) {
 }
 
 // TestGetWorkloadStatsSumsContainers covers the multi-container actor: the
-// guest gives one cgroup per container (see StartOverlayWorkload), and the
+// guest gives one cgroup per container (see StartRootfsContainer), and the
 // proto reports one figure for the actor.
 func TestGetWorkloadStatsSumsContainers(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
@@ -221,19 +232,19 @@ func TestGetWorkloadStatsSumsContainers(t *testing.T) {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
 
-	if want := uint64(1500); got.GetMemoryCurrentBytes() != want {
-		t.Errorf("memory_current_bytes = %d, want %d", got.GetMemoryCurrentBytes(), want)
+	if want := uint64(1500); got.GetSample().GetMemoryCurrentBytes() != want {
+		t.Errorf("memory_current_bytes = %d, want %d", got.GetSample().GetMemoryCurrentBytes(), want)
 	}
 	// The sum of the peaks, which is an upper bound on the peak of the sum: the
 	// two containers need not have peaked at the same moment.
-	if want := uint64(4800); got.GetMemoryPeakBytes() != want {
-		t.Errorf("memory_peak_bytes = %d, want %d", got.GetMemoryPeakBytes(), want)
+	if want := uint64(4800); got.GetSample().GetMemoryPeakBytes() != want {
+		t.Errorf("memory_peak_bytes = %d, want %d", got.GetSample().GetMemoryPeakBytes(), want)
 	}
-	if want := uint64(1200); got.GetMemoryWorkingSetBytes() != want {
-		t.Errorf("memory_working_set_bytes = %d, want %d", got.GetMemoryWorkingSetBytes(), want)
+	if want := uint64(1200); got.GetSample().GetMemoryWorkingSetBytes() != want {
+		t.Errorf("memory_working_set_bytes = %d, want %d", got.GetSample().GetMemoryWorkingSetBytes(), want)
 	}
-	if want := uint64(10); got.GetCpuUsageUsec() != want {
-		t.Errorf("cpu_usage_usec = %d, want %d", got.GetCpuUsageUsec(), want)
+	if want := uint64(10); got.GetSample().GetCpuUsageUsec() != want {
+		t.Errorf("cpu_usage_usec = %d, want %d", got.GetSample().GetCpuUsageUsec(), want)
 	}
 
 	if want := []string{"app_ovl", "sidecar_ovl"}; !cmp.Equal(want, agent.calls) {
@@ -257,11 +268,11 @@ func TestGetWorkloadStatsSkipsUnreadableContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
-	if want := uint64(1000); got.GetMemoryCurrentBytes() != want {
-		t.Errorf("memory_current_bytes = %d, want %d", got.GetMemoryCurrentBytes(), want)
+	if want := uint64(1000); got.GetSample().GetMemoryCurrentBytes() != want {
+		t.Errorf("memory_current_bytes = %d, want %d", got.GetSample().GetMemoryCurrentBytes(), want)
 	}
-	if want := uint64(5); got.GetCpuUsageUsec() != want {
-		t.Errorf("cpu_usage_usec = %d, want %d", got.GetCpuUsageUsec(), want)
+	if want := uint64(5); got.GetSample().GetCpuUsageUsec() != want {
+		t.Errorf("cpu_usage_usec = %d, want %d", got.GetSample().GetCpuUsageUsec(), want)
 	}
 }
 
@@ -276,7 +287,7 @@ func TestGetWorkloadStatsCountsAnsweredContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
-	if got.GetMemoryCurrentBytes() != 0 || got.GetCpuUsageUsec() != 0 {
+	if got.GetSample().GetMemoryCurrentBytes() != 0 || got.GetSample().GetCpuUsageUsec() != 0 {
 		t.Errorf("GetWorkloadStats() = %v, want an all-zero measurement", got)
 	}
 }
@@ -332,8 +343,8 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		},
 		{
 			// Should be unreachable — the two atomics are written together under
-			// lock — so what is pinned here is that disagreeing state declines
-			// instead of misattributing.
+			// lock — so a disagreement is an invariant violation, not a routine
+			// state: Internal, unlike every other way sampleGuest declines.
 			name: "guest agent connection belongs to another actor",
 			service: func() *AteomService {
 				s := newStatsService(healthy, "app_ovl")
@@ -341,7 +352,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 				return s
 			},
 			actorUID: "uid-a",
-			want:     codes.FailedPrecondition,
+			want:     codes.Internal,
 		},
 		{
 			// Not one container gone but the guest as a whole not answering: the
@@ -412,5 +423,140 @@ func TestAteomServiceStartsAvailable(t *testing.T) {
 	}
 	if got := s.guestStats.Load(); got != nil {
 		t.Errorf("new AteomService.guestStats = %v, want nil", got)
+	}
+}
+
+func TestGetActiveWorkloadStats(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
+		"app_ovl": containerStats(157286400, 209715200, 20971520, 1234567000),
+	}}
+	s := newStatsService(agent, "app_ovl")
+
+	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
+	}
+	if got.GetSample() == nil {
+		t.Fatalf("GetActiveWorkloadStats() = %v, want a sample", got)
+	}
+
+	// The keyed read against the same fake is the reference: the discovery read
+	// must produce the identical sample, since both are the same measurement
+	// with a different addressing mode.
+	want, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
+	if err != nil {
+		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
+	}
+	sample := got.GetSample()
+	sample.ObservedAtUnixNano = 0
+	want.GetSample().ObservedAtUnixNano = 0
+	if diff := cmp.Diff(want.GetSample(), sample, protocmp.Transform()); diff != "" {
+		t.Errorf("discovery sample differs from keyed sample (-keyed +discovery):\n%s", diff)
+	}
+}
+
+// TestGetActiveWorkloadStatsAvailable pins the contract that makes the
+// discovery read scrapeable: an idle ateom is a reason, never an error.
+func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
+	s := &AteomService{}
+
+	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
+	}
+	if got.GetNoSampleReason() != ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD {
+		t.Errorf("GetActiveWorkloadStats() = %v, want NO_WORKLOAD reason", got)
+	}
+}
+
+// TestGetActiveWorkloadStatsBooting: executing but no guest target yet is a
+// NOT_MEASURABLE_YET reason, not an error, unlike the keyed read's
+// FAILED_PRECONDITION. A blind caller finds boots as routinely as idle
+// workers.
+func TestGetActiveWorkloadStatsBooting(t *testing.T) {
+	s := &AteomService{}
+	s.activeActor.Store(&testActor) // attribution retained, target not published
+
+	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetActiveWorkloadStats() mid-boot: error = %v, want nil", err)
+	}
+	if got.GetNoSampleReason() != ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET {
+		t.Errorf("GetActiveWorkloadStats() mid-boot = %v, want NOT_MEASURABLE_YET reason", got)
+	}
+}
+
+// The transition tests cover the re-check that runs after the lock-free
+// measurement: the fake agent's onCall hook flips activeActor while the
+// handler is mid-read, which is exactly the window a checkpoint plus a fresh
+// run (or a checkpoint alone) can land in.
+
+func TestGetActiveWorkloadStatsTransition(t *testing.T) {
+	otherActor := testActor
+	otherActor.UID = "uid-b"
+
+	tests := []struct {
+		name string
+		to   *resources.ActorAttribution
+		want ateompb.NoSampleReason
+	}{
+		// A new actor took the slot: there is a workload, its numbers are just
+		// not attributable this tick.
+		{name: "to another actor", to: &otherActor, want: ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET},
+		// A checkpoint emptied the slot: report what is true now.
+		{name: "to available", to: nil, want: ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
+				"app_ovl": containerStats(1000, 2000, 100, 5000),
+			}}
+			s := newStatsService(agent, "app_ovl")
+			agent.onCall = func() { s.activeActor.Store(tc.to) }
+
+			got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+			if err != nil {
+				t.Fatalf("GetActiveWorkloadStats() during transition: error = %v, want nil", err)
+			}
+			if got.GetSample() != nil {
+				t.Errorf("GetActiveWorkloadStats() during transition returned sample %v, want none", got.GetSample())
+			}
+			if got.GetNoSampleReason() != tc.want {
+				t.Errorf("GetActiveWorkloadStats() during transition = %v, want %v reason", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGetWorkloadStatsTransition pins the keyed read's side of the same
+// window: the caller asserted an actor that is gone by the time the sample
+// exists, so the answer is NOT_FOUND -- its mapping wants re-resolving.
+func TestGetWorkloadStatsTransition(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
+		"app_ovl": containerStats(1000, 2000, 100, 5000),
+	}}
+	s := newStatsService(agent, "app_ovl")
+	agent.onCall = func() { s.activeActor.Store(nil) }
+
+	_, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
+	if got := status.Code(err); got != codes.NotFound {
+		t.Errorf("GetWorkloadStats() during transition: code = %v, want %v (err: %v)", got, codes.NotFound, err)
+	}
+}
+
+// TestGetActiveWorkloadStatsStaleTarget pins that the one bug-shaped failure
+// stays an error on the discovery read too: a target/attribution disagreement
+// is an invariant violation, not a NOT_MEASURABLE_YET to skip past silently.
+func TestGetActiveWorkloadStatsStaleTarget(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
+		"app_ovl": containerStats(1000, 2000, 100, 5000),
+	}}
+	s := newStatsService(agent, "app_ovl")
+	s.guestStats.Store(&guestStatsTarget{actorUID: "uid-b", agent: agent, workloadIDs: []string{"app_ovl"}})
+
+	_, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("GetActiveWorkloadStats() with stale target: code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
 }

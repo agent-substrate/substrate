@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestExtractMetadata(t *testing.T) {
@@ -104,7 +105,7 @@ func TestExtractMetadata(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := NewRequestMetadata(tc.headers)
+			got := NewRequestMetadata(tc.headers, nil)
 
 			if !reflect.DeepEqual(got.Headers, tc.wantHeaders) {
 				t.Errorf("NewRequestMetadata() headersMap = %v, want %v", got.Headers, tc.wantHeaders)
@@ -116,5 +117,27 @@ func TestExtractMetadata(t *testing.T) {
 				t.Errorf("NewRequestMetadata() host = %v, want %v", got.Host, tc.wantHost)
 			}
 		})
+	}
+}
+
+func TestRequestMetadataAttribute(t *testing.T) {
+	attrs := map[string]*structpb.Struct{
+		"envoy.filters.http.ext_proc": {
+			Fields: map[string]*structpb.Value{
+				"filter_state['dev.ate.authority']": structpb.NewStringValue("actor-1.team-a.actors.resources.substrate.ate.dev"),
+			},
+		},
+	}
+
+	md := NewRequestMetadata(nil, attrs)
+
+	// The lookup scans every filter's attributes rather than hardcoding which
+	// filter reported the value (see filterChainName in dispatch.go for why),
+	// so it must not matter which filter name the value arrived under.
+	if got, want := md.Attribute("filter_state['dev.ate.authority']"), "actor-1.team-a.actors.resources.substrate.ate.dev"; got != want {
+		t.Errorf("Attribute() = %q, want %q", got, want)
+	}
+	if got := md.Attribute("filter_state['does.not.exist']"); got != "" {
+		t.Errorf("Attribute() for a missing key = %q, want \"\"", got)
 	}
 }

@@ -34,7 +34,7 @@ var createActorCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -61,7 +61,7 @@ var createActorCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			request.SourceSnapshot = &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: ref}}
+			request.Actor.SourceSnapshotTag = ref
 		}
 		resp, err := apiClient.CreateActor(ctx, request)
 		if err != nil {

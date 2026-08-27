@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -115,10 +116,10 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
 
-	podName := actor.GetWorkerAssignment().GetWorkerPod()
-	namespace := actor.GetWorkerAssignment().GetWorkerNamespace()
+	podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
+	namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 
-	if podName == "" || namespace == "" || actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+	if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return fmt.Errorf("actor %s is not currently running on any worker pod", r.actorRef)
 	}
 
@@ -169,10 +170,10 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 			}
 		}
 
-		podName := actor.GetWorkerAssignment().GetWorkerPod()
-		namespace := actor.GetWorkerAssignment().GetWorkerNamespace()
+		podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
+		namespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 
-		if podName == "" || namespace == "" || actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		if podName == "" || namespace == "" || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -265,7 +266,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 				if err == nil {
 					act := resp
-					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetWorkerAssignment().GetWorkerPod() != currentPod {
+					if act.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || act.GetStatus().GetWorkerAssignment().GetWorkerPod() != currentPod {
 						// Actor suspended or migrated! Cancel stream context to reconnect.
 						cancel()
 						return
@@ -279,7 +280,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 func runLogsActor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}
@@ -326,9 +327,9 @@ func filterAndDisplayLogLine(line string, target resources.ActorRef, w io.Writer
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
-				if name, ok := labels["ate.dev/actor_name"].(string); ok && name != "" {
+				if name, ok := labels[string(ateattr.ActorNameKey)].(string); ok && name != "" {
 					emitter.Name = name
-					emitter.Atespace, _ = labels["ate.dev/actor_atespace"].(string)
+					emitter.Atespace, _ = labels[string(ateattr.AtespaceKey)].(string)
 					break
 				}
 			}
@@ -345,12 +346,14 @@ func filterAndDisplayLogLine(line string, target resources.ActorRef, w io.Writer
 		return logTime, false
 	}
 
-	// remove actor labels from CLI output
+	// Remove substrate's labels from CLI output. Stripping the whole reserved
+	// prefix rather than the known keys means an actor cannot get a plausible
+	// ate.*-namespaced label of its own printed as platform attribution.
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
 				for k := range labels {
-					if strings.HasPrefix(k, "ate.dev/") {
+					if strings.HasPrefix(k, ateattr.ReservedNamespace) {
 						delete(labels, k)
 					}
 				}

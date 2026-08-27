@@ -47,13 +47,8 @@ jobs:
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
-  e2e-test-matrix:
+  e2e-test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ateapi-client-auth: [cert, token]
-    name: e2e-test (${{ matrix.ateapi-client-auth }})
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -61,12 +56,6 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
-    - name: Free disk space
-      # The micro-VM guest image/kernel + cloud-hypervisor + kind node image +
-      # control-plane images + snapshots are tight on the ~14GB runner disk.
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        df -h /
     - name: Cache micro-VM assets
       id: microvm-assets
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -89,17 +78,20 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth=${{ matrix.ateapi-client-auth }}
+      run: hack/install-ate-kind.sh --deploy-ate-system --store-backend=postgres
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=${{ matrix.ateapi-client-auth }}
+      run: hack/run-microvm-demo-kind.sh
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
-    - name: Deploy egress demo
-      # TestActorEgress in the networking suite builds its Actor from the
-      # ate-demo-egress/egress ActorTemplate, so the fixture has to exist before.
-      run: hack/install-ate-kind.sh --deploy-demo-egress
+    - name: Deploy egress demos
+      # TestActorEgress in the networking suite builds its Actor from the egress
+      # ActorTemplate for the class under test, so both fixtures have to exist
+      # before their respective lane runs.
+      run: |
+        hack/install-ate-kind.sh --deploy-demo-egress
+        hack/install-ate-kind.sh --deploy-demo-egress-microvm
     - name: Wait for micro-VM golden snapshot
       run: |
         kubectl --context kind-kind wait --for=condition=Ready \
@@ -107,13 +99,14 @@ jobs:
     - name: Run E2E tests (gVisor)
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Run E2E tests (micro-VM)
-      # Same demo lifecycle suite (create -> suspend -> resume -> in-RAM continuity),
-      # pointed at the micro-VM counter via env (see createActorTemplate in demo_test.go).
+      # The same suites again, with every fixture repointed at its micro-VM
+      # variant by the single E2E_SANDBOX_CLASS knob (see internal/e2e/sandbox.go).
+      # Sequential with the gVisor lane above, not concurrent: a suite releases
+      # its namespace — and with it its worker pods — as each test passes, so the
+      # two runs do not contend for the one kind node.
       env:
-        E2E_TEMPLATE_NAMESPACE: ate-demo-counter-microvm
-        E2E_TEMPLATE_NAME: counter-microvm
-        E2E_TEMPLATE_READY_TIMEOUT: 600s
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color
+        E2E_SANDBOX_CLASS: microvm
+      run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
       run: |
@@ -132,14 +125,3 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
-  e2e-test:
-    runs-on: ubuntu-latest
-    needs: e2e-test-matrix
-    if: always()
-    steps:
-    - name: Check E2E matrix
-      run: |
-        if [ "${{ needs.e2e-test-matrix.result }}" != "success" ]; then
-          echo "e2e-test-matrix result: ${{ needs.e2e-test-matrix.result }}"
-          exit 1
-        fi

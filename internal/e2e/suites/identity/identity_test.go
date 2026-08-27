@@ -19,9 +19,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -32,16 +30,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const (
-	probeNamespace = "ate-e2e-probe"
-	probeTemplate  = "probe"
-)
+const probeTemplate = "probe"
+
+// probeNamespace is where deployProbe applies the fixture, and the atespace its
+// actors live in. Suffixed per sandbox class (see e2e.FixtureName) so the two
+// lanes' fixtures never collide: they run one after the other, and this
+// namespace is deleted by the test that created it.
+var probeNamespace = e2e.FixtureName("ate-e2e-probe")
 
 type whoamiResponse struct {
 	File     string `json:"file"`
+	Atespace string `json:"atespace"`
+	UID      string `json:"uid"`
 	Hostname string `json:"hostname"`
-	// Error is the probe's identity-file read error, if any, so a failed
-	// assertion explains why the ID was missing.
+	// Held is the actor id read through a file descriptor the probe opened at
+	// startup and holds across checkpoints — the snapshot therefore carries an
+	// open guest handle on a system-info file, and restore must re-bind it to
+	// the regenerated file (virtiofsd find-paths / gofer re-open by path).
+	Held string `json:"held"`
+	// Error is the probe's file read error(s), if any, so a failed assertion
+	// explains why a value was missing.
 	Error string `json:"error"`
 }
 
@@ -51,6 +59,16 @@ type whoamiResponse struct {
 // snapshot all reported the golden actor's ID. This test catches that by
 // restoring TWO actors from one golden snapshot and asserting each observes its
 // OWN id — and explicitly that it is not the golden id.
+//
+// It then suspends and resumes one of them: atelet wipes and regenerates the
+// system-info files between suspend and resume, so the suspend-time guest
+// state (the probe's startup-held fd, plus every inode the pre-suspend whoami
+// indexed) must re-bind to the regenerated files at the same paths. The
+// micro-VM lane enforces that the hardest: virtiofsd's find-paths migration
+// re-opens recorded paths on restore and its default --migration-on-error=abort
+// fails the resume outright if any path moved — a write scheme that relocates
+// real files (e.g. a timestamped-directory symlink swap) would make any actor
+// that ever touched a system-info file unable to resume.
 func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
@@ -75,6 +93,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	defer rc.Close()
 
 	seen := map[string]string{}
+	seenUIDs := map[string]string{}
 	for _, id := range ids {
 		got := whoami(t, ctx, rc, id)
 
@@ -88,7 +107,92 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q and %q both report identity %q — actors are not distinct", id, other, got.File)
 		}
 		seen[got.File] = id
+
+		// The fd held open since before the golden snapshot must survive the
+		// restore and read the restored actor's OWN id: system-info files are
+		// regenerated at stable paths precisely so suspend-time guest handles
+		// re-bind (a moved or deleted path would fail the restore or the read).
+		if got.Held != id {
+			t.Errorf("actor %q: id via startup-held fd = %q, want %q (probe read error: %q)", id, got.Held, id, got.Error)
+		}
+
+		if got.Atespace != probeNamespace {
+			t.Errorf("actor %q: /run/ate/atespace = %q, want %q (probe read error: %q)", id, got.Atespace, probeNamespace, got.Error)
+		}
+
+		// The projected UID must match the control plane's authoritative view
+		// of this actor, and be distinct per actor even though both actors
+		// were seeded from the same golden snapshot.
+		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}})
+		if err != nil {
+			t.Fatalf("GetActor %q: %v", id, err)
+		}
+		if wantUID := actor.GetMetadata().GetUid(); got.UID != wantUID {
+			t.Errorf("actor %q: /run/ate/actor-uid = %q, want %q (probe read error: %q)", id, got.UID, wantUID, got.Error)
+		}
+		if other, dup := seenUIDs[got.UID]; dup {
+			t.Errorf("actor %q and %q both report uid %q — actors are not distinct", id, other, got.UID)
+		}
+		seenUIDs[got.UID] = id
 	}
+
+	// Full suspend/resume cycle of one actor (see the doc comment): the whoami
+	// calls above deliberately seeded the guest state a suspend records — the
+	// held fd from probe startup plus the freshly indexed file inodes — and the
+	// resume regenerates every file underneath that state.
+	id := ids[0]
+	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("SuspendActor %q: %v", id, err)
+	}
+	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("ResumeActor %q (after suspend): %v", id, err)
+	}
+	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	got := whoami(t, ctx, rc, id)
+	if got.File != id {
+		t.Errorf("after suspend/resume: /run/ate/actor-id = %q, want %q (probe read error: %q)", got.File, id, got.Error)
+	}
+	if got.Held != id {
+		t.Errorf("after suspend/resume: id via startup-held fd = %q, want %q (probe read error: %q)", got.Held, id, got.Error)
+	}
+	if got.Atespace != probeNamespace {
+		t.Errorf("after suspend/resume: /run/ate/atespace = %q, want %q (probe read error: %q)", got.Atespace, probeNamespace, got.Error)
+	}
+	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
+		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
+	}
+}
+
+// seenUIDFor returns the UID recorded for actor id in the first phase of the
+// test, so the post-resume assertion checks against the same authoritative
+// value rather than a fresh lookup that could mask a UID change.
+func seenUIDFor(t *testing.T, seenUIDs map[string]string, id string) string {
+	t.Helper()
+	for uid, actor := range seenUIDs {
+		if actor == id {
+			return uid
+		}
+	}
+	t.Fatalf("no UID recorded for actor %q", id)
+	return ""
+}
+
+func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapipb.ActorState) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
+		})
+		if err == nil && resp.GetStatus().GetState() == want {
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
+	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, want)
 }
 
 func deployProbe(t *testing.T, bucket string) {
@@ -98,17 +202,9 @@ func deployProbe(t *testing.T, bucket string) {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
 
-	// Render the manifest template to a file so both apply and delete can
-	// consume it without any shell involved.
-	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/probe/probe.yaml.tmpl"))
-	if err != nil {
-		t.Fatalf("reading probe manifest template: %v", err)
-	}
-	manifest := filepath.Join(t.TempDir(), "probe.yaml")
-	rendered := strings.ReplaceAll(string(tmpl), "${BUCKET_NAME}", bucket)
-	if err := os.WriteFile(manifest, []byte(rendered), 0o644); err != nil {
-		t.Fatalf("writing rendered probe manifest: %v", err)
-	}
+	// One manifest, rendered for the sandbox class under test, so both apply and
+	// delete consume the same file without any shell involved.
+	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe.yaml.tmpl", bucket)
 
 	// Build/push the probe image and apply the manifest through the repo's
 	// pinned ko (hack/run-tool.sh ko); CI does not install ko on PATH, and every
@@ -140,7 +236,7 @@ func deployProbe(t *testing.T, bucket string) {
 
 func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) string {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Minute)
+	deadline := time.Now().Add(e2e.TemplateReadyTimeout(t))
 	for time.Now().Before(deadline) {
 		at, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(probeNamespace).Get(ctx, probeTemplate, metav1.GetOptions{})
 		if err == nil {
@@ -162,6 +258,13 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	t.Helper()
 	// CreateActor requires the atespace to exist first.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: probeNamespace}}})
+	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
+	// The actor record lives in the ateapi store and outlives the fixture
+	// namespace, so a failed prior run can leak it and wedge every rerun on
+	// AlreadyExists. Best-effort clear it before creating (DeleteActor
+	// requires SUSPENDED or CRASHED, hence the suspend first).
+	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
 		ActorTemplateNamespace: probeNamespace,
@@ -170,9 +273,13 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	t.Cleanup(func() {
-		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}})
+		// Suspend is best-effort: the actor may already be suspended, or may
+		// never have resumed. A failed delete is only logged — the pre-create
+		// clear above keeps the next run working regardless.
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
+			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
+		}
 	})
 
 	// Resume from the golden snapshot (the restore path, not --boot).

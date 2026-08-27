@@ -27,8 +27,30 @@ metadata:
   labels:
     workload: counter
 spec:
-  replicas: 5
+  # Sized to what a small node (a single kind node in CI) can actually place,
+  # with one worker to spare: the only suites that run actors on this pool are
+  # networking and metrics, one actor each, and they can run concurrently. A
+  # pool that cannot place every replica is worse than a smaller one -- the
+  # deploy blocks on a rollout that never completes.
+  replicas: 3
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    # Per-worker resources: these size the worker POD and advertise its
+    # scheduling capacity (the per-actor ceiling). The sandbox itself is sized by
+    # the ActorTemplate's spec.resources below, not by these (see internal/sizing).
+    #
+    # Capacity comes from the limits (workerCapacity reads limits only), while the
+    # kube-scheduler packs nodes by the requests — so the CPU request is set well
+    # below the limit to keep the pool placeable alongside the rest of the install
+    # without changing what an actor is allowed to use. Memory is not
+    # compressible, so its request matches the limit.
+    resources:
+      limits:
+        cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 1Gi
 
 ---
 
@@ -43,6 +65,11 @@ spec:
     image: ko://github.com/agent-substrate/substrate/demos/counter
     command:
     - /ko-app/counter
+    # Exercises atenet-router's arbitrary-port ingress support: a second
+    # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
+    # from the primary port 80 every other assertion in this demo uses.
+    - --extra-port=9090
+    - --tcp-port=9091
 ${VALIDATE_EXISTING_FILE_PATH_ARG}
     readyz:
       httpGet:
@@ -52,6 +79,13 @@ ${VALIDATE_EXISTING_FILE_PATH_ARG}
     - name: data
       mountPath: /home/counter
 ${EXTERNAL_VOLUME_MOUNTS}
+  # Sandbox size: an actor occupies its whole worker, so size it at (or below)
+  # the pool's per-worker capacity above. ateom writes these to the OCI spec
+  # (cgroup CPU quota + memory limit) — see internal/sizing.
+  resources:
+    limits:
+      cpu: "1"
+      memory: 512Mi
   workerSelector:
     matchLabels:
       workload: counter

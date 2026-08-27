@@ -116,7 +116,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 
 		status := "FREE"
 		assignedActor := "<none>"
-		if wass := w.GetAssignment(); wass != nil && wass.GetActor() != nil {
+		if wass := w.GetStatus().GetAssignment(); wass != nil && wass.GetActor() != nil {
 			status = "ASSIGNED"
 			if tpl := wass.GetActorTemplate(); tpl != nil && tpl.GetNamespace() != "" {
 				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
@@ -195,7 +195,7 @@ func extractContainerUsage(pm metricsv1beta1.PodMetrics) (string, string) {
 
 func runTopWorkers(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 	}

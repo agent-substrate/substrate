@@ -18,8 +18,35 @@ set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
+KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
-reg_port="5001"
+reg_port="${KIND_REGISTRY_PORT:-5001}"
+
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    -h|--help)
+      echo "Usage: $0"
+      echo "Creates the kind cluster '${KIND_CLUSTER_NAME}' and a local registry container on port ${reg_port}."
+      echo
+      echo "Configured through the environment:"
+      echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
+      echo "  IP_FAMILY          Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      exit 0
+      ;;
+  esac
+fi
+
+# Only ipFamily is set; kind's per-family podSubnet/serviceSubnet defaults are
+# already what we want.
+IP_FAMILY="${IP_FAMILY:-ipv4}"
+case "${IP_FAMILY}" in
+  ipv4|ipv6|dual)
+    ;;
+  *)
+    echo "error: IP_FAMILY must be one of ipv4, ipv6, dual (got '${IP_FAMILY}')" >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "${ROOT}/bin"
 
@@ -57,7 +84,7 @@ else
   echo "/dev/kvm not available: micro-VM support disabled (gVisor still works)."
 fi
 
-echo "Creating kind configuration for cluster '${KIND_CLUSTER_NAME}'..."
+echo "Creating kind configuration for cluster '${KIND_CLUSTER_NAME}' (ipFamily=${IP_FAMILY})..."
 cat <<EOF > "${ROOT}/bin/kind-config.yaml"
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -83,18 +110,64 @@ featureGates:
   PodCertificateRequest: true
 runtimeConfig:
   "certificates.k8s.io/v1beta1": "true"
+networking:
+  ipFamily: ${IP_FAMILY}
 EOF
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}" || true
 
+# kind reuses an existing "kind" network as-is and deleting the cluster does not
+# drop it, so a v4-only one (older kind, or a daemon with IPv6 off) leaves nodes
+# without a v6 address — surfacing much later as pods stuck at ContainerCreating.
+if [[ "${IP_FAMILY}" != "ipv4" &&
+      "$(docker network inspect kind --format '{{.EnableIPv6}}' 2>/dev/null || echo absent)" == "false" ]]; then
+  echo "The 'kind' Docker network exists without IPv6; recreating it..."
+  docker network disconnect kind "${reg_name}" 2>/dev/null || true
+  if ! docker network rm kind >/dev/null; then
+    echo "error: could not remove the 'kind' Docker network. Something else is still" >&2
+    echo "       attached to it; disconnect it and re-run:" >&2
+    echo "         docker network inspect kind --format '{{json .Containers}}'" >&2
+    exit 1
+  fi
+fi
+
 echo "Creating kind cluster '${KIND_CLUSTER_NAME}'..."
 "${ROOT}"/hack/kind.sh create cluster --name "${KIND_CLUSTER_NAME}" --config "${ROOT}/bin/kind-config.yaml"
 
-# 2.5 Enable Proxy ARP on kind nodes for gVisor loopback pod-to-pod networking
-echo "Enabling Proxy ARP on kind nodes..."
+# A daemon with IPv6 off hands kind a v4-only network whatever it asked for.
+if [[ "${IP_FAMILY}" != "ipv4" &&
+      "$(docker network inspect kind --format '{{.EnableIPv6}}')" != "true" ]]; then
+  echo "error: the 'kind' Docker network has no IPv6, so the nodes have no v6 address." >&2
+  echo "       Enable IPv6 in the Docker daemon and re-run. On Linux, add to" >&2
+  echo "       /etc/docker/daemon.json and restart dockerd:" >&2
+  echo '         {"ipv6": true, "ip6tables": true}' >&2
+  exit 1
+fi
+
+# For ipv6 kind writes a kubeconfig pointing at [::1], the address it published
+# the apiserver on, which only works for a client on the Docker host itself: a
+# VM-hosted daemon (Lima on macOS) forwards the port to the *v4* loopback, so
+# every kubectl below fails at connect. localhost is a SAN on the apiserver
+# cert and lets the client pick a family that works from either side.
+if [[ "${IP_FAMILY}" == "ipv6" ]]; then
+  server="$(kubectl config view \
+    -o jsonpath="{.clusters[?(@.name==\"${KUBECTL_CONTEXT}\")].cluster.server}")"
+  if [[ "${server}" == "https://[::1]:"* ]]; then
+    echo "Repointing the kubeconfig for '${KUBECTL_CONTEXT}' at localhost..."
+    kubectl config set-cluster "${KUBECTL_CONTEXT}" \
+      --server="https://localhost:${server##*:}" >/dev/null
+  fi
+fi
+
+# 2.5 Enable Proxy ARP/NDP on kind nodes for gVisor loopback pod-to-pod networking
+echo "Enabling Proxy ARP/NDP on kind nodes..."
 for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
+  # Unconditional: nodes of either family carry the other's addresses on the
+  # Docker bridge, and a proxy sysctl is inert without proxy entries. -e skips
+  # proxy_ndp on a kernel built without IPv6 instead of failing an ipv4 run.
   docker exec "${node}" sysctl net.ipv4.conf.all.proxy_arp=1
+  docker exec "${node}" sysctl -e net.ipv6.conf.all.proxy_ndp=1
 done
 
 # 2.6 When KVM is available: make /dev/kvm usable inside the node and label
@@ -103,7 +176,7 @@ if [ "${HAS_KVM}" = "1" ]; then
   echo "Preparing kind nodes for micro-VM (kata + cloud-hypervisor) runtime..."
   for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
     docker exec "${node}" chmod 666 /dev/kvm
-    kubectl label node "${node}" ate.dev/sandboxClass=microvm --overwrite
+    kubectl --context="${KUBECTL_CONTEXT}" label node "${node}" ate.dev/sandboxClass=microvm --overwrite
   done
 fi
 
@@ -125,7 +198,7 @@ fi
 
 # 5. Document the local registry in kube-public ConfigMap
 echo "Documenting local registry in cluster..."
-cat <<EOF | kubectl apply -f -
+cat <<EOF | kubectl --context="${KUBECTL_CONTEXT}" apply -f -
 apiVersion: v1
 kind: ConfigMap
 metadata:

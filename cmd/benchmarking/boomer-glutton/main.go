@@ -25,12 +25,14 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"
 )
 
@@ -40,13 +42,15 @@ func main() {
 		routerURL     = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
 		atespace      = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr      = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		configJSON    = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds). Unset fields keep their built-in defaults.")
+		configJSON    = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds, durdir_file_size_bytes, resume_mode, durdir_read_mode, durdir_template). Unset fields keep their built-in defaults.")
 		masterWebPort = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message and fail fatally on error. {master-host} comes from boomer's existing --master-host flag.")
-		useTokenAuth  = flag.Bool("use-token-auth", false, "Use Kubernetes ServiceAccount token for ateapi auth instead of client certificate.")
+		userClass     = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
 	flag.Parse()
+
+	class := strings.ToLower(*userClass)
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -69,7 +73,7 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	conn, apiStub, err := glutton.DialControl(*apiEndpoint, *useTokenAuth)
+	conn, apiStub, err := glutton.DialControl(*apiEndpoint)
 	if err != nil {
 		slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
 		os.Exit(1)
@@ -95,14 +99,27 @@ func main() {
 		slog.Info("dynconfig fetch enabled", slog.String("url", configURL))
 	}
 
-	cfg := &glutton.Config{
+	cfg := &userclass.Config{
 		APIStub:    apiStub,
 		HTTPClient: httpClient,
 		RouterURL:  *routerURL,
 		Atespace:   *atespace,
 		Dyn:        dyn,
 	}
-	taskFn, shutdownFn := glutton.Register(cfg)
+
+	entry, ok := userclass.Lookup(class)
+	if !ok {
+		slog.Error("fatal: unknown --user-class value",
+			slog.String("user_class", *userClass),
+			slog.String("known", strings.Join(userclass.Names(), ",")))
+		os.Exit(1)
+	}
+	taskFn, shutdownFn := entry.Init(cfg)
+
+	slog.Info("registered boomer task",
+		slog.String("user_class", entry.UserClass),
+		slog.String("user_class_flag", class),
+	)
 
 	metricsCtx, metricsCancel := context.WithCancel(context.Background())
 	defer metricsCancel()
@@ -115,7 +132,7 @@ func main() {
 	// Blocks until SIGINT/SIGTERM or master quit. Boomer registers its own
 	// signal handlers; we do cleanup after it returns.
 	boomer.Run(&boomer.Task{
-		Name:   "GluttonUser",
+		Name:   entry.UserClass,
 		Weight: 1,
 		Fn:     taskFn,
 	})

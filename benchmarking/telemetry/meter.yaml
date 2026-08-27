@@ -1,0 +1,206 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# telemetry-meter: an OTLP sink that counts the telemetry that substrate sends,
+# for each service that sends it.
+#
+# See benchmarking/telemetry/README.md. Send substrate to
+#   http://telemetry-meter.benchmarking.svc.cluster.local:4317
+# for the duration of a measurement, then scrape :8889 for
+#
+#   substrate_spans_total{svc="..."}       the spans from each service
+#   substrate_datapoints_total{svc="..."}  the datapoints from each service
+#
+# Scrape :8888 for the otelcol_* receiver counters of the meter.
+#
+# The meter is a tee. It counts the telemetry and then sends it on to the
+# managed collector, thus the resource values of the managed collector stay
+# correct during a measurement. It is not a replacement for that collector.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmarking
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telemetry-meter-config
+  namespace: benchmarking
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      # The count connector sends deltas. Each batch has a new start timestamp,
+      # and the Prometheus exporter reads a new start timestamp as a reset of
+      # the counter. Without deltatocumulative the counters do not accumulate,
+      # and each scrape shows only the last batch.
+      deltatocumulative:
+
+      # The count connector reads the attributes of a span or a datapoint. It
+      # does not read the attributes of the resource, thus service.name is not
+      # visible to it. Copy service.name to a datapoint attribute. Without this
+      # copy the connector has nothing to group by, and it counts all the
+      # services into one bucket.
+      #
+      # This is not a correction for the scrape configuration. honor_labels
+      # changes what Prometheus does with the labels of a scrape, and a scrape
+      # occurs after the connector counts. Thus honor_labels cannot give the
+      # connector an attribute to count by, and it is not an alternative to
+      # this transform.
+      #
+      # The name is svc, and not job, because Prometheus sets job to the name
+      # of the scrape job.
+      transform/svc:
+        error_mode: ignore
+        trace_statements:
+          - context: span
+            statements:
+              - set(attributes["svc"], resource.attributes["service.name"])
+        metric_statements:
+          - context: datapoint
+            statements:
+              - set(attributes["svc"], resource.attributes["service.name"])
+
+    connectors:
+      count:
+        spans:
+          substrate_spans:
+            description: Spans received, by emitting service.
+            attributes:
+              # Without a default value, the connector removes each item that
+              # has no service.name from the count. The item does not show as
+              # unknown, and the totals are too low with no error message.
+              - key: svc
+                default_value: unknown
+        datapoints:
+          substrate_datapoints:
+            description: Metric datapoints received, by emitting service.
+            attributes:
+              - key: svc
+                default_value: unknown
+
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:8889
+
+      # The meter is a tee, not a terminal sink. It counts the telemetry and
+      # then sends it on to the collector that the cluster uses. Thus the
+      # managed collector keeps the load of the run, and its CPU, memory, and
+      # replica count stay correct while you measure the volume.
+      #
+      # To make the meter terminal, delete the two forward pipelines below.
+      # The counts continue to work. A terminal meter keeps the telemetry of a
+      # long run out of Cloud Monitoring, but it makes the resource values of
+      # the managed collector those of an idle collector.
+      otlp/managed:
+        endpoint: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        # The count pipelines and the forward pipelines read the same receiver.
+        # The collector sends a copy of the data to each pipeline, and it clones
+        # the data because transform/svc changes it. Thus the svc attribute that
+        # the count needs does not go to the managed collector.
+        traces/count:
+          receivers: [otlp]
+          processors: [transform/svc]
+          exporters: [count]
+        traces/forward:
+          receivers: [otlp]
+          exporters: [otlp/managed]
+        metrics/count:
+          receivers: [otlp]
+          processors: [transform/svc]
+          exporters: [count]
+        metrics/forward:
+          receivers: [otlp]
+          exporters: [otlp/managed]
+        metrics/counts:
+          receivers: [count]
+          processors: [deltatocumulative]
+          exporters: [prometheus]
+      telemetry:
+        metrics:
+          level: detailed
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-meter
+  namespace: benchmarking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: telemetry-meter
+  template:
+    metadata:
+      labels:
+        app: telemetry-meter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8889"
+    spec:
+      containers:
+      - name: collector
+        image: otel/opentelemetry-collector-contrib:0.152.0
+        args: ["--config=/conf/config.yaml"]
+        ports:
+        - {name: otlp-grpc, containerPort: 4317}
+        - {name: otlp-http, containerPort: 4318}
+        - {name: self, containerPort: 8888}
+        - {name: counts, containerPort: 8889}
+        resources:
+          requests:
+            cpu: "1"
+            memory: 1Gi
+          limits:
+            memory: 4Gi
+        volumeMounts:
+        - name: config
+          mountPath: /conf
+      volumes:
+      - name: config
+        configMap:
+          name: telemetry-meter-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-meter
+  namespace: benchmarking
+spec:
+  selector:
+    app: telemetry-meter
+  ports:
+  - {name: otlp-grpc, port: 4317, targetPort: 4317}
+  - {name: otlp-http, port: 4318, targetPort: 4318}
+  - {name: self, port: 8888, targetPort: 8888}
+  - {name: counts, port: 8889, targetPort: 8889}

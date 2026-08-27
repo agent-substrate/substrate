@@ -131,6 +131,15 @@ func mountOverlay(mountpoint string, lowers []string, upper, work string) error 
 	if err := set("workdir", work); err != nil {
 		return err
 	}
+	// volatile: skip overlayfs's syncs on this upper, including the one it does
+	// at umount, which measured ~450ms per actor on GKE. The bundle upper holds
+	// only copy-ups made during one activation and atelet wipes it between them
+	// (RemoveAllWritable), so nothing here is expected to outlive a crash. Note
+	// the merged rootfs overlay stacked on top of this one must be volatile too:
+	// with only one of them volatile the sync simply moves to the other.
+	if err := unix.FsconfigSetFlag(fsfd, "volatile"); err != nil {
+		return fmt.Errorf("while setting overlay volatile: %w%s", err, fsContextLog(fsfd))
+	}
 
 	if err := unix.FsconfigCreate(fsfd); err != nil {
 		return fmt.Errorf("while creating overlay superblock: %w%s", err, fsContextLog(fsfd))

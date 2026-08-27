@@ -65,25 +65,17 @@ func (m Mode) ServesIngress() bool { return m != ModeEgress }
 // ServesEgress reports whether this mode answers egress CONNECTs.
 func (m Mode) ServesEgress() bool { return m != ModeIngress }
 
-// authConfig holds the router's client-auth settings for dialing ateapi.
-// AteapiCAFile always verifies ateapi's serving cert (the servicedns trust
-// bundle in-cluster). By default the router presents AteapiClientCertPath
-// (the podidentity credential bundle) as its client cert; with
-// AteapiUseTokenAuth it sends a Bearer token from AteapiTokenFile instead and
-// the cert path is ignored.
+// authConfig holds the router's mTLS settings for dialing ateapi.
 type authConfig struct {
-	AteapiUseTokenAuth   bool
 	AteapiCAFile         string
 	AteapiClientCertPath string
 	AteapiServerName     string
-	AteapiTokenFile      string
 }
 
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
 	// Mode restricts the instance to one traffic direction. Empty means ModeAll.
 	Mode           Mode
-	Standalone     bool
 	AtenetRouter   string
 	Namespace      string
 	Kubeconfig     string
@@ -92,12 +84,16 @@ type routerConfig struct {
 	XdsPort        int
 	ExtprocPort    int
 	ExtprocAddr    string
-	EnvoyImage     string
 	TemplatesFile  string
 	StatusPort     int
 	HealthInterval time.Duration
 	HttpsPort      int
-	EnvoyCertPath  string
+	// ConnectPlainTextPort and ConnectTLSPort are the plaintext and TLS
+	// listener ports for CONNECT-tunneled traffic. Non-positive disables the
+	// corresponding listener.
+	ConnectPlainTextPort int
+	ConnectTLSPort       int
+	EnvoyCertPath        string
 
 	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
 	// (cert+key) presented as the client cert when dialing the actor's atunnel

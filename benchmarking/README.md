@@ -2,6 +2,12 @@
 
 This is the nascent suite for benchmarking Substrate's performance at scale.
 
+The suite also measures the telemetry volume and the capacity of the OTel
+collector: how much trace data and metric data substrate and its actors send,
+and if the collector can accept it. To make a measurement, read
+[telemetry/README.md](telemetry/README.md). For the prerequisites and the
+scenario ladder, read [observability.md](observability.md).
+
 ## Deploy benchmarks
 
 > [!IMPORTANT]
@@ -55,6 +61,53 @@ that the counter demo be installed.
 You can also configure things like the number of users, how quickly those users
 are spawned, the frequency with which requests are made and whether or not tracing is
 enabled.
+
+User classes implemented in boomer rather than Python are selected at deploy
+time — the stack runs one per deployment:
+
+```bash
+./benchmarking/locust/deploy.sh --deploy --user-class durdir
+```
+
+### Headless (automation only)
+
+`runner.py` runs a test without the web UI, writing CSVs, logs and traces to
+`--dest`. The nightly automation submits it as a Job on the test cluster; it is
+not a local entry point. See [automation/README.md](automation/README.md).
+
+```bash
+python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
+```
+
+Test-specific flags are appended to the same command; see the sections below.
+
+### DurDir Benchmark
+
+The DurDir benchmark evaluates actor suspend/resume performance, disk persistence overhead,
+and state restoration latency when a durable directory is attached to the actor.
+
+#### DurDir Configuration Knobs
+
+* `--durdir-file-size-bytes`: Size in bytes of the data file (default `8388608` = 8 MiB).
+* `--resume-mode`: Resume trigger mode:
+  * `explicit` (default): Client invokes the `ResumeActor` RPC before sending traffic.
+  * `implicit`: Client sends traffic through the router without an explicit wake RPC, testing traffic-triggered resume.
+* `--durdir-read-mode`: Verification read mode:
+  * `data` (default): Server returns full payload bytes for client-side SHA-256 verification.
+  * `digest`: Server hashes the file and returns size and digest, reducing network transfer.
+* `--durdir-template`: ActorTemplate name:
+  * `glutton-durdir-data` (default): Attaches a durable data directory without memory snapshot restore.
+  * `glutton-durdir-full`: Attaches a durable data directory and performs a full memory snapshot restore.
+
+#### DurDir Reported Metrics
+
+* `DurDirWrite`: Initial truncate-write creating the data file.
+* `DurDirServeInitial`: First read immediately following file creation.
+* `SuspendActor`: Actor suspend latency (snapshot creation + persistence upload).
+* `ResumeActor`: Actor resume latency.
+* `DurDirServeAfterResume`: First read after resume (measures page faults / lazy load overhead on restored volume).
+* `DurDirServeWarm`: Subsequent read within the same active cycle (cached state baseline).
+* `DurDirOverwrite`: In-place file overwrite with checksum verification.
 
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.

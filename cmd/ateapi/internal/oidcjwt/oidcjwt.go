@@ -1,0 +1,615 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package oidcjwt verifies JWTs using OIDC discovery.
+package oidcjwt
+
+import (
+	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"hash"
+	"io"
+	"log/slog"
+	"math/big"
+	"net/http"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+)
+
+// KeyAndID wraps a crypto.PublicKey and its JWK key ID.
+type KeyAndID struct {
+	KeyID     string
+	PublicKey crypto.PublicKey
+}
+
+type parseHeader struct {
+	Type      string `json:"typ,omitempty"`
+	Algorithm string `json:"alg,omitempty"`
+	KeyID     string `json:"kid,omitempty"`
+}
+
+type parseClaims struct {
+	// Claims from RFC7519
+	Issuer     string          `json:"iss,omitempty"`
+	Subject    string          `json:"sub,omitempty"`
+	Audiences  json.RawMessage `json:"aud,omitempty"`
+	Expiration float64         `json:"exp,omitempty"`
+	NotBefore  float64         `json:"nbf,omitempty"`
+	IssuedAt   float64         `json:"iat,omitempty"`
+	JTI        string          `json:"jti,omitempty"`
+
+	// Kubernetes bound token claims.
+	BoundClaims parseBoundClaims `json:"kubernetes.io,omitempty"`
+
+	// Kubernetes legacy token claims.
+	LegacyNamespace          string `json:"kubernetes.io/serviceaccount/namespace,omitempty"`
+	LegacySecretName         string `json:"kubernetes.io/serviceaccount/secret.name,omitempty"`
+	LegacyServiceAccountName string `json:"kubernetes.io/serviceaccount/service-account.name,omitempty"`
+	LegacyServiceAccountUID  string `json:"kubernetes.io/serviceaccount/service-account.uid,omitempty"`
+}
+
+type parseBoundClaims struct {
+	Namespace      string                    `json:"namespace,omitempty"`
+	Pod            parseBoundObjectReference `json:"pod,omitempty"`
+	ServiceAccount parseBoundObjectReference `json:"serviceaccount,omitempty"`
+	Secret         parseBoundObjectReference `json:"secret,omitempty"`
+	Node           parseBoundObjectReference `json:"node,omitempty"`
+	WarnAfter      float64                   `json:"warnafter,omitempty"`
+}
+
+type parseBoundObjectReference struct {
+	Name string `json:"name,omitempty"`
+	UID  string `json:"uid,omitempty"`
+}
+
+// Claims contains standard JWT claims and, when present, Kubernetes
+// ServiceAccount claims.
+type Claims struct {
+	// Claims from RFC7519
+	Issuer     string
+	Subject    string
+	Audiences  []string
+	Expiration time.Time
+	NotBefore  time.Time
+	IssuedAt   time.Time
+	JTI        string
+
+	KubernetesClaims
+}
+
+// KubernetesClaims contains claims added to Kubernetes ServiceAccount tokens.
+type KubernetesClaims struct {
+	Namespace string
+
+	ServiceAccountName string
+	ServiceAccountUID  string
+	PodName            string
+	PodUID             string
+	SecretName         string
+	SecretUID          string
+	NodeName           string
+	NodeUID            string
+
+	WarnAfter time.Time
+}
+
+var (
+	permittedSkew            = 5 * time.Minute
+	jwksRefreshInterval      = 5 * time.Minute
+	jwksRefreshRetryInterval = time.Minute
+	defaultHTTPClient        = &http.Client{Timeout: 10 * time.Second}
+)
+
+// Verifier verifies JWTs from one trusted OIDC issuer and caches its signing
+// keys. Keys are refreshed periodically and, at a bounded rate, when a token
+// names an unknown key ID.
+type Verifier struct {
+	issuer     string
+	audiences  []string
+	httpClient *http.Client
+
+	mu                    sync.RWMutex
+	keys                  []*KeyAndID
+	lastRefresh           time.Time
+	lastFailedRefresh     time.Time
+	lastUnknownKeyRefresh time.Time
+}
+
+// NewVerifier returns a verifier for issuer. A token is accepted when at least
+// one of its audiences matches audiences.
+func NewVerifier(issuer string, audiences []string, httpClient *http.Client) *Verifier {
+	return &Verifier{issuer: issuer, audiences: slices.Clone(audiences), httpClient: httpClient}
+}
+
+// Verify verifies and extracts claims from a JWT.
+func (v *Verifier) Verify(ctx context.Context, jwt string, now time.Time) (*Claims, error) {
+	segments := strings.Split(jwt, ".")
+	if len(segments) != 3 {
+		return nil, fmt.Errorf("malformed JWT")
+	}
+	headerB64String := segments[0]
+	payloadB64String := segments[1]
+	signatureB64String := segments[2]
+
+	headerBytes, err := base64.RawURLEncoding.DecodeString(headerB64String)
+	if err != nil {
+		return nil, fmt.Errorf("while base64 decoding header: %w", err)
+	}
+
+	signatureBytes, err := base64.RawURLEncoding.DecodeString(signatureB64String)
+	if err != nil {
+		return nil, fmt.Errorf("while base64 decoding signature: %w", err)
+	}
+
+	var header parseHeader
+	if err := json.Unmarshal([]byte(headerBytes), &header); err != nil {
+		return nil, fmt.Errorf("while unmarshaling header: %w", err)
+	}
+
+	// K8s JWTs don't set the `typ` header field. They might in the future, so we should tolerate the
+	// spec-recommended value.
+	switch header.Type {
+	case "", "JWT": // OK
+	default:
+		return nil, fmt.Errorf("unexpected value in type header")
+	}
+
+	// Parse the payload. The payload is not verified at this point, so the only safe thing to do with
+	// it is extract the issuer, check the issuer, and fetch keys from the issuer.
+	//
+	// Don't consider any other data in the payload until the call to verifySignature() below.
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(payloadB64String)
+	if err != nil {
+		return nil, fmt.Errorf("while base64-decoding payload: %w", err)
+	}
+	var rawClaims parseClaims
+	if err := json.Unmarshal(payloadBytes, &rawClaims); err != nil {
+		return nil, fmt.Errorf("while unmarshaling payload: %w", err)
+	}
+
+	if rawClaims.Issuer != v.issuer {
+		return nil, fmt.Errorf("unexpected issuer %q", rawClaims.Issuer)
+	}
+
+	// Find the key we should use for verification based on the key ID in the JWT header.
+	if header.KeyID == "" {
+		return nil, fmt.Errorf("key ID is required")
+	}
+	selectedKey, err := v.key(ctx, header.KeyID, now)
+	if err != nil {
+		return nil, err
+	}
+
+	// Warning: don't ever refer to the payload data (except "iss") above this point. We need to
+	// ensure that we _never_ consider the contents of the payload when deciding how to perform
+	// signature verification.
+	if err := verifySignature(header.Algorithm, selectedKey, []byte(headerB64String+"."+payloadB64String), signatureBytes); err != nil {
+		return nil, fmt.Errorf("while verifying JWT signature: %w", err)
+	}
+
+	// It is now safe to consider arbitrary data from the payload.
+	//
+	// The signature proves the payload's authenticity, but the audience and time
+	// bindings still need validation before the token is accepted.
+
+	// Because the JWT spec authors wanted to be fancy, we need to try to deserialize
+	// rawClaims.Audiences both as a single string and as a slice of strings.
+	var singleAudience string
+	var audiences []string
+	if err := json.Unmarshal(rawClaims.Audiences, &singleAudience); err == nil { // err EQUALS nil
+		audiences = []string{singleAudience}
+	} else if err := json.Unmarshal(rawClaims.Audiences, &audiences); err == nil { // err EQUALS nil
+	} else {
+		return nil, fmt.Errorf("unable to parse audiences")
+	}
+
+	// Check that at least one configured audience is present in the token.
+	if !slices.ContainsFunc(v.audiences, func(expected string) bool { return slices.Contains(audiences, expected) }) {
+		return nil, fmt.Errorf("token is not issued for expected audience")
+	}
+	if rawClaims.Subject == "" {
+		return nil, fmt.Errorf("token subject is required")
+	}
+
+	expiration := time.Unix(int64(rawClaims.Expiration), 0)
+	notBefore := time.Unix(int64(rawClaims.NotBefore), 0)
+	issuedAt := time.Unix(int64(rawClaims.IssuedAt), 0)
+
+	if expiration.Before(now.Add(-permittedSkew)) {
+		return nil, fmt.Errorf("jwt has expired")
+	}
+
+	if notBefore.After(now.Add(permittedSkew)) {
+		return nil, fmt.Errorf("jwt is not valid yet")
+	}
+
+	if issuedAt.After(now.Add(permittedSkew)) {
+		return nil, fmt.Errorf("jwt claims to have been issued in the future")
+	}
+
+	return &Claims{
+		Issuer:     rawClaims.Issuer,
+		Audiences:  audiences,
+		Subject:    rawClaims.Subject,
+		Expiration: expiration,
+		NotBefore:  notBefore,
+		IssuedAt:   issuedAt,
+		JTI:        rawClaims.JTI,
+		KubernetesClaims: KubernetesClaims{
+			Namespace:          rawClaims.BoundClaims.Namespace,
+			ServiceAccountName: rawClaims.BoundClaims.ServiceAccount.Name,
+			ServiceAccountUID:  rawClaims.BoundClaims.ServiceAccount.UID,
+			PodName:            rawClaims.BoundClaims.Pod.Name,
+			PodUID:             rawClaims.BoundClaims.Pod.UID,
+			SecretName:         rawClaims.BoundClaims.Secret.Name,
+			SecretUID:          rawClaims.BoundClaims.Secret.UID,
+			NodeName:           rawClaims.BoundClaims.Node.Name,
+			NodeUID:            rawClaims.BoundClaims.Node.UID,
+			WarnAfter:          time.Unix(int64(rawClaims.BoundClaims.WarnAfter), 0),
+		},
+	}, nil
+}
+
+func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto.PublicKey, error) {
+	v.mu.RLock()
+	key := findKey(v.keys, keyID)
+	hasKeys := len(v.keys) > 0
+	lastRefresh := v.lastRefresh
+	lastFailedRefresh := v.lastFailedRefresh
+	lastUnknownKeyRefresh := v.lastUnknownKeyRefresh
+	v.mu.RUnlock()
+	if key != nil && now.Sub(lastRefresh) < jwksRefreshInterval {
+		return key.PublicKey, nil
+	}
+	if !lastFailedRefresh.IsZero() && now.Sub(lastFailedRefresh) < jwksRefreshRetryInterval {
+		if key != nil {
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
+	}
+	if key == nil && hasKeys && !lastUnknownKeyRefresh.IsZero() && now.Sub(lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
+		return nil, fmt.Errorf("unknown key ID %q", keyID)
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	key = findKey(v.keys, keyID)
+	if key != nil && now.Sub(v.lastRefresh) < jwksRefreshInterval {
+		return key.PublicKey, nil
+	}
+	if !v.lastFailedRefresh.IsZero() && now.Sub(v.lastFailedRefresh) < jwksRefreshRetryInterval {
+		if key != nil {
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
+	}
+	if key == nil && len(v.keys) > 0 && !v.lastUnknownKeyRefresh.IsZero() && now.Sub(v.lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
+		return nil, fmt.Errorf("unknown key ID %q", keyID)
+	}
+	if key == nil && len(v.keys) > 0 {
+		v.lastUnknownKeyRefresh = now
+	}
+	keys, err := discoverKeysForIssuer(ctx, v.httpClient, v.issuer)
+	if err != nil {
+		v.lastFailedRefresh = now
+		if key != nil {
+			slog.WarnContext(ctx, "Could not refresh OIDC signing keys; using cached key", slog.String("issuer", v.issuer), slog.Any("err", err))
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
+	}
+	v.keys = keys
+	v.lastRefresh = now
+	v.lastFailedRefresh = time.Time{}
+	key = findKey(keys, keyID)
+	if key == nil {
+		return nil, fmt.Errorf("unknown key ID %q", keyID)
+	}
+	return key.PublicKey, nil
+}
+
+func findKey(keys []*KeyAndID, keyID string) *KeyAndID {
+	i := slices.IndexFunc(keys, func(k *KeyAndID) bool { return k.KeyID == keyID })
+	if i == -1 {
+		return nil
+	}
+	return keys[i]
+}
+
+func verifySignature(algorithm string, selectedKey crypto.PublicKey, toBeSignedBytes, signatureBytes []byte) error {
+	switch algorithm {
+	case "RS256":
+		rsaKey, ok := selectedKey.(*rsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("requested key ID is not an RSA key")
+		}
+		toBeSignedDigest := hashBytes(crypto.SHA256.New(), toBeSignedBytes)
+		if err := rsa.VerifyPKCS1v15(rsaKey, crypto.SHA256, toBeSignedDigest, signatureBytes); err != nil {
+			return fmt.Errorf("while validating RSA PKCS1v15 signature: %w", err)
+		}
+	case "RS384":
+		rsaKey, ok := selectedKey.(*rsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("requested key ID is not an RSA key")
+		}
+		toBeSignedDigest := hashBytes(crypto.SHA384.New(), toBeSignedBytes)
+		if err := rsa.VerifyPKCS1v15(rsaKey, crypto.SHA384, toBeSignedDigest, signatureBytes); err != nil {
+			return fmt.Errorf("while validating RSA PKCS1v15 signature: %w", err)
+		}
+	case "RS512":
+		rsaKey, ok := selectedKey.(*rsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("requested key ID is not an RSA key")
+		}
+		toBeSignedDigest := hashBytes(crypto.SHA512.New(), toBeSignedBytes)
+		if err := rsa.VerifyPKCS1v15(rsaKey, crypto.SHA512, toBeSignedDigest, signatureBytes); err != nil {
+			return fmt.Errorf("while validating RSA PKCS1v15 signature: %w", err)
+		}
+	case "ES256":
+		ecdsaKey, ok := selectedKey.(*ecdsa.PublicKey)
+		if !ok || ecdsaKey.Curve != elliptic.P256() {
+			return fmt.Errorf("requested key ID is not an ECDSA P256 key")
+		}
+		toBeSignedDigest := hashBytes(crypto.SHA256.New(), toBeSignedBytes)
+		if len(signatureBytes) != 2*32 {
+			return fmt.Errorf("invalid ecdsa signature")
+		}
+		r := big.NewInt(0).SetBytes(signatureBytes[:32])
+		s := big.NewInt(0).SetBytes(signatureBytes[32:])
+		if !ecdsa.Verify(ecdsaKey, toBeSignedDigest, r, s) {
+			return fmt.Errorf("invalid ecdsa signature")
+		}
+	case "ES384":
+		ecdsaKey, ok := selectedKey.(*ecdsa.PublicKey)
+		if !ok || ecdsaKey.Curve != elliptic.P384() {
+			return fmt.Errorf("requested key ID is not an ECDSA P384 key")
+		}
+		toBeSignedDigest := hashBytes(crypto.SHA384.New(), toBeSignedBytes)
+		if len(signatureBytes) != 2*48 {
+			return fmt.Errorf("invalid ecdsa signature")
+		}
+		r := big.NewInt(0).SetBytes(signatureBytes[:48])
+		s := big.NewInt(0).SetBytes(signatureBytes[48:])
+		if !ecdsa.Verify(ecdsaKey, toBeSignedDigest, r, s) {
+			return fmt.Errorf("invalid ecdsa signature")
+		}
+	case "ES512":
+		ecdsaKey, ok := selectedKey.(*ecdsa.PublicKey)
+		if !ok || ecdsaKey.Curve != elliptic.P521() {
+			return fmt.Errorf("requested key ID is not an ECDSA P521 key")
+		}
+		toBeSignedDigest := hashBytes(crypto.SHA512.New(), toBeSignedBytes)
+		if len(signatureBytes) != 2*66 {
+			return fmt.Errorf("invalid ecdsa signature")
+		}
+		r := big.NewInt(0).SetBytes(signatureBytes[:66])
+		s := big.NewInt(0).SetBytes(signatureBytes[66:])
+		if !ecdsa.Verify(ecdsaKey, toBeSignedDigest, r, s) {
+			return fmt.Errorf("invalid ecdsa signature")
+		}
+	default:
+		return fmt.Errorf("unsupported algorithm %q", algorithm)
+	}
+
+	return nil
+}
+
+func hashBytes(hasher hash.Hash, bytes []byte) []byte {
+	hasher.Write(bytes)
+	hash := hasher.Sum(nil)
+	return hash[:]
+}
+
+// ellipticCurveForJWK maps a JWK "crv" value to its elliptic.Curve. Only the NIST
+// curves that verifySignature supports (ES256/ES384/ES512) are accepted.
+func ellipticCurveForJWK(crv string) (elliptic.Curve, error) {
+	switch crv {
+	case "P-256":
+		return elliptic.P256(), nil
+	case "P-384":
+		return elliptic.P384(), nil
+	case "P-521":
+		return elliptic.P521(), nil
+	default:
+		return nil, fmt.Errorf("unhandled elliptic curve %q", crv)
+	}
+}
+
+type oidcConfigT struct {
+	Issuer  string `json:"issuer"`
+	JWKSURI string `json:"jwks_uri"`
+}
+
+type jwkSetT struct {
+	Keys []jwkT `json:"keys"`
+}
+
+type jwkT struct {
+	KeyType string `json:"kty"`
+	KeyID   string `json:"kid,omitempty"`
+
+	EllipticCurve string `json:"crv,omitempty"`
+	EllipticX     string `json:"x,omitempty"`
+	EllipticY     string `json:"y,omitempty"`
+
+	RSAN string `json:"n"`
+	RSAE string `json:"e"`
+}
+
+func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer string) ([]*KeyAndID, error) {
+	var discoveryDocURL string
+	if strings.HasSuffix(issuer, "/") {
+		discoveryDocURL = issuer + ".well-known/openid-configuration"
+	} else {
+		discoveryDocURL = issuer + "/.well-known/openid-configuration"
+	}
+
+	oidcConfig, err := fetchJSON[oidcConfigT](ctx, httpClient, discoveryDocURL)
+	if err != nil {
+		return nil, fmt.Errorf("while fetching OIDC Discovery document: %w", err)
+	}
+	if oidcConfig.Issuer != issuer {
+		return nil, fmt.Errorf("discovered issuer %q does not match expected issuer %q", oidcConfig.Issuer, issuer)
+	}
+
+	slog.InfoContext(ctx, "Fetched discovery doc", slog.Any("doc", oidcConfig))
+
+	jwkSet, err := fetchJSON[jwkSetT](ctx, httpClient, oidcConfig.JWKSURI)
+	if err != nil {
+		return nil, fmt.Errorf("while fetching JWKS: %w", err)
+	}
+
+	slog.InfoContext(ctx, "Fetched JWK set", slog.Any("jwkSet", jwkSet))
+
+	var ret []*KeyAndID
+	skipped := 0
+	for _, jwk := range jwkSet.Keys {
+		key, err := parseJWK(jwk)
+		if err != nil {
+			// Skip an unusable key instead of failing the whole issuer; it's safe because
+			// keys are selected by kid and the signature is still verified, so a skipped
+			// key can't be abused. Debug, not Warn: unsupported key types are a normal
+			// issuer configuration and periodic refreshes would otherwise spam warnings.
+			slog.DebugContext(ctx, "Skipping unusable JWK from issuer",
+				slog.String("kid", jwk.KeyID), slog.String("kty", jwk.KeyType), slog.Any("err", err))
+			skipped++
+			continue
+		}
+		ret = append(ret, key)
+	}
+
+	// None usable: fail here (reasons logged above) rather than return an empty set
+	// that fails later as a vaguer "unknown key ID".
+	if len(ret) == 0 {
+		if len(jwkSet.Keys) == 0 {
+			return nil, fmt.Errorf("issuer %q published an empty JWKS", issuer)
+		}
+		return nil, fmt.Errorf("no usable keys in JWKS for issuer %q (%d skipped)", issuer, skipped)
+	}
+
+	if skipped > 0 {
+		slog.DebugContext(ctx, "Skipped unusable JWKs from issuer",
+			slog.String("issuer", issuer), slog.Int("skipped", skipped), slog.Int("usable", len(ret)))
+	}
+
+	return ret, nil
+}
+
+// parseJWK converts a single JWK into a verification key, returning an error for a key
+// the verifier cannot use (missing key ID, unsupported key type or curve, or malformed
+// parameters).
+func parseJWK(jwk jwkT) (*KeyAndID, error) {
+	if jwk.KeyID == "" {
+		return nil, fmt.Errorf("JWK has no key ID")
+	}
+	switch jwk.KeyType {
+	case "EC":
+		curve, err := ellipticCurveForJWK(jwk.EllipticCurve)
+		if err != nil {
+			return nil, err
+		}
+		if jwk.EllipticX == "" || jwk.EllipticY == "" {
+			return nil, fmt.Errorf("EC JWK is missing the x or y coordinate")
+		}
+		xBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticX)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding EC x coordinate: %w", err)
+		}
+		yBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticY)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding EC y coordinate: %w", err)
+		}
+		x := new(big.Int).SetBytes(xBytes)
+		y := new(big.Int).SetBytes(yBytes)
+		// Reject coordinates outside the field. This is a cheap sanity check; the
+		// authoritative on-curve validation happens in ecdsa.Verify, which returns
+		// false for a public key whose point is not on the curve.
+		p := curve.Params().P
+		if x.Cmp(p) >= 0 || y.Cmp(p) >= 0 {
+			return nil, fmt.Errorf("EC JWK coordinate is out of range for curve %q", jwk.EllipticCurve)
+		}
+		return &KeyAndID{
+			KeyID:     jwk.KeyID,
+			PublicKey: &ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+		}, nil
+
+	case "RSA":
+		nBytes, err := base64.RawURLEncoding.DecodeString(jwk.RSAN)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding n: %w", err)
+		}
+		n := &big.Int{}
+		n.SetBytes(nBytes)
+
+		eBytes, err := base64.RawURLEncoding.DecodeString(jwk.RSAE)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding e: %w", err)
+		}
+		e := &big.Int{}
+		e.SetBytes(eBytes)
+		if !e.IsInt64() || e.Int64() < 2 || int64(int(e.Int64())) != e.Int64() {
+			return nil, fmt.Errorf("RSA JWK exponent is outside the supported integer range")
+		}
+
+		return &KeyAndID{
+			KeyID: jwk.KeyID,
+			PublicKey: &rsa.PublicKey{
+				N: n,
+				E: int(e.Int64()),
+			},
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unhandled key type %q", jwk.KeyType)
+	}
+}
+
+func fetchJSON[T any](ctx context.Context, httpClient *http.Client, url string) (T, error) {
+	var parsedBody T
+	if httpClient == nil {
+		httpClient = defaultHTTPClient
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return parsedBody, fmt.Errorf("while creating HTTP request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return parsedBody, fmt.Errorf("while making HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return parsedBody, fmt.Errorf("non-200 response code %d", resp.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return parsedBody, fmt.Errorf("while reading response body: %w", err)
+	}
+
+	if err := json.Unmarshal(bodyBytes, &parsedBody); err != nil {
+		return parsedBody, fmt.Errorf("while parsing response body: %w", err)
+	}
+
+	return parsedBody, nil
+}

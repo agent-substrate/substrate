@@ -33,10 +33,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Ateom_RunWorkload_FullMethodName        = "/ateom.Ateom/RunWorkload"
-	Ateom_CheckpointWorkload_FullMethodName = "/ateom.Ateom/CheckpointWorkload"
-	Ateom_RestoreWorkload_FullMethodName    = "/ateom.Ateom/RestoreWorkload"
-	Ateom_GetWorkloadStats_FullMethodName   = "/ateom.Ateom/GetWorkloadStats"
+	Ateom_RunWorkload_FullMethodName            = "/ateom.Ateom/RunWorkload"
+	Ateom_CheckpointWorkload_FullMethodName     = "/ateom.Ateom/CheckpointWorkload"
+	Ateom_RestoreWorkload_FullMethodName        = "/ateom.Ateom/RestoreWorkload"
+	Ateom_GetWorkloadStats_FullMethodName       = "/ateom.Ateom/GetWorkloadStats"
+	Ateom_GetActiveWorkloadStats_FullMethodName = "/ateom.Ateom/GetActiveWorkloadStats"
 )
 
 // AteomClient is the client API for Ateom service.
@@ -99,6 +100,26 @@ type AteomClient interface {
 	// "booting" distinguishable from "not here" at all, and it means a workload
 	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error)
+	// GetActiveWorkloadStats samples whatever this ateom is currently
+	// executing, without asserting an identity. It is the discovery read for a
+	// scraper that enumerates ateoms and holds no worker-to-actor mapping;
+	// GetWorkloadStats above is the verified read for a caller that must be
+	// answered about a specific actor.
+	//
+	// Every state a blind caller can find is a normal answer here, never an
+	// error: the response is either a sample or the NoSampleReason there is
+	// none -- nothing to measure ("available"), or nothing to measure YET (a
+	// poll landing in a boot or a restore). Error codes are reserved for real
+	// failures reading a sandbox that should be measurable. This is deliberately
+	// unlike GetWorkloadStats, whose caller asserts knowledge the codes then
+	// answer.
+	//
+	// Consumers MUST attribute each sample solely from the identity echoed
+	// inside it, never from a mapping they hold: without an asserted uid, the
+	// response is the only statement of who was measured. Like GetWorkloadStats
+	// it is a pure read, safe on a timer, and does not touch the lifecycle
+	// mutex.
+	GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error)
 }
 
 type ateomClient struct {
@@ -143,6 +164,16 @@ func (c *ateomClient) GetWorkloadStats(ctx context.Context, in *GetWorkloadStats
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetWorkloadStatsResponse)
 	err := c.cc.Invoke(ctx, Ateom_GetWorkloadStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *ateomClient) GetActiveWorkloadStats(ctx context.Context, in *GetActiveWorkloadStatsRequest, opts ...grpc.CallOption) (*GetActiveWorkloadStatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetActiveWorkloadStatsResponse)
+	err := c.cc.Invoke(ctx, Ateom_GetActiveWorkloadStats_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +240,26 @@ type AteomServer interface {
 	// "booting" distinguishable from "not here" at all, and it means a workload
 	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error)
+	// GetActiveWorkloadStats samples whatever this ateom is currently
+	// executing, without asserting an identity. It is the discovery read for a
+	// scraper that enumerates ateoms and holds no worker-to-actor mapping;
+	// GetWorkloadStats above is the verified read for a caller that must be
+	// answered about a specific actor.
+	//
+	// Every state a blind caller can find is a normal answer here, never an
+	// error: the response is either a sample or the NoSampleReason there is
+	// none -- nothing to measure ("available"), or nothing to measure YET (a
+	// poll landing in a boot or a restore). Error codes are reserved for real
+	// failures reading a sandbox that should be measurable. This is deliberately
+	// unlike GetWorkloadStats, whose caller asserts knowledge the codes then
+	// answer.
+	//
+	// Consumers MUST attribute each sample solely from the identity echoed
+	// inside it, never from a mapping they hold: without an asserted uid, the
+	// response is the only statement of who was measured. Like GetWorkloadStats
+	// it is a pure read, safe on a timer, and does not touch the lifecycle
+	// mutex.
+	GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error)
 	mustEmbedUnimplementedAteomServer()
 }
 
@@ -230,6 +281,9 @@ func (UnimplementedAteomServer) RestoreWorkload(context.Context, *RestoreWorkloa
 }
 func (UnimplementedAteomServer) GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWorkloadStats not implemented")
+}
+func (UnimplementedAteomServer) GetActiveWorkloadStats(context.Context, *GetActiveWorkloadStatsRequest) (*GetActiveWorkloadStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActiveWorkloadStats not implemented")
 }
 func (UnimplementedAteomServer) mustEmbedUnimplementedAteomServer() {}
 func (UnimplementedAteomServer) testEmbeddedByValue()               {}
@@ -324,6 +378,24 @@ func _Ateom_GetWorkloadStats_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Ateom_GetActiveWorkloadStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActiveWorkloadStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).GetActiveWorkloadStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_GetActiveWorkloadStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).GetActiveWorkloadStats(ctx, req.(*GetActiveWorkloadStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Ateom_ServiceDesc is the grpc.ServiceDesc for Ateom service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -346,6 +418,10 @@ var Ateom_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWorkloadStats",
 			Handler:    _Ateom_GetWorkloadStats_Handler,
+		},
+		{
+			MethodName: "GetActiveWorkloadStats",
+			Handler:    _Ateom_GetActiveWorkloadStats_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -36,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/lru"
 )
 
 const testAteletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
@@ -131,6 +132,119 @@ func makeLeafCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, o
 		t.Fatalf("parsing leaf certificate: %v", err)
 	}
 	return cert
+}
+
+// newDialerForPods builds an AteletDialer for testing.
+func newDialerForPods(t *testing.T, workerPod, ateletPod *corev1.Pod) *AteletDialer {
+	t.Helper()
+
+	workerIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		byNamespaceAndName: func(obj any) ([]string, error) {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.ObjectMeta.Namespace + "/" + pod.ObjectMeta.Name}, nil
+		},
+	})
+	if err := workerIndexer.Add(workerPod); err != nil {
+		t.Fatalf("adding worker pod to indexer: %v", err)
+	}
+
+	ateletIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		byNode: func(obj any) ([]string, error) {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.Spec.NodeName}, nil
+		},
+	})
+	if err := ateletIndexer.Add(ateletPod); err != nil {
+		t.Fatalf("adding atelet pod to indexer: %v", err)
+	}
+
+	return &AteletDialer{
+		workerIndexer: workerIndexer,
+		ateletIndexer: ateletIndexer,
+		ateletConns:   lru.New(16),
+		dialCredentials: func(string) (credentials.TransportCredentials, error) {
+			return insecure.NewCredentials(), nil
+		},
+	}
+}
+
+func TestDialForWorkerTarget(t *testing.T) {
+	tests := []struct {
+		name       string
+		ateletIP   string
+		wantTarget string
+	}{
+		{
+			name:       "IPv4 atelet",
+			ateletIP:   "10.244.1.7",
+			wantTarget: "10.244.1.7:8085",
+		},
+		{
+			name:       "IPv6 atelet is bracketed",
+			ateletIP:   "fd00:10:244::7",
+			wantTarget: "[fd00:10:244::7]:8085",
+		},
+		{
+			name:       "IPv6 loopback is bracketed",
+			ateletIP:   "::1",
+			wantTarget: "[::1]:8085",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workerPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "worker-1", UID: "worker-uid"},
+				Spec:       corev1.PodSpec{NodeName: "node-1"},
+			}
+			ateletPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-abc", UID: "atelet-uid"},
+				Spec:       corev1.PodSpec{NodeName: "node-1"},
+				Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: tc.ateletIP}}},
+			}
+
+			d := newDialerForPods(t, workerPod, ateletPod)
+			conn, err := d.DialForWorker("team-a", "worker-1")
+			if err != nil {
+				t.Fatalf("DialForWorker returned error: %v", err)
+			}
+			t.Cleanup(func() { conn.Close() })
+
+			if got := conn.Target(); got != tc.wantTarget {
+				t.Errorf("dial target = %q, want %q", got, tc.wantTarget)
+			}
+		})
+	}
+}
+
+func TestDialForWorkerErrors(t *testing.T) {
+	workerPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "worker-1", UID: "worker-uid"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+	}
+
+	t.Run("unknown worker pod", func(t *testing.T) {
+		ateletPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-abc", UID: "atelet-uid"},
+			Spec:       corev1.PodSpec{NodeName: "node-1"},
+			Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.244.1.7"}}},
+		}
+		d := newDialerForPods(t, workerPod, ateletPod)
+		if _, err := d.DialForWorker("team-a", "no-such-worker"); !errors.Is(err, ErrWorkerPodNotFound) {
+			t.Fatalf("DialForWorker error = %v, want ErrWorkerPodNotFound", err)
+		}
+	})
+
+	t.Run("atelet without assigned IPs", func(t *testing.T) {
+		ateletPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: "atelet-abc", UID: "atelet-uid"},
+			Spec:       corev1.PodSpec{NodeName: "node-1"},
+		}
+		d := newDialerForPods(t, workerPod, ateletPod)
+		if _, err := d.DialForWorker("team-a", "worker-1"); err == nil {
+			t.Fatal("DialForWorker succeeded, want error for atelet with no IPs")
+		}
+	})
 }
 
 func TestVerifyAteletServerCert(t *testing.T) {

@@ -27,6 +27,10 @@
 # Optional `sandboxClass` (default "gvisor") picks the sandbox runtime for
 # the benchmark WorkerPool. Allowed values: "gvisor" | "microvm".
 #
+# Optional `actorMemory` (default "256Mi", the smallest size microvm admits)
+# sets the memory limit on the benchmark ActorTemplates. Raise it for suites
+# that exercise glutton's WriteRAM path.
+#
 # Required `targetCluster` names a config file under
 # /etc/orchestrator/target-clusters/ (e.g. `targetCluster: dev` ->
 # /etc/orchestrator/target-clusters/dev.sh). The orchestrator copies that
@@ -81,5 +85,119 @@ tests:
     flags:
       - "--min-wait-time"
       - "0.5"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_data_baseline
+    description: "DurDir data baseline: 1 concurrent user, 8 MiB file, explicit resume"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_full_baseline
+    description: "DurDir full baseline: 1 concurrent user, 8 MiB file, full memory restore comparison"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-full"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_implicit_resume
+    description: "DurDir implicit resume: 1 concurrent user, 8 MiB file, traffic-triggered resume"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "implicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_size_5mb
+    description: "DurDir file size sweep (5 MiB): 1 concurrent user, digest read mode"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-read-mode"
+      - "digest"
+      - "--durdir-file-size-bytes"
+      - "5242880"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_size_10mb
+    description: "DurDir file size sweep (10 MiB): 1 concurrent user, digest read mode"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-read-mode"
+      - "digest"
+      - "--durdir-file-size-bytes"
+      - "10485760"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_size_64mb
+    description: "DurDir file size sweep (64 MiB): 1 concurrent user, digest read mode"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-read-mode"
+      - "digest"
+      - "--durdir-file-size-bytes"
+      - "67108864"
+      - "--min-wait-time"
+      - "1.0"
       - "--max-wait-time"
       - "1.0"

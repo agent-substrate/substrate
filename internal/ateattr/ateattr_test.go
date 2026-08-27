@@ -57,11 +57,11 @@ func assertAttrs(t *testing.T, got map[attribute.Key]attribute.Value, want map[a
 		switch exp := wv.(type) {
 		case string:
 			if v.Type() != attribute.STRING || v.AsString() != exp {
-				t.Errorf("%s = %v (%s), want string %q", k, v.Emit(), v.Type(), exp)
+				t.Errorf("%s = %v (%s), want string %q", k, v.String(), v.Type(), exp)
 			}
 		case int64:
 			if v.Type() != attribute.INT64 || v.AsInt64() != exp {
-				t.Errorf("%s = %v (%s), want int64 %d", k, v.Emit(), v.Type(), exp)
+				t.Errorf("%s = %v (%s), want int64 %d", k, v.String(), v.Type(), exp)
 			}
 		default:
 			t.Fatalf("unsupported want type for %s: %T", k, wv)
@@ -154,6 +154,7 @@ func TestKeySpellings(t *testing.T) {
 		{AtespaceKey, "ate.atespace"},
 		{ActorNameKey, "ate.actor.name"},
 		{ActorUIDKey, "ate.actor.uid"},
+		{ActorContainerNameKey, "ate.actor.container.name"},
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateNamespaceKey, "ate.template.namespace"},
 		{ActorVersionKey, "ate.actor.version"},
@@ -169,11 +170,105 @@ func TestKeySpellings(t *testing.T) {
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
 		{ErrorTypeKey, "error.type"},
 		{FailureReasonKey, "ate.failure.reason"},
+		{OTLPRelayKey, "ate.otlp.relay"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			if string(tt.key) != tt.want {
 				t.Errorf("key = %q, want %q", string(tt.key), tt.want)
+			}
+		})
+	}
+}
+
+// TestLogFieldSpellings pins the trace-context field names. These are fixed by
+// the OTel spec for non-OTLP log formats, not ours to choose: a collector only
+// recognizes them at these exact spellings.
+func TestLogFieldSpellings(t *testing.T) {
+	tests := []struct {
+		got  string
+		want string
+	}{
+		{LogTraceIDField, "trace_id"},
+		{LogSpanIDField, "span_id"},
+		{LogTraceFlagsField, "trace_flags"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("field = %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActorLogLabels(t *testing.T) {
+	const containerName = "counter"
+
+	attribution := resources.ActorAttribution{
+		Ref:               resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
+		UID:               "uid-abc",
+		TemplateNamespace: "ate-agents",
+		TemplateName:      "support-agent",
+	}
+
+	tests := []struct {
+		name          string
+		attribution   resources.ActorAttribution
+		containerName string
+		want          map[string]string
+	}{
+		{
+			name:          "container output carries the container name",
+			attribution:   attribution,
+			containerName: containerName,
+			want: map[string]string{
+				"ate.atespace":             "team-a",
+				"ate.actor.name":           "support-agent-42",
+				"ate.actor.uid":            "uid-abc",
+				"ate.actor.container.name": containerName,
+				"ate.template.namespace":   "ate-agents",
+				"ate.template.name":        "support-agent",
+			},
+		},
+		{
+			name:          "no container name omits the key rather than emitting it empty",
+			attribution:   attribution,
+			containerName: "",
+			want: map[string]string{
+				"ate.atespace":           "team-a",
+				"ate.actor.name":         "support-agent-42",
+				"ate.actor.uid":          "uid-abc",
+				"ate.template.namespace": "ate-agents",
+				"ate.template.name":      "support-agent",
+			},
+		},
+		{
+			name:          "zero attribution still produces the five identity keys",
+			attribution:   resources.ActorAttribution{},
+			containerName: "",
+			want: map[string]string{
+				"ate.atespace":           "",
+				"ate.actor.name":         "",
+				"ate.actor.uid":          "",
+				"ate.template.namespace": "",
+				"ate.template.name":      "",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ActorLogLabels(tt.attribution, tt.containerName)
+			if len(got) != len(tt.want) {
+				t.Errorf("got %d labels, want %d: %v", len(got), len(tt.want), got)
+			}
+			for k, want := range tt.want {
+				if v, ok := got[k]; !ok {
+					t.Errorf("missing label %s", k)
+				} else if v != want {
+					t.Errorf("%s = %q, want %q", k, v, want)
+				}
 			}
 		})
 	}
@@ -243,20 +338,24 @@ func TestActorMetricAttributes(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "counter-template",
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			WorkerPool: "default-pool",
+		Status: &ateapipb.ActorStatus{
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "ate-workers",
+				WorkerPool:      "default-pool",
+			},
 		},
 	}
 
 	t.Run("explicit operation and reason", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:  "default",
-			TemplateNameKey:       "counter-template",
-			WorkerPoolNameKey:     "default-pool",
-			SandboxClassKey:       "gvisor",
-			ActorOperationNameKey: OperationResume,
-			FailureReasonKey:      ReasonCorruptedAssignment,
+			TemplateNamespaceKey:   "default",
+			TemplateNameKey:        "counter-template",
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "default-pool",
+			SandboxClassKey:        "gvisor",
+			ActorOperationNameKey:  OperationResume,
+			FailureReasonKey:       ReasonCorruptedAssignment,
 		}
 
 		assertAttrs(t, got, want)
@@ -265,12 +364,13 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("default unknown values", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:  "default",
-			TemplateNameKey:       "counter-template",
-			WorkerPoolNameKey:     "default-pool",
-			SandboxClassKey:       "gvisor",
-			ActorOperationNameKey: OperationUnknown,
-			FailureReasonKey:      ReasonUnknown,
+			TemplateNamespaceKey:   "default",
+			TemplateNameKey:        "counter-template",
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "default-pool",
+			SandboxClassKey:        "gvisor",
+			ActorOperationNameKey:  OperationUnknown,
+			FailureReasonKey:       ReasonUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -279,15 +379,67 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
 		want := map[attribute.Key]any{
+			TemplateNamespaceKey:   "default",
+			TemplateNameKey:        "counter-template",
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "default-pool",
+			SandboxClassKey:        "gvisor",
+			ActorOperationNameKey:  OperationUnknown,
+			FailureReasonKey:       ReasonUnknown,
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	// An actor that crashed before it reached a worker has no pool. Reporting
+	// one key of the pair, or an empty-string name, would put that crash in a
+	// series that looks like a real pool.
+	t.Run("unassigned actor omits both pool keys", func(t *testing.T) {
+		unassigned := &ateapipb.Actor{
+			ActorTemplateNamespace: "default",
+			ActorTemplateName:      "counter-template",
+		}
+		got := toMap(ActorMetricAttributes(unassigned, "gvisor", OperationCreate, ReasonUnknown))
+		want := map[attribute.Key]any{
 			TemplateNamespaceKey:  "default",
 			TemplateNameKey:       "counter-template",
-			WorkerPoolNameKey:     "default-pool",
 			SandboxClassKey:       "gvisor",
-			ActorOperationNameKey: OperationUnknown,
+			ActorOperationNameKey: OperationCreate,
 			FailureReasonKey:      ReasonUnknown,
 		}
 
 		assertAttrs(t, got, want)
+	})
+}
+
+// TestWorkerPoolAttributes pins the both-or-neither rule. A WorkerPool is
+// namespaced, so a name on its own merges same-named pools from different
+// namespaces and cannot join against the instruments that carry the pair.
+func TestWorkerPoolAttributes(t *testing.T) {
+	t.Run("known pool returns the pair", func(t *testing.T) {
+		got := toMap(WorkerPoolAttributes("ate-workers", "pool-a"))
+		want := map[attribute.Key]any{
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "pool-a",
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	t.Run("unknown pool returns neither key", func(t *testing.T) {
+		for _, namespace := range []string{"", "ate-workers"} {
+			if got := WorkerPoolAttributes(namespace, ""); len(got) != 0 {
+				t.Errorf("WorkerPoolAttributes(%q, \"\") = %v, want no attributes", namespace, got)
+			}
+		}
+	})
+
+	// The reverse of the case this helper exists for: a name without a namespace
+	// half-identifies the pool, which joins to nothing on the paired instruments.
+	t.Run("name without a namespace returns neither key", func(t *testing.T) {
+		if got := WorkerPoolAttributes("", "pool-a"); len(got) != 0 {
+			t.Errorf("WorkerPoolAttributes(\"\", \"pool-a\") = %v, want no attributes", got)
+		}
 	})
 }
 

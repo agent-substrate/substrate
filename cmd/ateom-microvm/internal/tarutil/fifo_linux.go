@@ -15,6 +15,7 @@
 package tarutil
 
 import (
+	"archive/tar"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,34 @@ func createFifo(root *os.Root, name string, mode os.FileMode) error {
 
 	if err := unix.Mkfifoat(int(parent.Fd()), base, uint32(mode.Perm())); err != nil {
 		return fmt.Errorf("creating fifo %q: %w", name, err)
+	}
+	return nil
+}
+
+// createDevice creates a character or block device node at name, a path
+// relative to root, using the same parent-directory containment as createFifo.
+// Device nodes matter here because overlayfs records a deleted lower-layer
+// file as a 0:0 character device ("whiteout") in the upper — dropping one at
+// extraction would resurrect the deleted file on restore. mknod requires
+// privilege; extraction runs as root in ateom, and the tests gate on it.
+func createDevice(root *os.Root, name string, hdr *tar.Header, mode os.FileMode) error {
+	dir, base := filepath.Split(name)
+	if dir == "" {
+		dir = "."
+	}
+	parent, err := root.Open(filepath.Clean(dir))
+	if err != nil {
+		return fmt.Errorf("opening parent directory of %q: %w", name, err)
+	}
+	defer parent.Close()
+
+	var typ uint32 = unix.S_IFCHR
+	if hdr.Typeflag == tar.TypeBlock {
+		typ = unix.S_IFBLK
+	}
+	dev := unix.Mkdev(uint32(hdr.Devmajor), uint32(hdr.Devminor))
+	if err := unix.Mknodat(int(parent.Fd()), base, typ|uint32(mode.Perm()), int(dev)); err != nil {
+		return fmt.Errorf("creating device node %q: %w", name, err)
 	}
 	return nil
 }

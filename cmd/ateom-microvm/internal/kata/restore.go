@@ -30,8 +30,22 @@ func VMDir(id string) string { return filepath.Join(vcVMDir, id) }
 // references; CH recreates the listener here on restore.
 func VsockSocketPath(id string) string { return filepath.Join(VMDir(id), "clh.sock") }
 
+// ConsoleLogPath is where the guest's virtio-console (hvc0) is captured: the kernel
+// log from virtio-console probe onwards, plus everything the kata-agent prints.
+func ConsoleLogPath(id string) string { return filepath.Join(VMDir(id), "console.log") }
+
+// SerialLogPath is where the emulated UART is captured. Only wired up in debug mode,
+// where it carries the early-boot messages hvc0 is too late to see.
+func SerialLogPath(id string) string { return filepath.Join(VMDir(id), "serial.log") }
+
 // DurableVirtiofsdSocketPath is the vhost-user-fs socket for the actor's writable
-// durable-dir share, served by a second virtiofsd alongside the RO lower's.
+// durable-dir share, served by a second virtiofsd alongside the rootfs share's.
 func DurableVirtiofsdSocketPath(id string) string {
 	return filepath.Join(VMDir(id), "virtiofsd-durable.sock")
+}
+
+// CsiVirtiofsdSocketPath is the vhost-user-fs socket for the actor's writable
+// CSI volumes share.
+func CsiVirtiofsdSocketPath(id string) string {
+	return filepath.Join(VMDir(id), "virtiofsd-csi.sock")
 }

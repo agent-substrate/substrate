@@ -19,10 +19,20 @@ likely be split in the future for better scalability.)
   * Envoy
   * atenet router
 * Service will expose:
-  * Envoy port 80 and 443.
+  * Envoy port 80 and 443 for ordinary ingress traffic, plus a dedicated
+    CONNECT port (8081, or 8444 for TLS) for arbitrary-port ingress: a client
+    reaches a port on the actor other than its default (80) with an HTTP
+    `CONNECT` request naming the port in the authority. Only HTTP(S) traffic
+    over the tunnel is supported today, not raw TCP.
 * Upstream: Envoy's `ORIGINAL_DST` actor cluster dials the actor's in-worker
   `atunnel` ingress server on the worker pod's port 443 over mTLS, using the
-  address `atenet router`'s ext_proc resolved into `x-ate-original-dst`.
+  address `atenet router`'s ext_proc resolves into dynamic metadata rather
+  than a header. `atunnel` can't read that metadata directly, though -- it's
+  a separate process on the worker pod, not part of Envoy -- so the port to
+  reach on the actor itself (its default port, or an arbitrary one for
+  CONNECT) still travels as a real header, `atunnel.TargetPortHeader`.
+  `:authority`/`Host` reaches atunnel unmodified either way, so it authorizes
+  the actor by its own DNS name.
 * Termination: the router drains gracefully on SIGTERM (readiness flip →
   endpoint propagation → Envoy admin-API drain → ext_proc drain), and the
   Envoy container's `preStop` hook waits for the router's drain-complete

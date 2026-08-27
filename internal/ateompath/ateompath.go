@@ -58,12 +58,37 @@ func GVisorReleaseDir(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "gvisor-"+sha256)
 }
 
-func AteomPath(podUID string) string {
+// AteletOTLPSocketPath is the node-scoped unix socket atelet serves the OTLP
+// relay on (see internal/otlprelay). It is node-scoped rather than per-pod
+// because every ateom on the node pushes into the same relay: atelet is a
+// DaemonSet, so one socket collapses N per-pod collector connections into one
+// per-node connection.
+//
+// It sits directly under BasePath, which is the host directory already mounted
+// at the same path into atelet and into every ateom pod, so no new volume is
+// needed for ateom to reach it. Note that BasePath is mounted writable
+// (workerpool_apply.go) and shared with CredentialBrokerSocket and the image
+// cache, so a worker pod can unlink or replace this socket. Confining
+// atelet-owned sockets to a subdirectory mounted read-only would be an
+// improvement, but it is a property of the whole BasePath mount rather than of
+// this socket — a read-only subdir needs its own volume and mount, and the pod
+// keeps CAP_SYS_ADMIN. Tracked separately rather than solved here.
+func AteletOTLPSocketPath() string {
 	return filepath.Join(
 		BasePath,
-		"ateoms",
-		podUID,
+		"atelet-otlp.sock",
 	)
+}
+
+// AteomsDir is the parent of every per-ateom directory. Each ateom creates
+// AteomPath(podUID) under it when it boots, so listing this directory is how a
+// scraper with no prior knowledge discovers the node's ateoms.
+func AteomsDir() string {
+	return filepath.Join(BasePath, "ateoms")
+}
+
+func AteomPath(podUID string) string {
+	return filepath.Join(AteomsDir(), podUID)
 }
 
 func AteomSocketPath(podUID string) string {
@@ -88,18 +113,6 @@ func ActorPath(actorUID string) string {
 	return filepath.Join(
 		ActorsDir,
 		actorUID,
-	)
-}
-
-// ActorIdentityDirPath is the host directory atelet populates with the
-// actor's identity data (currently the single file "actor-id") and
-// bind-mounts read-only into the actor. It is per-actor and regenerated on
-// every resume, so (unlike the checkpointed process environment) it reflects
-// the correct ID after a restore from the golden snapshot.
-func ActorIdentityDirPath(actorUID string) string {
-	return filepath.Join(
-		ActorPath(actorUID),
-		"identity",
 	)
 }
 
@@ -185,6 +198,37 @@ func DurableDirVolumeMountsDir(actorUID string) string {
 func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
 	return filepath.Join(
 		DurableDirVolumeMountsDir(actorUID),
+		volumeName,
+	)
+}
+
+// SystemInfoVolumeRootsDir is the directory containing the per-volume root
+// directories of system-info volumes. Snapshots must capture durable-dir
+// data but never system-info contents, which atelet regenerates on every
+// Run/Restore; each sandbox class excludes them differently:
+//
+//   - micro-VM captures by location: its checkpoint tars all of
+//     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
+//     system-info roots are excluded by living in this separate directory.
+//   - gVisor captures by declaration: durable mounts are registered with
+//     the sandbox (mount-hint annotations for FULL checkpoints, the
+//     enumerated durable mount paths for DATA fscheckpoints); system-info
+//     mounts are plain undeclared binds, never captured regardless of host
+//     layout.
+//
+// The separate directory is therefore critical only for micro-VM.
+func SystemInfoVolumeRootsDir(actorUID string) string {
+	return filepath.Join(
+		ActorPath(actorUID),
+		"system-info",
+	)
+}
+
+// SystemInfoVolumeRoot returns the host path of the root directory for a
+// specific system-info volume.
+func SystemInfoVolumeRoot(actorUID, volumeName string) string {
+	return filepath.Join(
+		SystemInfoVolumeRootsDir(actorUID),
 		volumeName,
 	)
 }

@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -36,6 +37,10 @@ import (
 )
 
 const (
+	// DefaultConnectPort is the worker port on which atunnel accepts inbound
+	// mTLS CONNECT tunnels from the ingress router.
+	DefaultConnectPort = 444
+
 	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
 	StaleAssignmentHeader = "X-Ate-Assignment-Stale"
@@ -44,7 +49,24 @@ const (
 	// atunnel only accepts mTLS-authenticated router clients, and the router's
 	// ext_proc server overwrites this header before every request.
 	OriginalHostHeader = "X-Ate-Original-Host"
+
+	// TargetPortHeader carries the port to reach on the actor: the CONNECT
+	// :authority's port for arbitrary-port ingress, or the default 80
+	// otherwise (see atenet-router's HandleRequestHeaders). cfg.Upstream is
+	// fixed for the Server's lifetime, so this lets the port vary per
+	// request; stripped before the request reaches the actor.
+	TargetPortHeader = "X-Ate-Target-Port"
 )
+
+// ParsePort parses s as a TCP port number, returning ok=false for anything
+// outside the valid 1-65535 range (including non-numeric input).
+func ParsePort(s string) (port int, ok bool) {
+	p, err := strconv.Atoi(s)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, false
+	}
+	return p, true
+}
 
 // Config configures an ingress Server.
 type Config struct {
@@ -61,6 +83,7 @@ type Server struct {
 	credentialBundlePath string
 	tlsConfig            *tls.Config
 	proxy                *httputil.ReverseProxy
+	upstream             *url.URL
 
 	mu     sync.Mutex
 	active *activation
@@ -103,17 +126,33 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(cfg.Upstream)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	proxy.Transport = transport
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(cfg.Upstream)
+			// Retain the actor's stable mesh hostname rather than the
+			// upstream's, matching NewSingleHostReverseProxy's default
+			// behavior.
+			pr.Out.Host = pr.In.Host
+
+			port := pr.In.Header.Get(TargetPortHeader)
+			pr.Out.Header.Del(TargetPortHeader)
+			if p, ok := ParsePort(port); ok {
+				pr.Out.URL.Host = net.JoinHostPort(cfg.Upstream.Hostname(), strconv.Itoa(p))
+			}
+			pr.SetXForwarded()
+		},
+		Transport: transport,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		},
 	}
 
 	s := &Server{
 		credentialBundlePath: cfg.CredentialBundlePath,
 		proxy:                proxy,
+		upstream:             cfg.Upstream,
 	}
 	s.tlsConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -156,9 +195,25 @@ func loadCredentialBundle(path string) (*tls.Certificate, error) {
 
 // Serve serves HTTPS on lis until ctx is canceled or the server fails.
 func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
+	return s.serve(ctx, lis, s, s.tlsConfig)
+}
+
+// ServeConnect serves the mTLS CONNECT endpoint. CONNECT is deliberately on a
+// separate listener so ordinary actor ingress remains a request proxy, while
+// the router can use this listener for a bidirectional tunnel.
+func (s *Server) ServeConnect(ctx context.Context, lis net.Listener) error {
+	// Keep ALPN confined to the CONNECT listener. The established ingress
+	// listener is explicitly HTTP/1.1 in the router's upstream cluster, while
+	// the CONNECT listener supports either HTTP/1.1 or HTTP/2.
+	tlsConfig := s.tlsConfig.Clone()
+	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
+	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), tlsConfig)
+}
+
+func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handler, tlsConfig *tls.Config) error {
 	httpServer := &http.Server{
-		Handler:           s,
-		TLSConfig:         s.tlsConfig,
+		Handler:           handler,
+		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	done := make(chan struct{})
@@ -175,6 +230,123 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 		return nil
 	}
 	return err
+}
+
+// ServeConnectHTTP accepts a router-authenticated CONNECT request and relays
+// its tunnel to the named port on the currently active actor.
+func (s *Server) ServeConnectHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodConnect {
+		http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+		return
+	}
+	ref, ctx, release, ok := s.authorize(r)
+	if !ok {
+		s.reject(w)
+		return
+	}
+	defer release()
+
+	_, port, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		http.Error(w, "CONNECT authority must include a port", http.StatusBadRequest)
+		return
+	}
+	if _, ok := ParsePort(port); !ok {
+		http.Error(w, "invalid CONNECT port", http.StatusBadRequest)
+		return
+	}
+
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	upstream, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(s.upstream.Hostname(), port))
+	if err != nil {
+		slog.WarnContext(r.Context(), "atunnel CONNECT upstream failed", slog.Any("actor", ref), slog.Any("err", err))
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+		return
+	}
+	defer upstream.Close()
+
+	if r.ProtoMajor == 2 {
+		s.serveH2Connect(w, r, upstream, ctx)
+		return
+	}
+	s.serveH1Connect(w, upstream, ctx)
+}
+
+func (s *Server) serveH1Connect(w http.ResponseWriter, upstream net.Conn, ctx context.Context) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "CONNECT hijacking unsupported", http.StatusInternalServerError)
+		return
+	}
+	client, rw, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer client.Close()
+	if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	if err := rw.Flush(); err != nil {
+		return
+	}
+
+	relayIngressWithHalfClose(ctx, upstream, rw, client, client)
+}
+
+func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream net.Conn, ctx context.Context) {
+	// A HTTP/2 CONNECT tunnel is a pair of streams, not a hijackable TCP
+	// socket. Send the response headers before copying so the peer can start
+	// sending DATA frames, then flush each upstream write promptly.
+	w.WriteHeader(http.StatusOK)
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		return
+	}
+
+	relayIngressWithHalfClose(ctx, upstream, r.Body, flushingWriter{ResponseWriter: w}, r.Body)
+}
+
+// relayIngressWithHalfClose copies a CONNECT stream. When the client request
+// stream ends, it half-closes the actor connection and continues forwarding
+// actor output until that stream ends too.
+func relayIngressWithHalfClose(ctx context.Context, upstream net.Conn, clientReader io.Reader, clientWriter io.Writer, clientCloser io.Closer) {
+	stop := context.AfterFunc(ctx, func() {
+		_ = upstream.Close()
+		_ = clientCloser.Close()
+	})
+	defer stop()
+
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(upstream, clientReader)
+		closeWrite(upstream)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(clientWriter, upstream)
+		done <- struct{}{}
+	}()
+	for range 2 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+		}
+	}
+}
+
+type flushingWriter struct {
+	http.ResponseWriter
+}
+
+func (w flushingWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if err != nil {
+		return n, err
+	}
+	if err := http.NewResponseController(w.ResponseWriter).Flush(); err != nil {
+		return n, err
+	}
+	return n, nil
 }
 
 // Activate allows requests for actorName in atespace. There can be only one
@@ -234,48 +406,58 @@ func (s *Server) closeIdleUpstreamConnections() {
 
 // ServeHTTP validates the actor hostname on every request before proxying it.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	actorHost := r.Header.Get(OriginalHostHeader)
-	if actorHost == "" {
-		actorHost = r.Host
-	}
-	host, err := requestHostname(actorHost)
-	if err != nil {
+	_, requestCtx, release, ok := s.authorize(r)
+	if !ok {
 		s.reject(w)
 		return
 	}
-	ref, err := resources.ParseActorDNSName(host)
-	if err != nil {
-		s.reject(w)
-		return
-	}
-
-	s.mu.Lock()
-	active := s.active
-	if active == nil || active.ref != ref {
-		s.mu.Unlock()
-		s.reject(w)
-		return
-	}
-	active.wg.Add(1)
-	s.mu.Unlock()
-	defer active.wg.Done()
-
-	requestCtx, cancel := context.WithCancel(r.Context())
-	stop := context.AfterFunc(active.ctx, cancel)
-	defer func() {
-		stop()
-		cancel()
-	}()
+	defer release()
 
 	// Do not expose the router-only routing header to actor code. Restore Host
 	// so dataplanes that route dynamically on worker IP still give the actor its
 	// stable actor DNS name.
+	actorHost := r.Header.Get(OriginalHostHeader)
+	if actorHost == "" {
+		actorHost = r.Host
+	}
 	r.Header.Del(OriginalHostHeader)
 	r.Host = actorHost
 
 	// ReverseProxy changes the URL destination but intentionally retains Host,
 	// allowing the actor application to observe its stable actor DNS name.
 	s.proxy.ServeHTTP(w, r.WithContext(requestCtx))
+}
+
+func (s *Server) authorize(r *http.Request) (resources.ActorRef, context.Context, func(), bool) {
+	actorHost := r.Header.Get(OriginalHostHeader)
+	if actorHost == "" {
+		actorHost = r.Host
+	}
+	host, err := requestHostname(actorHost)
+	if err != nil {
+		return resources.ActorRef{}, nil, nil, false
+	}
+	ref, err := resources.ParseActorDNSName(host)
+	if err != nil {
+		return resources.ActorRef{}, nil, nil, false
+	}
+
+	s.mu.Lock()
+	active := s.active
+	if active == nil || active.ref != ref {
+		s.mu.Unlock()
+		return resources.ActorRef{}, nil, nil, false
+	}
+	active.wg.Add(1)
+	s.mu.Unlock()
+	requestCtx, cancel := context.WithCancel(r.Context())
+	stop := context.AfterFunc(active.ctx, cancel)
+	release := func() {
+		active.wg.Done()
+		stop()
+		cancel()
+	}
+	return ref, requestCtx, release, true
 }
 
 func (s *Server) reject(w http.ResponseWriter) {
@@ -295,8 +477,7 @@ func requestHostname(hostport string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid host %q: %w", hostport, err)
 		}
-		portNumber, err := strconv.Atoi(port)
-		if err != nil || portNumber < 1 || portNumber > 65535 {
+		if _, ok := ParsePort(port); !ok {
 			return "", fmt.Errorf("invalid port in host %q", hostport)
 		}
 	}

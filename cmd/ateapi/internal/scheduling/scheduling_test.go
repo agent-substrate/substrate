@@ -100,25 +100,66 @@ func TestSchedule(t *testing.T) {
 		{
 			name: "draining workers never scheduled",
 			fleet: fleet{
-				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.Worker_STATE_DRAINING)),
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
 			},
 			constraints: Constraints{SandboxClass: "gvisor"},
 		},
 		{
 			name: "unspecified workers never scheduled",
 			fleet: fleet{
-				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapipb.Worker_STATE_UNSPECIFIED)),
+				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			},
 			constraints: Constraints{SandboxClass: "gvisor"},
 		},
 		{
 			name: "picks active worker over draining one",
 			fleet: fleet{
-				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.Worker_STATE_DRAINING)),
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
 				worker("w-active", "gvisor", "node-a", tierTwo),
 			},
 			constraints: Constraints{SandboxClass: "gvisor"},
 			wantPod:     "w-active",
+		},
+		{
+			name: "worker with too little cpu capacity is skipped",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 8<<30)),
+				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000},
+			wantPod:     "w-big",
+		},
+		{
+			name: "worker with too little memory capacity is skipped",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(4000, 1<<30)),
+				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 4<<30)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", MemoryBytes: 2 << 30},
+			wantPod:     "w-big",
+		},
+		{
+			name: "no worker with enough capacity yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000},
+		},
+		{
+			name: "zero worker capacity is treated as unconstrained",
+			fleet: fleet{
+				worker("w-unknown", "gvisor", "node-a", tierTwo),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000, MemoryBytes: 2 << 30},
+			wantPod:     "w-unknown",
+		},
+		{
+			name: "zero constraint ignores worker capacity",
+			fleet: fleet{
+				worker("w-tiny", "gvisor", "node-a", tierTwo, withCapacity(100, 1<<20)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-tiny",
 		},
 		{
 			name:        "empty fleet",
@@ -214,13 +255,13 @@ func TestApplies(t *testing.T) {
 		},
 		{
 			name:        "skips draining worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.Worker_STATE_DRAINING)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_DRAINING)),
 			constraints: Constraints{SandboxClass: "gvisor"},
 			want:        false,
 		},
 		{
 			name:        "skips unspecified worker",
-			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.Worker_STATE_UNSPECIFIED)),
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED)),
 			constraints: Constraints{SandboxClass: "gvisor"},
 			want:        false,
 		},
@@ -245,8 +286,10 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		WorkerPod:    pod,
 		SandboxClass: class,
 		NodeName:     node,
-		State:        ateapipb.Worker_STATE_ACTIVE,
 		Labels:       lbls,
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		},
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -254,18 +297,24 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 	return w
 }
 
-func withState(state ateapipb.Worker_State) func(*ateapipb.Worker) {
+func withState(state ateapipb.WorkerState) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		w.State = state
+		w.Status.State = state
 	}
 }
 
 func assigned(atespace, name string) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		w.Assignment = &ateapipb.Assignment{
+		w.Status.Assignment = &ateapipb.ActorAssignment{
 			Actor:    &ateapipb.ObjectRef{Atespace: atespace, Name: name},
 			ActorUid: atespace + "/" + name,
 		}
+	}
+}
+
+func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
+	return func(w *ateapipb.Worker) {
+		w.Capacity = &ateapipb.WorkerCapacity{CpuMilli: cpuMilli, MemoryBytes: memBytes}
 	}
 }
 
@@ -539,7 +588,7 @@ func TestSchedule_EligibleWorkersMetric(t *testing.T) {
 		meter := provider.Meter("test")
 
 		drainingWorker := workerWithPool("w-draining", "ns-a", "pool-1", "gvisor", "node-a", nil)
-		drainingWorker.State = ateapipb.Worker_STATE_DRAINING
+		drainingWorker.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 
 		flt := fleet{drainingWorker}
 

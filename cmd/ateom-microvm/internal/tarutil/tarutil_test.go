@@ -91,6 +91,9 @@ func TestRoundTrip(t *testing.T) {
 	if err := os.Mkdir(emptyDir, 0o755); err != nil {
 		t.Fatalf("mkdir empty: %v", err)
 	}
+	// Chmod explicitly: the Mkdir mode is clipped by the process umask (0o750
+	// under the 027 some workstations default to), which would skew the mode
+	// the round-trip below is expected to preserve.
 	if err := os.Chmod(emptyDir, 0o755); err != nil {
 		t.Fatalf("chmod empty: %v", err)
 	}
@@ -269,6 +272,50 @@ func TestCreateSkipsSockets(t *testing.T) {
 	}
 }
 
+// TestCreateFilteredSkipsSubtree verifies CreateFiltered drops exactly the
+// entries the skip function selects — for a directory, the whole subtree — and
+// leaves everything else identical to an unfiltered archive. The rootfs
+// snapshot leans on this to exclude overlay workdirs.
+func TestCreateFilteredSkipsSubtree(t *testing.T) {
+	src := t.TempDir()
+	for rel, content := range map[string]string{
+		"app/fs/data.txt":  "keep",
+		"app/work/tmp.bin": "drop",
+		"app/work/#1/f":    "drop nested",
+		"beta/work-not/f":  "keep (not an exact match)",
+	} {
+		p := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for %q: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %q: %v", rel, err)
+		}
+	}
+
+	tarPath := filepath.Join(t.TempDir(), "filtered.tar")
+	skip := func(rel string) bool {
+		parts := strings.Split(rel, "/")
+		return len(parts) == 2 && parts[1] == "work"
+	}
+	if err := CreateFiltered(t.Context(), tarPath, src, skip); err != nil {
+		t.Fatalf("CreateFiltered: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	for _, rel := range []string{"app/fs/data.txt", "beta/work-not/f"} {
+		if _, err := os.Stat(filepath.Join(dst, rel)); err != nil {
+			t.Errorf("kept entry %q missing after filtered round trip: %v", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dst, "app/work")); !os.IsNotExist(err) {
+		t.Errorf("skipped subtree app/work survived (stat err = %v), want absent", err)
+	}
+}
+
 // TestRoundTripSpecialModeBits pins setuid/setgid/sticky across a round trip.
 // FileMode.Perm() silently drops them, so without this the archive would record
 // bits that extraction throws away — and a setgid data directory would come back
@@ -364,20 +411,116 @@ func TestRoundTripOwnership(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsDeviceNode(t *testing.T) {
+// Device nodes must round-trip: overlayfs records a deleted lower-layer file
+// as a 0:0 character device (whiteout) in the rootfs upper, and dropping one
+// at archive or extract time silently resurrects the deleted file on restore.
+func TestRoundTripDeviceNode(t *testing.T) {
 	roottest.Require(t, "creating a device node requires root")
 
 	src := t.TempDir()
-	// /dev/null, the cheapest character device to plant.
-	if err := unix.Mknod(filepath.Join(src, "null"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); err != nil {
-		t.Fatalf("creating device node: %v", err)
+	// An overlayfs whiteout: character device 0:0.
+	if err := unix.Mknod(filepath.Join(src, "deleted-file"), unix.S_IFCHR|0o600, int(unix.Mkdev(0, 0))); err != nil {
+		t.Fatalf("creating whiteout device node: %v", err)
 	}
-	err := Create(t.Context(), filepath.Join(t.TempDir(), "dev.tar"), src)
-	if err == nil {
-		t.Fatal("Create succeeded on a device node, want an error")
+	tarPath := filepath.Join(t.TempDir(), "dev.tar")
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported file type") {
-		t.Errorf("error = %v, want it to mention an unsupported file type", err)
+
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	st, err := os.Lstat(filepath.Join(dst, "deleted-file"))
+	if err != nil {
+		t.Fatalf("stat extracted device node: %v", err)
+	}
+	if st.Mode()&os.ModeCharDevice == 0 {
+		t.Errorf("extracted node mode = %v, want a character device", st.Mode())
+	}
+	stat, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("no syscall.Stat_t for extracted device node")
+	}
+	if unix.Major(stat.Rdev) != 0 || unix.Minor(stat.Rdev) != 0 {
+		t.Errorf("extracted device = %d:%d, want the 0:0 whiteout", unix.Major(stat.Rdev), unix.Minor(stat.Rdev))
+	}
+}
+
+// trusted.overlay.* xattrs must round-trip: the host kernel's overlayfs
+// records a replaced lower-layer directory as a trusted.overlay.opaque xattr
+// on the upper directory, and dropping it would merge the old lower contents
+// back in after a restore. trusted.* needs CAP_SYS_ADMIN on both sides, as
+// ateom has.
+func TestRoundTripTrustedOverlayXattrs(t *testing.T) {
+	roottest.Require(t, "trusted.* xattrs require root")
+
+	src := t.TempDir()
+	if err := os.Mkdir(filepath.Join(src, "replaced-dir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := unix.Lsetxattr(filepath.Join(src, "replaced-dir"), "trusted.overlay.opaque", []byte("y"), 0); err != nil {
+		t.Skipf("filesystem does not support trusted xattrs: %v", err)
+	}
+
+	tarPath := filepath.Join(t.TempDir(), "trusted.tar")
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	buf := make([]byte, 8)
+	n, err := unix.Lgetxattr(filepath.Join(dst, "replaced-dir"), "trusted.overlay.opaque", buf)
+	if err != nil {
+		t.Fatalf("reading trusted.overlay.opaque on restored dir: %v", err)
+	}
+	if got := string(buf[:n]); got != "y" {
+		t.Errorf("restored trusted.overlay.opaque = %q, want %q", got, "y")
+	}
+}
+
+// user.* xattrs must round-trip too: durable-dir volumes carry arbitrary
+// workload state, which may include user attrs.
+func TestRoundTripUserXattrs(t *testing.T) {
+	src := t.TempDir()
+	if err := os.Mkdir(filepath.Join(src, "replaced-dir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := unix.Lsetxattr(filepath.Join(src, "replaced-dir"), "user.overlay.opaque", []byte("y"), 0); err != nil {
+		t.Skipf("filesystem does not support user xattrs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("writing file: %v", err)
+	}
+	if err := unix.Lsetxattr(filepath.Join(src, "f.txt"), "user.custom", []byte("val"), 0); err != nil {
+		t.Fatalf("setting file xattr: %v", err)
+	}
+
+	tarPath := filepath.Join(t.TempDir(), "xattr.tar")
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	for path, want := range map[string]struct{ attr, val string }{
+		"replaced-dir": {"user.overlay.opaque", "y"},
+		"f.txt":        {"user.custom", "val"},
+	} {
+		buf := make([]byte, 64)
+		n, err := unix.Lgetxattr(filepath.Join(dst, path), want.attr, buf)
+		if err != nil {
+			t.Errorf("reading %s on restored %q: %v", want.attr, path, err)
+			continue
+		}
+		if got := string(buf[:n]); got != want.val {
+			t.Errorf("restored %q %s = %q, want %q", path, want.attr, got, want.val)
+		}
 	}
 }
 
@@ -494,10 +637,20 @@ func TestExtractIntoPrecreatedVolumeDir(t *testing.T) {
 	}
 }
 
-func TestExtractRejectsUnsupportedType(t *testing.T) {
+func TestExtractSupportsDeviceEntry(t *testing.T) {
+	roottest.Require(t, "creating a device node requires root")
+
 	tarPath := filepath.Join(t.TempDir(), "dev.tar")
 	writeTar(t, tarPath, tar.Header{Name: "null", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3})
-	if err := Extract(tarPath, t.TempDir()); err == nil {
-		t.Fatal("Extract succeeded on a device entry, want an error")
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract failed on a device entry: %v", err)
+	}
+	st, err := os.Lstat(filepath.Join(dst, "null"))
+	if err != nil {
+		t.Fatalf("stat extracted device node: %v", err)
+	}
+	if st.Mode()&os.ModeCharDevice == 0 {
+		t.Errorf("extracted node mode = %v, want a character device", st.Mode())
 	}
 }

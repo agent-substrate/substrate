@@ -64,8 +64,7 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 		}
 
 		if errors.As(err, &statusErr) {
-			st := statusErr.GRPCStatus()
-			return nil, status.Error(st.Code(), st.Message())
+			return nil, statusErr.GRPCStatus().Err()
 		}
 
 		// No status error found in chain.

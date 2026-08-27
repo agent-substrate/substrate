@@ -16,14 +16,13 @@
 // the platform metrics in e2e.PlatformMetricPrefixes reach the kind stack's OTel
 // Collector. It closes the "silent regression" gap: a renamed or dropped
 // instrument fails here rather than surfacing as an empty dashboard. The prefix
-// set grows as each metric slice lands. Requires the demo counter template to be
-// installed (override with E2E_TEMPLATE_NAMESPACE / _NAME).
+// set grows as each metric slice lands. Requires the demo counter template for
+// the sandbox class under test to be installed (see e2e.CounterFixture).
 package metrics
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -38,21 +37,10 @@ import (
 
 const metricsAtespace = "ate-metrics-e2e"
 
-func templateRef() (namespace, name string) {
-	namespace, name = "ate-demo-counter", "counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
-		namespace = v
-	}
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
-		name = v
-	}
-	return namespace, name
-}
-
 func TestPlatformMetricsEmitted(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
-	tmplNS, tmplName := templateRef()
+	tmpl := e2e.CounterFixture()
 	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
@@ -62,8 +50,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
-		ActorTemplateNamespace: tmplNS,
-		ActorTemplateName:      tmplName,
+		ActorTemplateNamespace: tmpl.Namespace,
+		ActorTemplateName:      tmpl.Name,
 	}}); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
@@ -234,6 +222,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					reasonVal := extractLabelValue(line, "ate_failure_reason")
 					tmplNSVal := extractLabelValue(line, "ate_template_namespace")
 					tmplNameVal := extractLabelValue(line, "ate_template_name")
+					workerPoolNSVal := extractLabelValue(line, "ate_workerpool_namespace")
 					workerPoolVal := extractLabelValue(line, "ate_workerpool_name")
 					sandboxVal := extractLabelValue(line, "ate_sandbox_class")
 
@@ -256,6 +245,12 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					if tmplNameVal == "" {
 						crashErrs = append(crashErrs, "ate_template_name label is missing or empty")
 					}
+					// The pool keys identify one WorkerPool together: the name on
+					// its own merges same-named pools from different namespaces.
+					// The suite crashes an assigned actor, so both are expected.
+					if workerPoolNSVal == "" {
+						crashErrs = append(crashErrs, "ate_workerpool_namespace label is missing or empty")
+					}
 					if workerPoolVal == "" {
 						crashErrs = append(crashErrs, "ate_workerpool_name label is missing or empty")
 					}
@@ -264,8 +259,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					}
 
 					if len(crashErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q)",
-							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolVal, sandboxVal))
+						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q)",
+							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal))
 					}
 				}
 			}
@@ -311,7 +306,7 @@ func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 	// Delete the assigned worker pod directly.
 	// The WorkerPoolSyncer will detect the pod is gone, crash the actor via syncer.go,
 	// and emit the ate_actor_crashes counter.
-	if ass := actor.GetWorkerAssignment(); ass != nil && ass.GetWorkerPod() != "" {
+	if ass := actor.GetStatus().GetWorkerAssignment(); ass != nil && ass.GetWorkerPod() != "" {
 		podName := ass.GetWorkerPod()
 		podNS := ass.GetWorkerNamespace()
 		if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
@@ -321,7 +316,7 @@ func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 		t.Fatalf("Actor %s has no assigned worker pod to delete", actorID)
 	}
 
-	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_CRASHED)
+	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_CRASHED)
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
@@ -331,7 +326,7 @@ func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID str
 	}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
-	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 }
 
 // validateSnapshotPhaseLabels guards atelet's cold-start histograms against a
@@ -371,17 +366,17 @@ func suspend(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID st
 	}); err != nil {
 		t.Fatalf("SuspendActor: %v", err)
 	}
-	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForStatus(t, ctx, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 }
 
-func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.Actor_Status) {
+func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.ActorState) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 		})
-		if err == nil && resp.GetStatus() == want {
+		if err == nil && resp.GetStatus().GetState() == want {
 			return
 		}
 		time.Sleep(2 * time.Second)

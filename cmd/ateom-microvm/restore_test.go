@@ -26,14 +26,17 @@ import (
 )
 
 // writeSnapshotConfig writes a config.json holding the given fs devices (plus the
-// vsock and serial entries every snapshot has) into a fresh snapshot dir.
+// vsock and console entries every snapshot has) into a fresh snapshot dir. The
+// serial device is the debug-mode one, present here so the rewrite is exercised
+// against a snapshot that has both.
 func writeSnapshotConfig(t *testing.T, fsDevices []map[string]any) string {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := map[string]any{
-		"vsock":  map[string]any{"cid": 3, "socket": "/run/vc/vm/golden/clh.sock"},
-		"serial": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
-		"fs":     fsDevices,
+		"vsock":   map[string]any{"cid": 3, "socket": "/run/vc/vm/golden/clh.sock"},
+		"console": map[string]any{"mode": "File", "file": "/run/vc/vm/golden/console.log"},
+		"serial":  map[string]any{"mode": "File", "file": "/run/vc/vm/golden/serial.log"},
+		"fs":      fsDevices,
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -85,40 +88,43 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("each share keeps its own socket", func(t *testing.T) {
-		// Ordered durable-first to catch a rewrite that assumes the RO lower comes
-		// first, which would hand the guest the wrong filesystem.
+	t.Run("legacy multi-share snapshots repoint each tag", func(t *testing.T) {
+		// Ordered with the rootfs share last to catch a rewrite that assumes it
+		// comes first, which would hand the guest the wrong filesystem.
 		dir := writeSnapshotConfig(t, []map[string]any{
-			{"tag": kata.DurableFsTag, "socket": "/run/vc/vm/golden/virtiofsd-durable.sock"},
+			{"tag": "ateDurable", "socket": "/run/vc/vm/golden/virtiofsd-durable.sock"},
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
 		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
 			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
 		}
 		got := readFsSockets(t, dir)
-		for tag, want := range map[string]string{
-			kata.FsTag:        kata.VirtiofsdSocketPath(id),
-			kata.DurableFsTag: kata.DurableVirtiofsdSocketPath(id),
-		} {
-			if got[tag] != want {
-				t.Errorf("%s socket = %q, want %q", tag, got[tag], want)
-			}
+		if got[kata.FsTag] != kata.VirtiofsdSocketPath(id) {
+			t.Errorf("%s socket = %q, want %q", kata.FsTag, got[kata.FsTag], kata.VirtiofsdSocketPath(id))
 		}
-		if got[kata.FsTag] == got[kata.DurableFsTag] {
+		if got["ateDurable"] != kata.DurableVirtiofsdSocketPath(id) {
+			t.Errorf("ateDurable socket = %q, want %q", got["ateDurable"], kata.DurableVirtiofsdSocketPath(id))
+		}
+		if got[kata.FsTag] == got["ateDurable"] {
 			t.Error("both shares were pointed at the same socket")
 		}
 	})
 
 	t.Run("unknown tag is an error", func(t *testing.T) {
-		dir := writeSnapshotConfig(t, []map[string]any{
-			{"tag": "somethingElse", "socket": "/run/vc/vm/golden/other.sock"},
-		})
-		if err := rewriteSnapshotSocketPaths(dir, id); err == nil {
-			t.Fatal("rewriteSnapshotSocketPaths accepted an unknown fs tag, want an error")
+		// "ateUpper" is the retired third share's tag: it never appears in
+		// snapshots this code produces, and one showing up must fail loudly
+		// rather than be silently repointed.
+		for _, tag := range []string{"somethingElse", "ateUpper"} {
+			dir := writeSnapshotConfig(t, []map[string]any{
+				{"tag": tag, "socket": "/run/vc/vm/golden/other.sock"},
+			})
+			if err := rewriteSnapshotSocketPaths(dir, id); err == nil {
+				t.Fatalf("rewriteSnapshotSocketPaths accepted fs tag %q, want an error", tag)
+			}
 		}
 	})
 
-	t.Run("vsock and serial are repointed", func(t *testing.T) {
+	t.Run("vsock and console devices are repointed", func(t *testing.T) {
 		dir := writeSnapshotConfig(t, []map[string]any{
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
@@ -130,8 +136,9 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			t.Fatalf("reading config.json: %v", err)
 		}
 		var cfg struct {
-			Vsock  struct{ Socket string } `json:"vsock"`
-			Serial struct{ File string }   `json:"serial"`
+			Vsock   struct{ Socket string } `json:"vsock"`
+			Console struct{ File string }   `json:"console"`
+			Serial  struct{ File string }   `json:"serial"`
 		}
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			t.Fatalf("parsing rewritten config: %v", err)
@@ -139,7 +146,10 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		if want := kata.VsockSocketPath(id); cfg.Vsock.Socket != want {
 			t.Errorf("vsock socket = %q, want %q", cfg.Vsock.Socket, want)
 		}
-		if want := filepath.Join(kata.VMDir(id), "serial.log"); cfg.Serial.File != want {
+		if want := kata.ConsoleLogPath(id); cfg.Console.File != want {
+			t.Errorf("console file = %q, want %q", cfg.Console.File, want)
+		}
+		if want := kata.SerialLogPath(id); cfg.Serial.File != want {
 			t.Errorf("serial file = %q, want %q", cfg.Serial.File, want)
 		}
 	})

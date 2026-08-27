@@ -26,6 +26,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -61,8 +62,9 @@ type Namespace struct {
 	Name string
 }
 
-// CreateNamespace creates a new namespace with a randomized name using the K8s API
-// and registers it for cleanup at the end of the test.
+// CreateNamespace creates a new namespace with a randomized name using the K8s
+// API. The namespace is deleted when the test finishes, unless it failed — see
+// the cleanup registered below.
 func CreateNamespace(t *testing.T) *Namespace {
 	t.Helper()
 
@@ -100,6 +102,22 @@ func CreateNamespace(t *testing.T) *Namespace {
 		t.Fatalf("Failed to create namespace %s: %v", nsName, err)
 	}
 
+	// Release the namespace as soon as this test is done rather than at the end of
+	// the run. A suite's namespaces each carry a WorkerPool, and its worker pods
+	// hold node capacity for as long as the namespace exists; keeping every one of
+	// them alive until the binary exits starves the tests still to come, which on a
+	// single-node kind cluster shows up as worker pods that never get scheduled.
+	//
+	// A failed test keeps its namespace, for the same reason RetainNamespaces does:
+	// the worker pods are where the ateom (and micro-VM guest console) logs live,
+	// and they are gone the moment the namespace is.
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+		deleteNamespace(nsName)
+	})
+
 	// Wait for namespace to be active
 	const timeout = 60 * time.Second
 	ctx, cancel := context.WithTimeout(t.Context(), timeout)
@@ -120,12 +138,28 @@ func CreateNamespace(t *testing.T) *Namespace {
 	return &Namespace{Name: nsName}
 }
 
-// Delete the namespace explicitly. This will fail the test if deletion fails.
-func (ns *Namespace) Delete(t *testing.T) {
-	t.Helper()
-	err := sharedClients.K8s.CoreV1().Namespaces().Delete(t.Context(), ns.Name, metav1.DeleteOptions{})
-	if err != nil {
-		t.Fatalf("Failed to delete namespace %s: %v", ns.Name, err)
+// deleteNamespace requests deletion of a namespace and unregisters it, so the
+// end-of-run pass neither deletes it a second time nor reports it as retained.
+//
+// It does not wait for the namespace to finish terminating. The point is to hand
+// the node back to the tests that are still running, and the worker pods drain
+// alongside them perfectly well; blocking here would serialize the parallel
+// subtests behind each other's teardown for no benefit.
+func deleteNamespace(name string) {
+	namespacesMu.Lock()
+	namespacesToCleanup = slices.DeleteFunc(namespacesToCleanup, func(n string) bool { return n == name })
+	namespacesMu.Unlock()
+
+	// Not t.Context: it is canceled just before a test's cleanups run.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// NotFound means it is already gone, which is the outcome we wanted. Any other
+	// failure is worth reporting but not worth failing the test over: the namespace
+	// is labeled, so hack/cleanup-e2e.sh will still find it later.
+	err := GetClients().K8s.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		fmt.Fprintf(os.Stderr, "Failed to delete namespace %s: %v\n", name, err)
 	}
 }
 
@@ -133,6 +167,9 @@ func (ns *Namespace) Delete(t *testing.T) {
 // them, instead of deleting them. Used when the suite failed: the namespaces'
 // worker pods hold the ateom (and, for micro-VM workers, guest) logs a
 // post-mortem needs, and they are deleted long before anyone can read them.
+//
+// Passing tests have already released theirs, so what is left is the failures'
+// — exactly what a post-mortem wants to look at.
 func RetainNamespaces() {
 	namespacesMu.Lock()
 	defer namespacesMu.Unlock()
@@ -149,6 +186,9 @@ func RetainNamespaces() {
 
 // CleanupNamespaces deletes all registered namespaces using the K8s API.
 // This should be called at the end of RunTestMain.
+//
+// A backstop rather than the main path: tests release their own namespaces as
+// they finish, so this only picks up ones whose cleanup never ran.
 func CleanupNamespaces() {
 	namespacesMu.Lock()
 	defer namespacesMu.Unlock()

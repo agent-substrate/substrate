@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -58,7 +60,7 @@ var getActorSnapshotsCmd = &cobra.Command{
 		}
 
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -68,11 +70,14 @@ var getActorSnapshotsCmd = &cobra.Command{
 		if len(args) > 0 {
 			for _, name := range args {
 				ref := &ateapipb.ObjectRef{Atespace: snapshotAtespaceFlag, Name: name}
-				snapshotRef := &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: ref}}
 				if snapshotTagRefFlag {
-					snapshotRef.Reference = &ateapipb.ActorSnapshotRef_Tag{Tag: ref}
+					tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{Tag: ref})
+					if err != nil {
+						return fmt.Errorf("failed to get actor snapshot tag %q: %w", name, err)
+					}
+					ref = tag.GetSnapshot()
 				}
-				snapshot, err := client.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: snapshotRef})
+				snapshot, err := client.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: ref})
 				if err != nil {
 					return fmt.Errorf("failed to get actor snapshot %q: %w", name, err)
 				}
@@ -107,16 +112,16 @@ var createActorSnapshotTagCmd = &cobra.Command{
 			return err
 		}
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
 		defer client.Close()
 
-		resp, err := client.TagActorSnapshot(ctx, &ateapipb.TagActorSnapshotRequest{
-			Snapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagSnapshotFlag}}},
-			Tag: &ateapipb.ActorSnapshotTag{
+		resp, err := client.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
+			ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
+				Snapshot: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagSnapshotFlag},
 				Scope:    scope,
 			},
 		})
@@ -138,21 +143,16 @@ var updateActorSnapshotTagCmd = &cobra.Command{
 			return err
 		}
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
 		defer client.Close()
 
-		resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-			Tag: &ateapipb.ActorSnapshotTag{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: updateTagAtespaceFlag, Name: args[0]},
-				Scope:    scope,
-			},
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
-		})
+		ref := &ateapipb.ObjectRef{Atespace: updateTagAtespaceFlag, Name: args[0]}
+		resp, err := updateActorSnapshotTagScope(ctx, client, ref, scope)
 		if err != nil {
-			return fmt.Errorf("failed to update actor snapshot tag: %w", err)
+			return err
 		}
 		return printer.PrintActorSnapshotTag(resp, outputFmt)
 	},
@@ -165,7 +165,7 @@ var deleteActorSnapshotTagCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		client, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
@@ -180,6 +180,28 @@ var deleteActorSnapshotTagCmd = &cobra.Command{
 	},
 }
 
+type actorSnapshotTagClient interface {
+	GetActorSnapshotTag(ctx context.Context, in *ateapipb.GetActorSnapshotTagRequest, opts ...grpc.CallOption) (*ateapipb.ActorSnapshotTag, error)
+	UpdateActorSnapshotTag(ctx context.Context, in *ateapipb.UpdateActorSnapshotTagRequest, opts ...grpc.CallOption) (*ateapipb.ActorSnapshotTag, error)
+}
+
+func updateActorSnapshotTagScope(ctx context.Context, client actorSnapshotTagClient, ref *ateapipb.ObjectRef, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
+	tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{Tag: ref})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get actor snapshot tag %q: %w", ref.GetName(), err)
+	}
+	tag.Scope = scope
+
+	resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag:        tag,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update actor snapshot tag: %w", err)
+	}
+	return resp, nil
+}
+
 func parseActorSnapshotTagScope(value string) (ateapipb.ActorSnapshotTagScope, error) {
 	switch strings.ToLower(value) {
 	case "atespace":
@@ -187,7 +209,7 @@ func parseActorSnapshotTagScope(value string) (ateapipb.ActorSnapshotTagScope, e
 	case "published":
 		return ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, nil
 	default:
-		return 0, fmt.Errorf("invalid scope %q; must be atespace or published", value)
+		return ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED, fmt.Errorf("invalid scope %q; must be atespace or published", value)
 	}
 }
 

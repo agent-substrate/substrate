@@ -199,7 +199,7 @@ func (rh *routerHealth) checkDataplane(ctx context.Context) (bool, string) {
 
 func (rh *routerHealth) checkK8s(ctx context.Context) (bool, string) {
 	if rh.clientset == nil {
-		return true, "Skipped (standalone/file store)"
+		return true, "Skipped (no Kubernetes client)"
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)

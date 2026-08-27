@@ -67,7 +67,7 @@ func filterWorkers(workers []*ateapipb.Worker, namespace, atespace, selector, sa
 		if namespace != "" && w.GetWorkerNamespace() != namespace {
 			continue
 		}
-		if atespace != "" && w.GetAssignment().GetActor().GetAtespace() != atespace {
+		if atespace != "" && w.GetStatus().GetAssignment().GetActor().GetAtespace() != atespace {
 			continue
 		}
 		if labelSel != nil && !labelSel.Matches(labels.Set(w.GetLabels())) {

@@ -21,18 +21,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -72,8 +71,10 @@ var (
 	redisTLSServerName  = pflag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
 	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
 
-	clientJWTIssuer      = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
-	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
+	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
+	storeBackend             = pflag.String("store-backend", "redis", "The persistence backend to use: redis|postgres.")
+	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI), used when --store-backend=postgres.")
+
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
 
@@ -84,9 +85,8 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	showVersion     = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag    = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
-	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 )
 
 func main() {
@@ -124,10 +124,18 @@ func main() {
 
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
-
-	redisClient, err := connectRedis(ctx)
+	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up Redis/Valkey", err)
+		serverboot.Fatal(ctx, "Failed to load authentication config", err)
+	}
+	authCfg, actorIdentityJWTIssuer, err := buildJWTProviders(ctx, authenticationConfig)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
+	}
+
+	persistence, err := connectStore(ctx)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -140,9 +148,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to build server credentials", err)
 	}
 
-	redisPersistence := ateredis.NewPersistence(redisClient)
-
-	workerCache := workercache.New(redisPersistence, 5*time.Minute)
+	workerCache := workercache.New(persistence, 5*time.Minute)
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
@@ -158,7 +164,7 @@ func main() {
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
-	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, workerPodInformer, workerPoolLister)
+	syncer := controlapi.NewWorkerPoolSyncer(persistence, workerPodInformer, workerPoolLister)
 	syncer.Start(ctx)
 
 	stopCh := make(chan struct{})
@@ -187,12 +193,10 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	sm := controlapi.NewService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
-	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
-
-	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence, workerCache)
-	debugSrv := debugapi.NewService(redisPersistence)
+	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, *actorIDCAPoolFile, persistence, workerCache)
+	debugSrv := debugapi.NewService(persistence)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -200,15 +204,6 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
-	authCfg := ateapiauth.ServerConfig{
-		VerifyBearerToken: func(ctx context.Context, bearer string) (string, error) {
-			claims, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
-			if err != nil {
-				return "", err
-			}
-			return claims.Subject, nil
-		},
-	}
 	if err := ateapiauth.ValidateServerConfig(authCfg); err != nil {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
@@ -288,10 +283,11 @@ func loadFlagsFromEnv() {
 		env  string
 	}{
 		{redisClusterAddress, "ATE_API_REDIS_ADDRESS"},
-		{clientJWTIssuer, "ATE_API_K8SJWT_ISSUER"},
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
+		{storeBackend, "ATE_API_STORE_BACKEND"},
+		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -309,8 +305,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-use-iam-auth", *redisUseIAMAuth),
 		slog.String("redis-tls-server-name", *redisTLSServerName),
 		slog.String("redis-client-cert", *redisClientCert),
-		slog.String("client-jwt-issuer", *clientJWTIssuer),
-		slog.String("client-jwt-audience", *clientJWTAudience),
+		slog.String("authentication-config", *authenticationConfigFile),
+		slog.String("store-backend", *storeBackend),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -318,6 +314,31 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
+}
+
+// connectStore builds the store.Interface for the selected --store-backend.
+// Startup fails if the selected backend's configuration is missing or the
+// database can't be reached.
+func connectStore(ctx context.Context) (store.Interface, error) {
+	switch *storeBackend {
+	case "redis":
+		redisClient, err := connectRedis(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("setting up Redis/Valkey: %w", err)
+		}
+		return ateredis.NewPersistence(redisClient), nil
+	case "postgres":
+		if *postgresConnectionString == "" {
+			return nil, fmt.Errorf("--store-backend=postgres requires --postgres-connection-string")
+		}
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		if err != nil {
+			return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
+		}
+		return persistence, nil
+	default:
+		return nil, fmt.Errorf("unknown --store-backend %q (want redis|postgres)", *storeBackend)
+	}
 }
 
 // connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if
@@ -450,104 +471,30 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 	}), nil
 }
 
-// buildK8sServiceAccountIssuerDiscoveryClient returns an *http.Client for
-// Kubernetes ServiceAccount issuer discovery. External issuers use system roots
-// and no pod ServiceAccount token. The in-cluster Kubernetes issuer trusts
-// caFile for TLS verification and injects the pod's ServiceAccount Bearer token
-// only for URLs under issuer. Returns nil (use the k8sjwt default timeout
-// client) if issuer is empty, or if the in-cluster issuer is configured but
-// caFile is empty or unreadable.
-func buildK8sServiceAccountIssuerDiscoveryClient(ctx context.Context, caFile, issuer string) *http.Client {
-	if issuer == "" {
-		return nil
-	}
-	if !isInClusterKubernetesIssuer(issuer) {
-		return &http.Client{Timeout: 10 * time.Second}
-	}
-	if caFile == "" {
-		return nil
-	}
-	ca, err := os.ReadFile(caFile)
-	if err != nil {
-		slog.WarnContext(ctx, "Could not read JWT CA cert file; OIDC discovery will use system trust", slog.String("path", caFile), slog.Any("err", err))
-		return nil
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(ca) {
-		slog.WarnContext(ctx, "Could not parse JWT CA cert file; OIDC discovery will use system trust", slog.String("path", caFile))
-		return nil
-	}
-	return &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &k8sServiceAccountIssuerDiscoveryTransport{
-			base: &http.Transport{
-				TLSClientConfig: &tls.Config{RootCAs: pool},
-			},
-			tokenFile: ateapiauth.DefaultServiceAccountTokenFile,
-			issuer:    issuer,
-		},
-	}
-}
-
-// k8sServiceAccountIssuerDiscoveryTransport injects the pod's ServiceAccount
-// Bearer token only when fetching OIDC documents within the configured issuer.
-// Kubernetes' discovered jwks_uri can point at the API server's routable host
-// instead of the issuer host (for example, Kind advertises the node IP), so the
-// standard Kubernetes JWKS path is also allowed.
-// Reads the token file fresh on each request so token rotation is handled
-// automatically.
-type k8sServiceAccountIssuerDiscoveryTransport struct {
-	base      http.RoundTripper
-	tokenFile string
-	issuer    string
-}
-
-func (t *k8sServiceAccountIssuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if issuerScopedURL(req.URL.String(), t.issuer) || isKubernetesJWKSURL(req.URL.String()) {
-		token, err := os.ReadFile(t.tokenFile)
-		if err == nil && len(token) > 0 {
-			req = req.Clone(req.Context())
-			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig) (ateapiauth.ServerConfig, string, error) {
+	var serverCfg ateapiauth.ServerConfig
+	var actorIdentityIssuer string
+	for _, providerCfg := range cfg.JWTProviders {
+		httpClient, err := oidcjwt.NewHTTPClient(providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile)
+		if err != nil {
+			return ateapiauth.ServerConfig{}, "", fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
 		}
+		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
+		serverCfg.JWTProviders = append(serverCfg.JWTProviders, ateapiauth.JWTProvider{
+			Name:   providerCfg.Name,
+			Issuer: providerCfg.Issuer,
+			Verify: func(ctx context.Context, bearer string) (string, error) {
+				claims, err := verifier.Verify(ctx, bearer, time.Now())
+				if err != nil {
+					return "", err
+				}
+				return claims.Subject, nil
+			},
+		})
+		if providerCfg.Name == cfg.ActorIdentityJWTProvider {
+			actorIdentityIssuer = providerCfg.Issuer
+		}
+		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))
 	}
-	return t.base.RoundTrip(req)
-}
-
-func issuerScopedURL(rawURL, issuer string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	issuerURL, err := url.Parse(issuer)
-	if err != nil {
-		return false
-	}
-	if !strings.EqualFold(u.Scheme, issuerURL.Scheme) || !strings.EqualFold(u.Host, issuerURL.Host) {
-		return false
-	}
-	issuerPath := strings.TrimRight(issuerURL.EscapedPath(), "/")
-	if issuerPath == "" {
-		issuerPath = "/"
-	}
-	requestPath := u.EscapedPath()
-	if issuerPath == "/" {
-		return strings.HasPrefix(requestPath, "/")
-	}
-	return requestPath == issuerPath || strings.HasPrefix(requestPath, issuerPath+"/")
-}
-
-func isKubernetesJWKSURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == "/openid/v1/jwks"
-}
-
-func isInClusterKubernetesIssuer(issuer string) bool {
-	u, err := url.Parse(issuer)
-	if err != nil {
-		return false
-	}
-	return u.Scheme == "https" && (u.Host == "kubernetes.default.svc" || u.Host == "kubernetes.default.svc.cluster.local")
+	return serverCfg, actorIdentityIssuer, nil
 }

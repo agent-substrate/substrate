@@ -28,6 +28,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 // defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a
@@ -112,17 +113,16 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.UID, req.GetActorUid())
 	}
 
-	observedAt := time.Now()
-	sample, err := cgroupstats.Read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
+	sample, err := s.sampleSandbox(active)
 	if err != nil {
-		// The requested actor is the active one but its cgroup is not there. Most
-		// often that is a poll landing in the boot: the ateom retains the
+		// The requested actor is the active one but its cgroup is not there.
+		// Most often that is a poll landing in the boot: the ateom retains the
 		// attribution from the moment it accepts the actor, before runsc has
-		// created the leaf. The other way in is a sandbox that went away between
-		// the check above and the read, which the next CheckpointWorkload turns
-		// into the NOT_FOUND above. Either way it is "no numbers right now" and the
-		// caller should take the next sample, so FAILED_PRECONDITION. Anything else
-		// is a real read failure.
+		// created the leaf. The other way in is a sandbox that went away
+		// underneath the read, which the next CheckpointWorkload turns into the
+		// NOT_FOUND above. Either way it is "no numbers right now" and the
+		// caller should take the next sample, so FAILED_PRECONDITION. Anything
+		// else is a real read failure.
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, status.Error(codes.FailedPrecondition, "no sandbox cgroup to measure yet")
 		}
@@ -144,7 +144,75 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
 
-	return &ateompb.GetWorkloadStatsResponse{
+	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
+}
+
+// GetActiveWorkloadStats implements
+// ateompb.Ateom/GetActiveWorkloadStats: the discovery read, sampling
+// whatever is executing with no identity asserted. Same lock discipline as
+// GetWorkloadStats above, for the same reasons.
+func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+	active := s.activeActor.Load()
+	if active == nil {
+		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD), nil
+	}
+
+	sample, err := s.sampleSandbox(active)
+	if err != nil {
+		// A missing cgroup is a workload with no numbers yet -- a poll landing
+		// in the boot -- which for a caller with no prior knowledge is as
+		// normal a finding as an available ateom, so it is a reason, not an
+		// error. Anything else is a real read failure.
+		if errors.Is(err, fs.ErrNotExist) {
+			return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET), nil
+		}
+		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
+	}
+
+	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
+	// there is no "requested actor" for NOT_FOUND to disown, and a transition
+	// underneath the read just means these numbers cannot be attributed to any
+	// single actor. Report the reason as of now -- the next tick resolves it
+	// either way.
+	if latest := s.activeActor.Load(); latest != active {
+		reason := ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET
+		if latest == nil {
+			reason = ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD
+		}
+		return noSample(reason), nil
+	}
+
+	return &ateompb.GetActiveWorkloadStatsResponse{
+		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: sample},
+	}, nil
+}
+
+// noSample is the discovery read's "nothing to give, and that is normal"
+// answer.
+func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResponse {
+	return &ateompb.GetActiveWorkloadStatsResponse{
+		Result: &ateompb.GetActiveWorkloadStatsResponse_NoSampleReason{NoSampleReason: reason},
+	}
+}
+
+// sampleSandbox reads the sandbox cgroup and builds the sample attributed to
+// active. Errors come back raw -- notably fs.ErrNotExist for a cgroup that is
+// not there yet -- because the two RPCs disagree on what that means: an error
+// code for the keyed read, a normal EXECUTING answer for the discovery read.
+// Callers re-check s.activeActor against the pointer they loaded after this
+// returns; the read holds no lock.
+func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
+	read := s.readSandboxCgroup
+	if read == nil {
+		read = cgroupstats.Read
+	}
+	observedAt := time.Now()
+	sample, err := read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
+	if err != nil {
+		return nil, err
+	}
+
+	return &ateompb.WorkloadStatsSample{
 		Atespace:               active.Ref.Atespace,
 		ActorName:              active.Ref.Name,
 		ActorUid:               active.UID,

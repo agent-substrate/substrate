@@ -31,9 +31,11 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -42,32 +44,40 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 var (
-	podUID       = flag.String("pod-uid", "", "The UID of the current pod")
-	chBinary     = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	kataConfig   = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
-	kataDebug    = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
-	showVersion  = flag.Bool("version", false, "Print version and exit.")
-	logLevelFlag = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	podUID        = flag.String("pod-uid", "", "The UID of the current pod")
+	chBinary      = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	kataConfig    = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
+	kataDebug     = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
+	vmmMemReserve = flag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
+	showVersion   = flag.Bool("version", false, "Print version and exit.")
+	logLevelFlag  = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
-	atunnelListenAddress       = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
-	workerCredentialBundle     = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
-	podIdentityTrustBundle     = flag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
-	atunnelClientIdentity      = flag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
-	atunnelEgressListenAddress = flag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
-	egressGatewayTrustBundle   = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+	otlpRelaySocket = flag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
+		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
+
+	atunnelListenAddress        = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	atunnelConnectListenAddress = flag.String("atunnel-connect-listen-address", "0.0.0.0:444", "Address for actor ingress mTLS CONNECT")
+	workerCredentialBundle      = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
+	podIdentityTrustBundle      = flag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
+	atunnelClientIdentity       = flag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelEgressListenAddress  = flag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	egressGatewayTrustBundle    = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
 )
 
 const (
@@ -103,16 +113,39 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
 
 	const serviceName = "ateom-microvm"
+	// Export through atelet's node-local relay when it is there, so telemetry
+	// never touches the worker pod's network. A nil conn means it is not, and
+	// both providers fall back to dialing the collector directly.
+	//
+	// A relay that cannot be dialed is logged rather than fatal, matching both
+	// ends of the same decision: Dial already treats an absent socket as a
+	// fallback rather than an error, and atelet logs and keeps going when it
+	// cannot serve the relay at all. What is lost here is the node-local export
+	// path, not the ateom's ability to run actors, and failing the worker pod
+	// over its telemetry route would turn a misconfigured flag into an outage.
+	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; exporting telemetry directly over the pod network",
+			slog.String("socket", *otlpRelaySocket), slog.Any("err", err))
+	}
+	if relayConn != nil {
+		defer relayConn.Close()
+	}
+
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: serviceName,
-		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ServiceName:  serviceName,
+		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ExporterConn: relayConn,
+		// So the spans say which path they took, including when relayConn is nil
+		// because the dial above failed and this ateom is exporting directly.
+		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName)
+	mp, err := serverboot.InitMetricsPushOnlyVia(ctx, serviceName, relayConn)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
@@ -189,6 +222,16 @@ func do(ctx context.Context) error {
 		}
 	}()
 	slog.InfoContext(ctx, "atunnel serving", slog.String("address", *atunnelListenAddress))
+	atunnelConnectListener, err := net.Listen("tcp", *atunnelConnectListenAddress)
+	if err != nil {
+		return fmt.Errorf("while opening atunnel CONNECT listener: %w", err)
+	}
+	go func() {
+		if err := atunnelIngress.ServeConnect(ctx, atunnelConnectListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor CONNECT ingress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel CONNECT serving", slog.String("address", *atunnelConnectListenAddress))
 	atunnelEgress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
 	if err != nil {
 		return fmt.Errorf("while configuring atunnel egress: %w", err)
@@ -210,12 +253,33 @@ func do(ctx context.Context) error {
 	}()
 	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
 
+	ateomService := NewService(*podUID, *chBinary, *kataConfig, *kataDebug, *vmmMemReserve, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle)
+
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
-	ateompb.RegisterAteomServer(svr, NewService(*podUID, *chBinary, *kataConfig, *kataDebug, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle))
+	ateompb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
+
+	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination grace
+	// period) and propagate it into the guest so the actor can save its state and
+	// exit cleanly before the grace period expires. The server deliberately keeps
+	// serving throughout gracefulShutdown: new workload RPCs are rejected with
+	// codes.Unavailable (see rejectIfDraining) while a suspend arriving mid-drain
+	// is still honored, which is what lets an actor checkpoint itself on eviction.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		slog.InfoContext(ctx, "Received signal; beginning graceful shutdown", slog.String("signal", sig.String()))
+		// Use a fresh context: the do() context is torn down on return, but the
+		// shutdown must outlive it until the guest has stopped and the VM is down.
+		ateomService.gracefulShutdown(context.Background())
+		// Only now stop the server, which blocks until any in-flight RPC (notably a
+		// concurrent CheckpointWorkload) has completed, then unblocks svr.Serve below.
+		svr.GracefulStop()
+	}()
 
 	slog.InfoContext(ctx, "ateom-microvm serving", slog.String("socket", sockPath))
 	if err := svr.Serve(lis); err != nil {
@@ -252,18 +316,84 @@ func ensureSharedPropagation(ctx context.Context, path string) error {
 	return nil
 }
 
+const (
+	rpcRunWorkload        = "RunWorkload"
+	rpcRestoreWorkload    = "RestoreWorkload"
+	rpcCheckpointWorkload = "CheckpointWorkload"
+)
+
+// activeRPCInfo identifies the workload RPC currently holding lock, so graceful
+// shutdown can cancel a boot that would otherwise hold it for minutes.
+type activeRPCInfo struct {
+	name   string
+	cancel context.CancelFunc
+}
+
+// cancelableMutex is a mutex whose acquisition can be abandoned. sync.Mutex has
+// no bounded Lock, and graceful shutdown must not park forever behind an RPC
+// that is wedged: it needs to give up and get on with signaling the guest
+// while the pod's termination grace period still has room.
+type cancelableMutex struct {
+	ch chan struct{}
+}
+
+func newCancelableMutex() *cancelableMutex {
+	ch := make(chan struct{}, 1)
+	ch <- struct{}{}
+	return &cancelableMutex{ch: ch}
+}
+
+func (m *cancelableMutex) Lock() {
+	<-m.ch
+}
+
+func (m *cancelableMutex) Unlock() {
+	m.ch <- struct{}{}
+}
+
+// LockContext acquires the mutex, reporting false if ctx terminates first. On
+// false the mutex is NOT held and must not be unlocked.
+func (m *cancelableMutex) LockContext(ctx context.Context) bool {
+	select {
+	case <-m.ch:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // AteomService is the cloud-hypervisor implementation of ateompb.AteomServer.
 type AteomService struct {
 	ateompb.UnimplementedAteomServer
 
 	// lock serializes RPCs; like ateom-gvisor, the run/checkpoint/restore
 	// lifecycle is not safe to drive concurrently.
-	lock sync.Mutex
+	lock *cancelableMutex
+
+	// shuttingDown is set once SIGTERM has been received. While true, new workload
+	// RPCs are rejected with codes.Unavailable so the control plane reschedules.
+	//
+	// Atomic rather than lock-guarded: gracefulShutdown sets it before it tries to
+	// take lock, precisely so an RPC that arrives while it is still waiting is
+	// turned away instead of queueing behind it.
+	shuttingDown atomic.Bool
+
+	// activeRPC is the workload RPC in flight, tracked so gracefulShutdown can
+	// cancel a run or restore rather than wait out its boot. Guarded by
+	// activeRPCMu, which is separate from lock because the whole point is to reach
+	// it while lock is held by the RPC being cancelled.
+	activeRPCMu sync.Mutex
+	activeRPC   *activeRPCInfo
 
 	podUID     string
 	chBinary   string
 	kataConfig string
 	kataDebug  bool
+
+	// memReserveMiB is guest RAM (MiB) held back from the pod's memory limit for
+	// the cloud-hypervisor VMM + virtiofsd (host processes sharing the pod cgroup
+	// with the guest RAM). Set from --vmm-mem-reserve-mib.
+	memReserveMiB int
 
 	// interiorNetNS hosts the per-activation actor veth peer (see net.go);
 	// kata is pointed at it.
@@ -316,7 +446,7 @@ type AteomService struct {
 	// poller through all of them. The writers keep holding lock; the point is the
 	// reader. As there, the type makes a lock-free read possible without making
 	// one happen — GetWorkloadStats must not take lock at all.
-	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+	activeActor atomic.Pointer[resources.ActorAttribution]
 
 	// guestStats is what GetWorkloadStats measures with: the kata-agent client
 	// and the guest containers to sum. Nil whenever there is no guest to ask —
@@ -339,12 +469,14 @@ type AteomService struct {
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(podUID, chBinary, kataConfig string, kataDebug bool, interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
+func NewService(podUID, chBinary, kataConfig string, kataDebug bool, memReserveMiB int, interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
 	return &AteomService{
+		lock:                         newCancelableMutex(),
 		podUID:                       podUID,
 		chBinary:                     chBinary,
 		kataConfig:                   kataConfig,
 		kataDebug:                    kataDebug,
+		memReserveMiB:                memReserveMiB,
 		interiorNetNS:                interiorNetNS,
 		actorLogger:                  actorLogger,
 		atunnelIngress:               atunnelIngress,
@@ -434,4 +566,38 @@ func (s *AteomService) egressRedirectPort(redirectEgress bool) uint16 {
 		return 0
 	}
 	return s.atunnelEgressPort
+}
+
+// rejectIfDraining returns a codes.Unavailable error if ateom has begun graceful
+// shutdown, so the control plane reschedules the actor onto a live worker.
+func (s *AteomService) rejectIfDraining() error {
+	if s.shuttingDown.Load() {
+		return status.Error(codes.Unavailable, "worker draining: not accepting new workloads")
+	}
+	return nil
+}
+
+func (s *AteomService) setActiveRPC(name string, cancel context.CancelFunc) {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	s.activeRPC = &activeRPCInfo{name: name, cancel: cancel}
+}
+
+func (s *AteomService) clearActiveRPC() {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	s.activeRPC = nil
+}
+
+// cancelActiveRestoreOrRunRPC cancels an in-flight run or restore so it releases
+// lock instead of running its boot to completion. A checkpoint is deliberately
+// left alone: it is the one workload RPC worth finishing during a drain, since
+// it is what saves the actor's state.
+func (s *AteomService) cancelActiveRestoreOrRunRPC() {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	if s.activeRPC != nil && (s.activeRPC.name == rpcRestoreWorkload || s.activeRPC.name == rpcRunWorkload) {
+		slog.Info("Cancelling in-progress workload startup RPC due to graceful shutdown", slog.String("rpc", s.activeRPC.name))
+		s.activeRPC.cancel()
+	}
 }

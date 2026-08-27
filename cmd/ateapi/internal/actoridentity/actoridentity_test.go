@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -47,9 +48,14 @@ const (
 	testActorName = "counter-1"
 	testPodNS     = "ate-workers"
 	testWorkerPod = "worker-abc"
-	testPool      = "pool-1"
-	testNode      = "node-a"
-	testOtherNode = "node-b"
+	// testWorkerName is the seeded worker's resource name, and so the name
+	// MintCert requests reference it by. It is deliberately not equal to
+	// testWorkerPodUID: MintCert must resolve the worker by name alone.
+	testWorkerName   = "5b1e0c7a-8d34-4f62-b0a9-1e7c4d29f350"
+	testWorkerPodUID = "e2c40f8b-71d9-4a35-8c6e-b04f9d1a7263"
+	testPool         = "pool-1"
+	testNode         = "node-a"
+	testOtherNode    = "node-b"
 )
 
 // newTestCert builds a self-signed leaf carrying the given SPIFFE URI path
@@ -157,7 +163,35 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", "audience", "", poolFile, "", nil, st, workers)
+	return New("issuer", "", poolFile, st, workers)
+}
+
+func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
+	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example"}
+	for _, tt := range []struct {
+		name string
+		ctx  context.Context
+		code codes.Code
+	}{
+		{name: "no principal", ctx: context.Background(), code: codes.Unauthenticated},
+		{
+			name: "mTLS principal",
+			ctx:  principal.InjectContext(context.Background(), principal.PrincipalInfo{ID: "spiffe://caller", Kind: principal.KindMTLS}),
+			code: codes.Unauthenticated,
+		},
+		{
+			name: "different JWT provider",
+			ctx:  principal.InjectContext(context.Background(), principal.PrincipalInfo{ID: "user", Kind: principal.KindJWT, Issuer: "https://accounts.google.com"}),
+			code: codes.PermissionDenied,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := srv.MintJWT(tt.ctx, &ateapipb.MintJWTRequest{})
+			if got := status.Code(err); got != tt.code {
+				t.Fatalf("MintJWT() code = %v, want %v (err = %v)", got, tt.code, err)
+			}
+		})
+	}
 }
 
 // newCSR returns a DER-encoded, correctly self-signed CSR.
@@ -179,9 +213,7 @@ func newCSR(t *testing.T) []byte {
 func mintCertRequest(t *testing.T, actorUID string) *ateapipb.MintCertRequest {
 	t.Helper()
 	return &ateapipb.MintCertRequest{
-		WorkerNamespace:           testPodNS,
-		WorkerPod:                 testWorkerPod,
-		WorkerPodUid:              "worker-uid",
+		Worker:                    &ateapipb.ObjectRef{Name: testWorkerName},
 		ExpectedActorUid:          actorUID,
 		CertificateSigningRequest: newCSR(t),
 		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
@@ -190,11 +222,12 @@ func mintCertRequest(t *testing.T, actorUID string) *ateapipb.MintCertRequest {
 
 // actorFixture describes the actor/worker pair seeded into the store.
 type actorFixture struct {
-	status     ateapipb.Actor_Status
+	state      ateapipb.ActorState
 	workerNode string
-	// actorWorkerPod overrides the Pod named by the actor while leaving the
-	// requesting worker unchanged, simulating a stale reciprocal assignment.
-	actorWorkerPod string
+	// actorWorkerName overrides the Worker the actor points at while leaving
+	// the requesting worker unchanged, simulating a stale reciprocal
+	// assignment.
+	actorWorkerName string
 	// assignedTo overrides the actor the worker claims to be hosting. The zero
 	// value means the worker is assigned to the seeded actor.
 	assignedTo resources.ActorRef
@@ -216,20 +249,21 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		Status:                 f.status,
+		Status:                 &ateapipb.ActorStatus{State: f.state},
 		ActorTemplateNamespace: "ate-demo",
 		ActorTemplateName:      "counter",
 	}
 	if !f.noPlacement {
-		workerPod := testWorkerPod
-		if f.actorWorkerPod != "" {
-			workerPod = f.actorWorkerPod
+		workerName := testWorkerName
+		if f.actorWorkerName != "" {
+			workerName = f.actorWorkerName
 		}
-		actor.WorkerAssignment = &ateapipb.WorkerAssignment{
+		actor.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
+			Worker:          &ateapipb.ObjectRef{Name: workerName},
 			WorkerNamespace: testPodNS,
 			WorkerPool:      testPool,
-			WorkerPod:       workerPod,
-			WorkerPodUid:    "worker-uid",
+			WorkerPod:       testWorkerPod,
+			WorkerPodUid:    testWorkerPodUID,
 		}
 	}
 	created, err := st.CreateActor(ctx, actor)
@@ -249,19 +283,22 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 		assignedActorUID = "other-actor-uid"
 	}
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 		WorkerNamespace: testPodNS,
 		WorkerPool:      testPool,
 		WorkerPod:       testWorkerPod,
-		WorkerPodUid:    "worker-uid",
+		WorkerPodUid:    testWorkerPodUID,
 		NodeName:        f.workerNode,
-		State:           ateapipb.Worker_STATE_ACTIVE,
-		Assignment: &ateapipb.Assignment{
-			Actor:    assigned.ToObjectRef(),
-			ActorUid: assignedActorUID,
+		Status: &ateapipb.WorkerStatus{
+			State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Assignment: &ateapipb.ActorAssignment{
+				Actor:    assigned.ToObjectRef(),
+				ActorUid: assignedActorUID,
+			},
 		},
 	}
 	if f.unassigned {
-		worker.Assignment = nil
+		worker.Status.Assignment = nil
 	}
 	if err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
@@ -270,7 +307,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 
 // runningOnNode is the fixture for a healthy actor hosted on nodeName.
 func runningOnNode(nodeName string) actorFixture {
-	return actorFixture{status: ateapipb.Actor_STATUS_RUNNING, workerNode: nodeName}
+	return actorFixture{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, workerNode: nodeName}
 }
 
 // TestMintCertAuthorization covers the gate deciding whether a caller may mint
@@ -289,10 +326,10 @@ func TestMintCertAuthorization(t *testing.T) {
 
 		fixture actorFixture
 
-		// Request fields override their defaults when non-nil.
-		workerNamespace  *string
-		workerPod        *string
-		workerPodUID     *string
+		// Request fields override their defaults when non-nil. A nil worker
+		// override leaves the request pointing at the seeded worker.
+		worker           *ateapipb.ObjectRef
+		noWorker         bool
 		expectedActorUID *string
 
 		wantCode codes.Code
@@ -340,7 +377,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor does not exist": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				state:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: testAtespace, Name: "no-such-actor"},
 			},
@@ -348,7 +385,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor exists under a different atespace": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				state:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: "some-other-atespace", Name: testActorName},
 			},
@@ -358,14 +395,14 @@ func TestMintCertAuthorization(t *testing.T) {
 			fixture:  runningOnNode(testOtherNode),
 			wantCode: codes.PermissionDenied,
 		},
-		"worker Pod UID does not match": {
-			fixture:      runningOnNode(testNode),
-			workerPodUID: ptr("sibling-worker-uid"),
-			wantCode:     codes.PermissionDenied,
+		"worker names a different Pod UID": {
+			fixture:  runningOnNode(testNode),
+			worker:   &ateapipb.ObjectRef{Name: "9a2f7b81-4c60-4d13-8e5a-3f0b6c8d1e27"},
+			wantCode: codes.PermissionDenied,
 		},
 		"worker is assigned to a different actor": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				state:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: testAtespace, Name: "someone-else"},
 			},
@@ -373,7 +410,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"worker is assigned to an actor with same name and atespace but different UID": {
 			fixture: actorFixture{
-				status:        ateapipb.Actor_STATUS_RUNNING,
+				state:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode:    testNode,
 				mismatchedUID: true,
 			},
@@ -381,15 +418,15 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor points to a different worker": {
 			fixture: actorFixture{
-				status:         ateapipb.Actor_STATUS_RUNNING,
-				workerNode:     testNode,
-				actorWorkerPod: "replacement-worker",
+				state:           ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				workerNode:      testNode,
+				actorWorkerName: "7c3d9e15-2a48-4b6f-9d01-8e5a3f0b6c8d",
 			},
 			wantCode: codes.PermissionDenied,
 		},
 		"hosting worker record is missing": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				state:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				noWorker:   true,
 			},
@@ -397,7 +434,7 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"actor has no placement": {
 			fixture: actorFixture{
-				status:      ateapipb.Actor_STATUS_RUNNING,
+				state:       ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode:  testNode,
 				noPlacement: true,
 			},
@@ -405,21 +442,26 @@ func TestMintCertAuthorization(t *testing.T) {
 		},
 		"worker has been released": {
 			fixture: actorFixture{
-				status:     ateapipb.Actor_STATUS_RUNNING,
+				state:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				workerNode: testNode,
 				unassigned: true,
 			},
 			wantCode: codes.PermissionDenied,
 		},
-		"worker namespace is empty": {
-			fixture:         runningOnNode(testNode),
-			workerNamespace: ptr(""),
-			wantCode:        codes.InvalidArgument,
+		"worker is unset": {
+			fixture:  runningOnNode(testNode),
+			noWorker: true,
+			wantCode: codes.InvalidArgument,
 		},
-		"worker Pod is empty": {
-			fixture:   runningOnNode(testNode),
-			workerPod: ptr(""),
-			wantCode:  codes.InvalidArgument,
+		"worker name is empty": {
+			fixture:  runningOnNode(testNode),
+			worker:   &ateapipb.ObjectRef{},
+			wantCode: codes.InvalidArgument,
+		},
+		"worker carries an atespace": {
+			fixture:  runningOnNode(testNode),
+			worker:   &ateapipb.ObjectRef{Atespace: testAtespace, Name: testWorkerName},
+			wantCode: codes.InvalidArgument,
 		},
 		"expected actor UID is empty": {
 			fixture:          runningOnNode(testNode),
@@ -449,14 +491,11 @@ func TestMintCertAuthorization(t *testing.T) {
 				t.Fatalf("read seeded actor: %v", err)
 			}
 			req := mintCertRequest(t, actor.GetMetadata().GetUid())
-			if tc.workerNamespace != nil {
-				req.WorkerNamespace = *tc.workerNamespace
-			}
-			if tc.workerPod != nil {
-				req.WorkerPod = *tc.workerPod
-			}
-			if tc.workerPodUID != nil {
-				req.WorkerPodUid = *tc.workerPodUID
+			switch {
+			case tc.noWorker:
+				req.Worker = nil
+			case tc.worker != nil:
+				req.Worker = tc.worker
 			}
 			if tc.expectedActorUID != nil {
 				req.ExpectedActorUid = *tc.expectedActorUID
@@ -602,25 +641,25 @@ func TestMintCertActorUID(t *testing.T) {
 	}
 }
 
-// TestMintCertActorStatus pins down that the actor's status does not gate
+// TestMintCertActorState pins down that the actor's state does not gate
 // minting: an actor still assigned to a worker on the caller's node gets a
-// credential whatever status it carries, except while it is being deleted.
+// credential whatever state it carries, except while it is being deleted.
 //
-// STATUS_RESUMING is the case that matters in practice. atelet mints while
-// serving the Run/Restore RPC that ateapi issues before marking the actor
-// RUNNING, so gating on RUNNING would make every resume unsatisfiable.
+// ACTOR_STATE_RESUMING is the case that matters in practice. atelet mints
+// while serving the Run/Restore RPC that ateapi issues before marking the
+// actor RUNNING, so gating on RUNNING would make every resume unsatisfiable.
 //
-// The terminal statuses below are seeded with a worker assignment that the
+// The terminal states below are seeded with a worker assignment that the
 // control plane would already have cleared, so they are not reachable in a
 // healthy system; they are exercised to record that the assignment, not the
-// status, is what the decision rests on. Enumerating the enum rather than
-// listing statuses means a status added later is covered without editing this
+// state, is what the decision rests on. Enumerating the enum rather than
+// listing states means a state added later is covered without editing this
 // test.
-func TestMintCertActorStatus(t *testing.T) {
-	for value, name := range ateapipb.Actor_Status_name {
-		actorStatus := ateapipb.Actor_Status(value)
+func TestMintCertActorState(t *testing.T) {
+	for value, name := range ateapipb.ActorState_name {
+		actorState := ateapipb.ActorState(value)
 		wantCode := codes.OK
-		if actorStatus == ateapipb.Actor_STATUS_DELETING {
+		if actorState == ateapipb.ActorState_ACTOR_STATE_DELETING {
 			wantCode = codes.FailedPrecondition
 		}
 		t.Run(name, func(t *testing.T) {
@@ -628,7 +667,7 @@ func TestMintCertActorStatus(t *testing.T) {
 			st, cleanup := storetest.SetupTestStore(t)
 			defer cleanup()
 
-			seedActor(t, ctx, st, actorFixture{status: actorStatus, workerNode: testNode})
+			seedActor(t, ctx, st, actorFixture{state: actorState, workerNode: testNode})
 			srv := newTestServer(t, st)
 
 			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
@@ -643,13 +682,13 @@ func TestMintCertActorStatus(t *testing.T) {
 	}
 }
 
-// TestMintCertDeniesUnassignedActorWhateverItsStatus checks that the placement
-// checks — not the status — are what stops a departed actor. A RUNNING actor
+// TestMintCertDeniesUnassignedActorWhateverItsState checks that the placement
+// checks — not the state — are what stops a departed actor. A RUNNING actor
 // whose worker has been released is refused just as a SUSPENDED one is.
-func TestMintCertDeniesUnassignedActorWhateverItsStatus(t *testing.T) {
-	for name, actorStatus := range map[string]ateapipb.Actor_Status{
-		"Running":   ateapipb.Actor_STATUS_RUNNING,
-		"Suspended": ateapipb.Actor_STATUS_SUSPENDED,
+func TestMintCertDeniesUnassignedActorWhateverItsState(t *testing.T) {
+	for name, actorState := range map[string]ateapipb.ActorState{
+		"Running":   ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		"Suspended": ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -658,9 +697,9 @@ func TestMintCertDeniesUnassignedActorWhateverItsStatus(t *testing.T) {
 
 			// The worker still exists on the caller's node but has been released,
 			// which is what pause, suspend and crash all do before writing the
-			// terminal status.
+			// terminal state.
 			seedActor(t, ctx, st, actorFixture{
-				status:     actorStatus,
+				state:      actorState,
 				workerNode: testNode,
 				unassigned: true,
 			})
@@ -697,7 +736,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 	if err := workers.Start(cacheCtx); err != nil {
 		t.Fatal(err)
 	}
-	srv := New("issuer", "audience", "", filepath.Join(t.TempDir(), "missing.json"), "", nil, st, workers)
+	srv := New("issuer", "", filepath.Join(t.TempDir(), "missing.json"), st, workers)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {

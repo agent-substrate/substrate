@@ -62,7 +62,6 @@ func TestStatuszEndpoint(t *testing.T) {
 	caPath, clientCertPath := writeTestTLSMaterial(t)
 
 	cfg := routerConfig{
-		Standalone:         true,
 		Namespace:          "default",
 		StatusPort:         httpPort,
 		HttpPort:           8080,

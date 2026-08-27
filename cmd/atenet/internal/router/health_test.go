@@ -208,7 +208,7 @@ func TestHealthCheckDoesNotBlockReportOrStatusz(t *testing.T) {
 	}
 
 	statusServer := httptest.NewServer(http.HandlerFunc((&RouterServer{
-		cfg:    routerConfig{Standalone: true},
+		cfg:    routerConfig{},
 		health: rh,
 	}).handleStatusz))
 	defer statusServer.Close()

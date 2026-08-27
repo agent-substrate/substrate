@@ -55,7 +55,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -66,6 +65,72 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						VolumeMounts: []*ateletpb.VolumeMount{
 							{Name: "home", MountPath: "/home/user"},
 							{Name: "home", MountPath: "/workspace"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "converts SystemInfo volume with actorMetadata items",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{
+							Name: "system-info",
+							VolumeSource: atev1alpha1.VolumeSource{
+								SystemInfo: &atev1alpha1.SystemInfoVolumeSource{
+									DataSources: []atev1alpha1.SystemInfoDataSource{
+										{ActorMetadata: &atev1alpha1.ActorMetadataDataSource{
+											Items: []atev1alpha1.ActorMetadataItem{
+												{Field: atev1alpha1.ActorMetadataFieldName, Path: "actor-name"},
+												{Field: atev1alpha1.ActorMetadataFieldAtespace, Path: "atespace"},
+												{Field: atev1alpha1.ActorMetadataFieldUID, Path: "identity/actor-uid"},
+											},
+										}},
+									},
+								},
+							},
+						},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "system-info", MountPath: "/run/ate"},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name: "system-info",
+						Source: &ateletpb.Volume_SystemInfo{
+							SystemInfo: &ateletpb.SystemInfoVolume{
+								DataSources: []*ateletpb.SystemInfoDataSource{
+									{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+										ActorMetadata: &ateletpb.ActorMetadataDataSource{
+											Items: []*ateletpb.ActorMetadataItem{
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+											},
+										},
+									}},
+								},
+							},
+						},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "system-info", MountPath: "/run/ate"},
 						},
 					},
 				},
@@ -95,7 +160,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -127,7 +191,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -289,12 +352,14 @@ func TestAppendExternalVolumes(t *testing.T) {
 			Atespace: "space-abc",
 			Name:     "actor-123",
 		},
-		ActorVolumes: []*ateapipb.ExternalVolume{
-			{
-				VolumeName:      "vol-1",
-				StorageVolumeId: "vol-gce-pd-123",
-				VolumeType:      "pd-standard",
-				VolumeContext:   map[string]string{"foo": "bar"},
+		Status: &ateapipb.ActorStatus{
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				{
+					VolumeName:      "vol-1",
+					StorageVolumeId: "vol-gce-pd-123",
+					VolumeType:      "pd-standard",
+					VolumeContext:   map[string]string{"foo": "bar"},
+				},
 			},
 		},
 	}
@@ -308,7 +373,6 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Volumes: []*ateletpb.Volume{
 			{
 				Name: "vol-1",
-				Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 				Source: &ateletpb.Volume_External{
 					External: &ateletpb.ExternalVolumeSource{
 						StorageVolumeId: "vol-gce-pd-123",
@@ -330,9 +394,69 @@ func TestAppendExternalVolumes(t *testing.T) {
 			Atespace: "space-abc",
 			Name:     "actor-123",
 		},
-		ActorVolumes: []*ateapipb.ExternalVolume{},
+		Status: &ateapipb.ActorStatus{ActorVolumes: []*ateapipb.ExternalVolume{}},
 	}
 	if err := appendExternalVolumes(&ateletpb.WorkloadSpec{}, template, missingActor); err == nil {
 		t.Errorf("appendExternalVolumes expected error for missing volume, got nil")
+	}
+}
+
+func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
+	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-caps", Namespace: "agent-ns"},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			Containers: []atev1alpha1.Container{
+				{
+					Name:  "adjusted",
+					Image: "main",
+					SecurityContext: &atev1alpha1.SecurityContext{
+						Capabilities: &atev1alpha1.Capabilities{
+							Add:  []atev1alpha1.Capability{"NET_ADMIN"},
+							Drop: []atev1alpha1.Capability{"ALL"},
+						},
+					},
+				},
+				{
+					Name:  "unset",
+					Image: "side",
+				},
+				{
+					// An empty capabilities block asks for no adjustment, so
+					// nothing is put on the wire for it.
+					Name:            "empty",
+					Image:           "third",
+					SecurityContext: &atev1alpha1.SecurityContext{Capabilities: &atev1alpha1.Capabilities{}},
+				},
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+	}
+
+	want := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{
+			{
+				Name:  "adjusted",
+				Image: "main",
+				SecurityContext: &ateletpb.SecurityContext{
+					Capabilities: &ateletpb.Capabilities{
+						Add:  []string{"NET_ADMIN"},
+						Drop: []string{"ALL"},
+					},
+				},
+			},
+			{
+				Name:  "unset",
+				Image: "side",
+			},
+			{
+				Name:  "empty",
+				Image: "third",
+			},
+		},
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
 }

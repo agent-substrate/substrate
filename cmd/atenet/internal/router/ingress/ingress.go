@@ -25,8 +25,10 @@ package ingress
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -34,6 +36,7 @@ import (
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/atunnel"
@@ -41,26 +44,37 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// OriginalDstHeader carries the resolved worker atunnel address (IP:443) to
-// the ORIGINAL_DST cluster. It is this handler's contract with the ingress
-// Envoy configuration the xDS server generates.
-const OriginalDstHeader = "x-ate-original-dst"
+// defaultActorPort is the actor's port when a request names no other one.
+const defaultActorPort = 80
+
+const (
+	// OriginalDstMetadataKey is the dynamic-metadata namespace carrying the
+	// resolved worker address and port. xds.go's ORIGINAL_DST cluster reads
+	// it to pick the upstream.
+	OriginalDstMetadataKey = "envoy.filters.listener.original_dst"
+	// OriginalDstAddressKey is the resolved worker atunnel address (IP:443).
+	OriginalDstAddressKey = "local"
+	// OriginalDstPortKey is the actor's target port.
+	OriginalDstPortKey = "port"
+
+	// AuthorityFilterStateKey is the filter-state key holding the request's
+	// :authority, set by xds.go's authorityFilterStateFilter.
+	AuthorityFilterStateKey = "dev.ate.authority"
+	// AuthorityFilterStateAttribute is the CEL expression ext_proc evaluates
+	// to read AuthorityFilterStateKey back out.
+	AuthorityFilterStateAttribute = "filter_state['" + AuthorityFilterStateKey + "']"
+)
 
 // Handler routes ingress requests to the worker hosting their actor.
 type Handler struct {
 	resumer *ActorResumer
 	parking *parkingLot
-	// routeViaAuthority rewrites :authority to the worker atunnel address for
-	// data planes that dial it rather than OriginalDstHeader. See
-	// addRoutingMutations.
-	routeViaAuthority bool
 }
 
-func New(apiClient ateapipb.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics, routeViaAuthority bool) *Handler {
+func New(apiClient ateapipb.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
 	return &Handler{
-		resumer:           NewActorResumer(apiClient, withParking(parkCfg)),
-		parking:           newParkingLot(parkCfg, parkMetrics),
-		routeViaAuthority: routeViaAuthority,
+		resumer: NewActorResumer(apiClient, withParking(parkCfg)),
+		parking: newParkingLot(parkCfg, parkMetrics),
 	}
 }
 
@@ -80,10 +94,26 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
-	actorRef, err := parseActorRef(md.Host)
+	// Resolved from filter state rather than Host/:authority directly: a
+	// reinjected CONNECT tunnel's own :authority has nothing to do with the
+	// actor, so xds.go captures the real one at connect_terminate instead.
+	authority := md.Attribute(AuthorityFilterStateAttribute)
+	if authority == "" {
+		return extproc.Result{}, invalidHostErr(md.Host, fmt.Errorf("missing %s request attribute", AuthorityFilterStateAttribute))
+	}
+	actorRef, err := parseActorRef(authority)
 	if err != nil {
-		// Host is invalid, respond with 404.
-		return extproc.Result{}, invalidHostErr(md.Host, err)
+		// Authority is invalid, respond with 404.
+		return extproc.Result{}, invalidHostErr(authority, err)
+	}
+
+	// CONNECT traffic can name a port other than defaultActorPort in the
+	// authority.
+	targetPort := defaultActorPort
+	if _, portStr, err := net.SplitHostPort(authority); err == nil {
+		if p, ok := atunnel.ParsePort(portStr); ok {
+			targetPort = p
+		}
 	}
 
 	// Admit the request to the parking lot before resuming. While resume is
@@ -111,10 +141,10 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		Resume:            string(resumeOutcome),
 	}
 
-	workerIP := actor.GetWorkerAssignment().GetWorkerPodIp()
+	workerIP := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
-		slog.String("status", actor.GetStatus().String()),
+		slog.String("state", actor.GetStatus().GetState().String()),
 		slog.String("workerIP", workerIP))
 
 	if ip := net.ParseIP(workerIP); ip == nil {
@@ -122,22 +152,37 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 			"actor %s routing failed", actorRef)
 	}
 
-	// The actor is reached through the in-worker atunnel ingress server, which
-	// listens on :443 (mTLS) and forwards to the actor's :80. The worker no
-	// longer DNATs pod-IP:80 to the actor, so the router dials :443 and the
-	// ORIGINAL_DST cluster's upstream TLS context presents the router's
-	// podidentity client cert (see buildOriginalDstCluster and
-	// buildUpstreamTransportSocket).
-	// TODO(bowei) -- handle more than port 80 on the actor.
+	// atunnel's ingress server listens on :443 (mTLS) and forwards to
+	// targetPort on the actor; the router's client cert comes from the
+	// ORIGINAL_DST cluster's upstream TLS context (xds.go).
 	targetAddr := net.JoinHostPort(workerIP, "443")
 
 	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
-	// Route by telling the ORIGINAL_DST cluster which worker atunnel address to
-	// dial, without touching :authority — atunnel authorizes the actor by the
-	// original Host (actor DNS name).
+	// Envoy and agentgateway both pick the upstream from dynamic metadata,
+	// so the resolved address and port go there.
+	dynamicMetadata, err := structpb.NewStruct(map[string]any{
+		OriginalDstMetadataKey: map[string]any{
+			OriginalDstAddressKey: targetAddr,
+			OriginalDstPortKey:    strconv.Itoa(targetPort),
+		},
+	})
+	if err != nil {
+		return res, extproc.NewReqError(envoy_type.StatusCode_InternalServerError,
+			"actor %s routing failed", actorRef)
+	}
+
+	// :authority/Host stays untouched, so atunnel authorizes by the actor's
+	// own DNS name. The target port still goes as a header: atunnel can't
+	// read dynamic metadata.
 	mutation := &extprocv3.HeaderMutation{}
-	addRoutingMutations(targetAddr, md.Host, h.routeViaAuthority, mutation)
+	mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
+		Header: &corev3.HeaderValue{
+			Key:      atunnel.TargetPortHeader,
+			RawValue: []byte(strconv.Itoa(targetPort)),
+		},
+		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+	})
 
 	res.Target = targetAddr
 	res.Response = &extprocv3.HeadersResponse{
@@ -145,6 +190,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 			HeaderMutation: mutation,
 		},
 	}
+	res.DynamicMetadata = dynamicMetadata
 	return res, nil
 }
 
@@ -162,50 +208,4 @@ func parseActorRef(host string) (resources.ActorRef, error) {
 		host = h
 	}
 	return resources.ParseActorDNSName(host)
-}
-
-// addOriginalDstMutation sets the header the ORIGINAL_DST cluster reads to pick
-// the upstream address (the worker atunnel IP:443). Unlike an :authority
-// rewrite it leaves the request Host intact, so atunnel still sees the actor
-// DNS name and can authorize the active actor.
-//
-// Nothing strips this header from the incoming request, so overwrite rather
-// than append: a client-supplied value must never influence the address Envoy
-// dials. ext_proc mutations already default to replace, but the default is
-// split across the deprecated append field and append_action — pin it.
-func addOriginalDstMutation(dst string, mut *extprocv3.HeaderMutation) {
-	mut.SetHeaders = append(mut.SetHeaders,
-		&corev3.HeaderValueOption{
-			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-			Header: &corev3.HeaderValue{
-				Key:      OriginalDstHeader,
-				RawValue: []byte(dst),
-			},
-		},
-	)
-}
-
-// addRoutingMutations overwrites all routing metadata derived from the
-// control-plane result. Envoy dials OriginalDstHeader while preserving
-// :authority. Agentgateway v1.4.1's static dynamic backend instead dials the
-// request :authority, so that mode rewrites it to the worker atunnel address.
-// OriginalHostHeader lets atunnel restore and authorize the actor authority.
-func addRoutingMutations(dst, actorHost string, routeViaAuthority bool, mut *extprocv3.HeaderMutation) {
-	addOriginalDstMutation(dst, mut)
-	mut.SetHeaders = append(mut.SetHeaders, &corev3.HeaderValueOption{
-		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		Header: &corev3.HeaderValue{
-			Key:      atunnel.OriginalHostHeader,
-			RawValue: []byte(actorHost),
-		},
-	})
-	if routeViaAuthority {
-		mut.SetHeaders = append(mut.SetHeaders, &corev3.HeaderValueOption{
-			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-			Header: &corev3.HeaderValue{
-				Key:      extproc.AuthorityHeader,
-				RawValue: []byte(dst),
-			},
-		})
-	}
 }

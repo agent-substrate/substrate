@@ -15,6 +15,7 @@
 package atunnel
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,6 +24,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -33,6 +35,99 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRelayIngressWithHalfClose(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	actor, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actor.Close()
+	upstream := <-accepted
+	defer upstream.Close()
+
+	clientReader, clientInput := io.Pipe()
+	defer clientReader.Close()
+	var clientOutput bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		relayIngressWithHalfClose(context.Background(), upstream, clientReader, &clientOutput, clientReader)
+		close(done)
+	}()
+
+	if _, err := io.WriteString(clientInput, "request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientInput.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	request, err := io.ReadAll(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(request); got != "request" {
+		t.Fatalf("actor received %q, want request", got)
+	}
+
+	if _, err := io.WriteString(actor, "response"); err != nil {
+		t.Fatal(err)
+	}
+	if err := actor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not finish after the actor response ended")
+	}
+	if got := clientOutput.String(); got != "response" {
+		t.Errorf("client received %q, want response", got)
+	}
+}
+
+func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
+	upstream, actor := net.Pipe()
+	defer actor.Close()
+	clientReader, clientInput := io.Pipe()
+	defer clientInput.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		relayIngressWithHalfClose(ctx, upstream, clientReader, io.Discard, clientReader)
+		close(done)
+	}()
+
+	cancel()
+	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := actor.Read(make([]byte, 1)); err == nil {
+		t.Fatal("actor connection remained open after relay cancellation")
+	}
+	if _, err := io.WriteString(clientInput, "request"); err == nil {
+		t.Fatal("client stream remained open after relay cancellation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not return after cancellation")
+	}
+}
 
 func TestServeHTTP(t *testing.T) {
 	upstreamHost := make(chan string, 4)
@@ -92,6 +187,97 @@ func TestServeHTTP(t *testing.T) {
 		if got := <-upstreamHost; got != "actor-1.team-a.actors.resources.substrate.ate.dev" && got != "actor-1.team-a.actors.resources.substrate.ate.dev:443" && got != "ACTOR-1.TEAM-A.ACTORS.RESOURCES.SUBSTRATE.ATE.DEV" {
 			t.Errorf("upstream Host = %q", got)
 		}
+	}
+}
+
+func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	var gotURLHost, gotHost, gotHeader string
+	s.proxy.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotURLHost = r.URL.Host
+		gotHost = r.Host
+		gotHeader = r.Header.Get(TargetPortHeader)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name           string
+		targetPort     string
+		wantDialedHost string
+	}{
+		{"arbitrary port overrides upstream's", "9090", "actor.internal:9090"},
+		{"absent falls back to upstream's own port", "", "actor.internal:80"},
+		{"invalid falls back to upstream's own port", "not-a-port", "actor.internal:80"},
+		{"out of range falls back to upstream's own port", "70000", "actor.internal:80"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+			req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+			if tt.targetPort != "" {
+				req.Header.Set(TargetPortHeader, tt.targetPort)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+			}
+			if gotURLHost != tt.wantDialedHost {
+				t.Errorf("dialed host = %q, want %q", gotURLHost, tt.wantDialedHost)
+			}
+			if gotHost != "actor-1.team-a.actors.resources.substrate.ate.dev" {
+				t.Errorf("Host header changed to %q; the actor should see its stable mesh hostname", gotHost)
+			}
+			if gotHeader != "" {
+				t.Errorf("%s leaked to the actor upstream: %q", TargetPortHeader, gotHeader)
+			}
+		})
+	}
+}
+
+func TestServeConnectHTTPValidatesMethodAndAuthority(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, upstreamURL)
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		host   string
+		want   int
+	}{
+		{name: "rejects non CONNECT", method: http.MethodGet, host: "actor-1.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMethodNotAllowed},
+		{name: "requires authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev", want: http.StatusBadRequest},
+		{name: "rejects invalid authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev:70000", want: http.StatusMisdirectedRequest},
+		{name: "rejects inactive actor", method: http.MethodConnect, host: "actor-2.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMisdirectedRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "https://worker/", nil)
+			req.Host = tt.host
+			rec := httptest.NewRecorder()
+			s.ServeConnectHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+		})
 	}
 }
 
@@ -194,6 +380,9 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := s.tlsConfig.NextProtos; len(got) != 0 {
+		t.Fatalf("ordinary ingress ALPN protocols = %v, want none", got)
 	}
 
 	untrustedCA := newTestCA(t)

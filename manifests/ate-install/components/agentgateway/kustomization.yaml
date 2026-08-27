@@ -19,7 +19,12 @@ resources:
   - configmap.yaml
 
 patches:
-  - patch: |-
+  - target:
+      version: v1
+      kind: ConfigMap
+      name: atenet-router-envoy-config
+      namespace: ate-system
+    patch: |-
       apiVersion: v1
       kind: ConfigMap
       metadata:
@@ -34,15 +39,15 @@ patches:
       namespace: ate-system
     patch: |-
       - op: test
-        path: /spec/template/spec/containers/0/args/5
+        path: /spec/template/spec/containers/0/args/4
         value: --port-xds=18000
       - op: remove
-        path: /spec/template/spec/containers/0/args/5
+        path: /spec/template/spec/containers/0/args/4
       - op: test
-        path: /spec/template/spec/containers/0/args/9
+        path: /spec/template/spec/containers/0/args/8
         value: --envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem
       - op: remove
-        path: /spec/template/spec/containers/0/args/9
+        path: /spec/template/spec/containers/0/args/8
       - op: test
         path: /spec/template/spec/containers/0/ports/0/name
         value: xds
@@ -55,7 +60,7 @@ patches:
         path: /spec/template/spec/containers/1
         value:
           name: agentgateway
-          image: cr.agentgateway.dev/agentgateway:v1.4.1
+          image: cr.agentgateway.dev/agentgateway:v0.0.0-alpha.a6c0e366
           args:
           - -f
           - /etc/agentgateway/config.yaml
@@ -67,6 +72,10 @@ patches:
             containerPort: 8080
           - name: https
             containerPort: 8443
+          - name: connect
+            containerPort: 8081
+          - name: connect-tls
+            containerPort: 8444
           - name: readiness
             containerPort: 15021
           - name: stats
@@ -78,7 +87,13 @@ patches:
             mountPath: /run/servicedns.podcert.ate.dev
           - name: podidentity
             mountPath: /run/podidentity.podcert.ate.dev
-  - patch: |-
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-router
+      namespace: ate-system
+    patch: |-
       apiVersion: apps/v1
       kind: Deployment
       metadata:
@@ -91,3 +106,52 @@ patches:
             - name: envoy-config
               configMap:
                 name: atenet-router-agentgateway-config
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0
+        value:
+          name: agentgateway
+          image: cr.agentgateway.dev/agentgateway:v1.4.1
+          args:
+          - -f
+          - /etc/agentgateway/config.yaml
+          ports:
+          - name: https
+            containerPort: 8443
+          - name: readiness
+            containerPort: 15021
+          - name: stats
+            containerPort: 15020
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: readiness
+            periodSeconds: 10
+          startupProbe:
+            failureThreshold: 60
+            httpGet:
+              path: /healthz/ready
+              port: readiness
+            periodSeconds: 1
+          volumeMounts:
+          - name: config
+            mountPath: /etc/agentgateway
+            readOnly: true
+          - name: servicedns
+            mountPath: /run/servicedns.podcert.ate.dev
+            readOnly: true
+          - name: actor-id-ca-certs
+            mountPath: /run/actor-id-ca-certs
+            readOnly: true
+      - op: add
+        path: /spec/template/spec/containers/1/args/-
+        value: --atenet-router=agentgateway
+      - op: replace
+        path: /spec/template/spec/volumes/0/configMap/name
+        value: atenet-egress-agentgateway-config

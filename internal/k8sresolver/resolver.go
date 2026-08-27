@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	discoverylisters "k8s.io/client-go/listers/discovery/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 )
 
 const Scheme = "k8s"
@@ -62,6 +63,7 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts res
 
 	inf := factory.Discovery().V1().EndpointSlices()
 	ctx, cancel := context.WithCancel(context.Background())
+	queue := workqueue.NewTyped[struct{}]()
 	r := &k8sResolver{
 		ctx:      ctx,
 		cancel:   cancel,
@@ -71,6 +73,7 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts res
 		informer: inf.Informer(),
 		lister:   inf.Lister().EndpointSlices(ns),
 		selector: selector,
+		queue:    queue,
 	}
 
 	_ = inf.Informer().SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
@@ -81,9 +84,9 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts res
 	})
 
 	reg, err := inf.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(_ any) { r.updateState() },
-		UpdateFunc: func(_, _ any) { r.updateState() },
-		DeleteFunc: func(_ any) { r.updateState() },
+		AddFunc:    func(_ any) { r.trigger() },
+		UpdateFunc: func(_, _ any) { r.trigger() },
+		DeleteFunc: func(_ any) { r.trigger() },
 	})
 	if err != nil {
 		return nil, fmt.Errorf("k8sresolver: failed to add event handler for %s/%s: %w", ns, svc, err)
@@ -91,10 +94,12 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts res
 
 	r.registration = reg
 
+	go r.run()
+
 	factory.Start(ctx.Done())
 	go func() {
 		if cache.WaitForCacheSync(ctx.Done(), inf.Informer().HasSynced) {
-			r.updateState()
+			r.trigger()
 		} else if ctx.Err() == nil {
 			slog.Error("k8sresolver failed to sync EndpointSlice cache", slog.String("namespace", ns), slog.String("service", svc))
 			cc.ReportError(fmt.Errorf("k8sresolver: failed to sync EndpointSlice cache for %s/%s", ns, svc))
@@ -141,15 +146,37 @@ type k8sResolver struct {
 	registration cache.ResourceEventHandlerRegistration
 	lister       discoverylisters.EndpointSliceNamespaceLister
 	selector     labels.Selector
+	queue        workqueue.TypedInterface[struct{}]
 }
 
-func (r *k8sResolver) ResolveNow(resolver.ResolveNowOptions) { r.updateState() }
+func (r *k8sResolver) ResolveNow(resolver.ResolveNowOptions) { r.trigger() }
 
 func (r *k8sResolver) Close() {
 	r.cancel()
+	r.queue.ShutDown()
 	if r.registration != nil {
 		_ = r.informer.RemoveEventHandler(r.registration)
 	}
+}
+
+func (r *k8sResolver) trigger() {
+	r.queue.Add(struct{}{})
+}
+
+func (r *k8sResolver) run() {
+	for r.processNextWorkItem() {
+	}
+}
+
+func (r *k8sResolver) processNextWorkItem() bool {
+	item, shutdown := r.queue.Get()
+	if shutdown {
+		return false
+	}
+	defer r.queue.Done(item)
+
+	r.updateState()
+	return true
 }
 
 func (r *k8sResolver) updateState() {

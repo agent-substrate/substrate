@@ -90,7 +90,7 @@ func TestValidateObjectRef(t *testing.T) {
 	}
 }
 
-func TestValidateResourceMetadataRef(t *testing.T) {
+func TestValidateUpdateMetadataRef(t *testing.T) {
 	const uid = "8bf5b1a2-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
 	tests := []struct {
 		name      string
@@ -98,12 +98,7 @@ func TestValidateResourceMetadataRef(t *testing.T) {
 		wantError field.ErrorList
 	}{
 		{
-			name:      "valid without preconditions",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-			wantError: nil,
-		},
-		{
-			name:      "valid with preconditions",
+			name:      "valid",
 			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid, Version: 7},
 			wantError: nil,
 		},
@@ -113,42 +108,62 @@ func TestValidateResourceMetadataRef(t *testing.T) {
 			wantError: field.ErrorList{
 				field.Required(field.NewPath("path", "atespace"), ""),
 				field.Required(field.NewPath("path", "name"), ""),
+				field.Required(field.NewPath("path", "uid"), ""),
+				field.Required(field.NewPath("path", "version"), ""),
+			},
+		},
+		{
+			name:  "no preconditions",
+			input: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
+			wantError: field.ErrorList{
+				field.Required(field.NewPath("path", "uid"), ""),
+				field.Required(field.NewPath("path", "version"), ""),
 			},
 		},
 		{
 			name:      "missing atespace",
-			input:     &ateapipb.ResourceMetadata{Name: "id1"},
+			input:     &ateapipb.ResourceMetadata{Name: "id1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Required(field.NewPath("path", "atespace"), "")},
 		},
 		{
 			name:      "invalid atespace",
-			input:     &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "atespace"), "NS1", "")},
 		},
 		{
 			name:      "missing name",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Required(field.NewPath("path", "name"), "")},
 		},
 		{
 			name:      "invalid name",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1", Uid: uid, Version: 7},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "name"), "ID1", "")},
 		},
 		{
+			name:      "missing uid",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Version: 7},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "uid"), "")},
+		},
+		{
 			name:      "invalid uid",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: "not-a-uuid"},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: "not-a-uuid", Version: 7},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "uid"), "not-a-uuid", "")},
 		},
 		{
+			name:      "missing version",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "version"), "")},
+		},
+		{
 			name:      "negative version",
-			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Version: -1},
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid, Version: -1},
 			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "version"), int64(-1), "")},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ValidateResourceMetadataRef(tt.input, field.NewPath("path"))
+			got := ValidateUpdateMetadataRef(tt.input, field.NewPath("path"))
 			field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, tt.wantError, got)
 		})
 	}
@@ -302,6 +317,14 @@ func TestValidateSnapshotLocation(t *testing.T) {
 	}
 }
 
+// testWorkerPodUID is the pod UID the worker cases share.
+const testWorkerPodUID = "123e4567-e89b-12d3-a456-426614174000"
+
+// testWorkerName is the resource name the worker cases share. Worker names are
+// server-assigned and opaque; nothing here may assume a relationship to
+// testWorkerPodUID.
+const testWorkerName = "7c1b8d4a-92e6-4f30-a5c7-2b8f61d0e934"
+
 func TestValidateWorker(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -310,222 +333,252 @@ func TestValidateWorker(t *testing.T) {
 	}{{
 		name: "valid unassigned worker",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1.example.com",
 		},
 		wantMsg: "",
 	}, {
 		name: "valid assigned worker",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Namespace: "actor-ns",
-					Name:      "actor-template",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Namespace: "actor-ns",
+						Name:      "actor-template",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "actor-ns",
+						Name:     "actor",
+					},
+					ActorUid: "actor-uid",
 				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-ns",
-					Name:     "actor",
-				},
-				ActorUid: "actor-uid",
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
 		wantMsg: "",
 	}, {
 		name: "partially assigned worker, missing actor_template",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-ns",
-					Name:     "actor",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "actor-ns",
+						Name:     "actor",
+					},
+					ActorUid: "actor-uid",
 				},
-				ActorUid: "actor-uid",
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor_template: Required value",
+		wantMsg: "worker.status.assignment.actor_template: Required value",
 	}, {
 		name: "partially assigned worker, missing actor_template.namespace",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Name: "actor-template",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Name: "actor-template",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "actor-ns",
+						Name:     "actor",
+					},
+					ActorUid: "actor-uid",
 				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-ns",
-					Name:     "actor",
-				},
-				ActorUid: "actor-uid",
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor_template.namespace: Required value",
+		wantMsg: "worker.status.assignment.actor_template.namespace: Required value",
 	}, {
 		name: "partially assigned worker, missing actor_template.name",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Namespace: "actor-ns",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Namespace: "actor-ns",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "actor-ns",
+						Name:     "actor",
+					},
+					ActorUid: "actor-uid",
 				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-ns",
-					Name:     "actor",
-				},
-				ActorUid: "actor-uid",
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor_template.name: Required value",
+		wantMsg: "worker.status.assignment.actor_template.name: Required value",
 	}, {
 		name: "partially assigned worker, missing actor",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Name:      "actor-template",
-					Namespace: "actor-ns",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Name:      "actor-template",
+						Namespace: "actor-ns",
+					},
+					ActorUid: "actor-uid",
 				},
-				ActorUid: "actor-uid",
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor: Required value",
+		wantMsg: "worker.status.assignment.actor: Required value",
 	}, {
 		name: "partially assigned worker, missing actor.name",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Name:      "actor-template",
-					Namespace: "actor-ns",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Name:      "actor-template",
+						Namespace: "actor-ns",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "actor-ns",
+					},
+					ActorUid: "actor-uid",
 				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-ns",
-				},
-				ActorUid: "actor-uid",
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor.name: Required value",
+		wantMsg: "worker.status.assignment.actor.name: Required value",
 	}, {
 		name: "partially assigned worker, missing actor.atespace",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Name:      "actor-template",
-					Namespace: "actor-ns",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Name:      "actor-template",
+						Namespace: "actor-ns",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Name: "actor",
+					},
+					ActorUid: "actor-uid",
 				},
-				Actor: &ateapipb.ObjectRef{
-					Name: "actor",
-				},
-				ActorUid: "actor-uid",
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor.atespace: Required value",
+		wantMsg: "worker.status.assignment.actor.atespace: Required value",
 	}, {
 		name: "partially assigned worker, missing actor_uid",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Name:      "actor-template",
-					Namespace: "actor-ns",
-				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-ns",
-					Name:     "actor",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Name:      "actor-template",
+						Namespace: "actor-ns",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "actor-ns",
+						Name:     "actor",
+					},
 				},
 			},
-			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
-			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor_uid: Required value",
+		wantMsg: "worker.status.assignment.actor_uid: Required value",
 	}, {
 		name: "missing worker_namespace",
 		worker: &ateapipb.Worker{
+			Metadata:     &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerPool:   "pool-1",
 			WorkerPod:    "pod-1",
 			Ip:           "10.0.0.1",
-			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid: testWorkerPodUID,
 			NodeName:     "node-1",
 		},
 		wantMsg: "worker_namespace: Required value",
 	}, {
 		name: "invalid worker_namespace",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "NS-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1",
 		},
 		wantMsg: "worker_namespace: Invalid value",
 	}, {
 		name: "missing ip",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1",
 		},
 		wantMsg: "ip: Required value",
 	}, {
 		name: "invalid ip",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "not-an-ip",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1",
 		},
 		wantMsg: "ip: Invalid value",
 	}, {
 		name: "missing worker_pod_uid",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
@@ -536,6 +589,7 @@ func TestValidateWorker(t *testing.T) {
 	}, {
 		name: "invalid worker_pod_uid",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
@@ -547,46 +601,54 @@ func TestValidateWorker(t *testing.T) {
 	}, {
 		name: "missing node_name",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 		},
 		wantMsg: "node_name: Required value",
 	}, {
 		name: "invalid node_name",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "NODE_NAME",
 		},
 		wantMsg: "node_name: Invalid value",
 	}, {
 		name: "valid active worker state",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1.example.com",
-			State:           ateapipb.Worker_STATE_ACTIVE,
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			},
 		},
 		wantMsg: "",
 	}, {
 		name: "valid draining worker state",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1.example.com",
-			State:           ateapipb.Worker_STATE_DRAINING,
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState_WORKER_STATE_DRAINING,
+			},
 		},
 		wantMsg: "",
 	}, {
@@ -594,27 +656,80 @@ func TestValidateWorker(t *testing.T) {
 		// compatibility with worker records written before the state field existed.
 		name: "unset worker state is tolerated",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1.example.com",
-			State:           ateapipb.Worker_STATE_UNSPECIFIED,
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState_WORKER_STATE_UNSPECIFIED,
+			},
 		},
 		wantMsg: "",
 	}, {
 		name: "invalid worker state",
 		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Ip:              "10.0.0.1",
-			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			WorkerPodUid:    testWorkerPodUID,
 			NodeName:        "node-1.example.com",
-			State:           ateapipb.Worker_State(99),
+			Status: &ateapipb.WorkerStatus{
+				State: ateapipb.WorkerState(99),
+			},
 		},
 		wantMsg: "state: Unsupported value",
+	}, {
+		name: "missing metadata",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+		},
+		wantMsg: "worker.metadata: Required value",
+	}, {
+		name: "missing metadata.name",
+		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{},
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+		},
+		wantMsg: "worker.metadata.name: Required value",
+	}, {
+		name: "invalid metadata.name",
+		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "Not A Name"},
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+		},
+		wantMsg: "worker.metadata.name: Invalid value",
+	}, {
+		name: "metadata.atespace set on a global-scoped Worker",
+		worker: &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName, Atespace: "team-a"},
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    testWorkerPodUID,
+			NodeName:        "node-1.example.com",
+		},
+		wantMsg: "worker.metadata.atespace: Invalid value",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -627,12 +742,18 @@ func TestValidateWorker(t *testing.T) {
 				if len(errs) == 0 {
 					t.Fatalf("expected error matching %q, got 0", tt.wantMsg)
 				}
-				err := errs[0]
-				got := err.Error()
-				if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
-					t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
-				} else if !matched {
-					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
+				// Any error may match: a case can trip more than one rule, so
+				// the wanted error is not always the first one reported.
+				matched := false
+				for _, err := range errs {
+					ok, matchErr := regexp.MatchString(tt.wantMsg, err.Error())
+					if matchErr != nil {
+						t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
+					}
+					matched = matched || ok
+				}
+				if !matched {
+					t.Errorf("expected message matching %q, got %v", tt.wantMsg, errs)
 				}
 			}
 		})
@@ -680,7 +801,7 @@ func TestValidateUUID(t *testing.T) {
 		uuid    string
 		wantMsg string // empty means valid
 	}{
-		{"valid", "123e4567-e89b-12d3-a456-426614174000", ""},
+		{"valid", testWorkerPodUID, ""},
 		{"too short", "123e4567", "must be a lowercase UUID"},
 		{"too long", "123e4567-e89b-12d3-a456-4266141740001", "must be a lowercase UUID"},
 		{"missing dashes", "123e4567e89b12d3a456426614174000", "must be a lowercase UUID"},

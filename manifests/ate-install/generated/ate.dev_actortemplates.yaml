@@ -186,6 +186,65 @@ spec:
                       required:
                       - httpGet
                       type: object
+                    securityContext:
+                      description: |-
+                        securityContext holds security settings for this container. Unset leaves
+                        it with the default capability set.
+                      properties:
+                        capabilities:
+                          description: |-
+                            Capabilities adjusts this container's Linux capabilities relative to the
+                            default set.
+                          properties:
+                            add:
+                              description: |-
+                                Add lists capabilities to grant on top of the default set.
+
+                                "ALL" is rejected: Kubernetes accepts it in the API and relies on
+                                PodSecurity admission to deny it, and there is no equivalent policy layer
+                                here yet.
+                              items:
+                                description: |-
+                                  Capability is a Linux capability named without the "CAP_" prefix (e.g.
+                                  "NET_BIND_SERVICE"), as in Kubernetes. The prefix is added when the OCI spec
+                                  is written, and the prefixed spelling is rejected so a manifest copied from
+                                  OCI docs fails at admission rather than granting nothing.
+                                maxLength: 63
+                                pattern: ^[A-Z][A-Z0-9_]*$
+                                type: string
+                                x-kubernetes-validations:
+                                - message: Capability must be named without the 'CAP_'
+                                    prefix (e.g. 'NET_BIND_SERVICE', not 'CAP_NET_BIND_SERVICE')
+                                  rule: '!self.startsWith(''CAP_'')'
+                              maxItems: 64
+                              type: array
+                              x-kubernetes-list-type: atomic
+                              x-kubernetes-validations:
+                              - message: add does not accept 'ALL'; name the individual
+                                  capabilities the container needs
+                                rule: '!self.exists(c, c == ''ALL'')'
+                            drop:
+                              description: |-
+                                Drop lists capabilities to remove from the default set. "ALL" drops the
+                                whole set, so drop+add expresses an exact set rather than a relative one.
+                              items:
+                                description: |-
+                                  Capability is a Linux capability named without the "CAP_" prefix (e.g.
+                                  "NET_BIND_SERVICE"), as in Kubernetes. The prefix is added when the OCI spec
+                                  is written, and the prefixed spelling is rejected so a manifest copied from
+                                  OCI docs fails at admission rather than granting nothing.
+                                maxLength: 63
+                                pattern: ^[A-Z][A-Z0-9_]*$
+                                type: string
+                                x-kubernetes-validations:
+                                - message: Capability must be named without the 'CAP_'
+                                    prefix (e.g. 'NET_BIND_SERVICE', not 'CAP_NET_BIND_SERVICE')
+                                  rule: '!self.startsWith(''CAP_'')'
+                              maxItems: 64
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          type: object
+                      type: object
                     volumeMounts:
                       description: volumeMounts define the volumes to mount into this
                         container.
@@ -227,6 +286,74 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              resources:
+                description: |-
+                  Resources declares the compute resources for each actor of this template.
+                  Unlike a pod, an actor is sized by its Limits: the sandbox is built to the
+                  CPU/memory limits (cgroup caps, and for the micro-VM the VM's vCPU count and
+                  memory), the scheduler only places the actor on a worker whose capacity is
+                  >= these limits, and the limits are supplied to the sandbox over the actor
+                  RPCs. Because the size is baked into snapshots, it is part of the immutable
+                  spec. Requests and claims are not supported (actors are sized by limits only).
+                  A zero or absent limit leaves the sandbox at the runtime default (unlimited
+                  for gVisor, the kata config for the micro-VM).
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
               sandboxClass:
                 default: gvisor
                 description: |-
@@ -261,6 +388,8 @@ spec:
                       OnCommit specifies what to include in the snapshot when a commit is requested.
                       If not provided, the "Full" behavior is used by default.
                       onCommit must be a subset of the onPause content.
+                      Note: Data scope only captures DurableDir-typed volumes; external/CSI
+                      volumes are not snapshotted as they persist independently.
 
                       For example:
                         - if onPause is "Full", then onCommit can be "Full" or "Data".
@@ -274,6 +403,8 @@ spec:
                     description: |-
                       OnPause specifies what to include in the snapshot when the actor is paused.
                       If not provided, the "Full" behavior is used by default.
+                      Note: Data scope only captures DurableDir-typed volumes; external/CSI
+                      volumes are not snapshotted as they persist independently.
                     enum:
                     - Full
                     - Data
@@ -344,16 +475,110 @@ spec:
                       x-kubernetes-validations:
                       - message: Name must be a valid DNS label
                         rule: '!format.dns1123Label().validate(self).hasValue()'
+                    systemInfo:
+                      description: systemInfo configures a system information volume.
+                      properties:
+                        dataSources:
+                          description: |-
+                            DataSources is the list of data sources to place within the SystemInfo
+                            volume.
+
+                            At most one actorMetadata entry may appear; this is what keeps file
+                            paths unique across the whole volume (uniqueness within the entry is
+                            enforced on its items).
+                          items:
+                            description: |-
+                              SystemInfoDataSource is a container allowing you to pick a particular
+                              SystemInfo data source.
+
+                              Exactly one member must be set.
+                            properties:
+                              actorMetadata:
+                                description: |-
+                                  ActorMetadataDataSource is a SystemInfo volume data source that projects the
+                                  actor's identity fields (name, atespace, uid) to files, one per item —
+                                  analogous to the Kubernetes downwardAPI volume. Values are written raw with
+                                  no trailing newline, and are fixed for the actor's lifetime across
+                                  suspend/resume/migration.
+                                properties:
+                                  items:
+                                    description: |-
+                                      Items is the list of fields to project and the file path each is
+                                      written to.
+                                    items:
+                                      description: ActorMetadataItem projects one
+                                        actor identity field to one file.
+                                      properties:
+                                        field:
+                                          description: Field selects which identity
+                                            field to project.
+                                          enum:
+                                          - name
+                                          - atespace
+                                          - uid
+                                          type: string
+                                        path:
+                                          description: |-
+                                            Relative path from the root of the SystemInfo volume at which the
+                                            field's value is written. Must be a clean relative Unix path: must not
+                                            start or end with '/', and contain no ':', '..', '.', '//', or control
+                                            characters.
+                                          maxLength: 255
+                                          minLength: 1
+                                          type: string
+                                          x-kubernetes-validations:
+                                          - message: 'path must be a clean relative
+                                              Unix path: must not start or end with
+                                              ''/'', and contain no '':'', ''..'',
+                                              ''.'', ''//'', or control characters'
+                                            rule: '!self.startsWith(''/'') && !self.endsWith(''/'')
+                                              && !self.contains(''//'') && !self.contains('':'')
+                                              && !self.matches(''[\x00-\x1f\x7f]'')
+                                              && !self.matches(''(^|/)[.][.]?(/|$)'')'
+                                      required:
+                                      - field
+                                      - path
+                                      type: object
+                                    maxItems: 8
+                                    minItems: 1
+                                    type: array
+                                    x-kubernetes-validations:
+                                    - message: items must not project the same field
+                                        twice
+                                      rule: self.all(x, self.exists_one(y, y.field
+                                        == x.field))
+                                    - message: items must not contain duplicate paths
+                                      rule: self.all(x, self.exists_one(y, y.path
+                                        == x.path))
+                                required:
+                                - items
+                                type: object
+                            type: object
+                            x-kubernetes-validations:
+                            - message: exactly one of the fields in [actorMetadata]
+                                must be set
+                              rule: '[has(self.actorMetadata)].filter(x,x==true).size()
+                                == 1'
+                          maxItems: 32
+                          type: array
+                          x-kubernetes-validations:
+                          - message: dataSources must contain at most one actorMetadata
+                              entry
+                            rule: self.filter(x, has(x.actorMetadata)).size() <= 1
+                      type: object
                   required:
                   - name
                   type: object
                   x-kubernetes-validations:
-                  - message: exactly one of the fields in [durableDir externalVolumeTemplate]
-                      must be set
-                    rule: '[has(self.durableDir),has(self.externalVolumeTemplate)].filter(x,x==true).size()
+                  - message: exactly one of the fields in [durableDir externalVolumeTemplate
+                      systemInfo] must be set
+                    rule: '[has(self.durableDir),has(self.externalVolumeTemplate),has(self.systemInfo)].filter(x,x==true).size()
                       == 1'
                 maxItems: 32
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               workerSelector:
                 description: |-
                   WorkerSelector restricts which worker pools actors from this template may
@@ -416,14 +641,26 @@ spec:
               rule: '!has(self.volumes) || self.volumes.all(v, has(self.containers)
                 && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm,
                 vm.name == v.name)))'
-            - message: ExternalVolumes are not supported when sandboxClass is 'microvm'
-              rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
-                !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))'
             - message: 'onResume.fromData: Golden is not supported when sandboxClass
                 is ''gvisor'''
               rule: '(has(self.sandboxClass) && self.sandboxClass == ''microvm'')
                 || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData)
                 ? self.snapshotsConfig.onResume.fromData : ''ColdBoot'') != ''Golden'''
+            - message: spec.resources.requests is not supported; actors are sized
+                by spec.resources.limits only
+              rule: '!has(self.resources) || !has(self.resources.requests)'
+            - message: spec.resources.claims is not supported
+              rule: '!has(self.resources) || !has(self.resources.claims)'
+            - message: For sandboxClass 'microvm', spec.resources.limits.memory must
+                be at least 256Mi (128Mi VMM reserve + 128Mi guest minimum); below
+                this the VM cannot boot
+              rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
+                !has(self.resources) || !has(self.resources.limits) || !(''memory''
+                in self.resources.limits) || !quantity(self.resources.limits[''memory'']).isLessThan(quantity(''256Mi''))'
+            - message: All volume mounts must refer to a volume defined in spec.volumes
+              rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
+                || c.volumeMounts.all(vm, has(self.volumes) && self.volumes.exists(v,
+                v.name == vm.name)))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

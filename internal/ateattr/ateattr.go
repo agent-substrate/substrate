@@ -32,7 +32,7 @@ import (
 )
 
 // Dotted ate.* matches the metric-instrument naming (atenet.*, atelet.*), not the
-// ate.dev/ slash form used for k8s labels and stdout log fields.
+// ate.dev/ slash form, which is k8s labels only.
 // name vs uid mirror the k8s object model that ResourceMetadata follows:
 // ate.actor.name is the atespace-scoped addressable name, ate.actor.uid is the
 // server-assigned globally-unique key. There is deliberately no ate.actor.id
@@ -40,15 +40,41 @@ import (
 // atespace and template are their own top-level namespaces (ate.atespace,
 // ate.template.*) rather than nested under actor: both are first-class resources
 // that also appear in non-actor telemetry, so the keys must mean the same thing
-// regardless of what a span is about.
+// regardless of what a span is about. ActorContainerNameKey nests under actor for
+// the mirror-image reason: it names a container the ActorTemplate declared, which
+// exists only within an actor. It is deliberately not the registry's
+// k8s.container.name or container.name, both of which the collector already
+// assigns to the worker pod's own containers.
 const (
-	AtespaceKey          = attribute.Key("ate.atespace")
-	ActorNameKey         = attribute.Key("ate.actor.name")
-	ActorUIDKey          = attribute.Key("ate.actor.uid")
-	TemplateNameKey      = attribute.Key("ate.template.name")
-	TemplateNamespaceKey = attribute.Key("ate.template.namespace")
-	ActorVersionKey      = attribute.Key("ate.actor.version")
+	AtespaceKey           = attribute.Key("ate.atespace")
+	ActorNameKey          = attribute.Key("ate.actor.name")
+	ActorUIDKey           = attribute.Key("ate.actor.uid")
+	ActorContainerNameKey = attribute.Key("ate.actor.container.name")
+	TemplateNameKey       = attribute.Key("ate.template.name")
+	TemplateNamespaceKey  = attribute.Key("ate.template.namespace")
+	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
+
+// ReservedNamespace is substrate's. A producer that merges untrusted fields into a
+// record drops everything under it, so nothing a workload sets can read as
+// platform-issued attribution downstream.
+const ReservedNamespace = "ate."
+
+// Trace-context fields for structured logs, per the OTel spec for non-OTLP log
+// formats: these exact names, top-level in the record, lowercase hex. Not ate.*
+// and not attributes - a collector maps them onto the log record's own
+// TraceId/SpanId/flags fields.
+// https://opentelemetry.io/docs/specs/otel/compatibility/logging_trace_context/
+const (
+	LogTraceIDField    = "trace_id"
+	LogSpanIDField     = "span_id"
+	LogTraceFlagsField = "trace_flags"
+)
+
+// OTLPRelayKey is a resource attribute rather than a subject one: it describes
+// how the emitting component reached the collector, not what the signal is about.
+// Only the components that have a relay to take or miss carry it.
+const OTLPRelayKey = attribute.Key("ate.otlp.relay")
 
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,
 // each with a small bounded value set. High-cardinality identity (actor
@@ -80,6 +106,18 @@ const (
 	RouterResumeKey         = attribute.Key("ate.router.resume")
 	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
 	FailureReasonKey        = attribute.Key("ate.failure.reason")
+	StatsSourceKey          = attribute.Key("ate.stats.source")
+)
+
+// Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
+// not measure the same thing (the cgroup source charges the sandbox runtime's
+// overhead along with the workload, the guest-agent source sees only the
+// workload's containers), so rollups must group by this key rather than sum
+// across it.
+const (
+	StatsSourceUnspecified = "unspecified"
+	StatsSourceCgroup      = "cgroup"
+	StatsSourceGuestAgent  = "guest-agent"
 )
 
 // Values for SchedulingConstraintKey.
@@ -251,6 +289,24 @@ func NormalizeSandboxClass(class string) string {
 	}
 }
 
+// WorkerPoolAttributes returns the namespaced identity of a WorkerPool. A
+// WorkerPool is namespaced, so half the pair identifies no pool: either key
+// missing drops both, rather than emit an empty-string series that merges
+// same-named pools and joins to nothing.
+//
+// This is for the actor-centric instruments, where an unknown pool is omitted.
+// Pool-centric ones that record a deliberate zero-valued series for "no pool
+// matched" build the pair themselves.
+func WorkerPoolAttributes(namespace, name string) []attribute.KeyValue {
+	if name == "" || namespace == "" {
+		return nil
+	}
+	return []attribute.KeyValue{
+		WorkerPoolNamespaceKey.String(namespace),
+		WorkerPoolNameKey.String(name),
+	}
+}
+
 // ActorRefAttributes returns the subset knowable before the Actor record
 // resolves: only the (atespace, name) the request addresses. The uid and version
 // are server-assigned and unknown until the record loads, so they are omitted.
@@ -273,8 +329,29 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 	}
 }
 
+// ActorLogLabels returns the actor identity stamped on every actor log record. A
+// string map because GKE promotes the record's label group into LogEntry.labels,
+// which is string-valued. An empty containerName omits the key rather than
+// emitting it empty, so a consumer filtering on it gets container output only.
+func ActorLogLabels(a resources.ActorAttribution, containerName string) map[string]string {
+	labels := map[string]string{
+		string(AtespaceKey):          a.Ref.Atespace,
+		string(ActorNameKey):         a.Ref.Name,
+		string(ActorUIDKey):          a.UID,
+		string(TemplateNamespaceKey): a.TemplateNamespace,
+		string(TemplateNameKey):      a.TemplateName,
+	}
+	if containerName != "" {
+		labels[string(ActorContainerNameKey)] = containerName
+	}
+	return labels
+}
+
 // ActorMetricAttributes returns the metric labels for an Actor.
 // High-cardinality attributes (atespace, actor name, actor uid) are omitted.
+// The worker-pool pair is omitted while the actor holds no assignment, so a
+// crash before the actor reaches a worker reports no pool rather than an
+// empty-string one.
 func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reason string) []attribute.KeyValue {
 	if a == nil {
 		return nil
@@ -286,17 +363,13 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 	}
 	operationName = NormalizeOperationName(operationName)
 
-	pool := ""
-	if ass := a.GetWorkerAssignment(); ass != nil {
-		pool = ass.GetWorkerPool()
-	}
-
-	return []attribute.KeyValue{
+	ass := a.GetStatus().GetWorkerAssignment()
+	attrs := []attribute.KeyValue{
 		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		TemplateNameKey.String(a.GetActorTemplateName()),
-		WorkerPoolNameKey.String(pool),
 		SandboxClassKey.String(sandboxClass),
 		ActorOperationNameKey.String(operationName),
 		FailureReasonKey.String(reason),
 	}
+	return append(attrs, WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 }

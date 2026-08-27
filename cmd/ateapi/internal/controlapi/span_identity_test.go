@@ -31,8 +31,7 @@ import (
 // TracerProvider and returns that span's attributes, so a test can observe what
 // the code under test stamps on the span carried in ctx. It never swaps the
 // global provider (the code under test reads its span via trace.SpanFromContext,
-// not the global provider), so span tests stay parallel-safe. Shared by the
-// per-method span tests (create/delete/resume/pause_actor_test.go).
+// not the global provider), so span tests stay parallel-safe.
 func recordRootSpanAttrs(t *testing.T, fn func(ctx context.Context)) map[attribute.Key]attribute.Value {
 	t.Helper()
 	sr := tracetest.NewSpanRecorder()
@@ -83,7 +82,7 @@ func TestSetSpanActorAttributes(t *testing.T) {
 	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
 	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, "ns1")
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 3 {
-		t.Errorf("%s = %v, want int64 3", ateattr.ActorVersionKey, v.Emit())
+		t.Errorf("%s = %v, want int64 3", ateattr.ActorVersionKey, v.String())
 	}
 }
 

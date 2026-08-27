@@ -21,6 +21,8 @@ package ateapiauth
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -35,19 +37,34 @@ import (
 )
 
 func ValidateServerConfig(cfg ServerConfig) error {
-	if cfg.VerifyBearerToken == nil {
-		return fmt.Errorf("a bearer token verifier is required")
+	if len(cfg.JWTProviders) == 0 {
+		return fmt.Errorf("at least one JWT provider is required")
+	}
+	issuers := make(map[string]bool, len(cfg.JWTProviders))
+	for i, provider := range cfg.JWTProviders {
+		if provider.Name == "" || provider.Issuer == "" || provider.Verify == nil {
+			return fmt.Errorf("JWT provider %d requires a name, issuer, and verifier", i)
+		}
+		if issuers[provider.Issuer] {
+			return fmt.Errorf("duplicate JWT provider issuer %q", provider.Issuer)
+		}
+		issuers[provider.Issuer] = true
 	}
 	return nil
 }
 
+// JWTProvider verifies bearer tokens from one trusted issuer.
+type JWTProvider struct {
+	Name   string
+	Issuer string
+	Verify func(context.Context, string) (string, error)
+}
+
 // ServerConfig configures the server-side auth interceptor.
 type ServerConfig struct {
-	// VerifyBearerToken verifies a Bearer token presented by a client and
-	// returns the authenticated principal's ID (e.g. the JWT subject). It
-	// authenticates clients that did not present a certificate identity
-	// (e.g. kubectl-ate, which dials without a client certificate).
-	VerifyBearerToken func(context.Context, string) (string, error)
+	// JWTProviders authenticate clients that did not present a certificate
+	// identity (e.g. kubectl-ate).
+	JWTProviders []JWTProvider
 }
 
 // UnaryServerInterceptor returns a gRPC unary interceptor enforcing cfg.
@@ -84,7 +101,7 @@ func (w *wrappedStream) Context() context.Context { return w.ctx }
 func newChainedAuthenticator(cfg ServerConfig) chainedServerAuthenticator {
 	return chainedServerAuthenticator{
 		jwt: jwtServerAuthenticator{
-			verifyBearerToken: cfg.VerifyBearerToken,
+			providers: cfg.JWTProviders,
 		},
 	}
 }
@@ -143,7 +160,7 @@ func mtlsPeerIdentity(ctx context.Context) (string, bool) {
 }
 
 type jwtServerAuthenticator struct {
-	verifyBearerToken func(context.Context, string) (string, error)
+	providers []JWTProvider
 }
 
 func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
@@ -151,14 +168,48 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing bearer token")
 	}
-	id, err := a.verifyBearerToken(ctx, bearer)
+	issuer, err := unverifiedIssuer(bearer)
 	if err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "invalid bearer token: %v", err)
+		return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
 	}
-	return principal.InjectContext(ctx, principal.PrincipalInfo{
-		ID:   id,
-		Kind: principal.KindJWT,
-	}), nil
+	for _, provider := range a.providers {
+		if provider.Issuer != issuer {
+			continue
+		}
+		id, err := provider.Verify(ctx, bearer)
+		if err != nil {
+			slog.DebugContext(ctx, "JWT verification failed", slog.String("provider", provider.Name), slog.Any("err", err))
+			return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
+		}
+		return principal.InjectContext(ctx, principal.PrincipalInfo{
+			ID:     id,
+			Kind:   principal.KindJWT,
+			Issuer: provider.Issuer,
+		}), nil
+	}
+	slog.DebugContext(ctx, "No JWT provider matched token issuer", slog.String("issuer", issuer))
+	return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
+}
+
+func unverifiedIssuer(token string) (string, error) {
+	segments := strings.Split(token, ".")
+	if len(segments) != 3 {
+		return "", fmt.Errorf("malformed JWT")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(segments[1])
+	if err != nil {
+		return "", err
+	}
+	var claims struct {
+		Issuer string `json:"iss"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", err
+	}
+	if claims.Issuer == "" {
+		return "", fmt.Errorf("token issuer is required")
+	}
+	return claims.Issuer, nil
 }
 
 func bearerToken(ctx context.Context) (string, bool) {

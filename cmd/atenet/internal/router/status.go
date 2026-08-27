@@ -71,8 +71,8 @@ type FormattedQuery struct {
 }
 
 func (s *RouterServer) getRouterIP(ctx context.Context) string {
-	if s.cfg.Standalone || s.clientset == nil {
-		return "Standalone Mode (No Cluster IP)"
+	if s.clientset == nil {
+		return "Offline Mode (No Cluster IP)"
 	}
 
 	svc, err := s.clientset.CoreV1().Services(s.cfg.Namespace).Get(ctx, "atenet-router", metav1.GetOptions{})

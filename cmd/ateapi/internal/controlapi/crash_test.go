@@ -38,15 +38,18 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:   ateapipb.Actor_STATUS_RUNNING,
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			WorkerNamespace: "ns",
-			WorkerPool:      "pool",
-			WorkerPod:       "pod",
-			WorkerPodUid:    "uid",
-			WorkerPodIp:     "1.2.3.4",
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: "uid"},
+				WorkerNamespace: "ns",
+				WorkerPool:      "pool",
+				WorkerPod:       "pod",
+				WorkerPodUid:    "uid",
+				WorkerPodIp:     "1.2.3.4",
+			},
+			InProgressSnapshotName: "reserved-snapshot",
 		},
-		InProgressSnapshotName: "reserved-snapshot",
 	}); err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}
@@ -57,19 +60,22 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "uid"},
 		WorkerNamespace: "ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",
+		WorkerPodUid:    "uid",
+		Status:          &ateapipb.WorkerStatus{},
 	}
 	if actorRef != (resources.ActorRef{}) {
 		actor, err := st.GetActor(ctx, actorRef)
 		if err != nil {
-			worker.Assignment = &ateapipb.Assignment{
+			worker.Status.Assignment = &ateapipb.ActorAssignment{
 				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorUid: "synthetic-" + actorRef.Name,
 			}
 		} else {
-			worker.Assignment = &ateapipb.Assignment{
+			worker.Status.Assignment = &ateapipb.ActorAssignment{
 				Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
 				ActorUid: actor.GetMetadata().GetUid(),
 			}
@@ -85,9 +91,11 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:                 ateapipb.Actor_STATUS_RUNNING,
-		InProgressSnapshotName: "reserved-snapshot",
+		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			InProgressSnapshotName: "reserved-snapshot",
+		},
 	}); err != nil {
 		t.Fatalf("seed unbound actor: %v", err)
 	}
@@ -101,15 +109,15 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 	if err != nil {
 		t.Fatalf("GetActor(%v) = %v, want nil", actorRef, err)
 	}
-	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
-		t.Errorf("status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if got.GetInProgressSnapshotName() == "" {
+	if got.GetStatus().GetInProgressSnapshotName() == "" {
 		t.Error(`InProgressSnapshotName = "", want preserved`)
 	}
-	if got.GetWorkerAssignment() != nil {
-		t.Errorf("WorkerAssignment = %v, want cleared", got.GetWorkerAssignment())
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want cleared", got.GetStatus().GetWorkerAssignment())
 	}
 }
 
@@ -145,12 +153,12 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
-				if worker.GetAssignment() != nil {
-					t.Errorf("worker assignment = %v, want nil", worker.GetAssignment())
+				if worker.GetStatus().GetAssignment() != nil {
+					t.Errorf("worker assignment = %v, want nil", worker.GetStatus().GetAssignment())
 				}
 			},
 		},
@@ -165,14 +173,14 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
-				if got := worker.GetAssignment().GetActor().GetName(); got != "actor-2" {
+				if got := worker.GetStatus().GetAssignment().GetActor().GetName(); got != "actor-2" {
 					t.Errorf("worker assigned actor name = %q, want %q", got, "actor-2")
 				}
-				if got := worker.GetAssignment().GetActorUid(); got != "synthetic-actor-2" {
+				if got := worker.GetStatus().GetAssignment().GetActorUid(); got != "synthetic-actor-2" {
 					t.Errorf("worker assigned actor uid = %q, want %q", got, "synthetic-actor-2")
 				}
 			},
@@ -183,12 +191,16 @@ func TestCrashActor(t *testing.T) {
 			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
 				// Create a worker assigned to the same actorRef, but with a stale UID
 				worker := &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: "uid"},
 					WorkerNamespace: "ns",
 					WorkerPool:      "pool",
 					WorkerPod:       "pod",
-					Assignment: &ateapipb.Assignment{
-						Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-						ActorUid: "stale-incarnation-uid",
+					WorkerPodUid:    "uid",
+					Status: &ateapipb.WorkerStatus{
+						Assignment: &ateapipb.ActorAssignment{
+							Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+							ActorUid: "stale-incarnation-uid",
+						},
 					},
 				}
 				if err := st.CreateWorker(ctx, worker); err != nil {
@@ -200,14 +212,14 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
-				if got := worker.GetAssignment().GetActor().GetName(); got != actorRef.Name {
+				if got := worker.GetStatus().GetAssignment().GetActor().GetName(); got != actorRef.Name {
 					t.Errorf("worker assigned actor name = %q, want %q", got, actorRef.Name)
 				}
-				if got := worker.GetAssignment().GetActorUid(); got != "stale-incarnation-uid" {
+				if got := worker.GetStatus().GetAssignment().GetActorUid(); got != "stale-incarnation-uid" {
 					t.Errorf("worker assigned actor uid = %q, want %q", got, "stale-incarnation-uid")
 				}
 			},
@@ -227,11 +239,11 @@ func TestCrashActor(t *testing.T) {
 				// Without a binding the worker cannot be looked up, so its
 				// assignment must be left untouched even though it names
 				// the crashed actor.
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
-				if worker.GetAssignment() == nil {
+				if worker.GetStatus().GetAssignment() == nil {
 					t.Error("worker assignment = nil, want untouched")
 				}
 			},
@@ -349,7 +361,7 @@ func TestMaybeCrashActor(t *testing.T) {
 				if gerr != nil {
 					t.Fatalf("GetActor() = %v, want nil", gerr)
 				}
-				if got.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
+				if got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					t.Errorf("status = CRASHED, want it unchanged")
 				}
 			},
@@ -373,7 +385,7 @@ func TestMaybeCrashActor(t *testing.T) {
 				if gerr != nil {
 					t.Fatalf("GetActor() = %v, want nil", gerr)
 				}
-				if got.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
+				if got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					t.Errorf("status = CRASHED, want it unchanged")
 				}
 			},
@@ -411,12 +423,16 @@ func TestCrashActor_Metrics(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "pod-uid-1"},
 		WorkerNamespace: "demo-ns",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		WorkerPodUid:    "pod-uid-1",
 		SandboxClass:    "gvisor",
-		Assignment: &ateapipb.Assignment{
-			Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.WorkerStatus{
+			Assignment: &ateapipb.ActorAssignment{
+				Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			},
 		},
 	}
 	if err := st.CreateWorker(ctx, worker); err != nil {
@@ -431,13 +447,16 @@ func TestCrashActor_Metrics(t *testing.T) {
 		},
 		ActorTemplateNamespace: "demo-ns",
 		ActorTemplateName:      "counter-template",
-		WorkerAssignment: &ateapipb.WorkerAssignment{
-			WorkerNamespace: "demo-ns",
-			WorkerPool:      "pool-1",
-			WorkerPod:       "pod-1",
-			WorkerPodUid:    "pod-uid-1",
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: "pod-uid-1"},
+				WorkerNamespace: "demo-ns",
+				WorkerPool:      "pool-1",
+				WorkerPod:       "pod-1",
+				WorkerPodUid:    "pod-uid-1",
+			},
 		},
-		Status: ateapipb.Actor_STATUS_RUNNING,
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
@@ -490,4 +509,63 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 	}
 	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
 		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
+}
+
+// failingUpdateWorkerStore wraps a store and fails every UpdateWorker call,
+// simulating a transient state-store error while releasing a worker.
+type failingUpdateWorkerStore struct {
+	store.Interface
+	err error
+}
+
+func (f failingUpdateWorkerStore) UpdateWorker(context.Context, *ateapipb.Worker, int64) error {
+	return f.err
+}
+
+// A transient failure releasing the worker must not move the actor to the
+// terminal CRASHED state: doing so would strand the still-assigned worker with
+// no actor left to drive a retry, permanently consuming the worker slot.
+// crashActor must return the error with the actor and worker left intact so the
+// caller retries and the worker is reclaimed.
+func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	seedActor(t, ctx, st, actorRef)
+	seedWorker(t, ctx, st, actorRef)
+
+	releaseErr := errors.New("state store unavailable")
+	err := crashActor(ctx, failingUpdateWorkerStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
+
+	if err == nil {
+		t.Fatal("crashActor() = nil, want error")
+	}
+	if !errors.Is(err, releaseErr) {
+		t.Errorf("crashActor() error = %v, want it to wrap %v", err, releaseErr)
+	}
+
+	// The actor must stay RUNNING with its worker assignment intact, so a retry
+	// can re-release the worker.
+	got, gerr := st.GetActor(ctx, actorRef)
+	if gerr != nil {
+		t.Fatalf("GetActor() = %v, want nil", gerr)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	}
+	if got.GetStatus().GetWorkerAssignment() == nil {
+		t.Error("WorkerAssignment cleared, want preserved so the release can be retried")
+	}
+
+	// The worker must still be assigned to the actor (the failed release did not
+	// persist): it is not leaked, and a retry will reclaim it.
+	worker, werr := st.GetWorker(ctx, "uid")
+	if werr != nil {
+		t.Fatalf("GetWorker() = %v, want nil", werr)
+	}
+	if worker.GetStatus().GetAssignment() == nil {
+		t.Error("worker assignment = nil, want still assigned (release failed, must remain retriable)")
+	}
 }

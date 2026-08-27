@@ -15,12 +15,18 @@
 model
   schema 1.1
 
+<<<<<<< HEAD
 type user
 type service_account
+=======
+# Unified Principal Identity (human users, machine service accounts, SPIFFE workload identities)
+type user
+>>>>>>> main
 
 # Global Cluster Scope
 type cluster
   relations
+<<<<<<< HEAD
     define admin: [user, service_account]
 
 type atespace
@@ -100,3 +106,56 @@ condition is_standard_label(label_key: string) {
 condition is_self_actor(target_actor: string, calling_actor: string) {
   target_actor == calling_actor
 }
+=======
+    define admin: [user]
+    define can_create_atespace: admin
+
+type atespace
+  relations
+    # Link to cluster-wide root cluster
+    define parent_cluster: [cluster]
+
+    # Standard 3-tier hierarchy: admin -> developer -> viewer
+    define admin: [user] or admin from parent_cluster
+    define developer: [user] or admin
+    define viewer: [user] or developer
+
+    # Atespace Operations
+    define can_get: viewer
+    define can_update: developer
+    define can_delete: admin
+
+type actor_template
+  relations
+    # Parent atespace where template definition lives
+    define parent_atespace: [atespace]
+
+    # Standard roles: developer (creator/maintainer) and viewer (users/public wildcards user:*)
+    define developer: [user] or developer from parent_atespace
+    define viewer: [user, user:*] or developer or viewer from parent_atespace
+
+    # Actor Template Operations
+    define can_get: viewer
+    define can_update: developer
+    define can_delete: developer
+
+type actor
+  relations
+    # Parent atespace where runtime instance lives
+    define parent_atespace: [atespace]
+
+    # Standard roles on actor instance
+    define developer: [user] or developer from parent_atespace
+    define viewer: [user] or developer or viewer from parent_atespace
+    define invoker: [user, user:*] or developer
+
+    # Resource Operations
+    define can_get: viewer
+    define can_update: developer
+    define can_delete: developer
+
+    # Substrate Specific Lifecycle & Ingress Operations
+    define can_resume: [user] or developer
+    define can_invoke: invoker
+    define can_suspend: [user] or developer
+>>>>>>> main

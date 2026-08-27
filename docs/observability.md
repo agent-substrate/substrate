@@ -6,21 +6,23 @@ This guide explains how Agent Substrate achieves observability across these susp
 
 ## The Observability Model
 
-To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
-* `ate.dev/actor_name`: The name of the actor (e.g., `my-counter-1` or `test`).
-* `ate.dev/actor_atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
-* `ate.dev/actor_uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
-* `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
-* `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
-* `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
+To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods. These are the same `ate.*` keys the spans and metrics below use, defined once in [`internal/ateattr`](../internal/ateattr):
+* `ate.actor.name`: The name of the actor (e.g., `my-counter-1` or `test`).
+* `ate.atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
+* `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
+* `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
+* `ate.template.namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
+
+`ate.*` is reserved for Substrate. An actor's own log lines pass through untouched except for keys in that namespace, which are dropped before the record is written, so nothing a workload emits can be read as platform-issued attribution.
 
 ---
 
 ## 1. Logging
 
-Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.dev` metadata labels.
+Agent Substrate captures container standard output/error, wraps them into structured JSON log entries, and injects the `ate.*` metadata labels.
 
 ### Active Actor Inspection via CLI
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
@@ -77,21 +79,21 @@ Because the logging pipeline indexes the core metadata labels, you can query you
 To track the unified, continuous lifecycle of a single actor regardless of how many times it migrated across worker pods or was suspended/resumed:
 
 ```text
-labels."ate.dev/actor_name"="test"
+labels."ate.actor.name"="test"
 ```
 
 #### 2. Atespace-Centric View
 To monitor or debug all actor instances in a specific atespace (e.g., analyzing the collective behavior or error rates of all actors belonging to one tenant):
 
 ```text
-labels."ate.dev/actor_atespace"="ate-demo-counter"
+labels."ate.atespace"="ate-demo-counter"
 ```
 
 #### 3. Template-Centric View
 To monitor or debug all actor instances created from a specific ActorTemplate (e.g., analyzing the collective behavior or error rates of all counter actors). One atespace can run actors from many templates, so this is a distinct dimension from the atespace view above:
 
 ```text
-labels."ate.dev/actor_template_name"="counter"
+labels."ate.template.name"="counter"
 ```
 
 #### 4. Pod-Centric View
@@ -103,6 +105,14 @@ resource.labels.pod_name="counter-c995fdf4c-m7d96"
 
 ---
 
+### Joining Logs to Traces
+
+Substrate-emitted records carry top-level `trace_id`, `span_id`, and `trace_flags` in lowercase hex, the names the [OpenTelemetry spec](https://opentelemetry.io/docs/specs/otel/compatibility/logging_trace_context/) fixes for non-OTLP log formats. That covers component logs (every `slog.*Context` call, via [`internal/contextlogging`](../internal/contextlogging)) and the synthetic actor lifecycle records, so a suspend or resume log line joins the RPC that drove it.
+
+An actor's **own** lines carry trace context only if the actor emits these fields itself, in which case they pass through unchanged. Substrate cannot supply them: one forwarder goroutine covers a container's whole output stream and cannot tell which request produced a given line. Per-line correlation for actor logs arrives with the actor telemetry relay ([#853](https://github.com/agent-substrate/substrate/issues/853)), where the actor's own SDK carries the context.
+
+---
+
 ## 2. Metrics
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
@@ -110,7 +120,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
-| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `STATUS_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.name`, `ate.sandbox.class`) |
+| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.namespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.namespace`, `ate.template.name`) |
@@ -119,8 +129,8 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`assigned`) and sandbox class to provide fleet capacity and saturation at a glance |
-| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool, sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
-| `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`) and sandbox class to catch scheduling latency and capacity starvation problems |
+| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
+| `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.namespace`, `ate.template.name`, `ate.sandbox.class`, plus `ate.failure.reason` on failure) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
@@ -132,7 +142,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 * **Autoscaling Control Loop & Anti-Windup**: `desired - ready > 0` sustained beyond a few minutes indicates undelivered capacity due to node pool exhaustion, quota limits, or stuck worker pods, serving as anti-windup input for demand-reactive capacity scaling.
 
 For `atenet.router.route.duration`:
-* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
+* `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
 
 For `ate.scheduler.eligible_workers`:
@@ -141,6 +151,12 @@ For `ate.scheduler.eligible_workers`:
 For `ate.imagecache.requests`:
 * `ate.imagecache.outcome` is `hit` when the node holds a complete image record — every layer directory the record names is present — and `miss` when the lookup must pull. A failed lookup is neither: `error` is a failed lookup whatever the cause, and `cancelled` or `timeout` is the caller giving up, as on `ate.router.outcome`. So the hit ratio is `hit / (hit + miss)`, with failures and abandoned lookups out of the denominator.
 * `error.type` is present only on the `error` outcome, and carries the registry's own HTTP status for its rejection, from a fixed set: `401`, `403`, `404`, `429`, `500`, `502`, `503`, `504`. The set is an allow-list because the registry client reports whatever the remote returned. Each other status, and each failure that carries no status, reports `_OTHER`.
+
+`ate.workerpool.namespace` and `ate.workerpool.name` identify a pool together, on every instrument that names one. A WorkerPool is a namespaced resource, so the name on its own merges same-named pools from different namespaces into one series. The pair means that capacity (`ate.workerpool.workers`, `ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`) joins to demand (`ate.scheduler.assignment.duration`, `ate.actor.lifecycle.operation.duration`, `ate.actor.crashes`) by pool.
+
+Two states read differently:
+* **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_free_worker` outcome, names no pool.
+* **Both keys empty** means no pool matched. Only `ate.scheduler.eligible_workers` reports it, as one zero-valued series that keeps "nothing is schedulable" on the same chart as the per-pool series.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
@@ -211,7 +227,9 @@ To visualize traces locally:
    ```
    The kind overlay pins `ateapi` to `parentbased_always_on`, so API calls show up even without `--trace`; the flag additionally prints the trace ID and forces sampling on every hop.
 
-4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi` or `atelet` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
+4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi`, `atelet`, or `ateom-gvisor` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
+
+> ateom carries no manual spans — its only instrumentation is the `otelgrpc` interceptor on the gRPC surface `atelet` calls. So it produces a span for an actor lifecycle operation (`suspend`, `resume`) and nothing at all for a read like `kubectl ate get actor`. Its sampler is parent based, so a lifecycle command is traced end to end into ateom whenever `ateapi` roots a sampled trace, which the kind overlay makes unconditional; the per-component ratio never enters into it. To check whether ateom exported its spans through the [OTLP relay](#the-ateom-otlp-relay) rather than falling back to direct network egress, inspect the span's resource attributes: `ate.otlp.relay` will be set to `"relay"` (instead of `"direct"`).
 
 > **Developer Guide:** For detailed instructions on configuring OpenTelemetry tracer providers, middleware, and exporters in your servers or clients, please refer to the [Tracing Best Practices](dev/best-practices/tracing.md) guide.
 
@@ -233,6 +251,24 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 > Every component reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
 > ateom workers don't read the ConfigMap at all — `ate-controller` copies the value into each worker pod at creation. A new endpoint reaches them only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
+
+### The ateom OTLP relay
+
+ateom is the one component that does not talk to the collector directly. It exports over a unix socket at `/var/lib/ateom-gvisor/atelet-otlp.sock`, which `atelet` serves and forwards to the collector on the node's network ([`internal/otlprelay`](../internal/otlprelay)):
+
+```
+ateom ──OTLP/gRPC over unix socket──► atelet relay ──OTLP/gRPC──► collector
+```
+
+The socket sits in the `BasePath` hostPath already mounted into both, so nothing new is mounted. `atelet` is a DaemonSet, so every ateom on a node shares one relay, and the many per-pod collector connections collapse into one per node. Four things motivate it: the worker pod runs untrusted agent code and will not need egress to the collector once direct fallback is phased out; the connection count drops; ateom's own telemetry stays clear of the transparent egress redirect it installs for the actor; and `atelet` outlives the worker pod, so spans still queued at teardown are not lost with it.
+
+The relay is best-effort. If the socket is absent when ateom starts — `atelet` not up yet, `--otlp-relay-socket=""`, or no collector configured for the relay to forward to — ateom logs it and exports directly to `OTEL_EXPORTER_OTLP_ENDPOINT` as before. That fallback is decided once at startup, not per export, and is stamped on telemetry as the `ate.otlp.relay` resource attribute (`relay` vs `direct`).
+
+> **Note on Network Egress Lockdown:** Complete network policy lockdown of worker pod egress to the collector is planned as a Phase 2 milestone once the relay path is fully proven and direct fallback is deprecated. While the fallback path remains active, worker pods retain network egress to the collector and `ate-controller` continues to inject `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+For verified ateom sources, the relay forwards each request verbatim rather than decoding and re-exporting, which is what keeps every ateom its own service in Jaeger/GCP Trace instead of being absorbed into `atelet`'s. `ate-controller` injects `k8s.pod.name`, `k8s.namespace.name`, `k8s.pod.uid`, and `service.instance.id` directly into `OTEL_RESOURCE_ATTRIBUTES` via the Kubernetes Downward API; because the relay preserves resources verbatim, Kubernetes attributes remain intact even though the TCP connection to the collector originates from `atelet` rather than the worker pod IP (bypassing reliance on collector-side IP-based `k8sattributes` enrichment).
+
+Verbatim forwarding is restricted to known ateom sources and refuses anything else with `PermissionDenied`. Actor telemetry is what that excludes: actors share a hostname (`runsc`) and an interior IP, so their series merge unless identity is injected from outside the actor ([#761](https://github.com/agent-substrate/substrate/issues/761)) — a rewrite, which will be implemented as an explicit rewriting path alongside this forwarder.
 
 ---
 

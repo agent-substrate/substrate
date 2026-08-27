@@ -83,16 +83,16 @@ func classifyOutcome(err error) string {
 		return "timeout"
 	}
 	switch status.Code(err) {
-	case codes.FailedPrecondition:
+	case codes.ResourceExhausted:
 		return "no_capacity"
+	case codes.FailedPrecondition:
+		return "failed_precondition"
 	case codes.Aborted:
 		return "lock_conflict"
 	case codes.NotFound:
 		return "not_found"
 	case codes.Unavailable:
 		return "unavailable"
-	case codes.ResourceExhausted:
-		return "rate_limited"
 	}
 	var re *ReqError
 	if errors.As(err, &re) {

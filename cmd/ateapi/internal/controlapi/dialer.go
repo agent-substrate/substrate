@@ -19,8 +19,11 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
+	"strconv"
 
+	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
@@ -61,10 +64,20 @@ type AteletDialer struct {
 	dialCredentials func(expectedPodUID string) (credentials.TransportCredentials, error)
 }
 
+// DialerOption customizes an AteletDialer built by NewAteletDialer.
+type DialerOption func(*AteletDialer)
+
+// WithDialCredentials overrides how transport credentials are built for a given
+// atelet pod UID. Tests use it to reach a fake atelet over insecure transport
+// while still exercising the real lookup, dial and connection-cache path.
+func WithDialCredentials(build func(expectedPodUID string) (credentials.TransportCredentials, error)) DialerOption {
+	return func(d *AteletDialer) { d.dialCredentials = build }
+}
+
 // NewAteletDialer creates a new AteletDialer. clientBundlePath and serverCAPath
 // are used to build the per-atelet mTLS credentials used for every atelet connection.
-func NewAteletDialer(workerIndexer cache.Indexer, ateletIndexer cache.Indexer, clientBundlePath, serverCAPath string) *AteletDialer {
-	return &AteletDialer{
+func NewAteletDialer(workerIndexer cache.Indexer, ateletIndexer cache.Indexer, clientBundlePath, serverCAPath string, opts ...DialerOption) *AteletDialer {
+	d := &AteletDialer{
 		workerIndexer: workerIndexer,
 		ateletIndexer: ateletIndexer,
 		ateletConns:   lru.New(1024),
@@ -76,6 +89,10 @@ func NewAteletDialer(workerIndexer cache.Indexer, ateletIndexer cache.Indexer, c
 			return credentials.NewTLS(tlsConfig), nil
 		},
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
 }
 
 // DialForWorker returns a gRPC connection to the Atelet running on the same node as the specified worker pod.
@@ -141,7 +158,7 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 	}
 
 	ateletConn, err := grpc.NewClient(
-		selectedAtelet.Status.PodIPs[0].IP+":8085",
+		net.JoinHostPort(selectedAtelet.Status.PodIPs[0].IP, strconv.Itoa(atelet.DefaultPort)),
 		grpc.WithTransportCredentials(creds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)

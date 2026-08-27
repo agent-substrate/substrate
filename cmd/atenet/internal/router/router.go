@@ -194,10 +194,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        s.clientset,
-		UseTokenAuth:     s.cfg.Auth.AteapiUseTokenAuth,
 		CAFile:           s.cfg.Auth.AteapiCAFile,
 		ServerName:       s.cfg.Auth.AteapiServerName,
-		TokenFile:        s.cfg.Auth.AteapiTokenFile,
 		ClientCredBundle: s.cfg.Auth.AteapiClientCertPath,
 	})
 	if err != nil {
@@ -211,12 +209,11 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
 	}
-	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr), slog.Bool("use-api-token-auth", s.cfg.Auth.AteapiUseTokenAuth))
+	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr))
 	s.apiClient = ateapipb.NewControlClient(conn)
 
 	slog.InfoContext(ctx, "Starting substrate router subsystem",
 		slog.String("mode", string(s.cfg.Mode)),
-		slog.Bool("standalone", s.cfg.Standalone),
 		slog.String("atenet_router", string(s.cfg.atenetRouter())))
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -230,7 +227,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
 		}
-		s.ingressHandler = ingress.New(s.apiClient, parkCfg, parkMetrics, s.cfg.atenetRouter().routeViaAuthority())
+		s.ingressHandler = ingress.New(s.apiClient, parkCfg, parkMetrics)
 		handlers[s.ingressHandler.Direction()] = s.ingressHandler
 	}
 	if s.cfg.Mode.ServesEgress() {
