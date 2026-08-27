@@ -28,12 +28,12 @@ import (
 // resources must never collide on one filename.
 func TestSocketPathsAreDistinctAndInKubeletDir(t *testing.T) {
 	kvm := New(HostDevice{ResourceName: "ate.dev/kvm", Path: "/dev/kvm"})
-	tun := New(HostDevice{ResourceName: "ate.dev/tun", Path: "/dev/net/tun"})
+	other := New(HostDevice{ResourceName: "ate.dev/other", Path: "/dev/other"})
 
-	if kvm.socket == tun.socket {
+	if kvm.socket == other.socket {
 		t.Errorf("sockets collide: %q", kvm.socket)
 	}
-	for _, p := range []*Plugin{kvm, tun} {
+	for _, p := range []*Plugin{kvm, other} {
 		if got := filepath.Dir(p.socket) + "/"; got != pluginapi.DevicePluginPath {
 			t.Errorf("socket %q is not in %q", p.socket, pluginapi.DevicePluginPath)
 		}

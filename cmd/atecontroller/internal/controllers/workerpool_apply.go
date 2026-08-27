@@ -334,17 +334,36 @@ func maybeApplyMicroVMPodShape(
 		return
 	}
 
-	// The micro-VM runtime needs /dev/kvm (to create the VM) and /dev/net/tun
-	// (to build the guest's tap). Request them as extended resources served by
-	// atelet's device plugin rather than hostPath-mounting them: a container's
-	// device access is gated by the cgroup device controller, which denies the
-	// node by default, and kubelet's device manager is what adds the matching
-	// allow rule. A hostPath mount alone yields EPERM unless the pod is
-	// privileged, which would hand over every other device on the node too.
+	// The micro-VM runtime needs /dev/kvm to create the VM. Request it as an
+	// extended resource served by atelet's device plugin rather than
+	// hostPath-mounting it: a container's device access is gated by the cgroup
+	// device controller, which denies /dev/kvm by default, and kubelet's device
+	// manager is what adds the matching allow rule. A hostPath mount alone
+	// yields EPERM unless the pod is privileged, which would hand over every
+	// other device on the node too.
 	//
-	// atelet advertises these only on nodes where the device exists, so the
+	// atelet advertises it only on nodes where the device exists, so the
 	// request also keeps the pod off nodes that cannot run a micro-VM.
-	addDeviceResourceLimits(containerAC, deviceplugin.ResourceKVM, deviceplugin.ResourceTUN)
+	addDeviceResourceLimits(containerAC, deviceplugin.ResourceKVM)
+
+	// The runtime also opens /dev/net/tun to build the guest's tap, but that
+	// one needs no grant: it is in the runtime's default device allow-list, so
+	// a bind mount is enough and creating the tap is a capability question
+	// (CAP_NET_ADMIN, above) rather than a device one. That default is a
+	// compatibility guarantee rather than an accident — runc dropped the rule
+	// once, restored it when it broke users, and crun matched.
+	//
+	// Advertising tun as a resource would only add a placement constraint that
+	// can fail: it is not scarce, and a node where the tun module has yet to
+	// load would refuse a worker that needs nothing from it.
+	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
+		WithName(tunDeviceVolume).
+		WithMountPath(tunDevicePath))
+	podSpecAC.WithVolumes(corev1ac.Volume().
+		WithName(tunDeviceVolume).
+		WithHostPath(corev1ac.HostPathVolumeSource().
+			WithPath(tunDevicePath).
+			WithType(corev1.HostPathCharDev)))
 
 	// Placement onto KVM-capable nodes comes from the device request above: the
 	// scheduler only picks nodes advertising the resource, and atelet advertises
@@ -367,6 +386,12 @@ func maybeApplyMicroVMPodShape(
 		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
 		WithEffect(corev1.TaintEffectNoSchedule))
 }
+
+// The tun device node a micro-VM worker bind-mounts to build the guest's tap.
+const (
+	tunDeviceVolume = "dev-net-tun"
+	tunDevicePath   = "/dev/net/tun"
+)
 
 // nvidiaToolkitContainerPath is where the host toolkit is mounted inside the
 // worker; ateom-gvisor's toolkitDir must match this. It sits outside

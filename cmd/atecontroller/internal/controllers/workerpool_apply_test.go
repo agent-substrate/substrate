@@ -268,16 +268,36 @@ func TestMicroVMPodShape(t *testing.T) {
 			wp.Spec.SandboxClass = tt.class
 			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
 
-			// The devices must come from the device plugin, never a hostPath:
-			// a hostPath mount does not carry the cgroup device allow rule.
+			// /dev/kvm must come from the device plugin, never a hostPath: a
+			// hostPath mount carries no cgroup device allow rule, and the
+			// runtime denies /dev/kvm by default. /dev/net/tun is the
+			// opposite — allowed by default, so it is bind-mounted.
 			for _, v := range ps.Volumes {
-				if v.HostPath != nil && v.HostPath.Path != nil && strings.HasPrefix(*v.HostPath.Path, "/dev/") {
+				if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path == tunDevicePath {
+					continue
+				}
+				if strings.HasPrefix(*v.HostPath.Path, "/dev/") {
 					t.Errorf("device %q must be requested as a resource, not hostPath-mounted", *v.HostPath.Path)
 				}
 			}
+			hasTunMount := false
+			for _, v := range ps.Volumes {
+				if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != tunDevicePath {
+					continue
+				}
+				hasTunMount = true
+				// Without CharDevice, kubelet would happily create a directory
+				// there on a node where the tun module has yet to load.
+				if v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
+					t.Errorf("%s hostPath type = %v, want CharDevice", tunDevicePath, v.HostPath.Type)
+				}
+			}
+			if hasTunMount && !containerMountsPath(ps.Containers[0], tunDevicePath) {
+				t.Errorf("%s is a pod volume but the ateom container does not mount it", tunDevicePath)
+			}
 
 			hasDeviceRequest := true
-			for _, name := range []string{deviceplugin.ResourceKVM, deviceplugin.ResourceTUN} {
+			for _, name := range []string{deviceplugin.ResourceKVM} {
 				qty, ok := deviceLimit(ps.Containers[0], name)
 				if !ok {
 					hasDeviceRequest = false
@@ -300,12 +320,22 @@ func TestMicroVMPodShape(t *testing.T) {
 					hasTol = true
 				}
 			}
-			if hasDeviceRequest != tt.wantMicroVM || hasTol != tt.wantMicroVM {
-				t.Errorf("microvm shape: deviceRequest=%v toleration=%v, want both %v",
-					hasDeviceRequest, hasTol, tt.wantMicroVM)
+			if hasDeviceRequest != tt.wantMicroVM || hasTol != tt.wantMicroVM || hasTunMount != tt.wantMicroVM {
+				t.Errorf("microvm shape: deviceRequest=%v toleration=%v tunMount=%v, want all %v",
+					hasDeviceRequest, hasTol, hasTunMount, tt.wantMicroVM)
 			}
 		})
 	}
+}
+
+// containerMountsPath reports whether c mounts anything at path.
+func containerMountsPath(c corev1ac.ContainerApplyConfiguration, path string) bool {
+	for _, m := range c.VolumeMounts {
+		if m.MountPath != nil && *m.MountPath == path {
+			return true
+		}
+	}
+	return false
 }
 
 // deviceLimit returns the container's limit for an extended resource.

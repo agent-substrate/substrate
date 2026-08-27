@@ -54,16 +54,16 @@ const (
 	// ResourceKVM grants /dev/kvm, which the micro-VM runtime needs to create a
 	// VM (cloud-hypervisor fails with EPERM on VmCreate without it).
 	ResourceKVM = "ate.dev/kvm"
-	// ResourceTUN grants /dev/net/tun, which the micro-VM runtime needs to build
-	// the guest's tap device.
-	ResourceTUN = "ate.dev/tun"
 )
 
-// SandboxDevices are the host devices a sandbox runtime may need. atelet
-// advertises whichever of these exist on its node.
+// SandboxDevices are the host devices a sandbox runtime needs a grant for.
+// atelet advertises whichever of these exist on its node.
+//
+// Only devices the container runtime denies by default belong here. The
+// micro-VM runtime also opens /dev/net/tun, but that is in the runtime's
+// default allow-list, so the worker gets it as an ordinary bind mount instead.
 var SandboxDevices = []HostDevice{
 	{ResourceName: ResourceKVM, Path: "/dev/kvm"},
-	{ResourceName: ResourceTUN, Path: "/dev/net/tun"},
 }
 
 // HostDevice is a device node advertised to kubelet under ResourceName.
@@ -85,8 +85,8 @@ func (d HostDevice) Present(devRoot string) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
-// resolve maps the device's host path into devRoot ("/dev/net/tun" ->
-// "<devRoot>/net/tun").
+// resolve maps the device's host path into devRoot ("/dev/kvm" ->
+// "<devRoot>/kvm").
 func (d HostDevice) resolve(devRoot string) string {
 	return filepath.Join(devRoot, strings.TrimPrefix(d.Path, "/dev/"))
 }
