@@ -1040,12 +1040,12 @@ message UpdateWorkerRequest {
   // always empty; Workers are global-scoped.
   // worker.metadata.version and worker.metadata.uid are required preconditions.
   //
-  // sandbox_class and labels are the only fields an update may change. Every
-  // other field is replaced with what the request carries, and a field left
-  // unset is cleared — so read the Worker, change what you mean to change, and
-  // send the whole thing back. A request that alters an immutable field, by
-  // changing it or by omitting it, returns INVALID_ARGUMENT naming the field.
-  // status is output-only and whatever it carries is ignored.
+  // labels is the only field an update may change. Every other field is
+  // replaced with what the request carries, and a field left unset is cleared —
+  // so read the Worker, change what you mean to change, and send the whole
+  // thing back. A request that alters an immutable field, by changing it or by
+  // omitting it, returns INVALID_ARGUMENT naming the field. status is
+  // output-only and whatever it carries is ignored.
   Worker worker = 1;
 }
 
@@ -1094,10 +1094,10 @@ message ListActorsResponse {
 // by the control plane and is opaque to clients — never parse it or derive it
 // from anything else; read pod identity from the named fields below.
 //
-// sandbox_class and labels are the only mutable fields; every other field is
-// either immutable after creation or output-only. UpdateWorker replaces the
-// whole resource, so an immutable field that a request changes — including by
-// omitting it, which would clear it — is rejected with INVALID_ARGUMENT.
+// labels is the only mutable field; every other field is either immutable
+// after creation or output-only. UpdateWorker replaces the whole resource, so
+// an immutable field that a request changes — including by omitting it, which
+// would clear it — is rejected with INVALID_ARGUMENT.
 message Worker {
   // Output-only: name, uid, version and timestamps are all server-assigned.
   // uid and version are echoed back on UpdateWorker as preconditions.
@@ -1111,9 +1111,11 @@ message Worker {
   string worker_pod_uid = 5;
   string node_name = 6;
   string ip = 7;
-
-  // Mutable.
   string sandbox_class = 8;
+
+  // The owning WorkerPool's labels, which the scheduler matches actor and
+  // template worker selectors against. Mutable: a pool's labels can be edited
+  // without disturbing its pods.
   map<string, string> labels = 9;
 
   // The compute capacity this worker can give an actor sandbox. Immutable, set

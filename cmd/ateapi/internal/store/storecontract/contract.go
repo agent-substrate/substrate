@@ -1257,7 +1257,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 
 		_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(original), func(toUpdate *ateapipb.Worker) error {
 			t.Error("mutate ran past its precondition once the guarded incarnation was gone")
-			toUpdate.SandboxClass = "edited-anyway"
+			toUpdate.Labels = map[string]string{"tier": "edited-anyway"}
 			return nil
 		})
 		if !errors.Is(err, store.ErrUIDConflict) {
@@ -1318,7 +1318,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 
 		sentinel := errors.New("nothing to do")
 		_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-			toUpdate.SandboxClass = "edited-anyway"
+			toUpdate.Labels = map[string]string{"tier": "edited-anyway"}
 			return sentinel
 		})
 		if !errors.Is(err, sentinel) {
@@ -1329,8 +1329,8 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got.GetSandboxClass() != "" {
-			t.Errorf("aborted mutation was written: sandbox_class is %q", got.GetSandboxClass())
+		if len(got.GetLabels()) != 0 {
+			t.Errorf("aborted mutation was written: labels are %v", got.GetLabels())
 		}
 		if got.GetMetadata().GetVersion() != 1 {
 			t.Errorf("aborted mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
@@ -1362,6 +1362,11 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 			{"worker_pod_uid", "worker_pod_uid", func(w *ateapipb.Worker) { w.WorkerPodUid = otherTestWorkerName }},
 			{"node_name", "node_name", func(w *ateapipb.Worker) { w.NodeName = "other-node" }},
 			{"ip", "ip", func(w *ateapipb.Worker) { w.Ip = "10.0.0.9" }},
+			// A pool's sandboxClass drives its pods' shape, so editing it
+			// replaces every pod rather than reclassifying any. Accepting the
+			// change here would advertise the old pod's shape wrongly to the
+			// scheduler for as long as it survives the rollout.
+			{"sandbox_class", "sandbox_class", func(w *ateapipb.Worker) { w.SandboxClass = "microvm" }},
 			{"capacity_changed", "capacity", func(w *ateapipb.Worker) { w.Capacity.CpuMilli = 4000 }},
 			// An update replaces the worker, so a caller that leaves capacity
 			// out is asking to clear it. That is a change like any other.

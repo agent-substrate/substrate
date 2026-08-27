@@ -300,6 +300,7 @@ func CheckWorkerMutation(stored, mutated *ateapipb.Worker) error {
 		{"worker_pod_uid", stored.GetWorkerPodUid(), mutated.GetWorkerPodUid()},
 		{"node_name", stored.GetNodeName(), mutated.GetNodeName()},
 		{"ip", stored.GetIp(), mutated.GetIp()},
+		{"sandbox_class", stored.GetSandboxClass(), mutated.GetSandboxClass()},
 	} {
 		if f.stored != f.mutated {
 			return fmt.Errorf("%w: %s changed from %q to %q", ErrImmutableField, f.name, f.stored, f.mutated)
