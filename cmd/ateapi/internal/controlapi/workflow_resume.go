@@ -708,6 +708,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if !src.GoldenSnapshotURI.IsZero() {
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
+			// atelet combines the local pause snapshot with the golden snapshot
+			// it reads from object storage; mint a read capability for it.
+			if req.SignedAccess, err = w.readAccessFor(ctx, src.GoldenSnapshotURI.String()); err != nil {
+				return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while minting golden snapshot read access", ateattr.OperationResume)
+			}
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
@@ -750,6 +755,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			EgressGateway:     egressGateway,
 			CpuMilli:          cpuMilli,
 			MemoryBytes:       memBytes,
+		}
+		// The node reads the actor's snapshot and, on a golden-data restore, the
+		// golden snapshot too; mint a read capability scoped to each.
+		if req.SignedAccess, err = w.readAccessFor(ctx, src.SnapshotURI.String(), src.GoldenSnapshotURI.String()); err != nil {
+			return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while minting snapshot read access", ateattr.OperationResume)
 		}
 		_, err = client.Restore(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
