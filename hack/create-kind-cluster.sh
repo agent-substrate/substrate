@@ -21,6 +21,7 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
 reg_port="${KIND_REGISTRY_PORT:-5001}"
+IPV6_DNS_UPSTREAM="${IPV6_DNS_UPSTREAM:-2001:4860:4860::8888 2001:4860:4860::8844}"
 
 if [[ $# -gt 0 ]]; then
   case "$1" in
@@ -31,6 +32,9 @@ if [[ $# -gt 0 ]]; then
       echo "Configured through the environment:"
       echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
       echo "  IP_FAMILY          Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      echo "  IPV6_DNS_UPSTREAM  Space-separated IPv6 resolvers CoreDNS forwards to when IP_FAMILY=ipv6"
+      echo "                     (default: Google Public DNS). These replace the host's resolver, so any"
+      echo "                     split-horizon names it served stop resolving from pods."
       exit 0
       ;;
   esac
@@ -146,6 +150,23 @@ fi
 echo "Creating kind cluster '${KIND_CLUSTER_NAME}'..."
 "${ROOT}"/hack/kind.sh create cluster --name "${KIND_CLUSTER_NAME}" --config "${ROOT}/bin/kind-config.yaml"
 
+# kind create returns before the apiserver answers, and every kubectl below races
+# it. Poll from inside the node, where the answer does not depend on how the
+# daemon published the port.
+echo "Waiting for the control plane to answer..."
+for attempt in $(seq 60); do
+  if docker exec "${KIND_CLUSTER_NAME}-control-plane" \
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw /healthz >/dev/null 2>&1; then
+    break
+  fi
+  if [[ "${attempt}" == 60 ]]; then
+    echo "error: the control plane did not answer /healthz within 2m of create:" >&2
+    echo "         docker logs ${KIND_CLUSTER_NAME}-control-plane" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
 # A daemon with IPv6 off hands kind a v4-only network whatever it asked for.
 if [[ "${IP_FAMILY}" != "ipv4" &&
       "$(docker network inspect kind --format '{{.EnableIPv6}}')" != "true" ]]; then
@@ -190,6 +211,50 @@ done
 echo "Connecting local registry to cluster network..."
 if [ "$(docker inspect -f='{{json .NetworkSettings.Networks.kind}}' "${reg_name}")" = "null" ]; then
   docker network connect "kind" "${reg_name}"
+fi
+
+# 4.5. Point CoreDNS at an IPv6 resolver and teach it the registry's name
+if [[ "${IP_FAMILY}" == "ipv6" ]]; then
+  echo "Repointing CoreDNS at an IPv6 resolver and teaching it '${reg_name}'..."
+  reg_v6="$(docker inspect "${reg_name}" \
+    --format '{{.NetworkSettings.Networks.kind.GlobalIPv6Address}}' 2>/dev/null || true)"
+  if [[ -z "${reg_v6}" ]]; then
+    echo "error: '${reg_name}' has no IPv6 address on the 'kind' network" >&2
+    exit 1
+  fi
+
+  # CoreDNS runs dnsPolicy: Default and inherits the node's IPv4 resolver, which
+  # no pod here can reach.
+  corefile="$(kubectl --context="${KUBECTL_CONTEXT}" -n kube-system get cm coredns \
+    -o jsonpath='{.data.Corefile}')"
+  search="forward . /etc/resolv.conf"
+  # $search unquoted: bash 3.2 splices the quotes in literally.
+  patched="${corefile/$search/forward . ${IPV6_DNS_UPSTREAM}}"
+  if [[ "${patched}" == "${corefile}" ]]; then
+    echo "error: '${search}' not found in the CoreDNS Corefile" >&2
+    echo "       the Corefile layout changed upstream; update this block" >&2
+    exit 1
+  fi
+
+  # Step 3's registry wiring is node-side, while atelet pulls from its own netns,
+  # where "kind-registry" does not resolve. Own zone, so no fallthrough is needed:
+  # only this name reaches the hosts stanza.
+  patched="${patched}
+${reg_name}:53 {
+    errors
+    hosts {
+        ${reg_v6} ${reg_name}
+    }
+}"
+
+  # A YAML patch file avoids escaping the Corefile's newlines into JSON.
+  { printf 'data:\n  Corefile: |\n'; printf '%s\n' "${patched}" | sed 's/^/    /'; } \
+    > "${ROOT}/bin/coredns-patch.yaml"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system patch cm coredns \
+    --type=merge --patch-file "${ROOT}/bin/coredns-patch.yaml"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout restart deploy/coredns
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout status deploy/coredns \
+    --timeout=120s
 fi
 
 # 5. Document the local registry in kube-public ConfigMap
