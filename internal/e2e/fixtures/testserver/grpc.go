@@ -12,26 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command grpcecho is the gRPC origin the egress e2e suites dial through the
-// egress gateway. It serves cleartext HTTP/2 -- no TLS anywhere -- because the
-// leg under test is the tunnel, not the origin's identity, and because the
-// gateway relays a terminated CONNECT as opaque TCP: whatever the actor speaks
-// is what arrives here.
-//
-// It answers the grpc health service as well as Echo, which is what the pod's
-// readinessProbe checks. A separate HTTP port for readiness would need an h2c
-// handler multiplexed onto this listener, and the whole point of this fixture
-// is that nothing between the actor and here parses HTTP.
 package main
 
 import (
 	"context"
 	"errors"
-	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
 
+	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -40,8 +31,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
 )
-
-var listenAddress = flag.String("listen", ":50051", "Address the gRPC server listens on, cleartext HTTP/2.")
 
 // maxStreamCount bounds EchoStream. A test asks for a handful of messages; a
 // request for millions is a bug in the caller, and answering it would look like
@@ -103,13 +92,31 @@ func newServer() *grpc.Server {
 	return server
 }
 
-func main() {
-	flag.Parse()
-
-	listener, err := net.Listen("tcp", *listenAddress)
-	if err != nil {
-		log.Fatalf("grpcecho: listening on %s: %v", *listenAddress, err)
+// newGRPCCmd is the gRPC origin the egress e2e suites dial through the egress
+// gateway. It serves cleartext HTTP/2 -- no TLS anywhere -- because the leg
+// under test is the tunnel, not the origin's identity, and because the gateway
+// relays a terminated CONNECT as opaque TCP: whatever the actor speaks is what
+// arrives here.
+//
+// It answers the grpc health service as well as Echo, which is what the pod's
+// readinessProbe checks. A separate HTTP port for readiness would need an h2c
+// handler multiplexed onto this listener, and the whole point of this mode is
+// that nothing between the actor and here parses HTTP.
+func newGRPCCmd() *cobra.Command {
+	var listenAddress string
+	cmd := &cobra.Command{
+		Use:   "grpc",
+		Short: "Serve a cleartext HTTP/2 gRPC echo origin.",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			listener, err := net.Listen("tcp", listenAddress)
+			if err != nil {
+				return fmt.Errorf("listening on %s: %w", listenAddress, err)
+			}
+			log.Printf("testserver grpc: serving on %s", listener.Addr())
+			return newServer().Serve(listener)
+		},
 	}
-	log.Printf("grpcecho: serving on %s", listener.Addr())
-	log.Fatal(newServer().Serve(listener))
+	cmd.Flags().StringVar(&listenAddress, "listen", ":50051", "Address the gRPC server listens on, cleartext HTTP/2.")
+	return cmd
 }

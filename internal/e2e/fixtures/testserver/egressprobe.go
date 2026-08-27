@@ -12,14 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command egressprobe drives the egress gateway from inside the cluster with a
-// credential of the caller's choosing, and reports how far the attempt got:
-// which hop refused it, or the certificate it was ultimately served.
-//
-// It exists as a pod rather than as a client in the test process because the
-// credentials worth testing -- a pod's own workload identity, a leaf for an
-// actor that does not exist -- are only obtainable, or only interesting, from
-// inside the cluster.
 package main
 
 import (
@@ -29,21 +21,15 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/credbundle"
-)
-
-var (
-	listenAddress    = flag.String("listen", ":8080", "Address the probe's HTTP API listens on.")
-	gatewayAddress   = flag.String("gateway-address", "atenet-egress.ate-system.svc:443", "host:port of the egress gateway's CONNECT front door.")
-	trustBundlePath  = flag.String("trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to verify the gateway's serving certificate.")
-	handshakeTimeout = flag.Duration("handshake-timeout", 20*time.Second, "Budget for one CONNECT plus inner handshake.")
 )
 
 // tunnelDestination is the CONNECT authority. atunnel takes this from
@@ -77,6 +63,14 @@ const (
 	stageInnerHandshake = "inner_handshake"
 )
 
+// probeConfig is the gateway coordinates a handshake needs, parsed once from the
+// subcommand's flags and captured by the request handler.
+type probeConfig struct {
+	gatewayAddress   string
+	trustBundlePath  string
+	handshakeTimeout time.Duration
+}
+
 // handshakeResult is the probe's response body.
 type handshakeResult struct {
 	SNI string `json:"sni"`
@@ -101,7 +95,7 @@ type handshakeResult struct {
 // handshake opens a tunnel through the gateway and completes an inner TLS
 // handshake for the requested SNI, which is what makes Envoy ask sdsmint for a
 // secret under that name.
-func handshake(w http.ResponseWriter, r *http.Request) {
+func handshake(w http.ResponseWriter, r *http.Request, cfg probeConfig) {
 	sni := r.URL.Query().Get("sni")
 	if sni == "" {
 		http.Error(w, "missing sni query parameter", http.StatusBadRequest)
@@ -119,11 +113,11 @@ func handshake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), *handshakeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), cfg.handshakeTimeout)
 	defer cancel()
 
 	result := handshakeResult{SNI: sni, Credential: credential}
-	chain, stage, err := fetchChain(ctx, sni, credential)
+	chain, stage, err := fetchChain(ctx, sni, credential, cfg)
 	if err != nil {
 		result.Stage = stage
 		result.Error = err.Error()
@@ -149,12 +143,12 @@ func encodeChain(chain []*x509.Certificate) string {
 // fetchChain opens a tunnel and completes the inner handshake, returning the
 // chain it was served. On failure it also returns the stage that failed, since
 // which hop said no is the assertion most callers are actually making.
-func fetchChain(ctx context.Context, sni, credentialBundle string) ([]*x509.Certificate, string, error) {
+func fetchChain(ctx context.Context, sni, credentialBundle string, cfg probeConfig) ([]*x509.Certificate, string, error) {
 	client, err := atunnel.NewClient(atunnel.ClientConfig{
-		GatewayAddress:       *gatewayAddress,
-		ServerName:           serverName(*gatewayAddress),
+		GatewayAddress:       cfg.gatewayAddress,
+		ServerName:           serverName(cfg.gatewayAddress),
 		GetClientCertificate: credbundle.ClientLoader(credentialBundle),
-		TrustBundlePath:      *trustBundlePath,
+		TrustBundlePath:      cfg.trustBundlePath,
 	})
 	if err != nil {
 		return nil, stageClient, fmt.Errorf("building egress client: %w", err)
@@ -214,25 +208,50 @@ func serverName(address string) string {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("egressprobe: encoding response: %v", err)
+		log.Printf("testserver egressprobe: encoding response: %v", err)
 	}
 }
 
-func main() {
-	flag.Parse()
+// newEgressProbeCmd drives the egress gateway from inside the cluster with a
+// credential of the caller's choosing, and reports how far the attempt got:
+// which hop refused it, or the certificate it was ultimately served.
+//
+// It exists as a pod rather than as a client in the test process because the
+// credentials worth testing -- a pod's own workload identity, a leaf for an
+// actor that does not exist -- are only obtainable, or only interesting, from
+// inside the cluster.
+func newEgressProbeCmd() *cobra.Command {
+	var (
+		listenAddress string
+		cfg           probeConfig
+	)
+	cmd := &cobra.Command{
+		Use:   "egressprobe",
+		Short: "Drive the egress gateway with a chosen credential and report the failing hop.",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/handshake", func(w http.ResponseWriter, r *http.Request) {
+				handshake(w, r, cfg)
+			})
+			mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/handshake", handshake)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	server := &http.Server{
-		Addr:              *listenAddress,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      2 * time.Minute,
+			server := &http.Server{
+				Addr:              listenAddress,
+				Handler:           mux,
+				ReadHeaderTimeout: 10 * time.Second,
+				WriteTimeout:      2 * time.Minute,
+			}
+			log.Printf("testserver egressprobe: listening on %s, gateway %s", listenAddress, cfg.gatewayAddress)
+			return server.ListenAndServe()
+		},
 	}
-	log.Printf("egressprobe: listening on %s, gateway %s", *listenAddress, *gatewayAddress)
-	log.Fatal(server.ListenAndServe())
+	flags := cmd.Flags()
+	flags.StringVar(&listenAddress, "listen", ":8080", "Address the probe's HTTP API listens on.")
+	flags.StringVar(&cfg.gatewayAddress, "gateway-address", "atenet-egress.ate-system.svc:443", "host:port of the egress gateway's CONNECT front door.")
+	flags.StringVar(&cfg.trustBundlePath, "trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to verify the gateway's serving certificate.")
+	flags.DurationVar(&cfg.handshakeTimeout, "handshake-timeout", 20*time.Second, "Budget for one CONNECT plus inner handshake.")
+	return cmd
 }

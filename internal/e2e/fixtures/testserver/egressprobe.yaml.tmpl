@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The egress probe used by internal/e2e/suites/egressauthz. ${NAMESPACE} is
-# substituted by the suite with the randomized namespace it created, so the
-# probe is torn down with that namespace and leaves nothing behind.
+# The egress probe used by internal/e2e/suites/egressauthz: testserver's probe
+# subcommand, with the credential volumes that suite mints. It is not a
+# ServerPod because it needs those volumes and a namespace the suite populates
+# first, so it stays a bespoke manifest. ${NAMESPACE} is substituted by the
+# suite with the randomized namespace it created, so the probe is torn down with
+# that namespace and leaves nothing behind.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -26,8 +29,9 @@ spec:
   restartPolicy: Never
   containers:
   - name: egressprobe
-    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
     args:
+    - "egressprobe"
     - "--listen=:8080"
     ports:
     - name: http

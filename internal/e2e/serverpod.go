@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,11 @@ type ServerPod struct {
 	// template's contract is that the binary takes --listen=:<port>, which is
 	// how one manifest serves fixtures that share nothing else.
 	ImportPath string
+	// Args are passed to the binary ahead of --listen=:<port>, which the
+	// template always appends. One image (internal/e2e/fixtures/testserver)
+	// backs every server, so this is where a caller names the subcommand that
+	// picks its behavior -- []string{"grpc"}, say.
+	Args []string
 	// Port is what the binary listens on and what the Service publishes,
 	// unchanged, so an address a suite grafts into an assertion — a CONNECT
 	// authority in a gateway's access log, say — is this number.
@@ -130,6 +136,7 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		"${PORT}":      port,
 	}
 	blocks := map[string]string{
+		"${ARGS}":            serverArgs(spec, port),
 		"${READINESS_PROBE}": serverReadinessProbe(spec, port),
 		// Indented to their parents: volumeMounts is a container field, volumes
 		// a pod one. An empty list takes its whole line, key included.
@@ -137,6 +144,19 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		"${VOLUMES}":       yamlListBlock(t, "volumes", spec.Volumes, 2),
 	}
 	return renderManifest(t, serverPodTemplate, inline, blocks)
+}
+
+// serverArgs renders the container's `args:` list -- spec.Args followed by the
+// --listen the template's contract always appends -- indented to replace the
+// template's `${ARGS}` line. It is never empty: every server takes --listen.
+func serverArgs(spec ServerPod, port string) string {
+	const pad = "    "
+	out := []string{pad + "args:"}
+	for _, arg := range spec.Args {
+		out = append(out, fmt.Sprintf("%s- %q", pad, arg))
+	}
+	out = append(out, fmt.Sprintf("%s- %q", pad, "--listen=:"+port))
+	return strings.Join(out, "\n")
 }
 
 // serverReadinessProbe renders the probe fragment for spec, indented to sit
