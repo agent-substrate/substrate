@@ -86,22 +86,27 @@ data:
               common_tls_context:
                 alpn_protocols:
                 - h2
-                tls_certificates:
-                - certificate_chain:
-                    filename: /run/servicedns/credential-bundle.pem
-                  private_key:
-                    filename: /run/servicedns/credential-bundle.pem
-                  watched_directory:
-                    path: /run/servicedns
-                validation_context:
-                  trusted_ca:
-                    filename: /run/podidentity-ca/trust-bundle.pem
-                  watched_directory:
-                    path: /run/podidentity-ca
-                  match_typed_subject_alt_names:
-                  - san_type: URI
-                    matcher:
-                      exact: "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
+                # Serving cert and trust bundle via filesystem SDS (the
+                # sds-*.yaml keys below): watched_directory only works on
+                # SDS-delivered secrets.
+                tls_certificate_sds_secret_configs:
+                - name: servicedns_serving_cert
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-servicedns-cert.yaml
+                combined_validation_context:
+                  default_validation_context:
+                    match_typed_subject_alt_names:
+                    - san_type: URI
+                      matcher:
+                        exact: "spiffe://cluster.local/ns/ate-system/sa/ate-api-server"
+                  validation_context_sds_secret_config:
+                    name: podidentity_validation_context
+                    sds_config:
+                      resource_api_version: V3
+                      path_config_source:
+                        path: /etc/envoy/sds-podidentity-validation.yaml
           filters:
           - name: envoy.filters.network.http_connection_manager
             typed_config:
@@ -138,7 +143,30 @@ data:
                 address:
                   pipe:
                     path: /csi/csi.sock
+  # SDS resources referenced by the listener above.
+  sds-servicedns-cert.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: servicedns_serving_cert
+      tls_certificate:
+        certificate_chain:
+          filename: /run/servicedns/credential-bundle.pem
+        private_key:
+          filename: /run/servicedns/credential-bundle.pem
+        watched_directory:
+          path: /run/servicedns
+  sds-podidentity-validation.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: podidentity_validation_context
+      validation_context:
+        trusted_ca:
+          filename: /run/podidentity-ca/trust-bundle.pem
+        watched_directory:
+          path: /run/podidentity-ca
 ```
+
+> **Note:** `watched_directory` takes effect only on SDS-delivered secrets. Attaching it to an inline `tls_certificates` or `validation_context` entry does nothing: Envoy reads those files once at config load, so a rotated certificate is never picked up and the proxy eventually serves (or trusts) expired material.
 
 #### 2. Envoy Sidecar in `csi-nfs-controller` Deployment
 
