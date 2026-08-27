@@ -437,7 +437,15 @@ spec:
 
 ### Micro-VM SandboxConfig
 
-A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `kata-shim`, `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, `kata-image`, and `kata-config` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes labeled `ate.dev/sandboxClass=microvm` (the controller adds the device mount and node placement automatically).
+A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, `kata-image`, and `kata-config` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require a host hypervisor device and nodes labeled `ate.dev/sandboxClass=microvm` (the controller adds the device mount and node placement automatically). The controller mounts `/dev/kvm` by default. On an x86-64 Microsoft Hypervisor root partition, such as an AKS `KataVmIsolation` node, label the node `ate.dev/microvm-hypervisor=mshv` and configure the controller before creating a micro-VM WorkerPool:
+
+```sh
+kubectl -n ate-system set env deployment/ate-controller ATE_MICROVM_HYPERVISOR_DEVICE=/dev/mshv
+```
+
+The setting applies to every micro-VM WorkerPool managed by that controller.
+Do not mix KVM and MSHV pools or change the setting while snapshots exist;
+snapshot compatibility across hypervisor backends is not guaranteed.
 
 See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 

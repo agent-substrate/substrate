@@ -38,8 +38,9 @@ const workerPoolFieldOwner = "workerpool-controller"
 
 type WorkerPoolReconciler struct {
 	client.Client
-	Scheme       *runtime.Scheme
-	OTelEndpoint string
+	Scheme                  *runtime.Scheme
+	OTelEndpoint            string
+	MicroVMHypervisorDevice string
 	// OTelMetricExportInterval is the OTEL_METRIC_EXPORT_INTERVAL propagated to
 	// ateom pods. Empty keeps the SDK's default.
 	OTelMetricExportInterval string
@@ -110,13 +111,20 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
-	depAC := buildDeploymentApplyConfig(wp, ateomOTelSettings{
+	device := r.MicroVMHypervisorDevice
+	if device == "" {
+		device = DefaultMicroVMHypervisorDevice
+	}
+	if err := ValidateMicroVMHypervisorDevice(device); err != nil {
+		return err
+	}
+	depAC := buildDeploymentApplyConfigWithHypervisorDevice(wp, ateomOTelSettings{
 		Endpoint:             r.OTelEndpoint,
 		MetricExportInterval: r.OTelMetricExportInterval,
 		MetricExportTimeout:  r.OTelMetricExportTimeout,
 		TracesSampler:        r.OTelTracesSampler,
 		TracesSamplerArg:     r.OTelTracesSamplerArg,
-	})
+	}, device)
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
 	}
