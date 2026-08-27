@@ -22,6 +22,7 @@ KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
 reg_port="${KIND_REGISTRY_PORT:-5001}"
 IPV6_DNS_UPSTREAM="${IPV6_DNS_UPSTREAM:-2001:4860:4860::8888 2001:4860:4860::8844}"
+IPV6_DNS64_PREFIX="${IPV6_DNS64_PREFIX:-}"
 
 if [[ $# -gt 0 ]]; then
   case "$1" in
@@ -35,6 +36,11 @@ if [[ $# -gt 0 ]]; then
       echo "  IPV6_DNS_UPSTREAM  Space-separated IPv6 resolvers CoreDNS forwards to when IP_FAMILY=ipv6"
       echo "                     (default: Google Public DNS). These replace the host's resolver, so any"
       echo "                     split-horizon names it served stop resolving from pods."
+      echo "  IPV6_DNS64_PREFIX  NAT64 prefix cluster DNS synthesizes external names into when"
+      echo "                     IP_FAMILY=ipv6, e.g. 64:ff9b::/96 (default: empty, no DNS64)."
+      echo "                     Set it only on a host with no IPv6 egress, together with"
+      echo "                     hack/setup-nat64.sh: it routes every external name through the"
+      echo "                     prefix, including names that already have reachable AAAA records."
       exit 0
       ;;
   esac
@@ -235,6 +241,62 @@ ${reg_name}:53 {
         ${reg_v6} ${reg_name}
     }
 }"
+
+  if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+    echo "Synthesizing external names into ${IPV6_DNS64_PREFIX}..."
+    # Plain DNS64 synthesizes only for names with no AAAA, and the names that
+    # matter here have real AAAA records pointing at addresses a host with no
+    # IPv6 egress cannot reach. Only translate_all forces them through the
+    # prefix -- which is why this is opt-in: where IPv6 egress does work it
+    # replaces reachable answers with unreachable ones.
+    #
+    # translate_all cannot share a server block with the cluster zones. dns64
+    # wraps the plugin chain below it and answers AAAA by synthesizing from A,
+    # so for an AAAA-only name it synthesizes from nothing and returns an empty
+    # answer. Every ClusterIP here is AAAA-only, so one block would take out all
+    # in-cluster service discovery. Re-zone what kind shipped to the cluster
+    # zones, lift its forwarder out, and give dns64 the catch-all.
+    #
+    # The prefix goes inside the block, not on the `dns64` line: CoreDNS takes
+    # `dns64 PREFIX { ... }` without complaint and then never applies the block,
+    # so translate_all silently does nothing and only AAAA-less names get
+    # synthesized -- which looks like it works until something with a real AAAA
+    # is the thing that has to be reached.
+    rezoned="$(printf '%s\n' "${patched}" | awk '
+      NR == 1 && /^\.:53[[:space:]]*\{/ {
+        print "cluster.local:53 in-addr.arpa:53 ip6.arpa:53 {"; first = 1; next
+      }
+      first && /^    forward([[:space:]].*)?\{$/ { skip = 1; next }
+      first && skip && /^    \}$/                { skip = 0; next }
+      first && skip                              { next }
+      first && /^\}$/                            { first = 0 }
+      { print }
+    ')"
+    case "${rezoned}" in
+      "cluster.local:53"*) ;;
+      *) echo "error: the Corefile does not open with the '.:53' block kind ships" >&2
+         echo "       the Corefile layout changed upstream; update this block" >&2
+         exit 1 ;;
+    esac
+    if printf '%s' "${rezoned}" | grep -q 'forward'; then
+      echo "error: a forward block survived the re-zone" >&2
+      exit 1
+    fi
+    patched="${rezoned}
+.:53 {
+    errors
+    dns64 {
+        prefix ${IPV6_DNS64_PREFIX}
+        translate_all
+    }
+    forward . ${IPV6_DNS_UPSTREAM} {
+        max_concurrent 1000
+    }
+    cache 30
+    loop
+    reload
+}"
+  fi
 
   # A YAML patch file avoids escaping the Corefile's newlines into JSON.
   { printf 'data:\n  Corefile: |\n'; printf '%s\n' "${patched}" | sed 's/^/    /'; } \
