@@ -473,7 +473,7 @@ const (
 	// Volume successfully created in the storage system.
 	ExternalVolume_STATUS_CREATED ExternalVolume_Status = 2
 	// Volume being deleted from the storage system.
-	ExternalVolume_STATUS_DELETING ExternalVolume_Status = 3
+	ExternalVolume_STATUS_DELETING ExternalVolume_Status = 3 // Keep this in sync with ExternalVolume.status's maximum.
 )
 
 // Enum value maps for ExternalVolume_Status.
@@ -783,15 +783,27 @@ func (x *ResourceMetadata) GetUpdateTime() *timestamppb.Timestamp {
 type ExternalVolume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Name of the volume specified in the actor template.
+	//
+	// +k8s:required
 	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
 	// The globally unique volume_id returned from the storage system.
-	// This will be initially empty during volume creation
+	// This will be initially empty during volume creation. Its format is the
+	// storage system's own, so it is not validated beyond presence.
+	//
+	// +k8s:optional
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// Internal volume plugin name or CSI driver name.
-	VolumeType string                `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
-	Status     ExternalVolume_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.ExternalVolume_Status" json:"status,omitempty"`
+	//
+	// +k8s:optional
+	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
+	// +k8s:optional
+	// +k8s:maximum=3 # keep this in sync with the Status enum
+	Status ExternalVolume_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.ExternalVolume_Status" json:"status,omitempty"`
 	// volume_context contains metadata returned by the CSI driver during volume
-	// provisioning, needed by the node plugin for mounting (e.g. attachment info).
+	// provisioning, needed by the node plugin for mounting (e.g. attachment
+	// info). Keys and values are the driver's own, so they are not validated.
+	//
+	// +k8s:optional
 	VolumeContext map[string]string `protobuf:"bytes,5,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1015,7 +1027,9 @@ type ActorStatus struct {
 	InProgressSnapshotSourceActorVersion int64 `protobuf:"varint,6,opt,name=in_progress_snapshot_source_actor_version,json=inProgressSnapshotSourceActorVersion,proto3" json:"in_progress_snapshot_source_actor_version,omitempty"`
 	// Volumes attached to the actor. These volumes only live as long as the actor.
 	// They are deleted when the actor is deleted.
-	// TODO: Add DV (optional, need to recurse into this type, immutable?)
+	//
+	// +k8s:optional
+	// +k8s:listType=atomic
 	ActorVolumes []*ExternalVolume `protobuf:"bytes,7,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
 	// TODO: Add DV (optional, maxLength?)
 	InProgressLocalSnapshotName string `protobuf:"bytes,8,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`

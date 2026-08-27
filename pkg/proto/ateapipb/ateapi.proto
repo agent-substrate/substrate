@@ -233,13 +233,20 @@ message ResourceMetadata {
 
 message ExternalVolume {
   // Name of the volume specified in the actor template.
+  //
+  // +k8s:required
   string volume_name = 1;
 
   // The globally unique volume_id returned from the storage system.
-  // This will be initially empty during volume creation
+  // This will be initially empty during volume creation. Its format is the
+  // storage system's own, so it is not validated beyond presence.
+  //
+  // +k8s:optional
   string storage_volume_id = 2;
 
   // Internal volume plugin name or CSI driver name.
+  //
+  // +k8s:optional
   string volume_type = 3;
 
   enum Status {
@@ -250,10 +257,18 @@ message ExternalVolume {
     STATUS_CREATED = 2;
     // Volume being deleted from the storage system.
     STATUS_DELETING = 3;
+    // Keep this in sync with ExternalVolume.status's maximum.
   }
+
+  // +k8s:optional
+  // +k8s:maximum=3 # keep this in sync with the Status enum
   Status status = 4;
+
   // volume_context contains metadata returned by the CSI driver during volume
-  // provisioning, needed by the node plugin for mounting (e.g. attachment info).
+  // provisioning, needed by the node plugin for mounting (e.g. attachment
+  // info). Keys and values are the driver's own, so they are not validated.
+  //
+  // +k8s:optional
   map<string, string> volume_context = 5;
 }
 
@@ -351,7 +366,9 @@ message ActorStatus {
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
-  // TODO: Add DV (optional, need to recurse into this type, immutable?)
+  //
+  // +k8s:optional
+  // +k8s:listType=atomic
   repeated ExternalVolume actor_volumes = 7;
 
   // TODO: Add DV (optional, maxLength?)
