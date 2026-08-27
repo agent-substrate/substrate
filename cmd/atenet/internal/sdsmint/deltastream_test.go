@@ -107,9 +107,6 @@ func (f *fakeDeltaStream) quiet(t *testing.T, whileDoing string) {
 
 func testServer(t *testing.T, opts serverOptions) *server {
 	t.Helper()
-	if opts.Logger == nil {
-		opts.Logger = quietLogger()
-	}
 	m := testMinter(t, minterOptions{TTL: defaultTTL})
 	return newServer(m, opts)
 }

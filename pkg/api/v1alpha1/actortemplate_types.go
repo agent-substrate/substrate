@@ -36,6 +36,16 @@ const (
 type DurableDirVolumeSource struct {
 }
 
+// Represents the contents of an OCI image, mounted read-only.
+type ImageVolumeSource struct {
+	// reference is the image to mount.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
+	Reference string `json:"reference"`
+}
+
 // Represents an external volume dynamically provisioned for each actor.
 type ExternalVolumeTemplate struct {
 	// capacity specifies the size of the volume to create.
@@ -71,14 +81,14 @@ type ActorMetadataItem struct {
 	Field ActorMetadataField `json:"field"`
 
 	// Relative path from the root of the SystemInfo volume at which the
-	// field's value is written. Must be a clean relative Unix path: must not
-	// start or end with '/', and contain no ':', '..', '.', '//', or control
-	// characters.
+	// field's value is written. Must be a clean relative Unix path: it must
+	// not start or end with '/' and must not contain ':', '//', '.' or '..'
+	// segments, or control characters.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=255
-	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: must not start or end with '/', and contain no ':', '..', '.', '//', or control characters"
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: it must not start or end with '/' and must not contain ':', '//', '.' or '..' segments, or control characters"
 	Path string `json:"path"`
 }
 
@@ -99,29 +109,75 @@ type ActorMetadataDataSource struct {
 	Items []ActorMetadataItem `json:"items"`
 }
 
+// TrustBundleDataSource is a SystemInfo volume data source that projects the
+// trust anchors of a named trust bundle to a single PEM file — inspired by
+// the Kubernetes clusterTrustBundle projected volume source, but
+// source-neutral: the name selects a bundle substrate knows how to fetch,
+// and where it is fetched from is a substrate deployment concern, not part
+// of this API (atelet enforces the supported set and resolves the backend).
+//
+// Supported names are allowlisted in atelet. Initially the only supported
+// bundle is "egress-mitm.ate.dev" (the egress gateway CA bundle), resolved
+// from the Kubernetes ClusterTrustBundle (certificates.k8s.io/v1beta1) that
+// atecontroller derives from the egress-mitm-ca-pool; a configurable backend
+// registry may widen this later.
+//
+// The bundle is resolved and sanitized on the node when the actor starts:
+// atelet reads the backing object through a cluster-wide watch and keeps
+// only CERTIFICATE PEM blocks, deduplicated and deliberately shuffled (order
+// carries no meaning); the actor itself never talks to any bundle backend.
+// Starting the actor fails if the named bundle is not on the allowlist, its
+// backend is unavailable in this deployment, or the resolved bundle is
+// missing, empty, or unparseable.
+type TrustBundleDataSource struct {
+	// Name of the trust bundle to project. Must be a bundle name supported
+	// by this deployment (currently only "egress-mitm.ate.dev").
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// Relative path from the root of the SystemInfo volume at which the PEM
+	// bundle is written. Must be a clean relative Unix path: it must not
+	// start or end with '/' and must not contain ':', '//', '.' or '..'
+	// segments, or control characters.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: it must not start or end with '/' and must not contain ':', '//', '.' or '..' segments, or control characters"
+	Path string `json:"path"`
+}
+
 // SystemInfoDataSource is a container allowing you to pick a particular
 // SystemInfo data source.
 //
 // Exactly one member must be set.
 //
-// +kubebuilder:validation:ExactlyOneOf={actorMetadata}
+// +kubebuilder:validation:ExactlyOneOf={actorMetadata,trustBundle}
 type SystemInfoDataSource struct {
 	ActorMetadata *ActorMetadataDataSource `json:"actorMetadata,omitempty"`
+
+	TrustBundle *TrustBundleDataSource `json:"trustBundle,omitempty"`
 }
 
 // Represents a system information volume, which provides files containing
-// substrate-generated per-actor data such as the actor's identity fields
-// (and, in the future, identity JWTs and certificates).
+// substrate-generated per-actor data such as the actor's identity fields,
+// projected trust bundles (and, in the future, identity JWTs and
+// certificates).
 type SystemInfoVolumeSource struct {
 	// DataSources is the list of data sources to place within the SystemInfo
 	// volume.
 	//
-	// At most one actorMetadata entry may appear; this is what keeps file
-	// paths unique across the whole volume (uniqueness within the entry is
-	// enforced on its items).
+	// At most one actorMetadata entry may appear, and file paths must be
+	// unique across all entries (uniqueness within actorMetadata is enforced
+	// on its items).
 	//
-	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:MaxItems=8
 	// +kubebuilder:validation:XValidation:rule="self.filter(x, has(x.actorMetadata)).size() <= 1",message="dataSources must contain at most one actorMetadata entry"
+	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.trustBundle) || self.exists_one(y, has(y.trustBundle) && y.trustBundle.path == x.trustBundle.path))",message="dataSources must not contain duplicate paths"
+	// +kubebuilder:validation:XValidation:rule="!self.exists(x, has(x.trustBundle) && self.exists(y, has(y.actorMetadata) && y.actorMetadata.items.exists(i, i.path == x.trustBundle.path)))",message="dataSources must not contain duplicate paths"
 	DataSources []SystemInfoDataSource `json:"dataSources,omitempty"`
 }
 
@@ -130,12 +186,16 @@ type SystemInfoVolumeSource struct {
 //
 // When adding a new source type, list it in the ExactlyOneOf marker below.
 //
-// +kubebuilder:validation:ExactlyOneOf={durableDir,externalVolumeTemplate,systemInfo}
+// +kubebuilder:validation:ExactlyOneOf={durableDir,externalVolumeTemplate,image,systemInfo}
 type VolumeSource struct {
 	// durableDir represents a durable directory on rootfs that persists across
 	// resumes and participates in snapshots.
 	// +optional
 	DurableDir *DurableDirVolumeSource `json:"durableDir,omitempty"`
+
+	// image represents the contents of an OCI image, mounted read-only.
+	// +optional
+	Image *ImageVolumeSource `json:"image,omitempty"`
 
 	// externalVolumeTemplate represents an external volume dynamically provisioned
 	// for each actor. The volume only lives as long as the actor and is deleted
@@ -288,7 +348,45 @@ type Container struct {
 	//
 	// +optional
 	SecurityContext *SecurityContext `json:"securityContext,omitempty"`
+
+	// Resources are the compute limits for this container, enforced inside the
+	// actor's sandbox. Only cpu and memory are supported, and only on micro-VM
+	// actors: gVisor applies cgroup limits at the sandbox level, so a
+	// per-container cgroup there is created but stays empty.
+	//
+	// +optional
+	Resources *ContainerResources `json:"resources,omitempty"`
 }
+
+// ContainerResources are the resource limits for one actor container.
+//
+// Only limits are expressible. A request is a scheduling hint, and scheduling
+// happens at the pod level: the WorkerPool reserves capacity on a node, and
+// per-container limits subdivide a budget that is already held.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || self.limits.all(k, k == 'cpu' || k == 'memory')",message="only cpu and memory limits are supported"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('memory' in self.limits) || quantity(string(self.limits['memory'])).isGreaterThan(quantity('0'))",message="memory limit must be greater than zero"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('cpu' in self.limits) || quantity(string(self.limits['cpu'])).isGreaterThan(quantity('0'))",message="cpu limit must be greater than zero"
+// +kubebuilder:validation:XValidation:rule="!has(self.limits) || !('cpu' in self.limits) || quantity(string(self.limits['cpu'])).isLessThan(quantity('1k'))",message="cpu limit must be less than 1000 cores"
+type ContainerResources struct {
+	// Limits is the maximum amount of compute resources allowed. Only cpu and
+	// memory are supported, and each must be greater than zero.
+	//
+	// A cpu limit below 10m is raised to 10m: the kernel rejects a CFS quota
+	// under 1ms, and the quota is expressed against a 100ms period.
+	//
+	// +optional
+	Limits ContainerResourceList `json:"limits,omitempty"`
+}
+
+// ContainerResourceList is the limits map for one actor container. It is a
+// named type so the bound below applies to the map itself, which also keeps the
+// CEL rules on ContainerResources inside the API server's cost budget: an
+// unbounded map makes the estimator assume the worst case and reject the whole
+// schema.
+//
+// +kubebuilder:validation:MaxProperties=2
+type ContainerResourceList map[corev1.ResourceName]resource.Quantity
 
 // ContainerReadyz configures the readiness signal for a container.
 type ContainerReadyz struct {
@@ -466,6 +564,7 @@ type SnapshotsConfig struct {
 // the runtime check. gVisor has no reserve, so this only applies to micro-VM.
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.resources) || !has(self.resources.limits) || !('memory' in self.resources.limits) || !quantity(self.resources.limits['memory']).isLessThan(quantity('256Mi'))",message="For sandboxClass 'microvm', spec.resources.limits.memory must be at least 256Mi (128Mi VMM reserve + 128Mi guest minimum); below this the VM cannot boot"
 // +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.all(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name)))",message="All volume mounts must refer to a volume defined in spec.volumes"
+// +kubebuilder:validation:XValidation:rule="!has(self.containers) || !self.containers.exists(c, has(c.resources)) || (has(self.sandboxClass) && self.sandboxClass == 'microvm')",message="container resources are only supported when sandboxClass is 'microvm'"
 type ActorTemplateSpec struct {
 	// Containers is the workload definition.
 	//

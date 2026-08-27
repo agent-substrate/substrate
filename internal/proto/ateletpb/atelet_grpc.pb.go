@@ -143,6 +143,7 @@ const (
 	AteomHerder_Checkpoint_FullMethodName             = "/atelet.AteomHerder/Checkpoint"
 	AteomHerder_Restore_FullMethodName                = "/atelet.AteomHerder/Restore"
 	AteomHerder_UploadPausedCheckpoint_FullMethodName = "/atelet.AteomHerder/UploadPausedCheckpoint"
+	AteomHerder_Terminate_FullMethodName              = "/atelet.AteomHerder/Terminate"
 )
 
 // AteomHerderClient is the client API for AteomHerder service.
@@ -163,6 +164,9 @@ type AteomHerderClient interface {
 	// paused, its sandbox is gone; the checkpoint files plus their manifest
 	// already sit under the actor's local-checkpoints directory.
 	UploadPausedCheckpoint(ctx context.Context, in *UploadPausedCheckpointRequest, opts ...grpc.CallOption) (*UploadPausedCheckpointResponse, error)
+	// Terminate tells atelet to terminate/kill any running workload for an actor,
+	// unmount its volumes, and clean up actor state on the node.
+	Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*TerminateResponse, error)
 }
 
 type ateomHerderClient struct {
@@ -213,6 +217,16 @@ func (c *ateomHerderClient) UploadPausedCheckpoint(ctx context.Context, in *Uplo
 	return out, nil
 }
 
+func (c *ateomHerderClient) Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*TerminateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TerminateResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_Terminate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AteomHerderServer is the server API for AteomHerder service.
 // All implementations must embed UnimplementedAteomHerderServer
 // for forward compatibility.
@@ -231,6 +245,9 @@ type AteomHerderServer interface {
 	// paused, its sandbox is gone; the checkpoint files plus their manifest
 	// already sit under the actor's local-checkpoints directory.
 	UploadPausedCheckpoint(context.Context, *UploadPausedCheckpointRequest) (*UploadPausedCheckpointResponse, error)
+	// Terminate tells atelet to terminate/kill any running workload for an actor,
+	// unmount its volumes, and clean up actor state on the node.
+	Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error)
 	mustEmbedUnimplementedAteomHerderServer()
 }
 
@@ -252,6 +269,9 @@ func (UnimplementedAteomHerderServer) Restore(context.Context, *RestoreRequest) 
 }
 func (UnimplementedAteomHerderServer) UploadPausedCheckpoint(context.Context, *UploadPausedCheckpointRequest) (*UploadPausedCheckpointResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UploadPausedCheckpoint not implemented")
+}
+func (UnimplementedAteomHerderServer) Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Terminate not implemented")
 }
 func (UnimplementedAteomHerderServer) mustEmbedUnimplementedAteomHerderServer() {}
 func (UnimplementedAteomHerderServer) testEmbeddedByValue()                     {}
@@ -346,6 +366,24 @@ func _AteomHerder_UploadPausedCheckpoint_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AteomHerder_Terminate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TerminateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).Terminate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_Terminate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).Terminate(ctx, req.(*TerminateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AteomHerder_ServiceDesc is the grpc.ServiceDesc for AteomHerder service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -368,6 +406,10 @@ var AteomHerder_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UploadPausedCheckpoint",
 			Handler:    _AteomHerder_UploadPausedCheckpoint_Handler,
+		},
+		{
+			MethodName: "Terminate",
+			Handler:    _AteomHerder_Terminate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

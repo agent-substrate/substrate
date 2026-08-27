@@ -51,7 +51,7 @@ type Server struct {
 
 	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
 	actorIDJWTPoolFile string
-	actorIDCAPoolFile  string
+	actorIDCAPool      localca.Pool
 
 	// store is the actor database. MintCert consults it to confirm the caller
 	// is entitled to the actor it is asking for a credential for.
@@ -61,11 +61,11 @@ type Server struct {
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer, actorIDJWTPoolFile, actorIDCAPoolFile string, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPoolFile:     actorIDJWTPoolFile,
-		actorIDCAPoolFile:      actorIDCAPoolFile,
+		actorIDCAPool:          actorIDCAPool,
 		store:                  store,
 		workers:                workers,
 	}
@@ -125,7 +125,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		Substrate: actoridjwt.SubstrateClaims{
 			Atespace:  req.GetAtespace(),
 			ActorName: req.GetActorName(),
-			ActorUid:  req.GetActorUid(),
+			ActorUID:  req.GetActorUid(),
 		},
 	}
 
@@ -179,18 +179,6 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		return nil, status.Error(codes.FailedPrecondition, "worker assignment changed while minting actor certificate")
 	}
 
-	// Load the CA pool for signing
-	poolBytes, err := os.ReadFile(s.actorIDCAPoolFile)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to read actor CA pool file", slog.Any("err", err))
-		return nil, status.Errorf(codes.Internal, "Failed to load actor CA")
-	}
-	caPool, err := localca.Unmarshal(poolBytes)
-	if err != nil || len(caPool.CAs) == 0 {
-		slog.ErrorContext(ctx, "Failed to load actor CA", slog.Any("err", err))
-		return nil, status.Errorf(codes.Internal, "Failed to load actor CA")
-	}
-
 	// Parse the CSR
 	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
 	if err != nil {
@@ -231,20 +219,14 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	}
 
 	// Sign and return the actor cert.
-	ca := caPool.CAs[0]
-	derBytes, err := x509.CreateCertificate(rand.Reader, template, ca.RootCertificate, csr.PublicKey, ca.SigningKey)
+	chain, err := s.actorIDCAPool.CreateCertificate(template, csr.PublicKey)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to sign certificate", slog.Any("err", err))
 		return nil, status.Errorf(codes.Internal, "Failed to sign certificate")
 	}
 
-	certificates := [][]byte{derBytes}
-	for _, intermed := range ca.IntermediateCertificates {
-		certificates = append(certificates, intermed.Raw)
-	}
-
 	return &ateapipb.MintCertResponse{
-		ActorCertificates: certificates,
+		ActorCertificates: chain,
 	}, nil
 }
 
@@ -307,71 +289,106 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 // validateWorkerRef checks the reference to the Worker the certificate is
 // minted for. Workers are global-scoped, so the reference carries no atespace.
 func validateWorkerRef(worker *ateapipb.ObjectRef) error {
-	fldPath := field.NewPath("worker")
-	if worker == nil {
-		return field.Required(fldPath, "")
-	}
-	return resources.ValidateGlobalObjectRef(worker, fldPath).ToAggregate()
+	return resources.ValidateGlobalObjectRef(worker, field.NewPath("worker")).ToAggregate()
 }
 
 // authorizeActor resolves the actor from the authenticated worker and verifies
 // that the worker and actor still point at one another. Actor identity supplied
 // by the requester never participates in this authorization decision.
+// The worker is resolved from cache first (hot path), but cache misses and
+// denials fall back to the authoritative store to handle watch-delivery lag
+// right after ResumeActor.
 func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, error) {
-	// Denials are deliberately indistinguishable from each other: a caller that
-	// is not entitled to a worker should not learn its assignment.
-	deny := func(reason string, args ...any) error {
-		slog.WarnContext(ctx, "ActorIdentity denied: "+reason,
-			append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
-		return status.Errorf(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
-	}
-
+	reason := "worker not found"
 	worker, err := s.workers.Worker(req.GetWorker().GetName())
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, resources.ActorRef{}, deny("worker not found")
-		}
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		slog.ErrorContext(ctx, "ActorIdentity: failed to read worker", slog.Any("err", err))
 		return nil, resources.ActorRef{}, status.Error(codes.Internal, "failed to look up worker")
 	}
+	if err == nil {
+		actor, actorRef, mismatchReason, err := s.authorizeWithWorker(ctx, worker, caller, req)
+		if err == nil {
+			return actor, actorRef, nil
+		}
+		if !errors.Is(err, errAssignmentMismatch) {
+			return nil, resources.ActorRef{}, err // e.g. actor lookup failed
+		}
+		reason = mismatchReason
+	}
+
+	// Read-through: re-check the authoritative worker from the store on a
+	// cache miss or assignment mismatch. Only fresh data may authorize, and
+	// only fresh data may deny.
+	fresh, ferr := s.store.GetWorker(ctx, req.GetWorker().GetName())
+	if ferr != nil {
+		if !errors.Is(ferr, store.ErrNotFound) {
+			slog.ErrorContext(ctx, "ActorIdentity: read-through worker lookup failed", slog.Any("err", ferr))
+		}
+		return nil, resources.ActorRef{}, s.denyMint(ctx, caller, req, reason) // the cached verdict stands
+	}
+
+	actor, actorRef, retryReason, retryErr := s.authorizeWithWorker(ctx, fresh, caller, req)
+	if retryErr != nil {
+		if errors.Is(retryErr, errAssignmentMismatch) {
+			return nil, resources.ActorRef{}, s.denyMint(ctx, caller, req, retryReason)
+		}
+		return nil, resources.ActorRef{}, retryErr
+	}
+
+	slog.InfoContext(ctx, "ActorIdentity: authorized via store read-through; worker cache was stale",
+		slog.String("worker", req.GetWorker().GetName()))
+	return actor, actorRef, nil
+}
+
+// denyMint logs the internal reason and returns a uniform PermissionDenied.
+// Denials are deliberately indistinguishable from each other: a caller that
+// is not entitled to a worker should not learn its assignment.
+func (s *Server) denyMint(ctx context.Context, caller *ateletCaller, req *ateapipb.MintCertRequest, reason string, args ...any) error {
+	slog.WarnContext(ctx, "ActorIdentity denied: "+reason,
+		append([]any{slog.String("worker", req.GetWorker().GetName()), slog.String("callerPod", caller.podName), slog.String("callerNode", caller.nodeName)}, args...)...)
+	return status.Error(codes.PermissionDenied, "caller is not permitted to mint credentials for this actor")
+}
+
+var errAssignmentMismatch = errors.New("assignment mismatch")
+
+// authorizeWithWorker returns errAssignmentMismatch and a reason string if the authorization failed
+// due to an assignment mismatch, indicating the caller may want to refetch the worker and retry.
+func (s *Server) authorizeWithWorker(ctx context.Context, worker *ateapipb.Worker, caller *ateletCaller, req *ateapipb.MintCertRequest) (*ateapipb.Actor, resources.ActorRef, string, error) {
 	if worker.GetNodeName() != caller.nodeName {
-		return nil, resources.ActorRef{}, deny("worker is hosted on a different node", slog.String("workerNode", worker.GetNodeName()))
+		return nil, resources.ActorRef{}, "worker is hosted on a different node", errAssignmentMismatch
 	}
 
 	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
 	if actorRef == (resources.ActorRef{}) {
-		return nil, resources.ActorRef{}, deny("worker has no actor assignment")
+		return nil, resources.ActorRef{}, "worker has no actor assignment", errAssignmentMismatch
 	}
+
 	actor, err := s.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, resources.ActorRef{}, deny("assigned actor not found")
+			return nil, resources.ActorRef{}, "assigned actor not found", errAssignmentMismatch
 		}
 		slog.ErrorContext(ctx, "ActorIdentity: failed to read actor", slog.Any("actor", actorRef), slog.Any("err", err))
-		return nil, resources.ActorRef{}, status.Error(codes.Internal, "failed to look up actor")
+		return nil, resources.ActorRef{}, "", status.Error(codes.Internal, "failed to look up actor")
 	}
 
-	// Deletion is only entered from SUSPENDED or CRASHED, both of which
-	// have already released the worker, so the assignment check below would
-	// reject this too. It is kept for better visibility and logging.
+	// Refuse credential minting if the actor is being deleted. Under force deletion,
+	// an actor enters ACTOR_STATE_DELETING while its worker assignment is still active.
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_DELETING {
 		slog.WarnContext(ctx, "ActorIdentity refused: actor is being deleted", slog.Any("actor", actorRef))
-		return nil, resources.ActorRef{}, status.Error(codes.FailedPrecondition, "actor is being deleted")
+		return nil, resources.ActorRef{}, "", status.Error(codes.FailedPrecondition, "actor is being deleted")
 	}
 
-	// An actor placed on a worker always carries its placement fields. Missing
-	// placement is a control-plane bug rather than a client error, so it is not
-	// folded into deny().
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.ErrorContext(ctx, "ActorIdentity: running actor has no worker assignment", slog.Any("actor", actorRef))
-		return nil, resources.ActorRef{}, status.Error(codes.FailedPrecondition, "actor has no worker assigned")
+		return nil, resources.ActorRef{}, "", status.Error(codes.FailedPrecondition, "actor has no worker assigned")
 	}
 	if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
-		return nil, resources.ActorRef{}, deny("worker is no longer assigned to this actor incarnation", slog.Any("actor", actorRef))
+		return nil, resources.ActorRef{}, "worker is no longer assigned to this actor incarnation", errAssignmentMismatch
 	}
 	if assignment.GetWorker().GetName() != worker.GetMetadata().GetName() {
-		return nil, resources.ActorRef{}, deny("actor no longer points to the requesting worker", slog.Any("actor", actorRef))
+		return nil, resources.ActorRef{}, "actor no longer points to the requesting worker", errAssignmentMismatch
 	}
-	return actor, actorRef, nil
+	return actor, actorRef, "", nil
 }

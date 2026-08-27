@@ -150,6 +150,19 @@ func OCIBundlePath(actorUID, containerName string) string {
 	)
 }
 
+// ImageVolumeMountPath returns where ateom composes one image volume for a
+// container. The path is per-container: containers of one actor may mount the
+// same volume, and each needs its own mount point inside its own bundle.
+func ImageVolumeMountPath(actorUID, containerName, volumeName string) string {
+	return ImageVolumeMountPathInBundle(OCIBundlePath(actorUID, containerName), volumeName)
+}
+
+// ImageVolumeMountPathInBundle returns the image volume mount path inside a
+// bundle path.
+func ImageVolumeMountPathInBundle(bundlePath, volumeName string) string {
+	return filepath.Join(bundlePath, "volumes", volumeName)
+}
+
 func RunscDebugLogDir(actorUID, containerName string) string {
 	return filepath.Join(
 		ActorPath(actorUID),

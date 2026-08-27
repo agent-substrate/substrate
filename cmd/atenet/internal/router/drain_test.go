@@ -16,6 +16,7 @@ package router
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,6 +278,39 @@ func TestEnvoyDrainerDrainsToZero(t *testing.T) {
 	}
 	if admin.statsCalls < 3 {
 		t.Errorf("stats polled %d times, want >= 3 (series 2,1,0)", admin.statsCalls)
+	}
+}
+
+// TestEnvoyDrainerReachesIPv6OnlyAdmin guards the loopback coupling behind
+// --envoy-admin-address: the gateway admin sockets bind "::", and a drainer
+// pinned to the IPv4 loopback would find nothing listening, read that as an
+// exited Envoy, and report a drain it never performed -- silently, since that
+// path returns nil. Hence the assertion on the POSTs rather than on the error.
+func TestEnvoyDrainerReachesIPv6OnlyAdmin(t *testing.T) {
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback on this host: %v", err)
+	}
+	admin := &fakeEnvoyAdmin{activeSeries: []int{0}}
+	srv := httptest.NewUnstartedServer(admin.handler())
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	defer srv.Close()
+
+	d := newEnvoyDrainer(net.JoinHostPort("localhost", itoa(ln.Addr().(*net.TCPAddr).Port)))
+	d.pollInterval = 5 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := d.Drain(ctx); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	admin.mu.Lock()
+	defer admin.mu.Unlock()
+	if len(admin.posts) != 2 {
+		t.Errorf("admin POSTs = %v, want the drain to have reached the IPv6 loopback", admin.posts)
 	}
 }
 

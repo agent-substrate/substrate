@@ -43,7 +43,7 @@ func (f *fakeTagClient) UpdateActorSnapshotTag(_ context.Context, in *ateapipb.U
 	f.updateReq = in
 	// Bump the version the way a real server does, so the returned tag is
 	// distinguishable from the one the caller sent.
-	updated := proto.Clone(in.GetTag()).(*ateapipb.ActorSnapshotTag)
+	updated := proto.Clone(in.GetActorSnapshotTag()).(*ateapipb.ActorSnapshotTag)
 	updated.Metadata.Version++
 	return updated, nil
 }

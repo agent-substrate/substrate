@@ -15,6 +15,8 @@
 package controlapi
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -22,46 +24,73 @@ import (
 )
 
 func TestValidateCreateAtespaceRequest(t *testing.T) {
+	// This test verifies validation of user input for creation.
+	validReq := func(atespace *ateapipb.Atespace, mods ...func(atespace *ateapipb.CreateAtespaceRequest)) *ateapipb.CreateAtespaceRequest {
+		req := &ateapipb.CreateAtespaceRequest{
+			Atespace: atespace,
+		}
+		for _, m := range mods {
+			m(req)
+		}
+		return req
+	}
+	withMetadata := withAtespaceMetadata
+
 	tests := []struct {
 		name string
 		req  *ateapipb.CreateAtespaceRequest
 		want field.ErrorList
 	}{{
 		"valid",
-		&ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}},
+		validReq(validAtespace()),
 		nil,
 	}, {
 		"missing atespace",
-		&ateapipb.CreateAtespaceRequest{},
+		&ateapipb.CreateAtespaceRequest{Atespace: nil},
 		field.ErrorList{field.Required(field.NewPath("atespace"), "")},
 	}, {
-		"metadata.atespace must be empty",
-		&ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "team-a"}}},
-		field.ErrorList{field.Invalid(field.NewPath("atespace", "metadata", "atespace"), "ns1", "")},
+		"missing atespace.metadata",
+		validReq(validAtespace(func(a *ateapipb.Atespace) { a.Metadata = nil })),
+		field.ErrorList{field.Required(field.NewPath("atespace", "metadata"), "")},
 	}, {
-		"missing metadata.name",
-		&ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: ""}}},
+		"atespace.metadata.atespace must be empty",
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Atespace = "as" }))),
+		field.ErrorList{field.Forbidden(field.NewPath("atespace", "metadata", "atespace"), "")},
+	}, {
+		"missing atespace.metadata.name",
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "" }))),
 		field.ErrorList{field.Required(field.NewPath("atespace", "metadata", "name"), "")},
 	}, {
 		"invalid metadata.name",
-		&ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "Team_A"}}},
-		field.ErrorList{field.Invalid(field.NewPath("atespace", "metadata", "name"), "Team_A", "")},
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "invalid value" }))),
+		field.ErrorList{field.Invalid(field.NewPath("atespace", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateCreateAtespaceRequest(tt.req), tt.want)
+			assertValidateErr(t, validateCreateAtespaceRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
 
 func TestValidateGetAtespaceRequest(t *testing.T) {
+	// This test verifies validation of user input for get.
+	validReq := func(mods ...func(atespace *ateapipb.GetAtespaceRequest)) *ateapipb.GetAtespaceRequest {
+		req := &ateapipb.GetAtespaceRequest{
+			Atespace: &ateapipb.ObjectRef{Name: "team1"},
+		}
+		for _, m := range mods {
+			m(req)
+		}
+		return req
+	}
+
 	tests := []struct {
 		name string
 		req  *ateapipb.GetAtespaceRequest
 		want field.ErrorList
 	}{{
 		"valid",
-		&ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		validReq(),
 		nil,
 	}, {
 		"missing atespace",
@@ -69,78 +98,123 @@ func TestValidateGetAtespaceRequest(t *testing.T) {
 		field.ErrorList{field.Required(field.NewPath("atespace"), "")},
 	}, {
 		"atespace.atespace must be empty",
-		&ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Atespace: "ns1", Name: "team-a"}},
-		field.ErrorList{field.Invalid(field.NewPath("atespace", "atespace"), "ns1", "")},
+		validReq(func(r *ateapipb.GetAtespaceRequest) { r.Atespace.Atespace = "as" }),
+		field.ErrorList{field.Forbidden(field.NewPath("atespace", "atespace"), "")},
 	}, {
 		"missing atespace.name",
-		&ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{}},
+		validReq(func(r *ateapipb.GetAtespaceRequest) { r.Atespace.Name = "" }),
 		field.ErrorList{field.Required(field.NewPath("atespace", "name"), "")},
 	}, {
 		"invalid atespace.name",
-		&ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "TEAM-A"}},
-		field.ErrorList{field.Invalid(field.NewPath("atespace", "name"), "TEAM-A", "")},
+		validReq(func(r *ateapipb.GetAtespaceRequest) { r.Atespace.Name = "invalid value" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateGetAtespaceRequest(tt.req), tt.want)
+			assertValidateErr(t, validateGetAtespaceRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
 
 func TestValidateListAtespacesRequest(t *testing.T) {
+	// This test verifies validation of user input for list.
+	validReq := func(mods ...func(atespace *ateapipb.ListAtespacesRequest)) *ateapipb.ListAtespacesRequest {
+		req := &ateapipb.ListAtespacesRequest{ /* default values */ }
+		for _, m := range mods {
+			m(req)
+		}
+		return req
+	}
+
 	tests := []struct {
 		name string
 		req  *ateapipb.ListAtespacesRequest
 		want field.ErrorList
 	}{{
 		"valid, no page_size",
-		&ateapipb.ListAtespacesRequest{},
+		validReq(),
 		nil,
 	}, {
 		"valid, positive page_size",
-		&ateapipb.ListAtespacesRequest{PageSize: 10},
+		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageSize = 10 }),
 		nil,
 	}, {
 		"negative page_size",
-		&ateapipb.ListAtespacesRequest{PageSize: -1},
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "")},
+		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageSize = -1 }),
+		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
+	}, {
+		"valid page_token",
+		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageToken = strings.Repeat("x", 256) }),
+		nil,
+	}, {
+		"too-large page_token",
+		validReq(func(r *ateapipb.ListAtespacesRequest) { r.PageToken = strings.Repeat("x", 257) }),
+		field.ErrorList{field.TooLongCharacters(field.NewPath("page_token"), "", 256).WithOrigin("maxLength")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateListAtespacesRequest(tt.req), tt.want)
+			assertValidateErr(t, validateListAtespacesRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
 
 func TestValidateDeleteAtespaceRequest(t *testing.T) {
+	// This test verifies validation of user input for delete.
+	validReq := func(mods ...func(atespace *ateapipb.DeleteAtespaceRequest)) *ateapipb.DeleteAtespaceRequest {
+		req := &ateapipb.DeleteAtespaceRequest{
+			Atespace: &ateapipb.ObjectRef{Name: "team1"},
+		}
+		for _, m := range mods {
+			m(req)
+		}
+		return req
+	}
+
 	tests := []struct {
 		name string
 		req  *ateapipb.DeleteAtespaceRequest
 		want field.ErrorList
 	}{{
 		"valid",
-		&ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		validReq(),
 		nil,
 	}, {
 		"missing atespace",
-		&ateapipb.DeleteAtespaceRequest{},
+		&ateapipb.DeleteAtespaceRequest{Atespace: nil},
 		field.ErrorList{field.Required(field.NewPath("atespace"), "")},
 	}, {
 		"atespace.atespace must be empty",
-		&ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Atespace: "ns1", Name: "team-a"}},
-		field.ErrorList{field.Invalid(field.NewPath("atespace", "atespace"), "ns1", "")},
+		validReq(func(r *ateapipb.DeleteAtespaceRequest) { r.Atespace.Atespace = "as" }),
+		field.ErrorList{field.Forbidden(field.NewPath("atespace", "atespace"), "")},
 	}, {
 		"missing atespace.name",
-		&ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{}},
+		validReq(func(r *ateapipb.DeleteAtespaceRequest) { r.Atespace.Name = "" }),
 		field.ErrorList{field.Required(field.NewPath("atespace", "name"), "")},
 	}, {
 		"invalid atespace.name",
-		&ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "TEAM-A"}},
-		field.ErrorList{field.Invalid(field.NewPath("atespace", "name"), "TEAM-A", "")},
+		validReq(func(r *ateapipb.DeleteAtespaceRequest) { r.Atespace.Name = "invalid value" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateDeleteAtespaceRequest(tt.req), tt.want)
+			assertValidateErr(t, validateDeleteAtespaceRequest(context.Background(), tt.req), tt.want)
 		})
 	}
+}
+
+// validAtespace returns a minimal Atespace which should pass input validation.
+func validAtespace(mods ...func(*ateapipb.Atespace)) *ateapipb.Atespace {
+	a := &ateapipb.Atespace{
+		Metadata: &ateapipb.ResourceMetadata{Name: "team1"},
+	}
+	for _, m := range mods {
+		m(a)
+	}
+	return a
+}
+
+// withAtespaceMetadata returns a modifier func (see validAtespace) which sets
+// the atespace's resource metadata to a valid value.
+func withAtespaceMetadata(mutate func(*ateapipb.ResourceMetadata)) func(*ateapipb.Atespace) {
+	return func(a *ateapipb.Atespace) { mutate(a.Metadata) }
 }

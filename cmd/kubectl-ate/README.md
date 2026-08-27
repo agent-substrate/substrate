@@ -100,7 +100,7 @@ kubectl ate get workers -l <label-selector>
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
 
-> **Note:** Actors and workers are not Kubernetes CRDs — they live in the Substrate control plane (valkey/redis), not `etcd`. `kubectl get actor` and `kubectl get worker` will not return anything; only `kubectl ate get …` queries the control plane. `kubectl get actortemplate` and `kubectl get workerpool` *do* work, because those are CRDs.
+> **Note:** Actors and workers are not Kubernetes CRDs — they live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor` and `kubectl get worker` will not return anything; only `kubectl ate get …` queries the control plane. `kubectl get actortemplate` and `kubectl get workerpool` *do* work, because those are CRDs.
 
 #### `kubectl ate get actor` output columns
 
@@ -168,8 +168,11 @@ kubectl ate resume actor my-actor -a <atespace>
 # Suspend an actor (snapshots its state to storage and frees the worker)
 kubectl ate suspend actor my-actor -a <atespace>
 
-# Delete an actor.
+# Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
 kubectl ate delete actor my-actor -a <atespace>
+
+# Delete an actor from any state (e.g. RUNNING, PAUSED), terminating workloads and detaching volumes.
+kubectl ate delete actor my-actor -a <atespace> --any-state
 ```
 
 ### Actor Snapshots
@@ -205,6 +208,9 @@ kubectl ate logs actors my-actor -a <atespace>
 # Follow the logs with -f. The stream is aggregated across worker
 # reassignments, so the same actor stays queryable as it teleports between pods.
 kubectl ate logs actors my-actor -a <atespace> -f
+
+# Show only one container's logs with -c/--container.
+kubectl ate logs actors my-actor -a <atespace> -c my-container
 ```
 
 Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
@@ -225,6 +231,6 @@ kubectl ate admin make-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"
 
-# DANGEROUS: Completely flush all Actor and Worker tracking state from Redis
-kubectl ate admin debug-flush-redis
+# DANGEROUS: Completely clear all Actor and Worker tracking state
+kubectl ate admin debug-clear-store
 ```

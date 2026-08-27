@@ -28,6 +28,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
 // SetupBundleRootfs composes the bundle's rootfs from cached layers per the
@@ -94,7 +96,52 @@ func SetupBundleRootfs(bundlePath string) error {
 	if err := applyDirFixups(rootfs, fixups); err != nil {
 		return fmt.Errorf("while repairing implicit dir metadata: %w", err)
 	}
+
+	if err := setupImageVolumes(bundlePath, spec.ImageVolumes); err != nil {
+		return fmt.Errorf("while setting up image volumes: %w", err)
+	}
 	return nil
+}
+
+// setupImageVolumes exposes each image volume's contents read-only at its
+// bundle-local mount point, for the OCI spec to bind into the container.
+func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
+	for _, vol := range volumes {
+		for _, layerDir := range vol.Layers {
+			if err := FinalizeLayer(layerDir); err != nil {
+				return fmt.Errorf("while finalizing layer %q of image volume %q: %w", layerDir, vol.Name, err)
+			}
+		}
+
+		mountpoint := ateompath.ImageVolumeMountPathInBundle(bundlePath, vol.Name)
+		if err := os.MkdirAll(mountpoint, 0o700); err != nil {
+			return fmt.Errorf("while creating image volume mount point %q: %w", mountpoint, err)
+		}
+		_ = unix.Unmount(mountpoint, unix.MNT_DETACH)
+
+		if err := mountImageVolume(mountpoint, vol.Layers); err != nil {
+			return fmt.Errorf("while mounting image volume %q: %w", vol.Name, err)
+		}
+	}
+	return nil
+}
+
+// mountImageVolume attaches layers read-only at mountpoint.
+func mountImageVolume(mountpoint string, layers []string) error {
+	if len(layers) == 1 {
+		// The kernel rejects a single lowerdir without an upperdir, so bind
+		// the layer's fs/ tree directly for the single-layer case.
+		fsDir := filepath.Join(layers[0], layerFSDirName)
+		if err := unix.Mount(fsDir, mountpoint, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+			return fmt.Errorf("while binding %q: %w", fsDir, err)
+		}
+		// MS_BIND and MS_RDONLY cannot be combined; a second call applies read-only.
+		if err := unix.Mount("", mountpoint, "", unix.MS_REMOUNT|unix.MS_BIND|unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("while remounting %q read-only: %w", mountpoint, err)
+		}
+		return nil
+	}
+	return mountOverlay(mountpoint, overlayLowerDirs(layers), "", "")
 }
 
 // mountOverlay attaches an overlay of lowers (top-most first) with the given
@@ -102,6 +149,9 @@ func SetupBundleRootfs(bundlePath string) error {
 // mount(2): appending lowerdirs one fsconfig(2) call at a time sidesteps
 // mount(2)'s single-page option-string cap, which digest-derived layer paths
 // (~114 bytes each) would hit at roughly 34 layers.
+//
+// An empty upper mounts the overlay without a writable layer, which overlayfs
+// makes read-only.
 //
 // Minimum supported kernel: Linux 6.5, where overlayfs gained the
 // incremental "lowerdir+" option. Every current GKE channel is at or above
@@ -125,11 +175,13 @@ func mountOverlay(mountpoint string, lowers []string, upper, work string) error 
 			return err
 		}
 	}
-	if err := set("upperdir", upper); err != nil {
-		return err
-	}
-	if err := set("workdir", work); err != nil {
-		return err
+	if upper != "" {
+		if err := set("upperdir", upper); err != nil {
+			return err
+		}
+		if err := set("workdir", work); err != nil {
+			return err
+		}
 	}
 	// volatile: skip overlayfs's syncs on this upper, including the one it does
 	// at umount, which measured ~450ms per actor on GKE. The bundle upper holds

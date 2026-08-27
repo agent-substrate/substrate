@@ -19,9 +19,35 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// WorkerPoolPodTemplate defines optional scheduling and resource settings for
-// worker pods. NodeAffinity is mapped to spec.affinity.nodeAffinity on the pod.
+// WorkerPoolLabelValue is a Kubernetes label value for generated worker
+// workloads.
+//
+// +kubebuilder:validation:MaxLength=63
+// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$`
+type WorkerPoolLabelValue string
+
+// WorkerPoolPodTemplate defines optional metadata, scheduling, and resource
+// settings for worker workloads. NodeAffinity is mapped to
+// spec.affinity.nodeAffinity on the pod.
 type WorkerPoolPodTemplate struct {
+	// Labels are added to the generated Deployment and worker pods. Keys in
+	// the ate.dev domain and its subdomains are reserved for controllers.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))",message="ate.dev and its subdomains are reserved"
+	// +kubebuilder:validation:XValidation:rule="self.all(key, !format.qualifiedName().validate(key).hasValue())",message="label keys must be valid Kubernetes qualified names"
+	Labels map[string]WorkerPoolLabelValue `json:"labels,omitempty"`
+
+	// Annotations are added to the generated Deployment and worker pods. Keys
+	// in the ate.dev domain and its subdomains are reserved for controllers.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(key, !key.startsWith('ate.dev/') && !key.contains('.ate.dev/'))",message="ate.dev and its subdomains are reserved"
+	// +kubebuilder:validation:XValidation:rule="self.all(key, !format.qualifiedName().validate(key).hasValue())",message="annotation keys must be valid Kubernetes qualified names"
+	Annotations map[string]string `json:"annotations,omitempty"`
+
 	// NodeSelector is a selector which must be true for the pod to fit on a node.
 	//
 	// +optional
@@ -64,7 +90,7 @@ type WorkerPoolSpec struct {
 	// +required
 	AteomImage string `json:"ateomImage"`
 
-	// Template holds optional pod scheduling and resource settings for worker pods.
+	// Template holds optional metadata, scheduling, and resource settings for worker workloads.
 	//
 	// +optional
 	Template *WorkerPoolPodTemplate `json:"template,omitempty"`

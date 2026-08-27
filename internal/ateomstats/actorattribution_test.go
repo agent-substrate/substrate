@@ -66,8 +66,35 @@ func TestActorAttributionFromRequest(t *testing.T) {
 			want: fullAttribution,
 		},
 		{
+			name: "checkpoint request",
+			req: &ateompb.CheckpointWorkloadRequest{
+				Atespace:               "atespace-a",
+				ActorName:              "actor-b",
+				ActorUid:               "uid-c",
+				ActorTemplateNamespace: "template-ns-d",
+				ActorTemplateName:      "template-name-e",
+			},
+			want: fullAttribution,
+		},
+		{
+			name: "terminate request",
+			req: &ateompb.TerminateWorkloadRequest{
+				Atespace:               "atespace-a",
+				ActorName:              "actor-b",
+				ActorUid:               "uid-c",
+				ActorTemplateNamespace: "template-ns-d",
+				ActorTemplateName:      "template-name-e",
+			},
+			want: fullAttribution,
+		},
+		{
 			name: "empty run request",
 			req:  &ateompb.RunWorkloadRequest{},
+			want: resources.ActorAttribution{},
+		},
+		{
+			name: "empty terminate request",
+			req:  &ateompb.TerminateWorkloadRequest{},
 			want: resources.ActorAttribution{},
 		},
 		{
@@ -82,6 +109,16 @@ func TestActorAttributionFromRequest(t *testing.T) {
 		{
 			name: "nil restore request",
 			req:  (*ateompb.RestoreWorkloadRequest)(nil),
+			want: resources.ActorAttribution{},
+		},
+		{
+			name: "nil checkpoint request",
+			req:  (*ateompb.CheckpointWorkloadRequest)(nil),
+			want: resources.ActorAttribution{},
+		},
+		{
+			name: "nil terminate request",
+			req:  (*ateompb.TerminateWorkloadRequest)(nil),
 			want: resources.ActorAttribution{},
 		},
 	}

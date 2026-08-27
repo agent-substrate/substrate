@@ -236,15 +236,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if len(containers) > maxActorContainers {
 		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	// The VM's RAM comes from the snapshot, so a limit the current VMM reserve can
-	// no longer satisfy (e.g. --vmm-mem-reserve-mib was raised after the snapshot
-	// was taken) has to fail here rather than silently pair the guest with a cgroup
-	// limit larger than its RAM.
-	guestSize, err := s.guestSize(p.size)
-	if err != nil {
-		return err
-	}
-	ctrs, err := s.buildActorContainers(actorUID, containers, guestSize)
+	ctrs, err := s.buildActorContainers(actorUID, containers)
 	if err != nil {
 		return err
 	}
@@ -491,12 +483,6 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			switch tag, _ := fm["tag"].(string); tag {
 			case kata.FsTag:
 				fm["socket"] = kata.VirtiofsdSocketPath(id)
-			case "ateDurable":
-				// Legacy multi-virtiofs snapshot backward compatibility.
-				fm["socket"] = kata.DurableVirtiofsdSocketPath(id)
-			case "ateCSI":
-				// Legacy multi-virtiofs snapshot backward compatibility.
-				fm["socket"] = kata.CsiVirtiofsdSocketPath(id)
 			default:
 				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
 			}

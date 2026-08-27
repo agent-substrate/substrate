@@ -16,8 +16,6 @@ package e2e
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -130,70 +128,44 @@ func TemplateReadyTimeout(t *testing.T) time.Duration {
 // the test's temp dir and returns that path. Both an apply and a later delete
 // can then consume the same file, with no shell involved.
 //
-// One template serves both sandbox classes so the two variants of a fixture
-// cannot drift apart. Templates carry two kinds of ${...} placeholder:
+// name distinguishes the caller (by convention its suite name) and is appended
+// to ${FIXTURE_SUFFIX}: suite packages run as concurrent processes, so each
+// caller must get its own copy of a fixture or one suite's cleanup deletes it
+// out from under another.
 //
-//   - inline, substituted wherever they appear (an empty value just disappears);
-//   - block, which must be the entire content of their line. They expand to a
-//     YAML fragment that brings its own indentation, and an empty value takes
-//     the whole line with it — the same trick hack/install-demo-counter.sh
-//     plays with `sed /.../d`. Requiring the placeholder to be the whole line
-//     is what lets a comment mention one without being deleted.
-func RenderFixtureManifest(t *testing.T, relPath, bucket string) string {
+// One template serves both sandbox classes so the two variants of a fixture
+// cannot drift apart. See renderManifest for the placeholder kinds a template
+// can carry.
+func RenderFixtureManifest(t *testing.T, relPath, bucket, name string) string {
 	t.Helper()
-	root, err := FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-	raw, err := os.ReadFile(filepath.Join(root, relPath))
-	if err != nil {
-		t.Fatalf("reading fixture manifest %s: %v", relPath, err)
-	}
-
-	inline, blocks := fixtureSubstitutions(bucket)
-	var out []string
-	for line := range strings.SplitSeq(string(raw), "\n") {
-		if value, isBlock := blocks[strings.TrimSpace(line)]; isBlock {
-			if value != "" {
-				out = append(out, value)
-			}
-			continue
-		}
-		for placeholder, value := range inline {
-			line = strings.ReplaceAll(line, placeholder, value)
-		}
-		out = append(out, line)
-	}
-
-	rendered := strings.TrimSuffix(filepath.Join(t.TempDir(), filepath.Base(relPath)), ".tmpl")
-	if err := os.WriteFile(rendered, []byte(strings.Join(out, "\n")), 0o644); err != nil {
-		t.Fatalf("writing rendered fixture manifest %s: %v", rendered, err)
-	}
-	return rendered
+	inline, blocks := fixtureSubstitutions(bucket, name)
+	return renderManifest(t, relPath, inline, blocks)
 }
 
 // fixtureSubstitutions is the placeholder set the internal/e2e/fixtures
 // manifest templates carry, split into the inline and whole-line-block kinds
 // RenderFixtureManifest treats differently.
-func fixtureSubstitutions(bucket string) (inline, blocks map[string]string) {
+func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string) {
 	inline = map[string]string{
 		"${BUCKET_NAME}": bucket,
 		"${ATEOM_IMAGE}": "ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor",
 		// The manifest-side half of FixtureName: it suffixes the fixture's
 		// namespace, and with it the snapshot prefix underneath.
-		"${FIXTURE_SUFFIX}": "",
+		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
 		"${WORKERPOOL_RUNTIME}":     "",
 		"${TEMPLATE_SANDBOX_CLASS}": "",
 		"${TEMPLATE_RESOURCES}":     "",
+		// Off unless the caller opts in; see WithTrustBundle.
+		"${TEMPLATE_TRUST_BUNDLE}": "",
 	}
 	if !IsMicroVM() {
 		return inline, blocks
 	}
 
 	inline["${ATEOM_IMAGE}"] = "ko://github.com/agent-substrate/substrate/cmd/ateom-microvm"
-	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM
+	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
 	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs. A
 	// micro-VM WorkerPool has to name it: it is deliberately not the class
 	// default, so a missing or stale one fails loudly.

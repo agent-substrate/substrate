@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -40,8 +41,15 @@ var (
 	// ErrFailedPrecondition indicates the object is not in the required state for the operation.
 	ErrFailedPrecondition = errors.New("persistence: failed precondition")
 
-	// ErrLockConflict indicates that a distributed lock is already held by another client.
-	ErrLockConflict = errors.New("persistence: lock conflict")
+	// ErrLeaseConflict indicates that a distributed lease is already held by another client.
+	ErrLeaseConflict = errors.New("persistence: lease conflict")
+
+	// ErrInvalidPageToken indicates that a list page token is malformed or was
+	// issued for a different list operation or scope.
+	ErrInvalidPageToken = errors.New("persistence: invalid page token")
+
+	// ErrInvalidPageSize indicates that a negative page size was supplied.
+	ErrInvalidPageSize = errors.New("persistence: invalid page size")
 
 	// ErrUIDConflict indicates a write was guarded on a uid the stored object does
 	// not carry, meaning the name now addresses a different incarnation. Retrying
@@ -51,13 +59,18 @@ var (
 	// ErrPreconditionRequired indicates an update was called with a precondition
 	// missing either guard (uid or version). Blind writes are not accepted.
 	ErrPreconditionRequired = errors.New("persistence: precondition required")
+
+	// ErrImmutableField indicates an update's mutation changed a field that is
+	// immutable for the lifetime of the stored object.
+	ErrImmutableField = errors.New("persistence: immutable field")
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
-	// mutated. Returns ErrAlreadyExists if key is taken.
+	// mutated. Returns ErrAlreadyExists if key is taken, or
+	// ErrFailedPrecondition if the actor's atespace does not exist.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
@@ -83,7 +96,8 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, or the mutate's error verbatim otherwise.
+	// exhausted, ErrImmutableField if the mutated actor changed a field that is
+	// immutable for its lifetime, or the mutate's error verbatim otherwise.
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
@@ -94,22 +108,24 @@ type Interface interface {
 	// store keeps no location of its own.
 	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
 
-	// Fetches an ActorSnapshot.
-	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
+	// Fetches an ActorSnapshot by reference. Returns ErrNotFound if missing.
+	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
 
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
 	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
 
-	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
-	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	// Adds an immutable Atespace-owned tag to the ActorSnapshot addressed by
+	// snapshotRef. Returns ErrNotFound if the snapshot does not exist, or
+	// ErrFailedPrecondition if the tag's atespace does not exist.
+	CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
-	// Fetches an Atespace-owned tag. Returns ErrNotFound if missing. The tag's
-	// snapshot field names the ActorSnapshot it resolves to; fetch it with
-	// GetActorSnapshot if needed.
-	GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+	// Fetches an Atespace-owned tag by reference. Returns ErrNotFound if
+	// missing. The tag's snapshot field names the ActorSnapshot it resolves
+	// to; fetch it with GetActorSnapshot if needed.
+	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
 
 	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag
-	// addressed by atespace and name, and returns the stored ActorSnapshotTag with
+	// addressed by tagRef, and returns the stored ActorSnapshotTag with
 	// advanced metadata (version, update_time).
 	//
 	// precondition guards the write against landing on unexpected state: it is
@@ -125,11 +141,12 @@ type Interface interface {
 	// Returns ErrPreconditionRequired if the precondition omits either guard,
 	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
-	// exhausted, or the mutate's error verbatim otherwise.
-	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
+	// exhausted, ErrImmutableField if the mutated tag changed a field that is
+	// immutable for its lifetime, or the mutate's error verbatim otherwise.
+	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
-	DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+	DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
@@ -138,9 +155,6 @@ type Interface interface {
 
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
-
-	// AtespaceExists reports whether the atespace object exists.
-	AtespaceExists(ctx context.Context, name string) (bool, error)
 
 	// Lists atespaces.
 	ListAtespaces(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Atespace], error)
@@ -158,9 +172,6 @@ type Interface interface {
 	// Fetches an ActorTemplate by reference. Returns ErrNotFound if missing.
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 
-	// ActorTemplateExists reports whether the ActorTemplate exists.
-	ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error)
-
 	// Lists ActorTemplates in an atespace, or across all atespaces when
 	// atespace is empty.
 	ListActorTemplates(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorTemplate], error)
@@ -174,12 +185,13 @@ type Interface interface {
 	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 
 	// Removes an ActorTemplate and returns the deleted resource. Returns
-	// ErrNotFound if missing, or ErrFailedPrecondition while any
-	// ActorTemplateVersion still names it as parent.
+	// ErrNotFound if missing.
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 
-	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
-	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
+	// Registers a new idle worker and returns the stored resource with
+	// server-assigned metadata (uid, version, timestamps). The input is not
+	// mutated. Returns ErrAlreadyExists if already registered.
+	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
 
 	// Fetches worker state by name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
@@ -187,13 +199,23 @@ type Interface interface {
 	// Lists workers.
 	ListWorkers(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Worker], error)
 
-	// Updates worker state with optimistic concurrency check, keyed by
-	// worker.metadata.name. Returns ErrNotFound if missing, or
-	// ErrVersionConflict on version mismatch.
-	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+	// UpdateWorker performs a transactional read-modify-write and returns the
+	// stored worker with advanced metadata (version, update_time).
+	//
+	// precondition guards the write against landing on unexpected state: it is
+	// checked against the stored worker before mutate runs. Both the uid and
+	// version guards are required.
+	//
+	// Returns ErrPreconditionRequired if the precondition omits either guard,
+	// ErrNotFound if missing, ErrUIDConflict or ErrVersionConflict if the
+	// precondition no longer holds, ErrVersionConflict if the retry budget is
+	// exhausted, or the mutate's error verbatim otherwise.
+	UpdateWorker(ctx context.Context, name string, precondition Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 
-	// Removes a worker by name. Idempotent: does nothing if worker is not found.
-	DeleteWorker(ctx context.Context, name string) error
+	// Removes a worker by name and returns the deleted resource. Returns
+	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if pre does
+	// not describe the worker the caller observed.
+	DeleteWorker(ctx context.Context, name string, pre DeletePreconditions) (*ateapipb.Worker, error)
 
 	// WatchWorkers returns an active subscription to track worker state changes.
 	// The watch's Events channel is closed when the caller calls Close, the
@@ -202,10 +224,10 @@ type Interface interface {
 	// must Close the watch to release its subscription.
 	WatchWorkers(ctx context.Context) (*WorkerWatch, error)
 
-	// AcquireLock attempts to acquire a distributed lock for key. The lock is
-	// held and renewed automatically until the returned Lock is closed.
-	// Returns ErrLockConflict if the lock is already held by another client.
-	AcquireLock(ctx context.Context, key string) (*Lock, error)
+	// AcquireLease attempts to acquire a distributed lease for key. The lease is
+	// held and renewed automatically until the returned Lease is closed.
+	// Returns ErrLeaseConflict if the lease is already held by another client.
+	AcquireLease(ctx context.Context, key string) (*Lease, error)
 
 	// DebugClearAll drop all data from the database. Useful for debugging / local testing/
 	DebugClearAll(ctx context.Context) error
@@ -221,6 +243,74 @@ type Precondition struct {
 	Version int64
 }
 
+// DeletePreconditions pins the object incarnation a delete may act on. Unlike
+// Precondition, whose guards an update requires, each guard here is
+// independently waivable: the zero value pins nothing, which is what an
+// unguarded delete wants.
+type DeletePreconditions struct {
+	// UID accepts only the object carrying it; empty accepts whichever object
+	// holds the name at delete time.
+	UID string
+	// Version accepts only that revision; zero accepts whatever revision the
+	// store is at.
+	Version int64
+}
+
+// Check reports whether md still describes the object the caller observed.
+// A waived guard is not checked. The uid is reported first: a new incarnation
+// makes the version meaningless.
+//
+// Returns ErrUIDConflict or ErrVersionConflict, which the delete surfaces
+// verbatim.
+func (p DeletePreconditions) Check(md *ateapipb.ResourceMetadata) error {
+	if p.UID != "" && p.UID != md.GetUid() {
+		return ErrUIDConflict
+	}
+	if p.Version != 0 && p.Version != md.GetVersion() {
+		return ErrVersionConflict
+	}
+	return nil
+}
+
+// CheckWorkerMutation reports whether an UpdateWorker mutation left the
+// worker's immutable identity fields alone. A backend calls it between running
+// the mutation and writing the result. It lives here, above any one backend,
+// so the rule is stated once and a second backend inherits it rather than
+// restating it.
+//
+// metadata is not checked: a backend re-stamps it from the object it read, so
+// whatever the mutation made of it is discarded either way.
+//
+// capacity is checked along with the rest because UpdateWorker replaces the
+// worker rather than patching it: a request that omits capacity is asking to
+// clear it, and silently losing a worker's compute capacity is worse than
+// rejecting the write. A future pod resize has to relax this rule first.
+//
+// A rejection wraps ErrImmutableField, so a backend can return it as-is and
+// callers still get the sentinel they map to INVALID_ARGUMENT.
+func CheckWorkerMutation(stored, mutated *ateapipb.Worker) error {
+	for _, f := range []struct {
+		name    string
+		stored  string
+		mutated string
+	}{
+		{"worker_namespace", stored.GetWorkerNamespace(), mutated.GetWorkerNamespace()},
+		{"worker_pool", stored.GetWorkerPool(), mutated.GetWorkerPool()},
+		{"worker_pod", stored.GetWorkerPod(), mutated.GetWorkerPod()},
+		{"worker_pod_uid", stored.GetWorkerPodUid(), mutated.GetWorkerPodUid()},
+		{"node_name", stored.GetNodeName(), mutated.GetNodeName()},
+		{"ip", stored.GetIp(), mutated.GetIp()},
+	} {
+		if f.stored != f.mutated {
+			return fmt.Errorf("%w: %s changed from %q to %q", ErrImmutableField, f.name, f.stored, f.mutated)
+		}
+	}
+	if !proto.Equal(stored.GetCapacity(), mutated.GetCapacity()) {
+		return fmt.Errorf("%w: capacity changed from %v to %v", ErrImmutableField, stored.GetCapacity(), mutated.GetCapacity())
+	}
+	return nil
+}
+
 // hasResourceMetadata is an object the store addresses by atespace and name,
 // and whose identity a caller can guard with a Precondition.
 type hasResourceMetadata interface {
@@ -229,7 +319,7 @@ type hasResourceMetadata interface {
 
 // PreconditionFrom builds the guards from the object the caller observed: its
 // uid and version.
-func PreconditionFrom[T hasResourceMetadata](observed T) Precondition {
+func PreconditionFrom(observed hasResourceMetadata) Precondition {
 	md := observed.GetMetadata()
 	return Precondition{UID: md.GetUid(), Version: md.GetVersion()}
 }
@@ -295,30 +385,29 @@ func NewWorkerWatch(events <-chan WorkerEvent, stop context.CancelFunc) *WorkerW
 // Close releases the subscription. Safe to call multiple times.
 func (w *WorkerWatch) Close() { w.stop() }
 
-// Lock represents a held distributed lock that is renewed automatically until
-// Close is called. If renewal cannot keep the lease alive, the context
+// Lease represents a held distributed lease that is renewed automatically
+// until Close is called. If renewal cannot keep the lease alive, the context
 // returned by Context is cancelled so the caller can detect it may no
 // longer have exclusive access.
-type Lock struct {
+type Lease struct {
 	ctx     context.Context
 	closeFn func()
 	once    sync.Once
 }
 
-// NewLock builds a Lock from its lease context (cancelled on loss or Close)
-// and the func that stops lease renewal and releases the lock.
-func NewLock(ctx context.Context, closeFn func()) *Lock {
-	return &Lock{ctx: ctx, closeFn: closeFn}
+// NewLease builds a Lease from its lease context (cancelled on loss or Close)
+// and the func that stops lease renewal and releases it.
+func NewLease(ctx context.Context, closeFn func()) *Lease {
+	return &Lease{ctx: ctx, closeFn: closeFn}
 }
 
-// Context returns a context derived from the context AcquireLock was called
+// Context returns a context derived from the context AcquireLease was called
 // with. It is cancelled when Close is called, or earlier if the lease is
 // lost.
-func (l *Lock) Context() context.Context { return l.ctx }
+func (l *Lease) Context() context.Context { return l.ctx }
 
-// Close stops lease renewal and releases the lock. Safe to call multiple
-// times.
-func (l *Lock) Close() { l.once.Do(l.closeFn) }
+// Close stops lease renewal and releases it. Safe to call multiple times.
+func (l *Lease) Close() { l.once.Do(l.closeFn) }
 
 // ListOptions carries the pagination parameters common to every List method.
 type ListOptions struct {
@@ -327,6 +416,22 @@ type ListOptions struct {
 	// PageToken resumes a listing after the page it was issued for. Empty
 	// starts from the first page.
 	PageToken string
+}
+
+// DefaultPageSize is used by store implementations when PageSize is unset.
+const DefaultPageSize int32 = 1000
+
+// NormalizeListOptions applies the store default and rejects invalid sizes.
+// RPC handlers validate user input separately, but store callers also need a
+// safe contract because list implementations use PageSize in slice indexes.
+func NormalizeListOptions(opts ListOptions) (ListOptions, error) {
+	if opts.PageSize < 0 {
+		return ListOptions{}, ErrInvalidPageSize
+	}
+	if opts.PageSize == 0 {
+		opts.PageSize = DefaultPageSize
+	}
+	return opts, nil
 }
 
 // ListResponse is the return value of a List method: the page of items it

@@ -21,6 +21,11 @@ to JSONL, and uploads everything to either GCS or local disk under
 When the test target is glutton.py, also spawns the boomer-glutton Go
 worker as a subprocess (locust runs in --master + --expect-workers=1
 mode) so the GluttonUser load comes from boomer instead of Python+gevent.
+
+-f accepts a comma-separated list of files, which locust reads as one test.
+Give the test file first, then a load shape, as in
+`/app/tests/glutton.py,/app/shapes/ladder_shape.py`. A shape holds no user
+class, thus this module finds the test in the list; see test_file().
 """
 
 import argparse
@@ -43,6 +48,11 @@ from common.boomer_config import build_config_json
 # Path inside the locust image to the boomer-glutton binary baked in by
 # benchmarking/locust/Dockerfile.
 BOOMER_BINARY = "/app/boomer-glutton"
+
+# Port for the headless /boomer-config server (common/boomer_config.py), which
+# gives boomer the values that change while a run continues. Locust already
+# holds 5557 (master) and 8089 (web UI) in this container.
+BOOMER_CONFIG_PORT = 5560
 
 # Tab-separated columns written to traces.txt. Order matters — readers split
 # on \t and index positionally.
@@ -75,6 +85,15 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Root destination (gs://bucket/path or local path)",
     )
+    p.add_argument(
+        "--allow-empty-stats",
+        action="store_true",
+        help=(
+            "Exit 0 when locust produced no measurement rows. For a run whose "
+            "result is not in the locust statistics, such as a run that sends "
+            "no request on purpose"
+        ),
+    )
     args, extra = p.parse_known_args()
     args.locust_extra = extra
     return args
@@ -92,8 +111,50 @@ PYTHON_TESTS = frozenset({
 })
 
 
-def needs_boomer(test_file: str) -> bool:
-    return os.path.basename(test_file) not in PYTHON_TESTS
+def test_file(files: str) -> str:
+    """Return the one file of `files` that holds the user class.
+
+    `files` is the value of -f, which is one path or a comma-separated list
+    of paths. A load shape is a file in that list with no user class, thus
+    the name of the run does not come from it. Two values are wrong if this
+    function takes the last path: needs_boomer below, and the --user-class
+    of boomer.
+
+    Each shape is a file in the shapes directory, thus remove those paths
+    first. A boomer test has no entry in PYTHON_TESTS, thus the test cannot
+    be found by that set alone. What stays is the test, and the result does
+    not change with the order of the paths.
+    """
+    paths = [p for p in files.split(",") if p]
+    tests = [p for p in paths if os.path.basename(os.path.dirname(p)) != "shapes"]
+    if tests:
+        return tests[0]
+    return paths[0] if paths else files
+
+
+def needs_boomer(files: str) -> bool:
+    return os.path.basename(test_file(files)) not in PYTHON_TESTS
+
+
+def pair_flags(locust_extra: list[str]) -> list[str]:
+    """Join each flag of `locust_extra` with its value, for the log.
+
+    tests.yaml gives a flag and its value as two entries of a list, thus one
+    flag becomes two items here. A reader compares the log with tests.yaml,
+    and a value on a line of its own makes that comparison difficult.
+    """
+    pairs: list[str] = []
+    i = 0
+    while i < len(locust_extra):
+        item = locust_extra[i]
+        nxt = locust_extra[i + 1] if i + 1 < len(locust_extra) else None
+        if item.startswith("--") and nxt is not None and not nxt.startswith("--"):
+            pairs.append(f"{item} {nxt}")
+            i += 2
+            continue
+        pairs.append(item)
+        i += 1
+    return pairs
 
 
 def tee(logs: TextIO, msg: str) -> None:
@@ -110,15 +171,21 @@ def log_run_config(args: argparse.Namespace, dest_prefix: str, work_dir: Path, l
         "==== Run config ====",
         f"  name:           {args.name}",
         f"  tag:            {args.tag}",
-        f"  test_file:      {args.file}",
+        f"  files:          {args.file}",
+        f"  test_file:      {test_file(args.file)}",
         f"  duration:       {args.duration}",
         f"  users:          {args.users}",
         f"  uses_boomer:    {needs_boomer(args.file)}",
+        f"  empty stats ok: {args.allow_empty_stats}",
         f"  dest_prefix:    {dest_prefix}",
         f"  work_dir:       {work_dir}",
-        f"  extra flags:    {' '.join(args.locust_extra) if args.locust_extra else '(none)'}",
-        "====================",
+        # One flag for each line, with its value. A run gives many flags to
+        # locust, and one line holds them in a form that no reader can
+        # compare with the entry in tests.yaml.
+        "  extra flags:",
     ]
+    lines += [f"    {flag}" for flag in pair_flags(args.locust_extra)] or ["    (none)"]
+    lines.append("====================")
     for line in lines:
         tee(logs, line)
 
@@ -198,6 +265,10 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
         # Master mode so boomer can connect as a worker on localhost:5557.
         # --expect-workers=1 makes locust wait for boomer before starting.
         locust_cmd += ["--master", "--expect-workers", "1"]
+        # Serve /boomer-config for the worker. --config-json gives boomer the
+        # values one time, at its start, thus a run that changes a value while
+        # it runs needs the endpoint. A load shape is one such run.
+        locust_cmd += ["--boomer-config-port", str(BOOMER_CONFIG_PORT)]
     locust_cmd += list(args.locust_extra)
 
     tee(logs, f"Running: {' '.join(locust_cmd)}")
@@ -218,10 +289,15 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
 
     boomer_proc = None
     if with_boomer:
-        boomer_cmd = [BOOMER_BINARY, "--user-class", Path(args.file).stem]
+        boomer_cmd = [BOOMER_BINARY, "--user-class", Path(test_file(args.file)).stem]
         cfg_json = build_config_json(args.locust_extra)
         if cfg_json:
             boomer_cmd += ["--config-json", cfg_json]
+        # Read the endpoint again at each spawn message. Thus a value that
+        # changes while the run continues, such as the sample rate of a load
+        # shape, reaches boomer at the change. boomer's --master-host default
+        # is the loopback address, where the server above listens.
+        boomer_cmd += ["--master-web-port", str(BOOMER_CONFIG_PORT)]
         tee(logs, f"Running: {' '.join(boomer_cmd)}")
         boomer_proc = subprocess.Popen(
             boomer_cmd,
@@ -394,7 +470,7 @@ def main() -> None:
         upload(src, dest)
         print(f"Uploaded {src} -> {dest}", flush=True)
 
-    if not stats_generated:
+    if not stats_generated and not args.allow_empty_stats:
         sys.exit(1)
 
 

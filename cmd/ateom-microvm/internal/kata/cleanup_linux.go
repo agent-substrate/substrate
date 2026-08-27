@@ -37,13 +37,31 @@ import (
 // .../virtiofsd.sock: bind: address already in use", "Could not bind mount
 // .../shared/sandboxes/<id>/mounts", "directory not empty". Calling this
 // before each run gives a clean slate.
+//
+// Removal is gated on the unmounting: the shared tree holds bind mounts whose
+// SOURCES belong to someone else (the durable-dir and CSI volume dirs are
+// atelet's — see BindIntoShare), and a RemoveAll that walks into a live bind
+// deletes the actor's data through it. So a dir is removed only once every
+// mount beneath it is known detached; otherwise it is left in place for the
+// next sweep (the stagers tolerate a leftover dir — they unmount stale binds
+// and reuse mountpoints).
 func CleanupSandboxState(ctx context.Context, id string) {
 	dirs := []string{
 		filepath.Join("/run/kata-containers/shared/sandboxes", id),
 		filepath.Join(vcVMDir, id),
 	}
-	if b, err := os.ReadFile("/proc/self/mountinfo"); err == nil {
-		var mounts []string
+	removable := make(map[string]bool, len(dirs))
+	if b, err := os.ReadFile("/proc/self/mountinfo"); err != nil {
+		// Without the mount table there is no telling what is still mounted
+		// under the dirs, so none of them is provably safe to remove.
+		slog.WarnContext(ctx, "Cannot read mountinfo; leaving sandbox dirs in place",
+			slog.Any("err", err))
+	} else {
+		for _, d := range dirs {
+			removable[d] = true
+		}
+		type mount struct{ mp, dir string }
+		var mounts []mount
 		for _, line := range strings.Split(string(b), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) < 5 {
@@ -52,21 +70,27 @@ func CleanupSandboxState(ctx context.Context, id string) {
 			mp := fields[4] // mount point
 			for _, d := range dirs {
 				if mp == d || strings.HasPrefix(mp, d+"/") {
-					mounts = append(mounts, mp)
+					mounts = append(mounts, mount{mp: mp, dir: d})
 					break
 				}
 			}
 		}
 		// Deepest paths first so child mounts unmount before their parents.
-		sort.Slice(mounts, func(i, j int) bool { return len(mounts[i]) > len(mounts[j]) })
-		for _, mp := range mounts {
-			if err := unix.Unmount(mp, unix.MNT_DETACH); err != nil {
+		sort.Slice(mounts, func(i, j int) bool { return len(mounts[i].mp) > len(mounts[j].mp) })
+		for _, m := range mounts {
+			if err := unix.Unmount(m.mp, unix.MNT_DETACH); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount leftover sandbox mount",
-					slog.String("mount", mp), slog.Any("err", err))
+					slog.String("mount", m.mp), slog.Any("err", err))
+				removable[m.dir] = false
 			}
 		}
 	}
 	for _, d := range dirs {
+		if !removable[d] {
+			slog.WarnContext(ctx, "Leaving sandbox dir in place: mounts under it were not all detached",
+				slog.String("dir", d))
+			continue
+		}
 		if err := os.RemoveAll(d); err != nil {
 			slog.WarnContext(ctx, "Failed to remove leftover sandbox dir",
 				slog.String("dir", d), slog.Any("err", err))

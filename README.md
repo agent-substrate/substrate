@@ -65,6 +65,8 @@ We host a weekly community meeting every Thursday from 10:00am - 11:00am PST.
 - Video call link: https://meet.google.com/uhq-cxvn-dhy
 - Or dial: (US) +1 253-289-6971 PIN: 787 664 574 59#
 - More phone numbers: https://tel.meet/uhq-cxvn-dhy?pin=9044088223662
+- [Meeting notes](https://docs.google.com/document/d/1obSIvfcafLNniLYTQCcT2eCgxHqa2AQ3Ga7YTsju49s) for the weekly sync meeting
+- [Recordings and transcripts](https://drive.google.com/corp/drive/u/0/folders/1rX1S6vPxPrR8dA1lEBuBEXkGKjHtG-mL) of all community meetings
 
 We also have channels in the CNCF slack; [request an invite here](https://slack.cncf.io/)
 if you don't have access.
@@ -91,7 +93,7 @@ To quickly set up the complete environment:
 # create cluster and local registry (IPv4; IP_FAMILY=dual|ipv6 overrides)
 hack/create-kind-cluster.sh
 
-# install ate, valkey, rustfs
+# install ate, PostgreSQL, rustfs
 hack/install-ate-kind.sh --deploy-ate-system
 
 # install counter demo
@@ -128,7 +130,7 @@ curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i 
    gcloud auth application-default login --project=${PROJECT_ID}
    ```
 
-3. Provision the required GCP resources (GKE cluster, Redis, GCS, and IAM bindings):
+3. Provision the required GCP resources (GKE cluster, GCS, and IAM bindings):
    ```bash
    go run ./tools/setup-gcp bootstrap
    ```

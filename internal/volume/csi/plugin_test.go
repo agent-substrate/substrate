@@ -175,7 +175,7 @@ func TestPlugin_CreateVolume(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestPlugin_DeleteVolume(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestPlugin_AttachVolume(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestPlugin_DetachVolume(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestPlugin_UnmountVolume(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestClient_Identity(t *testing.T) {
 	endpoint, cleanup := startMockCSIDriver(t, driver)
 	defer cleanup()
 
-	client, err := NewCSIClient(endpoint)
+	client, err := NewCSIClient(endpoint, nil)
 	if err != nil {
 		t.Fatalf("failed to create CSI client: %v", err)
 	}

@@ -23,7 +23,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -33,8 +34,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -75,12 +74,11 @@ var (
 )
 
 type testContext struct {
-	mr                  *miniredis.Miniredis
-	service             *controlapi.Service
+	service             *controlapi.RPCService
 	client              ateapipb.ControlClient
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
-	persistence         *ateredis.Persistence
+	persistence         store.Interface
 	workerCache         *workercache.Cache
 	fakeAtelet          *FakeAteletServer
 	cleanup             func()
@@ -91,6 +89,8 @@ type testContext struct {
 	// setupAteletOnNode waits on it so a test never dials a node whose atelet the
 	// informer has not seen yet.
 	ateletIndexer cache.Indexer
+	// metricReader collects what the service's instruments recorded.
+	metricReader *sdkmetric.ManualReader
 }
 
 // setupTest sets up a fully isolated test environment.
@@ -101,31 +101,23 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 // setupTestWithVolumePlugins is setupTest with the default mock volume plugin
 // replaced by plugins, keyed by driver name. Tests that need a failure-injecting
-// plugin pass it here rather than swapping it into the running Service, so each
+// plugin pass it here rather than swapping it into the running RPCService, so each
 // test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
-	// 1. Start Miniredis
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("failed to start miniredis: %v", err)
-	}
-
-	rdb := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: []string{mr.Addr()},
-	})
-	persistence := ateredis.NewPersistence(rdb)
+	// 1. Start an isolated PostgreSQL-backed store.
+	persistence, cleanupStore := storetest.SetupTestStore(t)
 
 	// 2. Initialize Clientsets using global cfg
 	k8sClient, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create k8s clientset: %v", err)
 	}
 
 	substrateClient, err := versioned.NewForConfig(cfg)
 	if err != nil {
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create substrate clientset: %v", err)
 	}
 
@@ -143,9 +135,6 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	syncer := controlapi.NewWorkerPoolSyncer(persistence, workerInformer, workerPoolLister)
-	syncer.Start(ctx)
-
 	workerFactory.Start(ctx.Done())
 	ateletFactory.Start(ctx.Done())
 	substrateInformerFactory.Start(ctx.Done())
@@ -160,7 +149,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	wc := workercache.New(persistence, 5*time.Minute)
 	if err := wc.Start(ctx); err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to start worker cache: %v", err)
 	}
 
@@ -171,10 +160,11 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 			return insecure.NewCredentials(), nil
 		}))
 
-	instruments, err := controlapi.NewInstruments(sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewManualReader())).Meter("ateapi"))
+	metricReader := sdkmetric.NewManualReader()
+	instruments, err := controlapi.NewInstruments(sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader)).Meter("ateapi"))
 	if err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create metric instruments: %v", err)
 	}
 	volPlugins := plugins
@@ -188,16 +178,19 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 			mockDriverName: mockPlugin,
 		}
 	}
-	service := controlapi.NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
+	service := controlapi.NewRPCService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
 
 	// 5. Start REAL gRPC Server for ATE API
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
+	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		ateinterceptors.ServerUnaryInterceptor,
+		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+	))
 	ateapipb.RegisterControlServer(grpcServer, service)
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to listen: %v", err)
 	}
 
@@ -211,7 +204,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	if err != nil {
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to connect: %v", err)
 	}
 
@@ -228,7 +221,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create namespace %s: %v", ns, err)
 	}
 
@@ -237,7 +230,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to seed test atespace %q: %v", testAtespace, err)
 	}
 
@@ -245,12 +238,10 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		rdb.Close()
-		mr.Close()
+		cleanupStore()
 	}
 
 	return &testContext{
-		mr:                  mr,
 		service:             service,
 		client:              client,
 		k8sClient:           k8sClient,
@@ -263,6 +254,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		workerPoolLister:    workerPoolLister,
 		sandboxConfigLister: sandboxConfigLister,
 		ateletIndexer:       ateletInformer.GetIndexer(),
+		metricReader:        metricReader,
 	}
 }
 
@@ -337,7 +329,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	}
 
 	const goldenSnapshot = "golden"
-	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+	storetest.MustCreateActorSnapshot(t, context.Background(), tc.persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
 		Status: &ateapipb.ActorSnapshotStatus{
 			ActorTemplateNamespace: ns,
@@ -346,9 +338,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			ContentScope:           ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			SnapshotUri:            "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
 		},
-	}); err != nil {
-		t.Fatalf("failed to create golden ActorSnapshot: %v", err)
-	}
+	})
 	createdTemplate.Status = atev1alpha1.ActorTemplateStatus{
 		GoldenSnapshot: goldenSnapshot,
 	}
@@ -468,9 +458,14 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name s
 	}
 }
 
-// createWorkerPod creates a worker pod and waits for the syncer to mirror it
-// into the store and the worker cache. It returns the name of the resulting
+// createWorkerPod creates a worker pod, registers the matching Worker, and
+// waits for it to reach the worker cache. It returns the name of the resulting
 // Worker, which is the key to look it up by.
+//
+// Both halves are needed: the Worker record is what the scheduler places actors
+// on, and the pod is what the atelet dialer resolves to reach one. In a real
+// cluster the syncer in ate-controller derives the first from the second; here
+// the test writes both, building the Worker exactly as the syncer would.
 func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) string {
 	t.Helper()
 	pod := &corev1.Pod{
@@ -494,26 +489,38 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	}
 	createdPod.Status.PodIPs = []corev1.PodIP{{IP: "127.0.0.1"}}
 	createdPod.Status.Phase = corev1.PodRunning
+	createdPod.Status.Conditions = []corev1.PodCondition{{
+		Type:   corev1.PodReady,
+		Status: corev1.ConditionTrue,
+	}}
 	_, err = tc.k8sClient.CoreV1().Pods(ns).UpdateStatus(context.Background(), createdPod, metav1.UpdateOptions{})
 	if err != nil {
 		t.Fatalf("failed to update worker pod status: %v", err)
 	}
 
-	// Wait for worker to be registered via API
-	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		resp, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
-		if err != nil {
-			return false, nil // Retry on API error
-		}
-		for _, w := range resp.GetWorkers() {
-			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == name {
-				return true, nil
-			}
-		}
-		return false, nil
-	})
+	// The WorkerPool supplies the fields the syncer copies off it. Read it from
+	// the lister the service itself uses, so a pool the informer has not caught
+	// up on fails here rather than producing a Worker the scheduler will not
+	// match.
+	pool, err := tc.workerPoolLister.WorkerPools(ns).Get(poolName)
 	if err != nil {
-		t.Fatalf("failed to wait for worker to be registered: %v", err)
+		t.Fatalf("failed to get WorkerPool %s/%s: %v", ns, poolName, err)
+	}
+	if _, err := tc.client.CreateWorker(context.Background(), &ateapipb.CreateWorkerRequest{
+		Worker: &ateapipb.Worker{
+			// Workers are global-scoped and named after the pod UID.
+			Metadata:        &ateapipb.ResourceMetadata{Name: string(createdPod.UID)},
+			WorkerNamespace: ns,
+			WorkerPool:      poolName,
+			WorkerPod:       name,
+			WorkerPodUid:    string(createdPod.UID),
+			Ip:              "127.0.0.1",
+			NodeName:        nodeName,
+			SandboxClass:    string(pool.Spec.SandboxClass),
+			Labels:          pool.GetLabels(),
+		},
+	}); err != nil {
+		t.Fatalf("failed to register worker: %v", err)
 	}
 
 	// Wait for the worker to appear in worker cache.
@@ -533,6 +540,23 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		t.Fatalf("failed to wait for worker to appear in worker cache: %v", err)
 	}
 	return string(createdPod.UID)
+}
+
+// waitForWorkerAvailable waits for an assignment release to reach the worker
+// cache. Lifecycle RPCs commit the release to the store before the cache's
+// PostgreSQL watch processes the corresponding update.
+func waitForWorkerAvailable(t *testing.T, tc *testContext, workerName string) {
+	t.Helper()
+	err := wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
+		worker, err := tc.workerCache.Worker(workerName)
+		if err != nil {
+			return false, nil
+		}
+		return worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_ACTIVE && worker.GetStatus().GetAssignment() == nil, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for worker %s to become available: %v", workerName, err)
+	}
 }
 
 // createAteletPod creates an atelet pod on nodeName and marks it Running with
@@ -609,21 +633,22 @@ func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 		t.Fatalf("failed to delete worker pod %s: %v", name, err)
 	}
 
-	// Wait for worker to be removed from API
-	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		resp, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
-		if err != nil {
-			return false, nil // Retry on API error
-		}
-		for _, w := range resp.GetWorkers() {
-			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == name {
-				return false, nil // Still there
-			}
-		}
-		return true, nil // Gone!
-	})
+	// Deregister the Worker, as the syncer would once it saw the pod go. The
+	// Worker is named after the pod UID, but the caller only has the pod name,
+	// so it is found by the pod fields it carries.
+	resp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
 	if err != nil {
-		t.Fatalf("failed to wait for worker to be removed: %v", err)
+		t.Fatalf("failed to list workers: %v", err)
+	}
+	for _, w := range resp.GetWorkers() {
+		if w.GetWorkerNamespace() != ns || w.GetWorkerPod() != name {
+			continue
+		}
+		if _, err := tc.client.DeleteWorker(context.Background(), &ateapipb.DeleteWorkerRequest{
+			Worker: &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
+		}); err != nil {
+			t.Fatalf("failed to deregister worker %s: %v", w.GetMetadata().GetName(), err)
+		}
 	}
 
 	err = wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {

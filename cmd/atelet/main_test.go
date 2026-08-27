@@ -50,6 +50,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
+	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
@@ -137,14 +139,14 @@ func TestWriteSystemInfoVolume(t *testing.T) {
 	}
 
 	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
-	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", si); err != nil {
+	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume: %v", err)
 	}
 
 	// Overwrite with a different actor, as happens when a snapshot taken from
 	// one actor seeds another on resume: files must carry the new values.
 	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
-	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", si); err != nil {
+	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
 	}
 
@@ -198,7 +200,7 @@ func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
 	}
 
 	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
-	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", si); err != nil {
+	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume: %v", err)
 	}
 
@@ -222,7 +224,7 @@ func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
 	// Regenerate for a different actor, as a restore from a shared golden
 	// snapshot does.
 	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
-	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", si); err != nil {
+	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
 		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
 	}
 
@@ -238,6 +240,42 @@ func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
 			t.Errorf("pre-rewrite real path %q gone after regeneration: %v; find-paths re-open of a suspend-time path would fail", realBefore[p], err)
 		}
 	}
+}
+
+func TestWriteSystemInfoVolume_TrustBundle(t *testing.T) {
+	ctx := context.Background()
+	certPEM := testCertPEM(t)
+	si := &ateletpb.SystemInfoVolume{
+		DataSources: []*ateletpb.SystemInfoDataSource{
+			{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
+				TrustBundle: &ateletpb.TrustBundleDataSource{Name: EgressTrustBundleName, Path: "trust/ca.pem"},
+			}},
+		},
+	}
+	lister := ctbLister(t, &certsv1beta1.ClusterTrustBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName},
+		Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: string(certPEM)},
+	})
+
+	root := filepath.Join(t.TempDir(), "system-info", "vol1")
+	ref := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	if err := writeSystemInfoVolume(ctx, root, ref, "uid-1", lister, si); err != nil {
+		t.Fatalf("writeSystemInfoVolume: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "trust/ca.pem"))
+	if err != nil {
+		t.Fatalf("reading projected bundle: %v", err)
+	}
+	if string(got) != string(certPEM) {
+		t.Errorf("content = %q, want the sanitized bundle", got)
+	}
+
+	t.Run("resolution failure fails the write rather than produce an empty trust file", func(t *testing.T) {
+		err := writeSystemInfoVolume(ctx, filepath.Join(t.TempDir(), "vol2"), ref, "uid-1", ctbLister(t), si)
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Errorf("writeSystemInfoVolume = %v, want not-found resolution error", err)
+		}
+	})
 }
 
 func TestWriteFileAtomic(t *testing.T) {
@@ -784,6 +822,41 @@ func TestRPCBoundariesReject(t *testing.T) {
 		})
 		wantInvalidArgument(t, "Restore", err)
 	})
+	t.Run("Terminate", func(t *testing.T) {
+		const okTargetAteomUID = "123e4567-e89b-12d3-a456-426614174001"
+		t.Run("invalid ateom UID", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				TargetAteomUid: badUID, Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing template namespace", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateName: "template",
+				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing template name", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default",
+				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing target ateom UID", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+	})
 }
 
 func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
@@ -1281,6 +1354,44 @@ func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
 	}
 	if readiness.Ready() {
 		t.Fatal("readiness should be not-ready after drain")
+	}
+}
+
+// Image volumes appear on their own ImageVolumeMounts field, separate from durable-dir mounts.
+func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
+	spec := &ateletpb.WorkloadSpec{
+		Volumes: []*ateletpb.Volume{
+			{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
+			{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+			{Name: "ext", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+		},
+		Containers: []*ateletpb.Container{{
+			Name: "app",
+			VolumeMounts: []*ateletpb.VolumeMount{
+				{Name: "agent", MountPath: "/ate"},
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "ext", MountPath: "/mnt/ext"},
+			},
+		}},
+	}
+
+	got, err := buildAteomWorkloadSpec(spec)
+	if err != nil {
+		t.Fatalf("buildAteomWorkloadSpec: %v", err)
+	}
+	if len(got.GetContainers()) != 1 {
+		t.Fatalf("containers = %d, want 1", len(got.GetContainers()))
+	}
+	ctr := got.GetContainers()[0]
+
+	if len(ctr.GetImageVolumeMounts()) != 1 {
+		t.Fatalf("image volume mounts = %v, want 1", ctr.GetImageVolumeMounts())
+	}
+	if name, path := ctr.GetImageVolumeMounts()[0].GetVolumeName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
+		t.Errorf("image volume mount = (%q, %q), want (agent, /ate)", name, path)
+	}
+	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetVolumeName() != "data" {
+		t.Errorf("durable mounts = %v, want just data", ctr.GetDurableDirVolumeMounts())
 	}
 }
 

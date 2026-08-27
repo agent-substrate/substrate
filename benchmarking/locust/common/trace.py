@@ -114,6 +114,19 @@ def init_tracing() -> None:
     _initialized = True
 
 
+def set_trace_probability(probability: float) -> None:
+    """Change the sample rate of this process while a test runs.
+
+    init_tracing sets the rate once, at the start of a test, from the command
+    line. A step of a load ladder changes the rate in the middle of a run
+    (see shapes/ladder_shape.py), and the provider holds one sampler for the
+    life of the process, thus the change goes to that sampler and not to a
+    new provider.
+    """
+    _sampler.update_probability(probability)
+    logger.info(f"Trace probability set to {probability}")
+
+
 def get_tracer(name: str) -> Tracer:
     return trace.get_tracer(name)
 

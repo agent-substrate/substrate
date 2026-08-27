@@ -113,19 +113,18 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 	}()
 
 	cancel()
-	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not return after cancellation")
 	}
+	// Deadline only guards against hanging; it fails once the relay closed the pipe.
+	_ = actor.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := actor.Read(make([]byte, 1)); err == nil {
 		t.Fatal("actor connection remained open after relay cancellation")
 	}
 	if _, err := io.WriteString(clientInput, "request"); err == nil {
 		t.Fatal("client stream remained open after relay cancellation")
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("relay did not return after cancellation")
 	}
 }
 

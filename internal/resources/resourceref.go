@@ -17,6 +17,7 @@ package resources
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -44,6 +45,7 @@ func (r ResourceRef[R]) String() string {
 // than flattening them into one opaque string.
 func (r ResourceRef[R]) LogValue() slog.Value {
 	return slog.GroupValue(
+		slog.String("type", reflect.TypeFor[R]().String()),
 		slog.String("atespace", r.Atespace),
 		slog.String("name", r.Name),
 	)
@@ -112,6 +114,40 @@ func ActorTemplateRefFromObjectRef(ref *ateapipb.ObjectRef) ActorTemplateRef {
 // template.
 func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateRef {
 	return ActorTemplateRef{
+		Atespace: t.GetMetadata().GetAtespace(),
+		Name:     t.GetMetadata().GetName(),
+	}
+}
+
+// ActorSnapshotRef identifies an ActorSnapshot by the (atespace, name).
+type ActorSnapshotRef = ResourceRef[*ateapipb.ActorSnapshot]
+
+// ActorSnapshotRefFromObjectRef converts an ObjectRef to an ActorSnapshotRef.
+func ActorSnapshotRefFromObjectRef(ref *ateapipb.ObjectRef) ActorSnapshotRef {
+	return resourceRefFromObjectRef[*ateapipb.ActorSnapshot](ref)
+}
+
+// ActorSnapshotRefFromActorSnapshot returns the reference addressing the given
+// snapshot.
+func ActorSnapshotRefFromActorSnapshot(s *ateapipb.ActorSnapshot) ActorSnapshotRef {
+	return ActorSnapshotRef{
+		Atespace: s.GetMetadata().GetAtespace(),
+		Name:     s.GetMetadata().GetName(),
+	}
+}
+
+// ActorSnapshotTagRef identifies an ActorSnapshotTag by the (atespace, name).
+type ActorSnapshotTagRef = ResourceRef[*ateapipb.ActorSnapshotTag]
+
+// ActorSnapshotTagRefFromObjectRef converts an Ibjectref to an ActorSnapshotTagRef.
+func ActorSnapshotTagRefFromObjectRef(ref *ateapipb.ObjectRef) ActorSnapshotTagRef {
+	return resourceRefFromObjectRef[*ateapipb.ActorSnapshotTag](ref)
+}
+
+// ActorSnapshotTagRefFromActorSnapshotTag returns the reference addressing the
+// given tag.
+func ActorSnapshotTagRefFromActorSnapshotTag(t *ateapipb.ActorSnapshotTag) ActorSnapshotTagRef {
+	return ActorSnapshotTagRef{
 		Atespace: t.GetMetadata().GetAtespace(),
 		Name:     t.GetMetadata().GetName(),
 	}

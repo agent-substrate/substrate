@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -57,6 +58,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplNamespace, tmplN
 // opts mutate the actor before it is stored.
 func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplNamespace, tmplName string, actorState ateapipb.ActorState, opts ...func(*ateapipb.Actor)) {
 	t.Helper()
+
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status:                 &ateapipb.ActorStatus{State: actorState},
@@ -66,9 +68,7 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 	for _, opt := range opts {
 		opt(actor)
 	}
-	if _, err := st.CreateActor(ctx, actor); err != nil {
-		t.Fatalf("seed actor: %v", err)
-	}
+	storetest.MustCreateActor(t, ctx, st, actor)
 }
 
 // allActorStates enumerates every ActorState value, for exhaustive

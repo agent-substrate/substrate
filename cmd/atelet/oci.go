@@ -31,6 +31,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -76,7 +77,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -103,9 +104,25 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		}
 	}
 
-	img, err := imageCache.EnsureImage(ctx, ref)
-	if err != nil {
-		return fmt.Errorf("in imageCache.EnsureImage: %w", err)
+	var (
+		img          *imagecache.Image
+		imageVolumes []imagecache.ImageVolumeOverlay
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
+			return fmt.Errorf("in imageCache.EnsureImage: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		var err error
+		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
 	// Argv and env need only the image config; resolve them before writing
@@ -124,14 +141,15 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		extraDirs = append(extraDirs, vm.GetMountPath())
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
-		ImageDigest: img.Digest.String(),
-		Layers:      img.LayerDirs,
-		ExtraDirs:   extraDirs,
+		ImageDigest:  img.Digest.String(),
+		Layers:       img.LayerDirs,
+		ExtraDirs:    extraDirs,
+		ImageVolumes: imageVolumes,
 	}); err != nil {
 		return fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	ociSpec := buildActorOCISpec(actorUID, resolvedArgs, resolvedEnv, annotations, netns, volumes, volumeMounts, capabilities)
+	ociSpec := buildActorOCISpec(actorUID, containerName, resolvedArgs, resolvedEnv, annotations, netns, volumes, volumeMounts, capabilities, resources)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -142,6 +160,46 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 
 	return nil
+}
+
+// resolveImageVolumes pulls the image behind every image-typed volume this
+// container mounts and returns what the overlay spec needs to compose each.
+func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
+	mounted := make(map[string]bool, len(volumeMounts))
+	for _, vm := range volumeMounts {
+		mounted[vm.GetName()] = true
+	}
+
+	var wanted []*ateletpb.Volume
+	for _, vol := range volumes {
+		if vol.GetImage() == nil || !mounted[vol.GetName()] {
+			continue
+		}
+		wanted = append(wanted, vol)
+	}
+
+	// Pull the volumes concurrently; each entry lands at its own index so the
+	// spec order stays the template order.
+	out := make([]imagecache.ImageVolumeOverlay, len(wanted))
+	g, gctx := errgroup.WithContext(ctx)
+	for i, vol := range wanted {
+		g.Go(func() error {
+			img, err := imageCache.EnsureImage(gctx, vol.GetImage().GetReference())
+			if err != nil {
+				return fmt.Errorf("in imageCache.EnsureImage for volume %q: %w", vol.GetName(), err)
+			}
+			out[i] = imagecache.ImageVolumeOverlay{
+				Name:        vol.GetName(),
+				ImageDigest: img.Digest.String(),
+				Layers:      img.LayerDirs,
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // resolveActorEnv computes the final container environment from the image's ENV
@@ -203,11 +261,41 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 	return argv, nil
 }
 
+const (
+	// cpuQuotaPeriodUS is the CFS period the CPU quota is expressed against: a
+	// container limited to N milli-cores may run for N/1000 of every period.
+	cpuQuotaPeriodUS = 100000
+	// cpuQuotaMinUS is the smallest quota the kernel accepts. tg_set_cfs_bandwidth
+	// rejects a quota below 1ms, so a limit under
+	// cpuQuotaMinUS*1000/cpuQuotaPeriodUS milli-cores (10m) is raised to this
+	// floor rather than producing a spec the guest refuses.
+	cpuQuotaMinUS = 1000
+)
+
+// ociResources maps the resolved limits onto the OCI spec's linux.resources.
+// Returns nil when nothing is set, so the spec carries no linux.resources at
+// all for a container that declares no limits.
+func ociResources(r *ateletpb.ResourceLimits) *specs.LinuxResources {
+	if r == nil || (r.GetMemoryBytes() <= 0 && r.GetCpuMillis() <= 0) {
+		return nil
+	}
+	out := &specs.LinuxResources{}
+	if b := r.GetMemoryBytes(); b > 0 {
+		out.Memory = &specs.LinuxMemory{Limit: &b}
+	}
+	if m := r.GetCpuMillis(); m > 0 {
+		quota := max(m*cpuQuotaPeriodUS/1000, cpuQuotaMinUS)
+		period := uint64(cpuQuotaPeriodUS)
+		out.CPU = &specs.LinuxCPU{Quota: &quota, Period: &period}
+	}
+	return out
+}
+
 // buildActorOCISpec assembles the OCI runtime spec for an actor container from
 // already-resolved args, env and capabilities (see resolveProcessArgs,
 // resolveActorEnv and resolveCapabilities). An empty capabilities set means the
 // process runs with none, which is what the pause container gets.
-func buildActorOCISpec(actorUID string, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string) *specs.Spec {
+func buildActorOCISpec(actorUID, containerName string, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) *specs.Spec {
 	mounts := []specs.Mount{
 		{
 			Destination: "/proc",
@@ -292,6 +380,7 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 					Type: "mount",
 				},
 			},
+			Resources: ociResources(resources),
 		},
 		Annotations: annotations,
 	}
@@ -314,6 +403,9 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 			// System-info contents are generated by atelet; the workload only
 			// reads them.
 			srcPath = ateompath.SystemInfoVolumeRoot(actorUID, vm.GetName())
+			options = []string{"bind", "ro"}
+		case *ateletpb.Volume_Image:
+			srcPath = ateompath.ImageVolumeMountPath(actorUID, containerName, vm.GetName())
 			options = []string{"bind", "ro"}
 		default:
 			continue

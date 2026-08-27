@@ -21,7 +21,6 @@ import (
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 // tagActorSnapshot points tagName at snapshotRef with atespace scope.
@@ -64,8 +63,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	update := func(meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
 		meta.Atespace, meta.Name = testAtespace, tagName
 		return tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-			Tag:        &ateapipb.ActorSnapshotTag{Metadata: meta, Scope: scope},
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+			ActorSnapshotTag: &ateapipb.ActorSnapshotTag{Metadata: meta, Snapshot: snapshotRef, Scope: scope},
 		})
 	}
 
@@ -73,7 +71,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	// uid becomes stale.
 	staleUID := tagActorSnapshot(t, tc, snapshotRef, tagName).GetMetadata().GetUid()
 	if _, err := tc.client.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{
-		Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName},
+		ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName},
 	}); err != nil {
 		t.Fatalf("DeleteActorSnapshotTag failed: %v", err)
 	}
@@ -86,7 +84,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	}
 	// No preconditions
 	_, err := update(&ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.InvalidArgument, "[tag.metadata.uid: Required value, tag.metadata.version: Required value]")
+	assertGrpcError(t, err, codes.InvalidArgument, "[actor_snapshot_tag.metadata.uid: Required value, actor_snapshot_tag.metadata.version: Required value]")
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it
@@ -136,7 +134,7 @@ func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{
 				Atespace: testAtespace,
 				Name:     "does-not-exist",
@@ -146,7 +144,6 @@ func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
 			},
 			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})
 	assertGrpcError(t, err, codes.NotFound, "ActorSnapshot tag test-atespace/does-not-exist not found")
 }

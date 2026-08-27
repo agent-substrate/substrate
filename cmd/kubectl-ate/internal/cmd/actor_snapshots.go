@@ -24,7 +24,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 var (
@@ -71,13 +70,13 @@ var getActorSnapshotsCmd = &cobra.Command{
 			for _, name := range args {
 				ref := &ateapipb.ObjectRef{Atespace: snapshotAtespaceFlag, Name: name}
 				if snapshotTagRefFlag {
-					tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{Tag: ref})
+					tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: ref})
 					if err != nil {
 						return fmt.Errorf("failed to get actor snapshot tag %q: %w", name, err)
 					}
 					ref = tag.GetSnapshot()
 				}
-				snapshot, err := client.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: ref})
+				snapshot, err := client.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{ActorSnapshot: ref})
 				if err != nil {
 					return fmt.Errorf("failed to get actor snapshot %q: %w", name, err)
 				}
@@ -90,7 +89,7 @@ var getActorSnapshotsCmd = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("failed to list actor snapshots: %w", err)
 				}
-				snapshots = append(snapshots, resp.GetSnapshots()...)
+				snapshots = append(snapshots, resp.GetActorSnapshots()...)
 				pageToken = resp.GetNextPageToken()
 				if pageToken == "" {
 					break
@@ -171,7 +170,7 @@ var deleteActorSnapshotTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		_, err = client.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: deleteTagAtespaceFlag, Name: args[0]}})
+		_, err = client.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: deleteTagAtespaceFlag, Name: args[0]}})
 		if err != nil {
 			return fmt.Errorf("failed to delete actor snapshot tag: %w", err)
 		}
@@ -186,16 +185,13 @@ type actorSnapshotTagClient interface {
 }
 
 func updateActorSnapshotTagScope(ctx context.Context, client actorSnapshotTagClient, ref *ateapipb.ObjectRef, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
-	tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{Tag: ref})
+	tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: ref})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get actor snapshot tag %q: %w", ref.GetName(), err)
 	}
 	tag.Scope = scope
 
-	resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        tag,
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
-	})
+	resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{ActorSnapshotTag: tag})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update actor snapshot tag: %w", err)
 	}

@@ -36,7 +36,8 @@ import (
 // tests can assert they are cleared when the actor crashes.
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
-	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
+
+	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
@@ -50,9 +51,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 			},
 			InProgressSnapshotName: "reserved-snapshot",
 		},
-	}); err != nil {
-		t.Fatalf("seed actor: %v", err)
-	}
+	})
 }
 
 // seedWorker registers the worker referenced by seedActor's binding fields,
@@ -81,7 +80,7 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 			}
 		}
 	}
-	if err := st.CreateWorker(ctx, worker); err != nil {
+	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
 	}
 }
@@ -90,15 +89,13 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 // already cleared, e.g. by a prior release.
 func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
-	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
+	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status: &ateapipb.ActorStatus{
 			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			InProgressSnapshotName: "reserved-snapshot",
 		},
-	}); err != nil {
-		t.Fatalf("seed unbound actor: %v", err)
-	}
+	})
 }
 
 // assertCrashed reloads the actor and verifies it is CRASHED with its worker
@@ -203,7 +200,7 @@ func TestCrashActor(t *testing.T) {
 						},
 					},
 				}
-				if err := st.CreateWorker(ctx, worker); err != nil {
+				if _, err := st.CreateWorker(ctx, worker); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
 			},
@@ -435,7 +432,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 			},
 		},
 	}
-	if err := st.CreateWorker(ctx, worker); err != nil {
+	if _, err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 
@@ -458,9 +455,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 			},
 		},
 	}
-	if _, err := st.CreateActor(ctx, actor); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
+	storetest.MustCreateActor(t, ctx, st, actor)
 
 	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); err != nil {
 		t.Fatalf("crashActor: %v", err)
@@ -511,6 +506,32 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
 }
 
+// assertNoCrashMetricDatapoint fails if anything counted a crash. It is the
+// assertion for a path that transitions an actor without that being a fresh
+// crash — an actor already counted as crashed, or one that never crashed at all.
+func assertNoCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "ate.actor.crashes" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				t.Errorf("counted %d crash(es) with attrs %v, want none", dp.Value, dp.Attributes)
+			}
+		}
+	}
+}
+
 // failingUpdateWorkerStore wraps a store and fails every UpdateWorker call,
 // simulating a transient state-store error while releasing a worker.
 type failingUpdateWorkerStore struct {
@@ -518,8 +539,8 @@ type failingUpdateWorkerStore struct {
 	err error
 }
 
-func (f failingUpdateWorkerStore) UpdateWorker(context.Context, *ateapipb.Worker, int64) error {
-	return f.err
+func (f failingUpdateWorkerStore) UpdateWorker(context.Context, string, store.Precondition, func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	return nil, f.err
 }
 
 // A transient failure releasing the worker must not move the actor to the

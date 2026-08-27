@@ -38,6 +38,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discoverygrpc "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
@@ -47,6 +48,68 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
+
+// assertDualStackIngress checks an ingress listener keeps its 0.0.0.0 primary
+// and gains exactly one "::" socket on the same port.
+func assertDualStackIngress(t *testing.T, l *listenerv3.Listener, wantPort uint32) {
+	t.Helper()
+
+	sa := l.GetAddress().GetSocketAddress()
+	if sa.GetAddress() != "0.0.0.0" {
+		t.Errorf("Expected address '0.0.0.0', got %s", sa.GetAddress())
+	}
+	if sa.GetPortValue() != wantPort {
+		t.Errorf("Expected port %d, got %d", wantPort, sa.GetPortValue())
+	}
+
+	addrs := l.GetAdditionalAddresses()
+	if len(addrs) != 1 {
+		t.Fatalf("Expected 1 additional address on %s, got %d", l.GetName(), len(addrs))
+	}
+
+	asa := addrs[0].GetAddress().GetSocketAddress()
+	if asa.GetAddress() != "::" {
+		t.Errorf("Expected additional address '::', got %s", asa.GetAddress())
+	}
+	if asa.GetIpv4Compat() {
+		t.Error("Expected additional address Ipv4Compat to be false")
+	}
+	if asa.GetPortValue() != wantPort {
+		t.Errorf("Expected additional port %d, got %d", wantPort, asa.GetPortValue())
+	}
+}
+
+func assertHCMWebsocketUpgrade(t *testing.T, l *listenerv3.Listener) {
+	t.Helper()
+	if len(l.GetFilterChains()) == 0 || len(l.GetFilterChains()[0].GetFilters()) == 0 {
+		t.Fatalf("Expected at least one filter chain and filter")
+	}
+	filter := l.GetFilterChains()[0].GetFilters()[0]
+	if filter.GetName() != "envoy.filters.network.http_connection_manager" {
+		t.Errorf("Expected HCM filter, got '%s'", filter.GetName())
+	}
+
+	hcmAny := filter.GetTypedConfig()
+	hcm := &hcmv3.HttpConnectionManager{}
+	if err := hcmAny.UnmarshalTo(hcm); err != nil {
+		t.Fatalf("Failed to unmarshal HCM config: %v", err)
+	}
+
+	if len(hcm.GetUpgradeConfigs()) == 0 {
+		t.Errorf("Expected UpgradeConfigs to be populated")
+	} else {
+		upgradeFound := false
+		for _, cfg := range hcm.GetUpgradeConfigs() {
+			if cfg.GetUpgradeType() == "websocket" {
+				upgradeFound = true
+				break
+			}
+		}
+		if !upgradeFound {
+			t.Errorf("Expected 'websocket' in UpgradeConfigs")
+		}
+	}
+}
 
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
 	server := NewXdsServer(18000)
@@ -151,13 +214,9 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 		t.Errorf("Listener name '%s' is missing from snapshot listeners", IngressHTTPListener)
 	} else {
 		l := raw.(*listenerv3.Listener)
-		sa := l.GetAddress().GetSocketAddress()
-		if sa.GetPortValue() != 8081 {
-			t.Errorf("Expected port 8081, got %d", sa.GetPortValue())
-		}
-		if sa.GetAddress() != "0.0.0.0" {
-			t.Errorf("Expected address '0.0.0.0', got %s", sa.GetAddress())
-		}
+		assertDualStackIngress(t, l, 8081)
+
+		assertHCMWebsocketUpgrade(t, l)
 	}
 }
 
@@ -192,10 +251,7 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 		t.Errorf("Listener name '%s' is missing from snapshot listeners", IngressHTTPSListener)
 	} else {
 		l := raw.(*listenerv3.Listener)
-		sa := l.GetAddress().GetSocketAddress()
-		if sa.GetPortValue() != 8443 {
-			t.Errorf("Expected port 8443, got %d", sa.GetPortValue())
-		}
+		assertDualStackIngress(t, l, 8443)
 
 		// Verify the TLS config references the serving cert via SDS rather
 		// than embedding it: inline filename DataSources are read only once
@@ -354,16 +410,17 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	}
 	if raw, exists := listenersMap["connect_terminate"]; !exists {
 		t.Error("connect_terminate listener missing")
-	} else if sa := raw.(*listenerv3.Listener).GetAddress().GetSocketAddress(); sa.GetPortValue() != 8081 {
-		t.Errorf("Expected connect_terminate port 8081, got %d", sa.GetPortValue())
+	} else {
+		l := raw.(*listenerv3.Listener)
+		assertDualStackIngress(t, l, 8081)
+		assertHCMWebsocketUpgrade(t, l)
 	}
 	if raw, exists := listenersMap["connect_terminate_tls"]; !exists {
 		t.Error("connect_terminate_tls listener missing")
 	} else {
 		l := raw.(*listenerv3.Listener)
-		if sa := l.GetAddress().GetSocketAddress(); sa.GetPortValue() != 8444 {
-			t.Errorf("Expected connect_terminate_tls port 8444, got %d", sa.GetPortValue())
-		}
+		assertDualStackIngress(t, l, 8444)
+		assertHCMWebsocketUpgrade(t, l)
 		ts := l.GetFilterChains()[0].GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected connect_terminate_tls to be TLS-wrapped, got transport socket %q", ts.GetName())

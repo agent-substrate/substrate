@@ -309,12 +309,6 @@ func (s *Server) serveH2Connect(w http.ResponseWriter, r *http.Request, upstream
 // stream ends, it half-closes the actor connection and continues forwarding
 // actor output until that stream ends too.
 func relayIngressWithHalfClose(ctx context.Context, upstream net.Conn, clientReader io.Reader, clientWriter io.Writer, clientCloser io.Closer) {
-	stop := context.AfterFunc(ctx, func() {
-		_ = upstream.Close()
-		_ = clientCloser.Close()
-	})
-	defer stop()
-
 	done := make(chan struct{}, 2)
 	go func() {
 		_, _ = io.Copy(upstream, clientReader)
@@ -328,6 +322,8 @@ func relayIngressWithHalfClose(ctx context.Context, upstream net.Conn, clientRea
 	for range 2 {
 		select {
 		case <-ctx.Done():
+			_ = upstream.Close()
+			_ = clientCloser.Close()
 			return
 		case <-done:
 		}

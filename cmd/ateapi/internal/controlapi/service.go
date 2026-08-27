@@ -28,31 +28,37 @@ import (
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// Service implements ateapipb.Control
-type Service struct {
+// RPCService implements ateapipb.ControlServer and provides the implementation of
+// the RPC service.
+//
+// Methods on this service should be as light as possible, delegating to the
+// ServiceImpl for business logic and invariants.
+type RPCService struct {
 	ateapipb.UnimplementedControlServer
-	persistence           serviceStore
+	impl                  serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
-	actorTemplateLister   listersv1alpha1.ActorTemplateLister
 	workerPoolLister      listersv1alpha1.WorkerPoolLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
-	storageClassLister    storagev1listers.StorageClassLister
 	actorWorkflow         *ActorWorkflow
+	workerWorkflow        *WorkerWorkflow
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
 }
 
-var _ ateapipb.ControlServer = (*Service)(nil)
+var _ ateapipb.ControlServer = (*RPCService)(nil)
 
 // VolumePluginRegistry defines the interface for dynamic CSI plugin resolution.
 type VolumePluginRegistry interface {
 	GetPlugin(ctx context.Context, name string) (volume.VolumePluginControlPlane, error)
 }
 
-// NewService creates a service. instruments may be nil; the record helpers no-op.
-func NewService(
+// NewRPCService creates an instance of the ControlServer service. This is what
+// implements the outward-facing RPC interface.
+//
+// instruments may be nil; the record helpers no-op.
+func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
 	actorTemplateLister listersv1alpha1.ActorTemplateLister,
@@ -64,19 +70,19 @@ func NewService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
-) *Service {
-	s := &Service{
-		persistence:           persistence,
+) *RPCService {
+	impl := newServiceImpl(persistence, actorTemplateLister, storageClassLister)
+	s := &RPCService{
+		impl:                  impl,
 		workerCache:           workerCache,
-		actorTemplateLister:   actorTemplateLister,
 		workerPoolLister:      workerPoolLister,
 		csiDriverConfigLister: csiDriverConfigLister,
-		storageClassLister:    storageClassLister,
 		dialer:                dialer,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
 	}
-	s.actorWorkflow = NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
 
@@ -87,23 +93,29 @@ type serviceStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)
-	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
+	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
 	ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error)
-	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
-	GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
-	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
-	DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
-	AtespaceExists(ctx context.Context, name string) (bool, error)
+	CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
+	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
+	DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
 	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error)
 	DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
+	CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error)
+	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
+	ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error)
+	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
-	AcquireLock(ctx context.Context, key string) (*store.Lock, error)
+	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
+	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
+	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
 // GetPlugin retrieves a CSI volume plugin by driver name, dynamically discovering it if not present.
-func (s *Service) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
+func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.VolumePluginControlPlane, error) {
 	s.mu.RLock()
 	plugin, ok := s.volumePlugins[driverName]
 	s.mu.RUnlock()
@@ -120,4 +132,45 @@ func (s *Service) GetPlugin(ctx context.Context, driverName string) (volume.Volu
 	s.volumePlugins[driverName] = csiPlugin
 	s.mu.Unlock()
 	return csiPlugin, nil
+}
+
+// ServiceImpl implements store.Interface and provides the "middleware" layer
+// between the RPC and storage layers.  It enforces invariants and validation
+// rules, and may implement additional logic beyond the storage layer.
+//
+// Methods on this service should hold most of the logic.
+type ServiceImpl struct {
+	// This field is explicitly named to prevent accidentally satisfying
+	// methods we need to trap.
+	store store.Interface
+
+	actorTemplateLister listersv1alpha1.ActorTemplateLister
+	storageClassLister  storagev1listers.StorageClassLister
+}
+
+var _ store.Interface = (*ServiceImpl)(nil)
+
+// newServiceImpl creates an instance of the service's middleware
+// implementation layer.
+func newServiceImpl(
+	persistence store.Interface,
+	actorTemplateLister listersv1alpha1.ActorTemplateLister,
+	storageClassLister storagev1listers.StorageClassLister,
+) *ServiceImpl {
+	s := &ServiceImpl{
+		store:               persistence,
+		actorTemplateLister: actorTemplateLister,
+		storageClassLister:  storageClassLister,
+	}
+	return s
+}
+
+// Pass-through.
+func (s *ServiceImpl) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
+	return s.store.AcquireLease(ctx, key)
+}
+
+// Pass-through.
+func (s *ServiceImpl) DebugClearAll(ctx context.Context) error {
+	return s.store.DebugClearAll(ctx)
 }

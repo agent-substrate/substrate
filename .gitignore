@@ -53,3 +53,6 @@ Thumbs.db
 
 # Stray local build outputs (go build ./tools/... without -o)
 /validate-image-cache
+
+# Substrate agent workspace scratchpads
+.agents/scratch/

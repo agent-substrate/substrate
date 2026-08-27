@@ -24,6 +24,7 @@ import (
 )
 
 var deleteAtespaceFlag string
+var deleteActorAnyStateFlag bool
 
 var deleteActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
@@ -39,7 +40,8 @@ var deleteActorCmd = &cobra.Command{
 
 		actorRef := resources.ActorRef{Atespace: deleteAtespaceFlag, Name: args[0]}
 		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: actorRef.ToObjectRef(),
+			Actor:    actorRef.ToObjectRef(),
+			AnyState: deleteActorAnyStateFlag,
 		})
 		if err != nil {
 			return err
@@ -53,5 +55,6 @@ var deleteActorCmd = &cobra.Command{
 func init() {
 	deleteActorCmd.Flags().StringVarP(&deleteAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = deleteActorCmd.MarkFlagRequired("atespace")
+	deleteActorCmd.Flags().BoolVar(&deleteActorAnyStateFlag, "any-state", false, "Delete the actor from any state")
 	deleteCmd.AddCommand(deleteActorCmd)
 }
