@@ -58,11 +58,8 @@ mountOptions:
 // SetupCSI installs the hostpath and NFS CSI drivers used by external volume
 // demos. Kind only: both drivers are patched for the single-node Kind layout
 // and reach into the node container over docker.
-func (e *Env) SetupCSI(ctx context.Context) error {
+func (e *Env) SetupCSI(ctx context.Context, driver string) error {
 	log.Step("setup_csi")
-	if err := e.RequireKind("CSI setup"); err != nil {
-		return err
-	}
 	// Both drivers register themselves with a CSIDriverConfig, so the ate CRDs
 	// have to be in place even when CSI setup runs on its own rather than as
 	// part of deploy ate-system.
@@ -87,10 +84,29 @@ func (e *Env) SetupCSI(ctx context.Context) error {
 	if err := e.WaitForPodCertificateTrustBundles(ctx); err != nil {
 		return err
 	}
-	if err := e.setupCSIHostpath(ctx); err != nil {
-		return err
+
+	switch driver {
+	case "nfs":
+		return e.setupCSINFS(ctx)
+	case "hostpath":
+		if err := e.RequireKind("csi-hostpath"); err != nil {
+			return err
+		}
+		return e.setupCSIHostpath(ctx)
+	case "both", "true":
+		if err := e.RequireKind("csi-hostpath"); err != nil {
+			return err
+		}
+		if err := e.setupCSIHostpath(ctx); err != nil {
+			return err
+		}
+		return e.setupCSINFS(ctx)
+	case "none", "false", "":
+		log.Infof("Skipping CSI driver setup.")
+		return nil
+	default:
+		return fmt.Errorf("unknown CSI driver %q (valid options: nfs, hostpath, both, none)", driver)
 	}
-	return e.setupCSINFS(ctx)
 }
 
 func (e *Env) setupCSIHostpath(ctx context.Context) error {
@@ -235,8 +251,7 @@ func (e *Env) setupCSINFS(ctx context.Context) error {
 	log.Step("setup_csi_nfs")
 
 	if err := checkNFSDSupport(); err != nil {
-		log.Warnf("%v; skipping NFS CSI driver setup", err)
-		return nil
+		return err
 	}
 
 	deployDir := e.Cfg.Path("hack", "third_party", "csi-driver-nfs", "deploy")

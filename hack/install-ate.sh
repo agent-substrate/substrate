@@ -68,7 +68,8 @@ function usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
-  echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
+  echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
+  echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
@@ -604,10 +605,39 @@ deploy_crds() {
   run_ko apply -f manifests/ate-install/generated
 }
 
+require_kind_for_hostpath() {
+  if [[ "${ATE_INSTALL_KIND:-false}" != "true" ]]; then
+    echo "Error: the hostpath CSI driver is only supported on Kind." >&2
+    exit 1
+  fi
+}
+
 setup_csi() {
-  log_step "setup_csi"
-  "${ROOT}/hack/setup-csi-hostpath-kind.sh"
-  "${ROOT}/hack/setup-csi-nfs-kind.sh"
+  local driver="${SETUP_CSI:-none}"
+  case "${driver}" in
+    ""|none|false)
+      return
+      ;;
+  esac
+  log_step "setup_csi (${driver})"
+  case "${driver}" in
+    nfs)
+      "${ROOT}/hack/setup-csi-nfs-kind.sh"
+      ;;
+    hostpath)
+      require_kind_for_hostpath
+      "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+      ;;
+    both|true)
+      require_kind_for_hostpath
+      "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+      "${ROOT}/hack/setup-csi-nfs-kind.sh"
+      ;;
+    *)
+      echo "Error: unknown CSI driver \"${driver}\" (valid options: nfs, hostpath, both, none)." >&2
+      exit 1
+      ;;
+  esac
 }
 
 deploy_ate_system() {
@@ -658,13 +688,10 @@ deploy_ate_system() {
   # exist. The ghostunnel sidecar uses projected podCertificate and clusterTrustBundle
   # volumes which cannot be fulfilled until podcertcontroller is actively signing,
   # otherwise rollout of csi-hostpath-socat times out.
-  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
-    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-      setup_csi
-    else
-      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
-    fi
-  fi
+  #
+  # setup_csi is a no-op unless --setup-csi asked for a driver, and it is the
+  # one that decides which drivers need Kind, so there is no Kind gate here.
+  setup_csi
 
   local manifests=""
   manifests="$(render_ate_system_manifests)"
@@ -1144,7 +1171,10 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
-SETUP_CSI="${SETUP_CSI:-false}"
+# Valid values for SETUP_CSI: nfs, hostpath, both, none. Defaults to none: a
+# CSI driver is an opt-in extra, and NFS needs kernel modules a plain
+# workstation will not have loaded.
+SETUP_CSI="${SETUP_CSI:-none}"
 BENCHMARK_WORKER_COUNT=1
 BENCHMARK_SANDBOX_CLASS=gvisor
 # Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).
@@ -1221,8 +1251,13 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ATE_OTLP_ENDPOINT="${prescan_args[$((i + 1))]}"
       ;;
     --otlp-endpoint=*) ATE_OTLP_ENDPOINT="${prescan_args[i]#*=}" ;;
+    --setup-csi=*) SETUP_CSI="${prescan_args[i]#*=}" ;;
     --setup-csi)
-      SETUP_CSI=true
+      if (( i + 1 < ${#prescan_args[@]} )) && [[ "${prescan_args[$((i + 1))]}" != --* ]]; then
+        SETUP_CSI="${prescan_args[$((i + 1))]}"
+      else
+        SETUP_CSI="nfs"
+      fi
       ;;
   esac
 done
@@ -1285,13 +1320,20 @@ while [[ "$#" -gt 0 ]]; do
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;
+    --setup-csi=*)
+      SETUP_CSI="${1#*=}"
+      ensure_crds
+      setup_csi
+      ;;
     --setup-csi)
-      if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-        ensure_crds
-        setup_csi
+      if [[ "$#" -gt 1 && "$2" != --* ]]; then
+        shift
+        SETUP_CSI="$1"
       else
-        echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+        SETUP_CSI="nfs"
       fi
+      ensure_crds
+      setup_csi
       ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;

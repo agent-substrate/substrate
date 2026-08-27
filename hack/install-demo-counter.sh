@@ -63,11 +63,15 @@ demo-counter_render() {
   local ext_vol_mount_cmd=("-e" "/\${EXTERNAL_VOLUME_MOUNTS}/d")
   local ext_vol_spec_cmd=("-e" "/\${EXTERNAL_VOLUMES}/d")
   if [[ "${with_external_volume}" == "true" ]]; then
-    # csi-hostpath-sc only exists when hack/setup-csi-hostpath-kind.sh has run (via SETUP_CSI=true).
-    # Otherwise fall back to the default "standard" StorageClass.
-    local storage_class="standard"
-    if [[ "${SETUP_CSI:-false}" == "true" ]]; then
-      storage_class="csi-hostpath-sc"
+    # STORAGE_CLASS names the class outright; without it, fall back to whatever
+    # --setup-csi just installed, and to "standard" when it installed nothing.
+    local storage_class="${STORAGE_CLASS:-}"
+    if [[ -z "${storage_class}" ]]; then
+      case "${SETUP_CSI:-none}" in
+        hostpath) storage_class="csi-hostpath-sc" ;;
+        nfs|both|true) storage_class="csi-nfs-sc" ;;
+        *) storage_class="standard" ;;
+      esac
     fi
 
     validate_cmd=("-e" "s|\${VALIDATE_EXISTING_FILE_PATH_ARG}|  - --validate-existing-file-path=/external-data/test.txt|g")

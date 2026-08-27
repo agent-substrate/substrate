@@ -45,9 +45,9 @@ var ateCRDs = []string{
 
 // DeployOptions carries the per-invocation choices for DeployAteSystem.
 type DeployOptions struct {
-	// SetupCSI additionally installs the hostpath and NFS CSI drivers. Kind
-	// only.
-	SetupCSI bool
+	// SetupCSI additionally installs the CSI driver (nfs, hostpath, both, none).
+	// Kind only. The hostpath driver is Kind only.
+	SetupCSI string
 }
 
 // DeployAteSystem installs the whole control plane: CRDs, RBAC, the
@@ -97,13 +97,8 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.WaitForPodCertificateTrustBundles(ctx); err != nil {
 		return err
 	}
-
-	if opts.SetupCSI {
-		if !e.Cfg.Kind {
-			log.Warnf("CSI setup is only supported for Kind local installations. Skipping.")
-		} else if err := e.SetupCSI(ctx); err != nil {
-			return err
-		}
+	if err := e.SetupCSI(ctx, opts.SetupCSI); err != nil {
+		return err
 	}
 
 	// Enforce per-class SandboxConfig asset requirements. This is applied

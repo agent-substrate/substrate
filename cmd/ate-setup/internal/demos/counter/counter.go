@@ -27,16 +27,17 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// namespace is the pool's k8s namespace; it doubles as the atespace holding
-// the demo's ActorTemplate.
-const namespace = "ate-demo-counter"
+const (
+	namespace = "ate-demo-counter"
+	template  = "demos/counter/counter-template.yaml.tmpl"
 
-// externalVolumeValues fills the optional external-volume placeholder lines
-// of the counter template manifest, which a plain deploy drops.
-func externalVolumeValues(e *steps.Env) map[string]string {
-	storageClass := "standard"
-	if e.Cfg.Kind {
-		storageClass = "csi-hostpath-sc"
+	defaultStorageClass = "standard"
+)
+
+func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
+	sc := defaultStorageClass
+	if d.storageClass != "" {
+		sc = d.storageClass
 	}
 	return map[string]string{
 		"VALIDATE_EXISTING_FILE_PATH_ARG": "  - --validate-existing-file-path=/external-data/test.txt",
@@ -46,7 +47,7 @@ func externalVolumeValues(e *steps.Env) map[string]string {
 			"  type: ExternalVolumeTemplate\n" +
 			"  externalVolumeTemplate:\n" +
 			"    capacity: 1Gi\n" +
-			"    storageClassName: " + storageClass,
+			"    storageClassName: " + sc,
 	}
 }
 
@@ -56,6 +57,7 @@ type demo struct {
 	demos.Substrate
 
 	withExternalVolume bool
+	storageClass       string
 }
 
 func init() {
@@ -77,6 +79,8 @@ func init() {
 func (d *demo) Flags(fs *pflag.FlagSet) {
 	fs.BoolVar(&d.withExternalVolume, "with-external-volume", false,
 		"Attach an external volume and validate a pre-seeded file on it (run \"setup csi\" first)")
+	fs.StringVar(&d.storageClass, "storage-class", defaultStorageClass,
+		"StorageClass backing the external volume, e.g. csi-nfs-sc or csi-hostpath-sc. Must be used --with-external-volume=true.")
 }
 
 // renderValues opts the template's external-volume lines in when the flag is
@@ -85,5 +89,5 @@ func (d *demo) renderValues(_ context.Context, e *steps.Env) (map[string]string,
 	if !d.withExternalVolume {
 		return nil, nil
 	}
-	return externalVolumeValues(e), nil
+	return d.externalVolumeValues(e), nil
 }

@@ -95,6 +95,7 @@ func init() {
 		deployPostgresCmd,
 	)
 
-	deployAteSystemCmd.Flags().BoolVar(&deployOpts.SetupCSI, "setup-csi", false,
-		"Also install the hostpath and NFS CSI drivers (Kind only)")
+	deployAteSystemCmd.Flags().StringVar(&deployOpts.SetupCSI, "setup-csi", "none",
+		"Also install CSI driver (nfs, hostpath, both, none; default: none)")
+	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
 }

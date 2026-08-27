@@ -29,23 +29,43 @@ import (
 // the ActorTemplate it is created as. The drop branch is covered by the
 // sweep test in the demos package.
 func TestExternalVolumeRenders(t *testing.T) {
-	e := demotest.Env(t)
-
-	manifest, err := demos.Render(e, "demos/counter/counter-template.yaml.tmpl", externalVolumeValues(e), nil)
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
-	demotest.AssertRenderedActorTemplate(t, manifest,
-		resources.ActorTemplateRef{Atespace: namespace, Name: "counter"})
-
-	for _, want := range []string{
-		"--validate-existing-file-path=/external-data/test.txt",
-		"mountPath: /external-data",
-		"externalVolumeTemplate:",
-		"storageClassName: standard",
+	for _, tc := range []struct {
+		name         string
+		storageClass string
+		wantSC       string
+	}{
+		{
+			name:         "unset",
+			storageClass: "",
+			wantSC:       "storageClassName: standard",
+		},
+		{
+			name:         "explicit",
+			storageClass: "csi-nfs-sc",
+			wantSC:       "storageClassName: csi-nfs-sc",
+		},
 	} {
-		if !strings.Contains(string(manifest), want) {
-			t.Errorf("rendered manifest is missing %q", want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			e := demotest.Env(t)
+			d := &demo{storageClass: tc.storageClass}
+
+			manifest, err := demos.Render(e, template, d.externalVolumeValues(e), nil)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			demotest.AssertRenderedActorTemplate(t, manifest, resources.ActorTemplateRef{Atespace: namespace, Name: "counter"})
+
+			for _, want := range []string{
+				"--validate-existing-file-path=/external-data/test.txt",
+				"mountPath: /external-data",
+				"type: ExternalVolumeTemplate",
+				"externalVolumeTemplate:",
+				tc.wantSC,
+			} {
+				if !strings.Contains(string(manifest), want) {
+					t.Errorf("rendered manifest is missing %q", want)
+				}
+			}
+		})
 	}
 }

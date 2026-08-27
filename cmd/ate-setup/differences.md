@@ -209,10 +209,10 @@ stdout/stderr split matches under CI log capture.
 
 ## Known differences worth flagging
 
-**`--setup-csi` on a non-Kind cluster.** The shell warns and continues;
-`ate-setup setup csi` is a hard error. CSI setup only ever worked on Kind, so
-the warning had nothing to offer a GKE caller but a slower path to the same
-outcome.
+**`--setup-csi` on a non-Kind cluster.** Both installers now accept `nfs` off
+Kind — only the hostpath plugin is patched for the single-node Kind layout, and
+both reject `hostpath` and `both` there with a hard error rather than the
+shell's old warn-and-continue.
 
 ## Testing
 
