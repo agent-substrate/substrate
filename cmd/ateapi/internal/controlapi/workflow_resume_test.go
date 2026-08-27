@@ -112,7 +112,7 @@ func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &updateWorkerErrorStore{Interface: persistence, err: store.ErrNotFound}
 	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}}
+	tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}})
 
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -133,7 +133,7 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	actor, wc := seedAssignFixture(t, ctx, persistence)
 	st := &updateWorkerErrorStore{Interface: persistence, err: store.ErrVersionConflict}
 	w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}}
+	tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}})
 
 	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -177,9 +177,9 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "actor-uid"},
 	}
-	tmpl := &atev1alpha1.ActorTemplate{
+	tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
-	}
+	})
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
 	if status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no free workers)", err)
@@ -252,9 +252,9 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorkerInBackground(t *testin
 	}
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &atev1alpha1.ActorTemplate{
+	tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
-	}
+	})
 	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt() error = %v, want nil (release must not fail the resume)", err)
@@ -350,9 +350,9 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	}
 
 	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &atev1alpha1.ActorTemplate{
+	tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
-	}
+	})
 	_, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("assignWorkerAttempt() on retry = %v, want nil (must re-pick a free worker)", err)
@@ -496,9 +496,9 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 			}}
 
 			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
-			tmpl := &atev1alpha1.ActorTemplate{
+			tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 				Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
-			}
+			})
 			refreshed, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 
 			if tc.wantRetry {
@@ -624,7 +624,7 @@ func TestEnsureWorkerAssigned_RejectsNonResumableStates(t *testing.T) {
 			continue
 		}
 		actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: st}, Metadata: &ateapipb.ResourceMetadata{Name: "id1", Uid: "actor-uid-1"}}
-		_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Name: "id1"}, actor, &atev1alpha1.ActorTemplate{})
+		_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Name: "id1"}, actor, mustTemplateFromCRD(&atev1alpha1.ActorTemplate{}))
 		assertPrerequisiteResult(t, st, err, false)
 	}
 }
@@ -823,7 +823,7 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 					},
 				},
 			}
-			tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}}
+			tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}})
 			_, err = w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
 			if got := status.Code(err); got != tt.wantCode {
 				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)

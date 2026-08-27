@@ -178,6 +178,51 @@ func TestCreateActor_TemplateNotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.FailedPrecondition, fmt.Sprintf("ActorTemplate %s/non-existent not found", ns))
 }
 
+// TestCreateActor_RejectsTemplateMatchExpressions pins the equality-only
+// selector contract: converting the template drops matchExpressions, which
+// would schedule the actor wider than the template declares, so CreateActor
+// must refuse instead.
+func TestCreateActor_RejectsTemplateMatchExpressions(t *testing.T) {
+	ns := namespaceForTest("ns-create-matchexpr")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	template := &atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-expr", Namespace: ns},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://fake-fake-fake"},
+			Containers: []atev1alpha1.Container{{
+				Name:    "main",
+				Image:   "main@sha256:abc",
+				Command: []string{"/main"},
+			}},
+			WorkerSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{poolLabelKey: ns},
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"1"}},
+				},
+			},
+		},
+	}
+	if _, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), template, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create actor template: %v", err)
+	}
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, err := tc.actorTemplateLister.ActorTemplates(ns).Get("tmpl-expr")
+		return err == nil, nil
+	}); err != nil {
+		t.Fatalf("template never appeared in the lister: %v", err)
+	}
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl-expr",
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition,
+		fmt.Sprintf("ActorTemplate %s/tmpl-expr workerSelector uses matchExpressions; only matchLabels is supported", ns))
+}
+
 // TestCreateActor_Duplicate tests that creating an actor with an existing ID fails.
 func TestCreateActor_Duplicate(t *testing.T) {
 	ns := namespaceForTest("ns-create-dup")

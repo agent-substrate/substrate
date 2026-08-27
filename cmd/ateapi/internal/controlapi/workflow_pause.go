@@ -25,7 +25,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
@@ -38,7 +37,7 @@ import (
 func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
-	var actorTemplate *atev1alpha1.ActorTemplate
+	var actorTemplate *ateapipb.ActorTemplate
 	var wireSnapshotScope string
 	// Set just before finalize; nil until then, so earlier exits label
 	// themselves from the record they hold.
@@ -95,7 +94,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 }
 
 // loadActorForPause fetches the current actor record and its template.
-func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *atev1alpha1.ActorTemplate, err error) {
+func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForPause")
 	defer func() { err = done(err) }()
 
@@ -103,9 +102,13 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 	if err != nil {
 		return nil, nil, err
 	}
-	actorTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
+	crdTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
 	if err != nil {
 		return nil, nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+	}
+	actorTemplate, err := actorTemplateFromCRD(crdTemplate)
+	if err != nil {
+		return nil, nil, err
 	}
 	return actor, actorTemplate, nil
 }
@@ -153,7 +156,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 // the once-minted snapshot name, so a re-entered workflow re-sends the same
 // semantic request; once atelet's Checkpoint is idempotent on those keys this
 // step becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (wireSnapshotScope string, err error) {
+func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletPause")
 	defer func() { err = done(err) }()
 
@@ -200,7 +203,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 				SnapshotName: actor.GetStatus().GetInProgressLocalSnapshotName(),
 			},
 		},
-		Scope:    toAteletSnapshotScope(actorTemplate.Spec.SnapshotsConfig.OnPause),
+		Scope:    actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause()),
 		ActorUid: actor.GetMetadata().Uid,
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
@@ -216,7 +219,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 // never be resumed. It re-reads the actor first so an out-of-band transition
 // (e.g. the syncer crashing the actor after its worker died) is not
 // overwritten: with no assignment left there is nothing to finalize.
-func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
 
@@ -269,7 +272,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", actorRef))
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		}
-		contentScope := toActorSnapshotContentScope(actorTemplate.Spec.SnapshotsConfig.OnPause)
+		contentScope := effectiveContentScope(actorTemplate.GetSnapshotsConfig().GetOnPause())
 		sandboxClass := ""
 		if worker != nil {
 			sandboxClass = worker.GetSandboxClass()

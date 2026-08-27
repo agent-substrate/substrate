@@ -15,8 +15,8 @@ set. The asset set is five files:
 
 These helpers assemble the asset set for your node arch, stage it into the cluster's rustfs
 S3 bucket, and the demo manifest's `SandboxConfig` points at it. When `/dev/kvm` is
-available, `hack/create-kind-cluster.sh` mounts it into the node and labels the node
-`ate.dev/sandboxClass=microvm`.
+available, `hack/create-kind-cluster.sh` mounts it into the node; atelet then advertises
+it as a device, which is what places micro-VM workers there.
 
 > [!TIP]
 > `hack/run-microvm-demo.sh` automates the full bring-up below (assets, control plane,
@@ -34,7 +34,7 @@ available, `hack/create-kind-cluster.sh` mounts it into the node and labels the 
 
 2. **Bring up the cluster + control plane:**
    ```sh
-   hack/create-kind-cluster.sh        # mounts /dev/kvm, labels node ate.dev/sandboxClass=microvm
+   hack/create-kind-cluster.sh        # mounts /dev/kvm into the nodes
    hack/install-ate-kind.sh           # control plane + rustfs (bucket: ate-snapshots)
    ```
 

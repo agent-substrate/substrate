@@ -181,7 +181,7 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 // restore; snapshotScope applies to all three and is what separates a restore
 // combined with the template's golden state from a plain one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
-func lifecycleOpAttrs(actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
+func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		ateattr.TemplateNameKey.String(actor.GetActorTemplateName()),
 		ateattr.TemplateNamespaceKey.String(actor.GetActorTemplateNamespace()),
@@ -189,7 +189,7 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 	if template != nil {
-		attrs = append(attrs, ateattr.SandboxClassKey.String(string(template.Spec.SandboxClass)))
+		attrs = append(attrs, ateattr.SandboxClassKey.String(sandboxClassString(template.GetSandboxConfig().GetSandboxClass())))
 	}
 	if snapshotKind != "" {
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))
