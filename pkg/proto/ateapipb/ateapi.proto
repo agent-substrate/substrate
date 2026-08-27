@@ -1214,6 +1214,7 @@ message MintCertRequest {
 enum ActorCertificatePurpose {
   ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
   ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
+  // Keep this in sync with MintCertRequest.purpose's maximum.
 }
 
 message MintCertResponse {
