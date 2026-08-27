@@ -69,7 +69,7 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 
 `docs/metrics/registry/metrics.yaml` is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. It defines every metric instrument the ate system components emit, and the permitted values of each label. Read it to find an instrument or its labels.
 
-If you add or rename an instrument, or add a metric label, update it and run `hack/verify/verify-metrics.sh`. `make verify` runs the same check.
+If you add or rename an instrument, or add a metric label, update it and run `hack/verify/metrics.sh`. `make verify` runs the same check.
 
 `docs/metrics/substrate.yaml` holds the rules Weaver cannot express: the cardinality rules, the known exceptions, and the subsystems that emit no metrics. Read `blind_spots` before you attribute a fault to a component.
 

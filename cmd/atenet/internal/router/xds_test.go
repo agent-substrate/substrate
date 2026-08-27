@@ -38,6 +38,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discoverygrpc "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
@@ -75,6 +76,38 @@ func assertDualStackIngress(t *testing.T, l *listenerv3.Listener, wantPort uint3
 	}
 	if asa.GetPortValue() != wantPort {
 		t.Errorf("Expected additional port %d, got %d", wantPort, asa.GetPortValue())
+	}
+}
+
+func assertHCMWebsocketUpgrade(t *testing.T, l *listenerv3.Listener) {
+	t.Helper()
+	if len(l.GetFilterChains()) == 0 || len(l.GetFilterChains()[0].GetFilters()) == 0 {
+		t.Fatalf("Expected at least one filter chain and filter")
+	}
+	filter := l.GetFilterChains()[0].GetFilters()[0]
+	if filter.GetName() != "envoy.filters.network.http_connection_manager" {
+		t.Errorf("Expected HCM filter, got '%s'", filter.GetName())
+	}
+
+	hcmAny := filter.GetTypedConfig()
+	hcm := &hcmv3.HttpConnectionManager{}
+	if err := hcmAny.UnmarshalTo(hcm); err != nil {
+		t.Fatalf("Failed to unmarshal HCM config: %v", err)
+	}
+
+	if len(hcm.GetUpgradeConfigs()) == 0 {
+		t.Errorf("Expected UpgradeConfigs to be populated")
+	} else {
+		upgradeFound := false
+		for _, cfg := range hcm.GetUpgradeConfigs() {
+			if cfg.GetUpgradeType() == "websocket" {
+				upgradeFound = true
+				break
+			}
+		}
+		if !upgradeFound {
+			t.Errorf("Expected 'websocket' in UpgradeConfigs")
+		}
 	}
 }
 
@@ -180,7 +213,10 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 	if raw, exists := listenersMap[IngressHTTPListener]; !exists {
 		t.Errorf("Listener name '%s' is missing from snapshot listeners", IngressHTTPListener)
 	} else {
-		assertDualStackIngress(t, raw.(*listenerv3.Listener), 8081)
+		l := raw.(*listenerv3.Listener)
+		assertDualStackIngress(t, l, 8081)
+
+		assertHCMWebsocketUpgrade(t, l)
 	}
 }
 
@@ -375,13 +411,16 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	if raw, exists := listenersMap["connect_terminate"]; !exists {
 		t.Error("connect_terminate listener missing")
 	} else {
-		assertDualStackIngress(t, raw.(*listenerv3.Listener), 8081)
+		l := raw.(*listenerv3.Listener)
+		assertDualStackIngress(t, l, 8081)
+		assertHCMWebsocketUpgrade(t, l)
 	}
 	if raw, exists := listenersMap["connect_terminate_tls"]; !exists {
 		t.Error("connect_terminate_tls listener missing")
 	} else {
 		l := raw.(*listenerv3.Listener)
 		assertDualStackIngress(t, l, 8444)
+		assertHCMWebsocketUpgrade(t, l)
 		ts := l.GetFilterChains()[0].GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected connect_terminate_tls to be TLS-wrapped, got transport socket %q", ts.GetName())

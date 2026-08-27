@@ -181,7 +181,10 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	service := controlapi.NewRPCService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
 
 	// 5. Start REAL gRPC Server for ATE API
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
+	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		ateinterceptors.ServerUnaryInterceptor,
+		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+	))
 	ateapipb.RegisterControlServer(grpcServer, service)
 
 	lis, err := net.Listen("tcp", "localhost:0")

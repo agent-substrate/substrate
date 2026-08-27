@@ -1,0 +1,127 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-jupyter
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: jupyter
+  namespace: ate-demo-jupyter
+  labels:
+    workload: jupyter
+spec:
+  replicas: 1
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: jupyter
+  namespace: ate-demo-jupyter
+spec:
+  containers:
+  - name: jupyter
+    image: "quay.io/jupyter/base-notebook@sha256:23fbe16371af3c0fdc833fa0962b42fd07811e152b821ff51d19a8d6e9cc86cf"
+    command:
+    - jupyter
+    - lab
+    - "--allow-root"
+    - "--ServerApp.token=''"
+    - "--ServerApp.password=''"
+    - "--ServerApp.allow_origin='*'"
+    - "--ServerApp.disable_check_xsrf=True"
+    - "--port=80"
+    - "--ip=0.0.0.0"
+    readyz:
+      httpGet:
+        path: /api
+        port: 80
+  workerSelector:
+    matchLabels:
+      workload: jupyter
+  snapshotsConfig:
+    onPause: Full
+    location: gs://${BUCKET_NAME}/ate-demo-jupyter/
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jupyter-proxy-config
+  namespace: ate-demo-jupyter
+data:
+  nginx.conf: |
+    events {}
+    http {
+      server {
+        listen 80;
+        location / {
+          proxy_pass http://atenet-router.ate-system.svc.cluster.local;
+          proxy_set_header Host jupyter-notebook.demo.actors.resources.substrate.ate.dev;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jupyter-proxy
+  namespace: ate-demo-jupyter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jupyter-proxy
+  template:
+    metadata:
+      labels:
+        app: jupyter-proxy
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+      volumes:
+      - name: config
+        configMap:
+          name: jupyter-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jupyter-proxy
+  namespace: ate-demo-jupyter
+spec:
+  type: ClusterIP
+  selector:
+    app: jupyter-proxy
+  ports:
+  - port: 80
+    targetPort: 80

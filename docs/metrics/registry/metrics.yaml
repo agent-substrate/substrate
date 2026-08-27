@@ -17,7 +17,7 @@
 # permitted values of each label. Use it as the only source of this data.
 #
 # `weaver registry check -r docs/metrics/registry` validates this file.
-# `hack/verify/verify-metrics.sh` runs that command in CI.
+# `hack/verify/metrics.sh` runs that command in CI.
 #
 # Weaver permits only `groups` and `imports` at the top level. Thus the rules
 # that Weaver cannot hold live in docs/metrics/substrate.yaml. That file is

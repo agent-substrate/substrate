@@ -178,9 +178,7 @@ func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace s
 func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
-	errs := Validate_CreateActorRequest(ctx, op, nil, req, nil)
-	errs = append(errs, validateNoUnknownFields(req.Actor, field.NewPath("actor"))...)
-	return errs
+	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
@@ -337,9 +335,7 @@ func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRe
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
 	op := operation.Operation{Type: operation.Create}
-	errs := Validate_UpdateActorRequest(ctx, op, nil, req, nil)
-	errs = append(errs, validateNoUnknownFields(req.Actor, field.NewPath("actor"))...)
-	return errs
+	return Validate_UpdateActorRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {

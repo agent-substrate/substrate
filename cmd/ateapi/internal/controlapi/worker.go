@@ -126,9 +126,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 func validateCreateWorkerRequest(ctx context.Context, req *ateapipb.CreateWorkerRequest) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
-	errs := Validate_CreateWorkerRequest(ctx, op, nil, req, nil)
-	errs = append(errs, validateNoUnknownFields(req.Worker, field.NewPath("worker"))...)
-	return errs
+	return Validate_CreateWorkerRequest(ctx, op, nil, req, nil)
 }
 
 // UpdateWorker replaces the stored Worker with the one the request carries.
@@ -196,9 +194,7 @@ func validateUpdateWorkerRequest(ctx context.Context, req *ateapipb.UpdateWorker
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
 	op := operation.Operation{Type: operation.Create}
-	errs := Validate_UpdateWorkerRequest(ctx, op, nil, req, nil)
-	errs = append(errs, validateNoUnknownFields(req.Worker, field.NewPath("worker"))...)
-	return errs
+	return Validate_UpdateWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
