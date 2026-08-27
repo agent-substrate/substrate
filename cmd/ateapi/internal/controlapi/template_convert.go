@@ -15,18 +15,73 @@
 package controlapi
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"sort"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// actorTemplateGetter is the storage subset template resolution needs.
+type actorTemplateGetter interface {
+	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
+}
+
+// errActorTemplateNotFound matches (via errors.Is) resolution failures where
+// the actor names a template that does not exist. Most callers return the
+// error as is — it already carries FailedPrecondition — while delete
+// tolerates it and cleans up without the template.
+var errActorTemplateNotFound = status.New(codes.FailedPrecondition, "actor template not found").Err()
+
+// resolveActorTemplate resolves an actor's template from whichever reference
+// form it carries: the substrate ActorTemplate resource when actor_template
+// is set, the ActorTemplate CRD otherwise. A missing template surfaces as a
+// templateNotFoundError either way.
+func resolveActorTemplate(ctx context.Context, st actorTemplateGetter, lister listersv1alpha1.ActorTemplateLister, actor *ateapipb.Actor) (*ateapipb.ActorTemplate, error) {
+	if ref := actor.GetActorTemplate(); ref != nil {
+		templateRef := resources.ActorTemplateRefFromObjectRef(ref)
+		template, err := st.GetActorTemplate(ctx, templateRef)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("%w; ObjectRef: %s ", errActorTemplateNotFound, templateRef)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+		}
+		return template, nil
+	}
+	// TODO: remove this fallback when we cut over to substrate resources.
+	crd, err := lister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w; CRD %s/%s ", errActorTemplateNotFound, actor.GetActorTemplateNamespace(), actor.GetActorTemplateName())
+		}
+		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+	}
+	return actorTemplateFromCRD(crd)
+}
+
+// actorTemplateObjectRef returns a fresh copy of the actor's substrate
+// template reference, or nil for CRD-backed actors — fresh so records built
+// from it never alias the actor message.
+func actorTemplateObjectRef(actor *ateapipb.Actor) *ateapipb.ObjectRef {
+	ref := actor.GetActorTemplate()
+	if ref == nil {
+		return nil
+	}
+	return &ateapipb.ObjectRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
+}
 
 // actorTemplateFromCRD projects an ActorTemplate CRD onto the substrate
 // ActorTemplate proto, so the workflows handle a single template type while

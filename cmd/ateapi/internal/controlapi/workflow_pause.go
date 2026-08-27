@@ -102,11 +102,7 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 	if err != nil {
 		return nil, nil, err
 	}
-	crdTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
-	if err != nil {
-		return nil, nil, fmt.Errorf("while getting ActorTemplate: %w", err)
-	}
-	actorTemplate, err := actorTemplateFromCRD(crdTemplate)
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
 	if err != nil {
 		return nil, nil, err
 	}

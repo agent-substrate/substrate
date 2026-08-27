@@ -109,11 +109,7 @@ func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resour
 	if err != nil {
 		return nil, nil, err
 	}
-	crdTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
-	if err != nil {
-		return nil, nil, fmt.Errorf("while getting ActorTemplate: %w", err)
-	}
-	actorTemplate, err := actorTemplateFromCRD(crdTemplate)
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -388,6 +384,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 				SourceActorVersion:     latestActor.GetStatus().GetInProgressSnapshotSourceActorVersion(),
 				ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
 				ActorTemplateName:      latestActor.GetActorTemplateName(),
+				ActorTemplate:          actorTemplateObjectRef(latestActor),
 				ActorTemplateUid:       actorTemplate.GetMetadata().GetUid(),
 				ContentScope:           commitSnapshotScope(actorRef.Atespace, actorTemplate),
 				SnapshotUri:            snapshotURI.String(),

@@ -172,11 +172,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		return actor, nil, src, nil
 	}
 
-	crdTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
-	if err != nil {
-		return nil, nil, src, fmt.Errorf("while getting ActorTemplate: %w", err)
-	}
-	actorTemplate, err := actorTemplateFromCRD(crdTemplate)
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
 	if err != nil {
 		return nil, nil, src, err
 	}
@@ -514,15 +510,19 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	assignment := &ateapipb.ActorAssignment{
-		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-			Namespace: actor.GetActorTemplateNamespace(),
-			Name:      actor.GetActorTemplateName(),
-		},
 		Actor: &ateapipb.ObjectRef{
 			Atespace: actor.GetMetadata().GetAtespace(),
 			Name:     actor.GetMetadata().GetName(),
 		},
 		ActorUid: actor.GetMetadata().GetUid(),
+	}
+	if ref := actorTemplateObjectRef(actor); ref != nil {
+		assignment.ActorTemplateRef = ref
+	} else {
+		assignment.ActorTemplate = &ateapipb.KubeNamespacedObjectRef{
+			Namespace: actor.GetActorTemplateNamespace(),
+			Name:      actor.GetActorTemplateName(),
+		}
 	}
 
 	// Workers() returns pointers directly from the cache, so the claim is written

@@ -137,8 +137,8 @@ type WriteRAMRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name of the array to be written to
 	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	// size of bytes to be written
-	Size          int32     `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	// size of bytes to be written, with an optional unit suffix (e.g. "2Gi")
+	Size          string    `protobuf:"bytes,2,opt,name=size,proto3" json:"size,omitempty"`
 	WriteMode     WriteMode `protobuf:"varint,3,opt,name=write_mode,json=writeMode,proto3,enum=glutton.WriteMode" json:"write_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -181,11 +181,11 @@ func (x *WriteRAMRequest) GetKey() string {
 	return ""
 }
 
-func (x *WriteRAMRequest) GetSize() int32 {
+func (x *WriteRAMRequest) GetSize() string {
 	if x != nil {
 		return x.Size
 	}
-	return 0
+	return ""
 }
 
 func (x *WriteRAMRequest) GetWriteMode() WriteMode {
@@ -773,7 +773,7 @@ const file_glutton_proto_rawDesc = "" +
 	"\rglutton.proto\x12\aglutton\"j\n" +
 	"\x0fWriteRAMRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x05R\x04size\x121\n" +
+	"\x04size\x18\x02 \x01(\tR\x04size\x121\n" +
 	"\n" +
 	"write_mode\x18\x03 \x01(\x0e2\x12.glutton.WriteModeR\twriteMode\"\x12\n" +
 	"\x10WriteRAMResponse\"k\n" +

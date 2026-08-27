@@ -28,7 +28,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -72,16 +71,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	// will still exist later.  Checking it here produces a nice error UX, but
 	// we still have to handle the template not existing later, which makes the
 	// UX inconsistent, at best.  Is it actually worth checking at all?
-	templateNamespace := inActor.GetActorTemplateNamespace()
-	templateName := inActor.GetActorTemplateName()
-	crdTemplate, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
-		}
-		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
-	}
-	template, err := actorTemplateFromCRD(crdTemplate)
+	template, err := resolveActorTemplate(ctx, s.store, s.actorTemplateLister, inActor)
 	if err != nil {
 		return nil, err
 	}
