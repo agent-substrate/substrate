@@ -82,9 +82,10 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	if uid == staleUID {
 		t.Fatalf("recreated tag reused uid %s, want a fresh one", uid)
 	}
-	// No preconditions
+	// No preconditions. Presence of the guards is the store's to enforce, so
+	// the rejection carries its wording rather than field paths.
 	_, err := update(&ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.InvalidArgument, "[actor_snapshot_tag.metadata.uid: Required value, actor_snapshot_tag.metadata.version: Required value]")
+	assertGrpcError(t, err, codes.InvalidArgument, fmt.Sprintf("while updating actor snapshot tag %s/%s: persistence: precondition required: uid", testAtespace, tagName))
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it

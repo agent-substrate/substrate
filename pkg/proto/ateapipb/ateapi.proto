@@ -988,7 +988,8 @@ message ListActorSnapshotsResponse {
 
 message CreateActorSnapshotTagRequest {
   // The tag to create.
-  // +k8s:opaqueType # until this request is converted to declarative validation
+  //
+  // +k8s:required
   ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
@@ -1001,12 +1002,16 @@ message UpdateActorSnapshotTagRequest {
   // actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
   // are required preconditions
   //
+  // +k8s:required
   // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
   ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
 message DeleteActorSnapshotTagRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_snapshot_tag = 1;
 }
 
