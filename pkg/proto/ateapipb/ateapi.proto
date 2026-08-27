@@ -113,12 +113,25 @@ service Control {
 }
 
 message LocalSnapshotInfo {
-  // The name of the local checkpoint on each of the nodes below.
+  // The name of the local checkpoint on each of the nodes below. Checkpoint
+  // names are server-generated UUIDs, but any resource name is valid here.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string snapshot_name = 1;
+
   // Node VMs that have local snapshots for this actor, while it's PAUSED.
+  //
+  // +k8s:optional
+  // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:format=k8s-long-name
   repeated string node_vms_with_local_snapshots = 2;
+
   // Scope the pause checkpoint captured (the template's onPause at pause
-  // time).
+  // time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
+  //
+  // +k8s:optional
+  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 3;
 }
 
@@ -129,6 +142,7 @@ enum SnapshotContentScope {
   SNAPSHOT_CONTENT_SCOPE_FULL = 1;
   // Captures durable data without process memory or root filesystem changes.
   SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+  // Keep this in sync with LocalSnapshotInfo.content_scope's maximum.
 }
 
 enum ActorSnapshotTagScope {
@@ -327,7 +341,8 @@ message ActorStatus {
   ObjectRef latest_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
-  // TODO: Add DV (optional, need to recurse into this type)
+  //
+  // +k8s:optional
   LocalSnapshotInfo local_snapshot_info = 5;
 
   // Actor version captured when the current durable snapshot began.

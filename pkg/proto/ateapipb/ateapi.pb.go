@@ -44,7 +44,7 @@ const (
 	// Captures process memory, root filesystem changes, and durable data.
 	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL SnapshotContentScope = 1
 	// Captures durable data without process memory or root filesystem changes.
-	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2
+	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2 // Keep this in sync with LocalSnapshotInfo.content_scope's maximum.
 )
 
 // Enum value maps for SnapshotContentScope.
@@ -521,12 +521,23 @@ func (ExternalVolume_Status) EnumDescriptor() ([]byte, []int) {
 
 type LocalSnapshotInfo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The name of the local checkpoint on each of the nodes below.
+	// The name of the local checkpoint on each of the nodes below. Checkpoint
+	// names are server-generated UUIDs, but any resource name is valid here.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	SnapshotName string `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
 	// Node VMs that have local snapshots for this actor, while it's PAUSED.
+	//
+	// +k8s:optional
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:format=k8s-long-name
 	NodeVmsWithLocalSnapshots []string `protobuf:"bytes,2,rep,name=node_vms_with_local_snapshots,json=nodeVmsWithLocalSnapshots,proto3" json:"node_vms_with_local_snapshots,omitempty"`
 	// Scope the pause checkpoint captured (the template's onPause at pause
-	// time).
+	// time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
+	//
+	// +k8s:optional
+	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
 	ContentScope  SnapshotContentScope `protobuf:"varint,3,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -996,7 +1007,8 @@ type ActorStatus struct {
 	// TODO: Add DV (required?)
 	LatestSnapshot *ObjectRef `protobuf:"bytes,4,opt,name=latest_snapshot,json=latestSnapshot,proto3" json:"latest_snapshot,omitempty"`
 	// Node-local state used only while the Actor is paused.
-	// TODO: Add DV (optional, need to recurse into this type)
+	//
+	// +k8s:optional
 	LocalSnapshotInfo *LocalSnapshotInfo `protobuf:"bytes,5,opt,name=local_snapshot_info,json=localSnapshotInfo,proto3" json:"local_snapshot_info,omitempty"`
 	// Actor version captured when the current durable snapshot began.
 	// TODO: Add DV (optional, minimum?)
