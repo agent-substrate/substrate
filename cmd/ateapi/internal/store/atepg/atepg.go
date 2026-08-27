@@ -1011,7 +1011,10 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotRef re
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	tagName := tag.GetMetadata().GetName()
 	dbTag := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
-	dbTag.Metadata = newCreateMetadata(tagAtespace, tagName)
+	if dbTag.Metadata == nil {
+		dbTag.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	setCreateMetadata(dbTag.Metadata)
 	dbTag.Snapshot = &ateapipb.ObjectRef{Atespace: snapshotAtespace, Name: snapshotName}
 	protoBytes, err := proto.Marshal(dbTag)
 	if err != nil {
@@ -1106,7 +1109,7 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, tagRef resourc
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	dbTag.Metadata = newUpdateMetadata(oldMeta)
+	setUpdateMetadata(dbTag.Metadata, oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {

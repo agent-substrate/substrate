@@ -97,7 +97,7 @@ const (
 	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE ActorSnapshotTagScope = 1
 	// Published for use by Actors in any Atespace. The tag remains addressed
 	// through its owning Atespace.
-	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED ActorSnapshotTagScope = 2
+	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED ActorSnapshotTagScope = 2 // Keep this in sync with ActorSnapshotTag.scope's maximum.
 )
 
 // Enum value maps for ActorSnapshotTagScope.

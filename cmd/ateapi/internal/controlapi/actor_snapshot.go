@@ -30,22 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// This exists only because nested subfield tags are not supported yet.
-func ValidateCustom_UpdateActorSnapshotTagRequest_ActorSnapshotTag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapipb.ActorSnapshotTag) field.ErrorList {
-	if tag == nil || tag.Metadata == nil {
-		return nil // handled by DV
-	}
-
-	// Updates are validated in 2 steps: first the update request and then the
-	// resource itself. DV for the request doesn't descend into the resource
-	// metadata.  Once DV supports nested subfield tags, this can be changed to
-	// something like:
-	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
-	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), tag.Metadata, nil)
-	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &tag.Metadata.Atespace, nil)...)
-	return errs
-}
-
 func (s *ServiceImpl) CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error) {
 	// TODO: implement this
 	return s.store.CreateActorSnapshot(ctx, snapshot)
@@ -278,4 +262,20 @@ func validateActorSnapshotTagUpdate(ctx context.Context, fldPath *field.Path, ne
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Update}
 	return Validate_ActorSnapshotTag(ctx, op, fldPath, newVal, oldVal)
+}
+
+// This exists only because nested subfield tags are not supported yet.
+func ValidateCustom_UpdateActorSnapshotTagRequest_ActorSnapshotTag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapipb.ActorSnapshotTag) field.ErrorList {
+	if tag == nil || tag.Metadata == nil {
+		return nil // handled by DV
+	}
+
+	// Updates are validated in 2 steps: first the update request and then the
+	// resource itself. DV for the request doesn't descend into the resource
+	// metadata.  Once DV supports nested subfield tags, this can be changed to
+	// something like:
+	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
+	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), tag.Metadata, nil)
+	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &tag.Metadata.Atespace, nil)...)
+	return errs
 }
