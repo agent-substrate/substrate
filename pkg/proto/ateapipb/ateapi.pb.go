@@ -2264,8 +2264,9 @@ func (x *Container) GetResources() *Resources {
 // SecurityContext holds security settings for a container's process,
 // modeling a subset of the Kubernetes container securityContext.
 type SecurityContext struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Capabilities  *Capabilities          `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// capabilities adjusts the Linux capabilities of the container's process.
+	Capabilities  *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2312,9 +2313,11 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 // granted. Capabilities are named without the "CAP_" prefix; "ALL" in drop
 // removes the whole default set.
 type Capabilities struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Add           []string               `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
-	Drop          []string               `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// add lists capabilities to grant on top of the default set.
+	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
+	// drop lists capabilities to remove from the default set.
+	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2539,7 +2542,8 @@ type Volume struct {
 	ExternalVolumeTemplate *ExternalVolumeTemplate `protobuf:"bytes,3,opt,name=external_volume_template,json=externalVolumeTemplate,proto3" json:"external_volume_template,omitempty"`
 	// +k8s:optional
 	SystemInfo *SystemInfoVolumeSource `protobuf:"bytes,5,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
-	Image      *ImageVolumeSource      `protobuf:"bytes,6,opt,name=image,proto3" json:"image,omitempty"`
+	// image mounts the contents of an OCI image, read-only.
+	Image *ImageVolumeSource `protobuf:"bytes,6,opt,name=image,proto3" json:"image,omitempty"`
 	// type discriminates the source union: "DurableDir",
 	// "ExternalVolumeTemplate", "Image" or "SystemInfo".
 	Type          string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
@@ -2623,8 +2627,9 @@ func (x *Volume) GetType() string {
 // reference must be pinned by digest: changing the image invalidates
 // snapshots.
 type ImageVolumeSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reference     string                 `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// reference is the OCI image reference, pinned by digest.
+	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

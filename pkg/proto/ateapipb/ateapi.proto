@@ -626,6 +626,7 @@ message Container {
 // SecurityContext holds security settings for a container's process,
 // modeling a subset of the Kubernetes container securityContext.
 message SecurityContext {
+  // capabilities adjusts the Linux capabilities of the container's process.
   Capabilities capabilities = 1;
 }
 
@@ -634,7 +635,10 @@ message SecurityContext {
 // granted. Capabilities are named without the "CAP_" prefix; "ALL" in drop
 // removes the whole default set.
 message Capabilities {
+  // add lists capabilities to grant on top of the default set.
   repeated string add = 1;
+
+  // drop lists capabilities to remove from the default set.
   repeated string drop = 2;
 }
 
@@ -678,6 +682,7 @@ message Volume {
   // +k8s:optional
   SystemInfoVolumeSource system_info = 5;
 
+  // image mounts the contents of an OCI image, read-only.
   ImageVolumeSource image = 6;
 
   // type discriminates the source union: "DurableDir",
@@ -689,6 +694,7 @@ message Volume {
 // reference must be pinned by digest: changing the image invalidates
 // snapshots.
 message ImageVolumeSource {
+  // reference is the OCI image reference, pinned by digest.
   string reference = 1;
 }
 
