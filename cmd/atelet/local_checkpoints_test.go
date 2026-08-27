@@ -38,7 +38,7 @@ func TestPruneRemovesEverySnapshot(t *testing.T) {
 	writeSnapshotDir(t, dir, "pause-2")
 	writeSnapshotDir(t, dir, "pause-3")
 
-	pruneLocalCheckpointDir(context.Background(), dir)
+	pruneLocalCheckpointDir(context.Background(), dir, "")
 
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("dir still exists (err=%v), want removed entirely", err)
@@ -46,5 +46,20 @@ func TestPruneRemovesEverySnapshot(t *testing.T) {
 }
 
 func TestPruneMissingDirIsNoop(t *testing.T) {
-	pruneLocalCheckpointDir(context.Background(), filepath.Join(t.TempDir(), "absent"))
+	pruneLocalCheckpointDir(context.Background(), filepath.Join(t.TempDir(), "absent"), "")
+}
+
+func TestPruneKeepsNamedSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	writeSnapshotDir(t, dir, "pause-1")
+	writeSnapshotDir(t, dir, "pause-2")
+
+	pruneLocalCheckpointDir(context.Background(), dir, "pause-2")
+
+	if _, err := os.Stat(filepath.Join(dir, "pause-1")); !os.IsNotExist(err) {
+		t.Errorf("pause-1 still exists (err=%v), want pruned", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pause-2", "memory.img")); err != nil {
+		t.Errorf("pause-2 was pruned, want kept: %v", err)
+	}
 }

@@ -317,25 +317,40 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	return nil
 }
 
-func (r *runsc) cmdState(ctx context.Context, containerName string) error {
-	reapLock.RLock()
-	defer reapLock.RUnlock()
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+// stateArgs builds the argv for `runsc state <container>`.
+func (r *runsc) stateArgs(containerName string) []string {
+	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
 		"state",
 		containerName,
-	)
+	}
+}
+
+func (r *runsc) cmdState(ctx context.Context, containerName string) error {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	cmd := exec.CommandContext(ctx, r.path, r.stateArgs(containerName)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc state`: %w", err)
 	}
 	return nil
+}
+
+// cmdStateOutput executes `runsc state` and captures combined stdout/stderr for failure inspection.
+func (r *runsc) cmdStateOutput(ctx context.Context, containerName string) ([]byte, error) {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	out, err := exec.CommandContext(ctx, r.path, r.stateArgs(containerName)...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("while running `runsc state`: %w", err)
+	}
+	return out, nil
 }
 
 // killArgs builds the argv for `runsc kill <container> <signal>`. Factored out

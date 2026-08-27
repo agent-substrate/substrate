@@ -26,7 +26,6 @@ import (
 	"os"
 	"os/signal"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -716,117 +715,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 
 	return &ateompb.RunWorkloadResponse{}, nil
-}
-
-// Allow checkpointing even if the pod is shutting down. This will allow actors
-// (or the harness) to suspend on shutdown.
-func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	s.setActiveRPC(rpcCheckpointWorkload, cancel)
-	defer s.clearActiveRPC()
-
-	if err := s.deactivateActorNetworking(ctx); err != nil {
-		return nil, err
-	}
-
-	attribution := ateomstats.ActorAttributionFromRequest(req)
-	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
-
-	// Contract with atelet:
-	//
-	//   * After we exit, atelet will upload checkpoint to GCS
-	//   * After we exit, atelet will tear down OCI bundles and reset the actor directory.
-
-	// Checkpoint only saves state; no sizing is applied, so size is left zero.
-	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-	}
-
-	checkpointPath := ateompath.CheckpointStateDir(req.GetActorUid())
-	if err := os.MkdirAll(checkpointPath, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
-	}
-
-	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
-	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
-	switch req.GetScope() {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		var ddv []string
-		for _, ctr := range req.GetSpec().GetContainers() {
-			for _, m := range ctr.GetDurableDirVolumeMounts() {
-				ddv = append(ddv, m.GetMountPath())
-			}
-		}
-		if len(ddv) == 0 {
-			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
-		}
-		if err := rcmd.cmdFsCheckpoint(ctx, "pause", checkpointPath, ddv); err != nil {
-			return nil, fmt.Errorf("while fscheckpointing durable-dir %q: %w", ddv[0], err)
-		}
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		// Checkpoint pause container (root of the sandbox)
-		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
-			return nil, fmt.Errorf("while checkpointing pause: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported snapshot scope: %v", req.GetScope())
-	}
-
-	// The sandbox is gone as of the checkpoint above, so the ateom is back to
-	// "available" from here on: there is nothing left to measure, and holding
-	// the attribution would let a later GetWorkloadStats report a checkpointed
-	// actor as though it were still running.
-	//
-	// Cleared here rather than at the end of the function because everything
-	// below is bookkeeping over a dead sandbox and can still fail (listing the
-	// snapshot files returns an error), which would otherwise leave the
-	// attribution behind. Conversely nothing above this point clears it: a
-	// checkpoint that failed may well have left the workload running, and
-	// reporting its usage is then the honest answer.
-	s.activeActor.Store(nil)
-
-	// Cleanup the containers after checkpointing.
-	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
-		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", attribution.Ref.String()),
-			slog.String("actorUID", attribution.UID),
-			slog.Any("err", err))
-	}
-
-	// Report exactly the files runsc wrote so atelet ships precisely this set
-	// (checkpoint.img plus any pages images), rather than a hardcoded list.
-	snapshotFiles, err := listSnapshotFiles(checkpointPath)
-	if err != nil {
-		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
-	}
-
-	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
-	s.activeSession = nil
-
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
-}
-
-// listSnapshotFiles returns the (relative) names of regular files directly under
-// dir, which atelet ships to object storage as the snapshot.
-func listSnapshotFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var files []string
-	for _, e := range entries {
-		if e.Type().IsRegular() {
-			files = append(files, e.Name())
-		}
-	}
-	sort.Strings(files)
-	return files, nil
 }
 
 func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Container) {
