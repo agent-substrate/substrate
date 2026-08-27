@@ -1,0 +1,200 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Substrate Authorization Model Tests
+model_file: ./model.fga
+
+tuples:
+  # Cluster-wide Scope
+  - user: user:carol
+    relation: admin
+    object: cluster:root
+
+  # Atespace Scope (atespace:space-1 linked to cluster:root)
+  - user: cluster:root
+    relation: parent_cluster
+    object: atespace:space-1
+  - user: user:alice
+    relation: admin
+    object: atespace:space-1
+  - user: user:bob
+    relation: developer
+    object: atespace:space-1
+  - user: user:dave
+    relation: viewer
+    object: atespace:space-1
+
+  # Shared Public Template (actor_template:shared-template in atespace:shared)
+  - user: atespace:shared
+    relation: parent_atespace
+    object: actor_template:shared-template
+  - user: user:eve
+    relation: developer
+    object: actor_template:shared-template
+  - user: user:*
+    relation: viewer
+    object: actor_template:shared-template
+
+  # Non-Public Template (actor_template:private-template in atespace:space-1)
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: actor_template:private-template
+
+  # Actor Instance (actor:runner-1 in atespace:space-1)
+  - user: atespace:space-1
+    relation: parent_atespace
+    object: actor:runner-1
+  - user: user:charlie
+    relation: developer
+    object: actor:runner-1
+
+  # Machine / Service Account Identities on actor:runner-1
+  - user: user:sa-router
+    relation: invoker
+    object: actor:runner-1
+  - user: user:sa-router
+    relation: can_resume
+    object: actor:runner-1
+  - user: user:sa-peer-1
+    relation: invoker
+    object: actor:runner-1
+  - user: user:sa-runner-1
+    relation: can_suspend
+    object: actor:runner-1
+
+tests:
+  - name: 1. Cluster Admin & Hierarchy Propagation
+    check:
+      - user: user:carol
+        object: cluster:root
+        assertions:
+          admin: true
+          can_create_atespace: true
+      - user: user:carol
+        object: atespace:space-1
+        assertions:
+          admin: true
+          developer: true
+          viewer: true
+          can_get: true
+          can_update: true
+          can_delete: true
+
+  - name: 2. Atespace Roles & Operation Isolation
+    check:
+      - user: user:alice # Atespace admin CAN delete space-1 & modify resources
+        object: atespace:space-1
+        assertions:
+          admin: true
+          developer: true
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:bob # Atespace developer CAN get and update, but CANNOT delete space-1
+        object: atespace:space-1
+        assertions:
+          developer: true
+          can_get: true
+          can_update: true
+          can_delete: false
+      - user: user:dave # Atespace viewer CAN ONLY get space-1
+        object: atespace:space-1
+        assertions:
+          viewer: true
+          can_get: true
+          can_update: false
+          can_delete: false
+
+  - name: 3. Public Actor Template Viewing & Instantiation
+    check:
+      - user: user:eve # Template developer can get, update, and delete template
+        object: actor_template:shared-template
+        assertions:
+          developer: true
+          viewer: true
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:bob # Any user can view public template (user:*) but CANNOT update or delete
+        object: actor_template:shared-template
+        assertions:
+          viewer: true
+          can_get: true
+          can_update: false
+          can_delete: false
+
+  - name: 4. Non-Public Actor Template in Private Atespace
+    check:
+      - user: user:alice # Atespace admin CAN get, update, and delete private template
+        object: actor_template:private-template
+        assertions:
+          developer: true
+          viewer: true
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:bob # Atespace developer CAN get, update, and delete private template
+        object: actor_template:private-template
+        assertions:
+          developer: true
+          viewer: true
+          can_get: true
+          can_update: true
+          can_delete: true
+      - user: user:dave # Atespace viewer CAN get private template, but CANNOT update or delete
+        object: actor_template:private-template
+        assertions:
+          viewer: true
+          can_get: true
+          can_update: false
+          can_delete: false
+      - user: user:eve # External user CANNOT get, update, or delete private template
+        object: actor_template:private-template
+        assertions:
+          viewer: false
+          can_get: false
+          can_update: false
+          can_delete: false
+
+  - name: 5. Actor Control-Plane & Data-Plane Operations
+    check:
+      - user: user:dave # Atespace viewer can inspect actor metadata but CANNOT mutate/invoke
+        object: actor:runner-1
+        assertions:
+          viewer: true
+          can_get: true
+          can_update: false
+          can_delete: false
+          can_resume: false
+          can_invoke: false
+          can_suspend: false
+      - user: user:sa-router # Ingress router proxy CAN resume and invoke actor
+        object: actor:runner-1
+        assertions:
+          can_resume: true
+          can_invoke: true
+      - user: user:sa-peer-1 # Peer workload CAN invoke actor
+        object: actor:runner-1
+        assertions:
+          can_invoke: true
+          can_resume: false
+      - user: user:sa-runner-1 # Actor's workload identity CAN self-suspend
+        object: actor:runner-1
+        assertions:
+          can_suspend: true
+          can_delete: false
+      - user: user:sa-runner-2 # External workload CANNOT suspend runner-1
+        object: actor:runner-1
+        assertions:
+          can_suspend: false

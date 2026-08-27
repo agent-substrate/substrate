@@ -1,0 +1,74 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+model
+  schema 1.1
+
+# Unified Principal Identity (human users, machine service accounts, SPIFFE workload identities)
+type user
+
+# Global Cluster Scope
+type cluster
+  relations
+    define admin: [user]
+    define can_create_atespace: admin
+
+type atespace
+  relations
+    # Link to cluster-wide root cluster
+    define parent_cluster: [cluster]
+
+    # Standard 3-tier hierarchy: admin -> developer -> viewer
+    define admin: [user] or admin from parent_cluster
+    define developer: [user] or admin
+    define viewer: [user] or developer
+
+    # Atespace Operations
+    define can_get: viewer
+    define can_update: developer
+    define can_delete: admin
+
+type actor_template
+  relations
+    # Parent atespace where template definition lives
+    define parent_atespace: [atespace]
+
+    # Standard roles: developer (creator/maintainer) and viewer (users/public wildcards user:*)
+    define developer: [user] or developer from parent_atespace
+    define viewer: [user, user:*] or developer or viewer from parent_atespace
+
+    # Actor Template Operations
+    define can_get: viewer
+    define can_update: developer
+    define can_delete: developer
+
+type actor
+  relations
+    # Parent atespace where runtime instance lives
+    define parent_atespace: [atespace]
+
+    # Standard roles on actor instance
+    define developer: [user] or developer from parent_atespace
+    define viewer: [user] or developer or viewer from parent_atespace
+    define invoker: [user, user:*] or developer
+
+    # Resource Operations
+    define can_get: viewer
+    define can_update: developer
+    define can_delete: developer
+
+    # Substrate Specific Lifecycle & Ingress Operations
+    define can_resume: [user] or developer
+    define can_invoke: invoker
+    define can_suspend: [user] or developer
