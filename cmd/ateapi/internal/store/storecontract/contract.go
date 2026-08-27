@@ -1505,7 +1505,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 
 		_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(original), func(toUpdate *ateapipb.Worker) error {
 			t.Error("mutate ran past its precondition once the guarded incarnation was gone")
-			toUpdate.SandboxClass = "edited-anyway"
+			toUpdate.Labels = map[string]string{"tier": "edited-anyway"}
 			return nil
 		})
 		if !errors.Is(err, store.ErrUIDConflict) {
@@ -1566,7 +1566,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 
 		sentinel := errors.New("nothing to do")
 		_, err = s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-			toUpdate.SandboxClass = "edited-anyway"
+			toUpdate.Labels = map[string]string{"tier": "edited-anyway"}
 			return sentinel
 		})
 		if !errors.Is(err, sentinel) {
@@ -1577,8 +1577,8 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got.GetSandboxClass() != "" {
-			t.Errorf("aborted mutation was written: sandbox_class is %q", got.GetSandboxClass())
+		if len(got.GetLabels()) != 0 {
+			t.Errorf("aborted mutation was written: labels are %v", got.GetLabels())
 		}
 		if got.GetMetadata().GetVersion() != 1 {
 			t.Errorf("aborted mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
