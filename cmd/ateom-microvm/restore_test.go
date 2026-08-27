@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -129,6 +130,48 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		}
 		if want := kata.SerialLogPath(id); cfg.Serial.File != want {
 			t.Errorf("serial file = %q, want %q", cfg.Serial.File, want)
+		}
+	})
+
+	// atelet stages a local checkpoint into the restore dir by hard-linking it, so
+	// the config.json rewritten here can share an inode with the actor's cached
+	// pause snapshot. Writing in place would rewrite that snapshot's config too.
+	t.Run("a hardlinked config is not written through", func(t *testing.T) {
+		dir := writeSnapshotConfig(t, []map[string]any{
+			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
+		})
+		cfgPath := filepath.Join(dir, "config.json")
+		before, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatalf("reading config.json: %v", err)
+		}
+		cached := filepath.Join(t.TempDir(), "config.json")
+		if err := os.Link(cfgPath, cached); err != nil {
+			t.Fatalf("linking config.json: %v", err)
+		}
+
+		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
+			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		}
+		if got, want := readFsSockets(t, dir)[kata.FsTag], kata.VirtiofsdSocketPath(id); got != want {
+			t.Errorf("%s socket = %q, want %q", kata.FsTag, got, want)
+		}
+		got, err := os.ReadFile(cached)
+		if err != nil {
+			t.Fatalf("reading the linked config.json: %v", err)
+		}
+		if !bytes.Equal(got, before) {
+			t.Errorf("the linked config.json was rewritten: got %q, want the original %q", got, before)
+		}
+		// Nothing may be left behind for atelet to ship as part of the snapshot.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != "config.json" {
+				t.Errorf("stray file left in the restore dir: %q", e.Name())
+			}
 		}
 	})
 }

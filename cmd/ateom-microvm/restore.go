@@ -492,8 +492,23 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfgPath, out, 0o600); err != nil {
+	// Temp file + rename, not os.WriteFile: atelet stages a local checkpoint by
+	// hard-linking it into this dir, so config.json can share an inode with the
+	// actor's cached pause snapshot. O_TRUNC would write straight through that link
+	// and rewrite the snapshot, and a crash mid-write would leave the actor's only
+	// local restore point holding a truncated config. Renaming replaces the name
+	// here and leaves the linked original whole.
+	tmp, err := os.CreateTemp(snapshotDir, ".config.json.tmp-*")
+	if err != nil {
 		return err
 	}
-	return nil
+	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), cfgPath)
 }

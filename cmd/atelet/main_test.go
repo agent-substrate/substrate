@@ -44,6 +44,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/pflag"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -354,6 +355,94 @@ func TestCopyFile(t *testing.T) {
 	if _, err := copyFile(dir, filepath.Join(dir, "dst2")); err == nil {
 		t.Error("copyFile(directory, ...) succeeded, want error")
 	}
+}
+
+// TestCopyLocalCheckpointLinks covers staging a local checkpoint into the restore
+// dir: the files must land as extra links to the cached snapshot rather than
+// copies, so a resume does not rewrite the image's working set. Sharing the inode
+// is what MergeDeltaIntoBase's Nlink check keys off to refuse its in-place overlay.
+func TestCopyLocalCheckpointLinks(t *testing.T) {
+	const snapshot = "snap-1"
+	want := []byte("checkpoint pages")
+
+	newDirs := func(t *testing.T) (srcDir, dstDir string) {
+		t.Helper()
+		root := t.TempDir()
+		srcDir, dstDir = filepath.Join(root, "local-checkpoint"), filepath.Join(root, "restore-state")
+		if err := os.MkdirAll(filepath.Join(srcDir, snapshot), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(dstDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(srcDir, snapshot, "memory-ranges"), want, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return srcDir, dstDir
+	}
+	inode := func(t *testing.T, path string) uint64 {
+		t.Helper()
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fi.Sys().(*syscall.Stat_t).Ino
+	}
+
+	t.Run("links when it can", func(t *testing.T) {
+		srcDir, dstDir := newDirs(t)
+		s := &AteomHerder{}
+		if err := s.copyLocalCheckpoint(context.Background(), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err != nil {
+			t.Fatalf("copyLocalCheckpoint: %v", err)
+		}
+		src := filepath.Join(srcDir, snapshot, "memory-ranges")
+		dst := filepath.Join(dstDir, "memory-ranges")
+		if got, err := os.ReadFile(dst); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("dst content = %q (err %v), want %q", got, err, want)
+		}
+		if inode(t, src) != inode(t, dst) {
+			t.Error("staged file is a copy; expected a link to the cached snapshot")
+		}
+	})
+
+	t.Run("falls back to copying across filesystems", func(t *testing.T) {
+		srcDir, dstDir := newDirs(t)
+		// EXDEV stands in for the mount boundary a unit test cannot produce.
+		orig := linkFile
+		linkFile = func(string, string) error { return unix.EXDEV }
+		t.Cleanup(func() { linkFile = orig })
+
+		s := &AteomHerder{}
+		if err := s.copyLocalCheckpoint(context.Background(), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err != nil {
+			t.Fatalf("copyLocalCheckpoint: %v", err)
+		}
+		dst := filepath.Join(dstDir, "memory-ranges")
+		if got, err := os.ReadFile(dst); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("dst content = %q (err %v), want %q", got, err, want)
+		}
+		if inode(t, filepath.Join(srcDir, snapshot, "memory-ranges")) == inode(t, dst) {
+			t.Error("expected a copy on the fallback path, got a link")
+		}
+	})
+
+	// Only EXDEV may fall back. Copying on any other link failure would silently
+	// undo this optimization, and would hand copyFile a dst that may already be a
+	// link to src, where its O_TRUNC empties both before the copy reads a byte.
+	t.Run("other link failures are fatal", func(t *testing.T) {
+		srcDir, dstDir := newDirs(t)
+		dst := filepath.Join(dstDir, "memory-ranges")
+		if err := os.Link(filepath.Join(srcDir, snapshot, "memory-ranges"), dst); err != nil {
+			t.Fatal(err)
+		}
+		s := &AteomHerder{}
+		// dst already exists, so os.Link fails with EEXIST.
+		if err := s.copyLocalCheckpoint(context.Background(), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err == nil {
+			t.Fatal("copyLocalCheckpoint accepted a non-EXDEV link failure, want an error")
+		}
+		if got, err := os.ReadFile(dst); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("dst content = %q (err %v), want the untouched %q", got, err, want)
+		}
+	})
 }
 
 type failingCloseFile struct{ *os.File }

@@ -660,11 +660,18 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// all: the actor's current state was just captured by CheckpointWorkload,
 	// and the control plane tracks only a single local snapshot, which this
 	// checkpoint either overwrites (pause) or clears (suspend).
-	pruneLocalCheckpoints(ctx, actorUID)
-
+	//
+	// Do not move this above CheckpointWorkload to keep MergeDeltaIntoBase on its
+	// in-place path: that leaves the whole checkpoint window with no local snapshot
+	// while LocalSnapshotInfo still names the pruned one, and a crash there strands
+	// the actor for good (resume never falls back to object storage, RequiredNodes
+	// pins it to this node, nothing clears the field).
+	//
 	// Pruning stays outside the persist window: it collects superseded
 	// snapshots on both paths, so timing it as part of an external upload would
 	// mix local disk deletion into the object-storage measurement.
+	pruneLocalCheckpoints(ctx, actorUID)
+
 	tPersist := time.Now()
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
@@ -1279,6 +1286,26 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 		}
 		src := filepath.Join(srcDir, snapshotName, fileName)
 		dst := filepath.Join(dstDir, fileName)
+		// Link rather than copy. The local checkpoint lives under the same actor dir
+		// as the restore staging area, so this stages the memory image in constant
+		// time instead of re-writing its whole working set. Nothing rewrites the
+		// shared inode: CH demand-pages from the staged image read-only,
+		// rewriteSnapshotSocketPaths renames its rewritten config.json into place
+		// rather than truncating, and MergeDeltaIntoBase refuses its in-place overlay
+		// once the image carries a second link.
+		//
+		// EXDEV alone falls back to copying, so an unexpected link failure surfaces
+		// instead of silently reverting to the full copy this exists to remove. It
+		// also keeps copyFile off a dst that is already a link to src, where its
+		// O_TRUNC would empty both and report a successful copy of the old size.
+		switch err := linkFile(src, dst); {
+		case err == nil:
+			continue
+		case !errors.Is(err, unix.EXDEV):
+			return fmt.Errorf("failed to link %s to %s: %w", src, dst, err)
+		}
+		slog.WarnContext(ctx, "local checkpoint and restore dir are on different filesystems; copying instead of linking",
+			slog.String("src", src), slog.String("dst", dst))
 		if _, err := copyFile(src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
@@ -1288,6 +1315,10 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 }
 
 var createDestFile = func(name string) (io.WriteCloser, error) { return os.Create(name) }
+
+// linkFile is os.Link, indirected so a test can force the cross-filesystem
+// fallback in copyLocalCheckpoint without mounting a second filesystem.
+var linkFile = os.Link
 
 // sparseDest is the part of *os.File a hole-preserving copy needs. Destinations that
 // do not implement it are copied densely instead.
