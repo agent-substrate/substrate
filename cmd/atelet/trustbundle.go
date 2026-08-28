@@ -21,7 +21,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/pemutil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 )
@@ -49,6 +48,18 @@ func supportedTrustBundleNames() string {
 	return strings.Join(names, ", ")
 }
 
+// bundleNamesFor returns the allowlisted bundle names backed by the
+// ClusterTrustBundle objectName.
+func bundleNamesFor(objectName string) []string {
+	var names []string
+	for name, object := range supportedTrustBundles {
+		if object == objectName {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // rawTrustBundle returns the unsanitized contents of the named trust
 // bundle's backing ClusterTrustBundle, resolving the name against the
 // allowlist and reading through atelet's informer-backed lister.
@@ -56,9 +67,6 @@ func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (o
 	objectName, supported := supportedTrustBundles[name]
 	if !supported {
 		return "", "", fmt.Errorf("trust bundle %q is not supported by this deployment (supported: %s)", name, supportedTrustBundleNames())
-	}
-	if lister == nil {
-		return "", "", fmt.Errorf("trust bundle %q: no ClusterTrustBundle lister configured", name)
 	}
 	bundle, err := lister.Get(objectName)
 	if apierrors.IsNotFound(err) {
@@ -69,43 +77,10 @@ func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (o
 	return objectName, bundle.Spec.TrustBundle, nil
 }
 
-// sanitizeTrustBundle sanitizes raw backing contents into the projected PEM.
-func sanitizeTrustBundle(name, objectName, raw string) ([]byte, error) {
-	pemBundle, err := pemutil.SanitizeCertificateBundle([]byte(raw))
-	if err != nil {
-		return nil, fmt.Errorf("trust bundle %q: unusable ClusterTrustBundle %q: %w", name, objectName, err)
-	}
-	return pemBundle, nil
-}
-
 // trustBundleHash fingerprints raw backing contents. Refreshes compare this,
 // never the projected bytes: sanitization shuffles the anchors, so two
 // projections of identical contents differ byte-wise.
 func trustBundleHash(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
-}
-
-// resolvedTrustBundle is a trust bundle resolved for projection.
-type resolvedTrustBundle struct {
-	// PEM is the sanitized bundle to write.
-	PEM []byte
-	// RawHash is the trustBundleHash of the backing contents PEM was derived
-	// from: the change-detection key stored as a projection's AppliedHash.
-	RawHash string
-}
-
-// resolveTrustBundle resolves the named trust bundle for projection. Every
-// error fails the actor start: an actor that declared a trust bundle must
-// not start without one.
-func resolveTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (resolvedTrustBundle, error) {
-	objectName, raw, err := rawTrustBundle(lister, name)
-	if err != nil {
-		return resolvedTrustBundle{}, err
-	}
-	pemBundle, err := sanitizeTrustBundle(name, objectName, raw)
-	if err != nil {
-		return resolvedTrustBundle{}, err
-	}
-	return resolvedTrustBundle{PEM: pemBundle, RawHash: trustBundleHash(raw)}, nil
 }

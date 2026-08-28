@@ -29,7 +29,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -307,13 +306,12 @@ func main() {
 		clusterTrustBundleLister,
 	)
 
-	// Live-refresh projected trust bundles: bundle events rewrite the files
-	// of registered running actors, and recovery re-registers the actors
-	// already running on this node.
-	if _, err := coreFactory.Certificates().V1beta1().ClusterTrustBundles().Informer().AddEventHandler(wmService.trustBundles.eventHandler(ctx)); err != nil {
+	// Live-refresh projected trust bundles: bundle events enqueue, and the
+	// run loop rewrites the files of registered running actors.
+	if _, err := coreFactory.Certificates().V1beta1().ClusterTrustBundles().Informer().AddEventHandler(wmService.systemInfoVolumes.eventHandler()); err != nil {
 		serverboot.Fatal(ctx, "Failed to watch ClusterTrustBundles for live refresh", err)
 	}
-	wmService.trustBundles.recoverFromDisk(ctx)
+	go wmService.systemInfoVolumes.run(ctx)
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
@@ -436,7 +434,7 @@ type AteomHerder struct {
 	volumePlugins            map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister    listersv1alpha1.CSIDriverConfigLister
 	clusterTrustBundleLister certlisters.ClusterTrustBundleLister
-	trustBundles             *trustBundleRefresher
+	systemInfoVolumes        *systemInfoVolumeRefresher
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -462,7 +460,7 @@ func NewService(
 		volumePlugins:            volumePlugins,
 		csiDriverConfigLister:    csiDriverConfigLister,
 		clusterTrustBundleLister: clusterTrustBundleLister,
-		trustBundles:             newTrustBundleRefresher(clusterTrustBundleLister),
+		systemInfoVolumes:        newSystemInfoVolumeRefresher(clusterTrustBundleLister),
 	}
 	return wms
 }
@@ -501,11 +499,11 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	// prepareOCIBundles registers trust-bundle projections; leave none behind
-	// for a sandbox that never came up.
+	// prepareOCIBundles registers system-info volumes for live refresh; leave
+	// no registration behind for a sandbox that never came up.
 	defer func() {
 		if err != nil {
-			s.trustBundles.Deregister(ctx, actorUID)
+			s.systemInfoVolumes.Deregister(actorUID)
 		}
 	}()
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
@@ -664,8 +662,8 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	// The sandbox is down from here on (CheckpointWorkload deletes the
-	// containers): stop refreshing its trust-bundle projections.
-	s.trustBundles.Deregister(ctx, actorUID)
+	// containers): stop refreshing its system-info volumes.
+	s.systemInfoVolumes.Deregister(actorUID)
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
@@ -1099,11 +1097,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
 	// copied to checkpointDir for the LOCAL case.
 
-	// prepareOCIBundles registers trust-bundle projections; leave none behind
-	// for a restore that fails.
+	// prepareOCIBundles registers system-info volumes for live refresh; leave
+	// no registration behind for a restore that fails.
 	defer func() {
 		if err != nil {
-			s.trustBundles.Deregister(ctx, actorUID)
+			s.systemInfoVolumes.Deregister(actorUID)
 		}
 	}()
 
@@ -1290,10 +1288,10 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		}
 	}
 
-	// The sandbox is down: stop refreshing its trust-bundle projections. Not
+	// The sandbox is down: stop refreshing its system-info volumes. Not
 	// earlier — a Terminate that fails before teardown leaves the actor
 	// running, and it must keep refreshing until the retry succeeds.
-	s.trustBundles.Deregister(ctx, actorUID)
+	s.systemInfoVolumes.Deregister(actorUID)
 
 	// Unmount external volumes
 	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
@@ -1539,8 +1537,9 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with. It also registers the trustBundle projections it writes for live
-// refresh; the caller deregisters if the start fails afterwards.
+// with. It also registers system-info volumes with the refresher, which
+// writes their contents; the caller deregisters if the start fails
+// afterwards.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1550,7 +1549,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	targetAteomUid string,
 ) error {
 	// Prepare host folders for volume types that need them.
-	var tbProjections []trustBundleProjection
+	var siVolumes []systemInfoVolume
 	for _, vol := range spec.GetVolumes() {
 		switch volSrc := vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
@@ -1560,13 +1559,19 @@ func (s *AteomHerder) prepareOCIBundles(
 			}
 
 		case *ateletpb.Volume_SystemInfo:
-			volRootHostPath := ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName())
-			projections, err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, s.clusterTrustBundleLister, volSrc.SystemInfo)
-			if err != nil {
-				return fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
-			}
-			tbProjections = append(tbProjections, projections...)
+			siVolumes = append(siVolumes, systemInfoVolume{
+				Name: vol.GetName(),
+				Root: ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName()),
+				Spec: volSrc.SystemInfo,
+			})
 		}
+	}
+	// Registration writes the volumes' contents, so the files carry the
+	// values of the actor actually being started before its sandbox boots
+	// (no matter what checkpointed state it boots from), and keeps them
+	// current while it runs.
+	if err := s.systemInfoVolumes.Register(actorUID, actorRef, siVolumes); err != nil {
+		return err
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -1644,100 +1649,6 @@ func (s *AteomHerder) prepareOCIBundles(
 
 	if err := g.Wait(); err != nil {
 		return err
-	}
-	if err := s.trustBundles.Register(ctx, actorUID, tbProjections); err != nil {
-		return fmt.Errorf("while registering trust-bundle projections: %w", err)
-	}
-	return nil
-}
-
-// writeSystemInfoVolume populates the root directory of a system-info volume
-// with one file per projected item. It runs on every Run/Restore, before the
-// sandbox starts, so the files carry the values of the actor actually being
-// started, no matter what checkpointed state it boots from. It returns the
-// trustBundle projections it wrote so the caller can register them with the
-// trustBundleRefresher, which rewrites them when the bundle changes while
-// the actor runs.
-//
-// Every file must be a plain file at a stable real path across
-// regenerations: restore re-binds suspend-time guest state to files by
-// recorded path (virtiofsd find-paths, gVisor's gofer), so a scheme that
-// relocates files on write (kubelet's atomic writer) would leave that state
-// dangling. Per-file write-to-temp-and-rename is atomic enough — a reader
-// sees old contents or new, never partial — and is what lets the refresher
-// rewrite bundles under a running sandbox.
-//
-// TODO(#802): other rotating data sources (identity JWTs, certificates) will
-// need the live refresh trust bundles have, keeping the same per-file rename
-// discipline so visible paths never move. actorMetadata never changes after
-// start, so writing here is enough for it.
-func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, ctbLister certlisters.ClusterTrustBundleLister, si *ateletpb.SystemInfoVolume) ([]trustBundleProjection, error) {
-	if err := os.MkdirAll(rootPath, 0o755); err != nil {
-		return nil, fmt.Errorf("while creating %q: %w", rootPath, err)
-	}
-
-	var tbProjections []trustBundleProjection
-	for _, dataSourceAny := range si.GetDataSources() {
-		switch dataSource := dataSourceAny.GetDataSource().(type) {
-		case *ateletpb.SystemInfoDataSource_TrustBundle:
-			tb := dataSource.TrustBundle
-			resolved, err := resolveTrustBundle(ctbLister, tb.GetName())
-			if err != nil {
-				return nil, fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
-			}
-			if err := writeSystemInfoFile(rootPath, tb.GetPath(), resolved.PEM); err != nil {
-				return nil, err
-			}
-			tbProjections = append(tbProjections, trustBundleProjection{
-				Bundle:      tb.GetName(),
-				Root:        rootPath,
-				Path:        tb.GetPath(),
-				AppliedHash: resolved.RawHash,
-			})
-		case *ateletpb.SystemInfoDataSource_ActorMetadata:
-			for _, item := range dataSource.ActorMetadata.GetItems() {
-				var value string
-				switch item.GetField() {
-				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME:
-					value = actorRef.Name
-				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE:
-					value = actorRef.Atespace
-				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID:
-					value = actorUID
-				default:
-					// Unknown fields come only from a newer ateapi; skip the
-					// item rather than write an empty file under its path.
-					continue
-				}
-				if err := writeSystemInfoFile(rootPath, item.GetPath(), []byte(value)); err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-	return tbProjections, nil
-}
-
-// writeSystemInfoFile writes one projected file at relPath under rootPath via
-// write-to-temp-and-rename, creating parent directories as needed. relPath is
-// validated defensively even though ActorTemplate validation already rejects
-// non-clean paths: atelet is the last line before the value hits the host
-// filesystem.
-func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
-	if relPath == "" || strings.HasPrefix(relPath, "/") {
-		return fmt.Errorf("invalid system-info path %q: must be a non-empty relative path", relPath)
-	}
-	for _, seg := range strings.Split(relPath, "/") {
-		if seg == ".." || seg == "." || seg == "" {
-			return fmt.Errorf("invalid system-info path %q: must not contain empty, '.', or '..' segments", relPath)
-		}
-	}
-	dst := filepath.Join(rootPath, filepath.FromSlash(relPath))
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("while creating parent of %q: %w", dst, err)
-	}
-	if err := writeFileAtomic(dst, data, 0o644); err != nil {
-		return fmt.Errorf("while writing system-info file %q: %w", dst, err)
 	}
 	return nil
 }
