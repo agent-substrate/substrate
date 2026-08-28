@@ -33,6 +33,10 @@ const EgressTrustBundleName = "egress-mitm.ate.dev"
 // supportedTrustBundles maps the bundle names the trustBundle data source
 // may reference to their backing ClusterTrustBundles. Enforced here so a
 // configurable backend registry (#932) can widen it without an API change.
+//
+// TODO(#932): select bundles by signer name + label selector (merging the
+// matches) instead of one direct object, so a new root can be trialed on a
+// fraction of workloads before it reaches all of them.
 var supportedTrustBundles = map[string]string{
 	EgressTrustBundleName: "egress-mitm.ate.dev:mitm:primary-bundle",
 }
