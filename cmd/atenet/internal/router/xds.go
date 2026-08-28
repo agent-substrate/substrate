@@ -166,9 +166,6 @@ type XdsServer struct {
 	connectPlainTextPort int
 	connectTLSPort       int
 	certPath             string
-	// httpsH2 offers HTTP/2 via ALPN on the HTTPS ingress listener,
-	// enabling gRPC to actors over TLS. See SetHttpsH2.
-	httpsH2 bool
 
 	// Upstream (actor-facing) mTLS. When upstreamCredentialBundlePath is set, the
 	// ORIGINAL_DST actor cluster dials the actor's in-worker atunnel ingress
@@ -303,17 +300,6 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	}
 	x.httpsPort = httpsPort
 	x.certPath = certPath
-}
-
-// SetHttpsH2 controls whether the HTTPS ingress listener offers HTTP/2 via
-// ALPN. Off, the listener advertises no protocols and clients fall back to
-// HTTP/1.1, matching historical behavior; on, gRPC (which requires a
-// negotiated "h2") can reach actors over TLS, while HTTP/1.1 clients still
-// negotiate http/1.1.
-func (x *XdsServer) SetHttpsH2(enabled bool) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	x.httpsH2 = enabled
 }
 
 // otlpDefaultPort is the OTLP/gRPC default port, used when the collector
@@ -1223,11 +1209,11 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	hcm := x.buildHcm("ingress_https", true)
 
 	// gRPC requires a negotiated "h2"; http/1.1 keeps plain HTTPS clients
-	// working alongside it.
-	var alpn []string
-	if x.httpsH2 {
-		alpn = []string{"h2", "http/1.1"}
-	}
+	// working alongside it. HTTP/1.1-only actors are safe either way: atunnel
+	// downgrades every non-gRPC request to HTTP/1.1 on the actor leg (see
+	// atunnel.protocolMirrorTransport), so offering h2 at the edge cannot
+	// change what an actor receives.
+	alpn := []string{"h2", "http/1.1"}
 
 	return &listenerv3.Listener{
 		Name: IngressHTTPSListener,
@@ -1319,8 +1305,8 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 					},
 				},
 				// No ALPN: CONNECT-TLS clients speak HTTP/1.1 CONNECT
-				// today, and the HTTPS h2 knob deliberately leaves this
-				// listener alone.
+				// today, and the HTTPS listener's h2 offer deliberately
+				// leaves this listener alone.
 				TransportSocket: buildDownstreamTlsTransportSocket(nil),
 			},
 		},

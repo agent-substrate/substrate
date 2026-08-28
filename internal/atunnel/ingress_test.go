@@ -420,6 +420,115 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 	}
 }
 
+// TestServeNegotiatesH2 checks that the ingress server negotiates h2 with a
+// client that offers it, and HTTP/1.1 with one that does not. The router's
+// HTTP/2 pool depends on the h2 side, which holds only because ServeTLS
+// enables HTTP/2 when tlsConfig.NextProtos is empty — this pins that.
+func TestServeNegotiatesH2(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	bundlePath := filepath.Join(dir, "server.pem")
+	trustPath := filepath.Join(dir, "trust.pem")
+	writeCredentialBundle(t, bundlePath, serverCert)
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clientCert := ca.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+
+	// The actor: an h2c-capable backend, so gRPC-shaped requests can arrive
+	// as HTTP/2 while everything else must still be downgraded to HTTP/1.1.
+	backendAddr, protoSeen := mirrorBackend(t, true, true)
+	upstream, err := url.Parse("http://" + backendAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewServer(Config{
+		CredentialBundlePath: bundlePath,
+		TrustBundlePath:      trustPath,
+		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
+		Upstream:             upstream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- s.Serve(ctx, lis) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-served; err != nil {
+			t.Errorf("Serve: %v", err)
+		}
+	})
+
+	client := func(h2 bool) *http.Client {
+		transport := &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true, // The handshake identity checks live in TestMutualTLSClientIdentity.
+				Certificates:       []tls.Certificate{clientCert},
+			},
+			// With h2, the transport offers "h2" via ALPN like Envoy's
+			// HTTP/2 pool; without it, only http/1.1 is offered, like the
+			// HTTP/1.1 pool.
+			ForceAttemptHTTP2: h2,
+		}
+		return &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	}
+	request := func(t *testing.T, c *http.Client, method, contentType string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(method, "https://"+lis.Addr().String()+"/", http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("%s request: %v", method, err)
+		}
+		res.Body.Close()
+		return res
+	}
+
+	h2Client := client(true)
+	res := request(t, h2Client, http.MethodPost, "application/grpc")
+	if res.Proto != "HTTP/2.0" {
+		t.Fatalf("h2-only client negotiated %s, want HTTP/2.0 — Envoy's mirrored HTTP/2 pool cannot connect", res.Proto)
+	}
+	if got := <-protoSeen; got != "HTTP/2.0" {
+		t.Errorf("gRPC-shaped request reached the actor as %s, want HTTP/2.0", got)
+	}
+	// A non-gRPC request on the same negotiated h2 connection is downgraded
+	// before the actor.
+	request(t, h2Client, http.MethodGet, "")
+	if got := <-protoSeen; got != "HTTP/1.1" {
+		t.Errorf("plain GET over h2 reached the actor as %s, want HTTP/1.1", got)
+	}
+
+	// Envoy's HTTP/1.1 pool offers only http/1.1; it must not be dragged onto h2.
+	h1Client := client(false)
+	res = request(t, h1Client, http.MethodGet, "")
+	if res.Proto != "HTTP/1.1" {
+		t.Errorf("http/1.1-only client negotiated %s, want HTTP/1.1", res.Proto)
+	}
+	if got := <-protoSeen; got != "HTTP/1.1" {
+		t.Errorf("HTTP/1.1 request reached the actor as %s, want HTTP/1.1", got)
+	}
+}
+
 func TestDeactivateCancelsInflightRequest(t *testing.T) {
 	upstream, err := url.Parse("http://actor.internal:80")
 	if err != nil {

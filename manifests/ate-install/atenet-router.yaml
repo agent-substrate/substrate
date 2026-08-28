@@ -208,12 +208,6 @@ spec:
         # turns to survive a shutdown, raise --drain-timeout and
         # terminationGracePeriodSeconds alongside it.
         # - "--route-timeout=5m"
-        # Enables HTTP/2 via ALPN on the HTTPS listener, which gRPC to actors
-        # over TLS requires. HTTP/1.1 clients are unaffected, and only gRPC
-        # continues to the actor as HTTP/2 — atunnel downgrades other HTTP/2
-        # requests to HTTP/1.1, so HTTP/1.1-only actors keep working the way they used to. Leaving
-        # it off means no ALPN negotiation.
-        # - "--https-h2"
         env:
         - name: POD_NAME
           valueFrom:

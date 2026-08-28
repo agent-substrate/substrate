@@ -143,7 +143,7 @@ func TestIngressGRPC(t *testing.T) {
 	// Cleartext h2c to the router's HTTP port, with the Actor's DNS name as the
 	// :authority — the same routing key every other ingress test in this suite
 	// uses, just carried by a gRPC client instead of an HTTP one. The h2 ALPN
-	// knob (--https-h2) is about the *TLS* listener; nothing here needs it.
+	// offer is about the *TLS* listener; nothing here needs it.
 	conn, err := grpc.NewClient(routerAddress(t, ctx),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithAuthority(resources.ActorDNSName(actorRef)),

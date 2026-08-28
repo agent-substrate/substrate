@@ -94,10 +94,6 @@ type routerConfig struct {
 	ConnectPlainTextPort int
 	ConnectTLSPort       int
 	EnvoyCertPath        string
-	// HttpsH2 offers HTTP/2 via ALPN on the HTTPS ingress listener, which
-	// gRPC over TLS requires. Off preserves the historical no-ALPN
-	// behavior.
-	HttpsH2 bool
 
 	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
 	// (cert+key) presented as the client cert when dialing the actor's atunnel

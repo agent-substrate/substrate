@@ -1118,44 +1118,53 @@ func downstreamTLS(t *testing.T, raw any) *tlsv3.DownstreamTlsContext {
 	return dtc
 }
 
-func TestXdsServer_HttpsH2ALPN(t *testing.T) {
+// TestXdsServer_ALPN pins the per-listener ALPN contract. The HTTPS ingress
+// listener always offers h2 before http/1.1: gRPC over TLS requires a
+// negotiated "h2", and the offer is unconditional because atunnel downgrades
+// every non-gRPC request to HTTP/1.1 on the actor leg (see
+// atunnel.protocolMirrorTransport and TestProtocolMirrorTransport), so an
+// HTTP/1.1-only actor cannot tell what the client negotiated at the edge. The
+// CONNECT-TLS listener stays ALPN-free: its clients speak HTTP/1.1 CONNECT,
+// and an h2 offer there would move them onto extended CONNECT the tunnel path
+// does not serve.
+func TestXdsServer_ALPN(t *testing.T) {
 	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
 
-	snapshotListeners := func(t *testing.T, h2 bool) map[string]any {
-		t.Helper()
-		server := NewXdsServer(18000)
-		server.SetConfig(8085, 50053, "127.0.0.1")
-		server.SetTlsConfig(8443, certPath)
-		server.SetConnectPorts(0, 8444)
-		server.SetHttpsH2(h2)
-		if err := server.UpdateSnapshot(); err != nil {
-			t.Fatalf("UpdateSnapshot failed: %v", err)
-		}
-		res, err := server.snapshot.GetSnapshot(NodeID)
-		if err != nil {
-			t.Fatalf("Failed to get snapshot: %v", err)
-		}
-		listeners := map[string]any{}
-		for name, l := range res.(*cachev3.Snapshot).GetResources(resourcev3.ListenerType) {
-			listeners[name] = l
-		}
-		return listeners
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+	server.SetTlsConfig(8443, certPath)
+	server.SetConnectPorts(0, 8444)
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	listeners := map[string]any{}
+	for name, l := range res.(*cachev3.Snapshot).GetResources(resourcev3.ListenerType) {
+		listeners[name] = l
 	}
 
-	// Default: no ALPN anywhere
-	listeners := snapshotListeners(t, false)
-	if alpn := downstreamTLS(t, listeners[IngressHTTPSListener]).GetCommonTlsContext().GetAlpnProtocols(); len(alpn) != 0 {
-		t.Errorf("HTTPS listener ALPN with knob off = %v, want none", alpn)
-	}
-
-	// Enabled: the HTTPS listener offers h2 then http/1.1; the CONNECT-TLS
-	// listener stays untouched.
-	listeners = snapshotListeners(t, true)
+	// h2 first: ALPN is server-preference, and a client that can speak HTTP/2
+	// must land on it rather than on http/1.1.
 	alpn := downstreamTLS(t, listeners[IngressHTTPSListener]).GetCommonTlsContext().GetAlpnProtocols()
 	if len(alpn) != 2 || alpn[0] != "h2" || alpn[1] != "http/1.1" {
-		t.Errorf("HTTPS listener ALPN with knob on = %v, want [h2 http/1.1]", alpn)
+		t.Errorf("HTTPS listener ALPN = %v, want [h2 http/1.1]", alpn)
 	}
 	if alpn := downstreamTLS(t, listeners["connect_terminate_tls"]).GetCommonTlsContext().GetAlpnProtocols(); len(alpn) != 0 {
-		t.Errorf("CONNECT-TLS listener ALPN = %v, want none regardless of the knob", alpn)
+		t.Errorf("CONNECT-TLS listener ALPN = %v, want none", alpn)
+	}
+
+	// The offer is only half the contract: the HCM must honor whatever ALPN
+	// negotiated. An explicit HTTP1 codec here would turn every h2 client
+	// into a connection error while the ALPN list still looked right.
+	https := listeners[IngressHTTPSListener].(*listenerv3.Listener)
+	hcm := &hcmv3.HttpConnectionManager{}
+	if err := https.GetFilterChains()[0].GetFilters()[0].GetTypedConfig().UnmarshalTo(hcm); err != nil {
+		t.Fatalf("Failed to unmarshal the HTTPS listener's HCM config: %v", err)
+	}
+	if hcm.GetCodecType() != hcmv3.HttpConnectionManager_AUTO {
+		t.Errorf("HTTPS listener HCM codec = %v, want AUTO so the negotiated protocol is honored", hcm.GetCodecType())
 	}
 }
