@@ -59,16 +59,12 @@ type registeredActor struct {
 	volumes []systemInfoVolume
 }
 
-// systemInfoVolumeRefresher owns the contents of system-info volumes,
-// modeled on kubelet's projected volumes: collectData is the one place that
-// builds a volume's complete contents, write applies them, and every
-// lifecycle point goes through the pair — Run/Restore via Register
-// (fail-closed), and ClusterTrustBundle events via the workqueue while the
-// actor runs (keep last-good, retry).
+// systemInfoVolumeRefresher owns the contents of system-info volumes, after
+// kubelet's projected volumes: collectData builds a volume's complete
+// contents, write applies them, and every lifecycle point uses the pair.
 //
-// TODO(#802): identity JWTs and certificates will ride the same refresh;
-// adopt kubelet's whole-volume AtomicWriter swap if a source ever needs
-// multi-file atomicity.
+// TODO(#802): adopt kubelet's whole-volume AtomicWriter swap if a source
+// ever needs multi-file atomicity.
 type systemInfoVolumeRefresher struct {
 	lister certlisters.ClusterTrustBundleLister
 
@@ -91,10 +87,8 @@ func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister) *
 }
 
 // Register records actorUID's system-info volumes and writes their complete
-// contents from current cluster state, replacing any previous registration.
-// Every error fails the actor start: an actor that declared a projection
-// must not start without it. The caller deregisters if the start fails
-// afterwards.
+// contents from current cluster state, replacing any prior registration.
+// Fail-closed: an actor that declared a projection must not start without it.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []systemInfoVolume) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -123,10 +117,8 @@ func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 }
 
 // collectData builds the complete contents of one system-info volume, keyed
-// by volume-relative path — the single source of projected payloads, after
-// kubelet's projected.go collectData. It also returns the raw-contents hash
-// of each trust bundle it resolved: refreshes compare raw, never projected,
-// bytes, because sanitization shuffles the anchors.
+// by volume-relative path, after kubelet's projected.go. The bundle hashes
+// fingerprint raw contents: sanitization shuffles the projected bytes.
 func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) (payload map[string][]byte, bundleHashes map[string]string, err error) {
 	payload = map[string][]byte{}
 	bundleHashes = map[string]string{}
@@ -166,12 +158,9 @@ func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID
 	return payload, bundleHashes, nil
 }
 
-// write makes the volume's on-disk contents match collectData. Every file is
-// a plain file at a stable real path, replaced by temp-and-rename: a reader
-// sees old bytes or new, never partial, and restore re-binds suspend-time
-// guest state by recorded path (virtiofsd find-paths, gVisor's gofer).
-// Files whose contents already match are left alone — replacing an inode
-// costs a suspended guest an EIO re-bind on resume.
+// write makes the volume's on-disk contents match collectData: files are
+// replaced via temp-and-rename and unchanged ones left alone, because
+// restores re-bind suspend-time guest state by real path and inode.
 func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID string, v *systemInfoVolume) error {
 	payload, bundleHashes, err := r.collectData(ref, actorUID, v.Spec)
 	if err != nil {
@@ -189,11 +178,9 @@ func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID strin
 	return nil
 }
 
-// writeSystemInfoFile writes one projected file at relPath under rootPath
-// via write-to-temp-and-rename, creating parent directories as needed, and
-// leaves a file whose contents already match untouched. relPath is validated
-// defensively even though ActorTemplate validation already rejects non-clean
-// paths: atelet is the last line before the value hits the host filesystem.
+// writeSystemInfoFile writes one projected file under rootPath via
+// temp-and-rename, skipping it if contents already match. relPath is
+// re-validated here: atelet is the last line before the host filesystem.
 func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
 	if relPath == "" || strings.HasPrefix(relPath, "/") {
 		return fmt.Errorf("invalid system-info path %q: must be a non-empty relative path", relPath)
@@ -216,11 +203,9 @@ func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
 	return nil
 }
 
-// eventHandler adapts the refresher to the ClusterTrustBundle informer:
-// events only enqueue, the run loop writes. Deletion takes the same path —
-// refreshBundle keeps last-good contents when resolution fails, so running
-// actors' files never go missing underneath them. Adding the handler after
-// cache sync is fine: client-go replays the existing object as an Add.
+// eventHandler adapts the ClusterTrustBundle informer: events only enqueue,
+// the run loop writes. Deletion enqueues too — refreshBundle keeps last-good
+// contents, so a running actor's files never go missing underneath it.
 func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 	enqueue := func(obj any) {
 		if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -263,10 +248,8 @@ func (r *systemInfoVolumeRefresher) run(ctx context.Context) {
 }
 
 // refreshBundle rewrites every registered volume that projects bundleName
-// and has not applied its current contents. All failures keep the affected
-// volume's last-good contents: resolution failures return nil and wait for
-// the bundle's next event, write failures return the error for the queue to
-// redrive without stopping the remaining volumes.
+// and has not applied its current contents, keeping last-good files on any
+// failure: resolution errors wait for the next event, write errors requeue.
 func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

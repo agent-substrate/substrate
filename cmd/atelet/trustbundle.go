@@ -31,9 +31,8 @@ import (
 const EgressTrustBundleName = "egress-mitm.ate.dev"
 
 // supportedTrustBundles maps the bundle names the trustBundle data source
-// may reference to their backing ClusterTrustBundle objects. Enforced here
-// rather than in the CRD schema so a configurable backend registry (#932)
-// can widen it without a template API change.
+// may reference to their backing ClusterTrustBundles. Enforced here so a
+// configurable backend registry (#932) can widen it without an API change.
 var supportedTrustBundles = map[string]string{
 	EgressTrustBundleName: "egress-mitm.ate.dev:mitm:primary-bundle",
 }

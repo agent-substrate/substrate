@@ -145,10 +145,9 @@ func TestSystemInfoVolumeRefresher_RefreshesRunningActorsOnChange(t *testing.T) 
 		}
 	}
 
-	// A replayed event for unchanged contents (relist after a watch
-	// reconnect, the daily resync) must not rewrite the files: a no-op
-	// rewrite still replaces the inode a suspended guest may need to re-bind.
-	// The sentinel write stands in for inode identity.
+	// A replayed event for unchanged contents (relist, daily resync) must
+	// not rewrite the files — a no-op rewrite still replaces the inode. The
+	// sentinel stands in for inode identity.
 	sentinelPath := filepath.Join(dir, "uid-1", "system-info", "trust", "ca.pem")
 	if err := os.WriteFile(sentinelPath, []byte("sentinel"), 0o644); err != nil {
 		t.Fatal(err)
@@ -237,9 +236,8 @@ func TestSystemInfoVolumeRefresher_RegisterEmptyClearsStaleRegistration(t *testi
 }
 
 // TestSystemInfoVolumeRefresher_RegisterRewritesFromCurrentState pins the
-// no-persistence restart story: a fresh refresher (as after an atelet
-// restart) knows nothing of past writes, and the next Run/Restore's Register
-// applies any rotation missed in between.
+// no-persistence restart story: a fresh refresher knows nothing of past
+// writes, so the next Run/Restore applies any rotation missed in between.
 func TestSystemInfoVolumeRefresher_RegisterRewritesFromCurrentState(t *testing.T) {
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
@@ -347,9 +345,8 @@ func TestSystemInfoVolumeRefresher_EventPipelineRetriesFailedWrites(t *testing.T
 }
 
 // TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone pins the
-// identical-contents skip in write: a rotation rewrites the bundle file but
-// not the volume's metadata files, whose inodes suspended guests may need to
-// re-bind. mtime stands in for inode identity.
+// identical-contents skip: a rotation rewrites the bundle file but not the
+// volume's metadata files. mtime stands in for inode identity.
 func TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone(t *testing.T) {
 	ctx := context.Background()
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
@@ -430,13 +427,9 @@ func TestSystemInfoVolumeRegister_WritesActorMetadata(t *testing.T) {
 	}
 }
 
-// TestSystemInfoVolumeRegister_StableRealPaths pins the path-stability
-// contract the restore paths depend on: the micro-VM virtiofsds run in
-// find-paths migration mode, which re-binds the guest's FUSE state to files
-// by the paths recorded at suspend, and gVisor's gofer likewise re-opens
-// files by path on restore. Projected files must therefore be plain files at
-// stable real paths — no symlink indirection — and regenerating the volume
-// must not move or delete a path that guest state may reference.
+// TestSystemInfoVolumeRegister_StableRealPaths pins the restore contract:
+// virtiofsd (find-paths mode) and gVisor's gofer re-bind suspend-time guest
+// state by recorded path, so regeneration must not move or drop real paths.
 func TestSystemInfoVolumeRegister_StableRealPaths(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
 	r := newSystemInfoVolumeRefresher(nil)

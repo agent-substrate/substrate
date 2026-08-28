@@ -1537,9 +1537,8 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with. It also registers system-info volumes with the refresher, which
-// writes their contents; the caller deregisters if the start fails
-// afterwards.
+// with. It also registers and populates system-info volumes; the caller
+// deregisters if the start later fails.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1566,10 +1565,9 @@ func (s *AteomHerder) prepareOCIBundles(
 			})
 		}
 	}
-	// Registration writes the volumes' contents, so the files carry the
-	// values of the actor actually being started before its sandbox boots
-	// (no matter what checkpointed state it boots from), and keeps them
-	// current while it runs.
+	// Registering before boot makes the files carry the values of the actor
+	// actually being started, whatever checkpointed state it boots from, and
+	// keeps them current while it runs.
 	if err := s.systemInfoVolumes.Register(actorUID, actorRef, siVolumes); err != nil {
 		return err
 	}
