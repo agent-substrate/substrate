@@ -52,8 +52,8 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 			Namespace: nsObj.Name,
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:   1,
-			AteomImage: "ateom:v1",
+			Replicas:    1,
+			WorkerImage: "ateom:v1",
 		},
 	}
 

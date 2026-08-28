@@ -92,8 +92,8 @@ func TestRenderFixtureManifest_GVisor(t *testing.T) {
 		t.Run(relPath, func(t *testing.T) {
 			pool, template := renderFixture(t, relPath)
 
-			if !strings.HasSuffix(pool.Spec.AteomImage, "/cmd/ateom-gvisor") {
-				t.Errorf("WorkerPool ateomImage = %q, want the gVisor ateom", pool.Spec.AteomImage)
+			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-gvisor") {
+				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.SandboxClass != "" || pool.Spec.SandboxConfigName != "" {
 				t.Errorf("WorkerPool carries micro-VM runtime fields: class=%q config=%q",
@@ -126,8 +126,8 @@ func TestRenderFixtureManifest_MicroVM(t *testing.T) {
 		t.Run(relPath, func(t *testing.T) {
 			pool, template := renderFixture(t, relPath)
 
-			if !strings.HasSuffix(pool.Spec.AteomImage, "/cmd/ateom-microvm") {
-				t.Errorf("WorkerPool ateomImage = %q, want the micro-VM ateom", pool.Spec.AteomImage)
+			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-microvm") {
+				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
 			}
 			if pool.Spec.SandboxClass != SandboxClassMicroVM || pool.Spec.SandboxConfigName != "microvm" {
 				t.Errorf("WorkerPool runtime = class %q / config %q, want microvm / microvm",

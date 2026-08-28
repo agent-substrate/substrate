@@ -119,7 +119,7 @@ func CreateSubstrateCounterTemplate(ctx context.Context, t *testing.T, clients *
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:          opts.PoolReplicas,
-			AteomImage:        existingWp.Spec.AteomImage,
+			WorkerImage:       existingWp.Spec.WorkerImage,
 			SandboxClass:      existingWp.Spec.SandboxClass,
 			SandboxConfigName: existingWp.Spec.SandboxConfigName,
 		},

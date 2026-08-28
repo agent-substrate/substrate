@@ -90,7 +90,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 
 	containerAC := corev1ac.Container().
 		WithName("ateom").
-		WithImage(wp.Spec.AteomImage).
+		WithImage(wp.Spec.WorkerImage).
 		WithArgs(
 			"--pod-uid=$(POD_UID)",
 			"--atunnel-listen-address=0.0.0.0:443",

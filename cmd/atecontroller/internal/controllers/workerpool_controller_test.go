@@ -173,7 +173,7 @@ func TestWorkerPoolReplicasUpdate(t *testing.T) {
 	})
 }
 
-// TestWorkerPoolImageUpdate verifies that changing spec.ateomImage on a
+// TestWorkerPoolImageUpdate verifies that changing spec.workerImage on a
 // WorkerPool propagates to the managed Deployment.
 func TestWorkerPoolImageUpdate(t *testing.T) {
 	t.Parallel()
@@ -190,7 +190,7 @@ func TestWorkerPoolImageUpdate(t *testing.T) {
 	})
 
 	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool image", func(current *atev1alpha1.WorkerPool) {
-		current.Spec.AteomImage = "ateom:v2"
+		current.Spec.WorkerImage = "ateom:v2"
 	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
@@ -569,8 +569,8 @@ func makeWorkerPool(name, ns string, replicas int32, image string) *atev1alpha1.
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:   replicas,
-			AteomImage: image,
+			Replicas:    replicas,
+			WorkerImage: image,
 		},
 	}
 }

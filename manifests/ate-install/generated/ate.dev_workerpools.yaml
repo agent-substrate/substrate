@@ -68,11 +68,6 @@ spec:
           spec:
             description: spec defines the desired state of WorkerPool
             properties:
-              ateomImage:
-                description: AteomImage is the ateom container image to deploy as
-                  workers.
-                minLength: 1
-                type: string
               replicas:
                 description: Replicas is the number of worker pods to run.
                 format: int32
@@ -84,7 +79,7 @@ spec:
                   SandboxClass selects the sandbox runtime family for this pool, which drives
                   the worker pod shape (KVM/vhost device mounts and node placement) and which
                   SandboxConfigs are eligible. The concrete binary is still selected by
-                  AteomImage. Defaults to gvisor.
+                  WorkerImage. Defaults to gvisor.
 
                   See Also: TODOs in ActorTemplate SandboxClass
                 enum:
@@ -447,8 +442,13 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                 type: object
+              workerImage:
+                description: |-
+                  WorkerImage is the ateom container image to deploy as workers. When
+                  unset, the controller injects a versioned default image for the pool's
+                  SandboxClass.
+                type: string
             required:
-            - ateomImage
             - replicas
             type: object
             x-kubernetes-validations:

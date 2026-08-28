@@ -26,7 +26,7 @@ metadata:
     workload: sandbox
 spec:
   replicas: 2
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
   template:
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The sandbox itself is sized by
