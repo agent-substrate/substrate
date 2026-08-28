@@ -128,15 +128,12 @@ func TestActorEgressHTTPS(t *testing.T) {
 }
 
 // httpTarget is the origin TestActorEgressNonStandardPort dials: a plain HTTP
-// server on a port that is neither 80 nor 443.
-//
-// It runs the egressprobe binary rather than one of its own. egressprobe's main
-// only parses flags and serves /healthz, and the credential bundles it reads
-// are read lazily inside /handshake, which this target never calls -- so it
-// starts with nothing mounted and needs no fixture of its own.
+// server on a port that is neither 80 nor 443. testserver's http subcommand
+// serves nothing but /healthz, which is all this target is dialed for.
 var httpTarget = e2e.ServerPod{
 	Name:       "httptarget",
-	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/egressprobe",
+	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	Args:       []string{"http"},
 	Port:       8080,
 }
 

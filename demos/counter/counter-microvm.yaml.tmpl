@@ -112,11 +112,13 @@ spec:
       workload: counter-microvm
   snapshotsConfig:
     onPause: Full
-    onCommit: Data
-    onResume:
-      # A Data snapshot resumes by combining the durable data with the golden
-      # snapshot's guest state (memory + fs delta) instead of cold-booting.
-      fromData: Golden
+    # Full, matching the gVisor variant: a suspend captures guest memory, so
+    # the in-RAM count continues from where it left off — the round-trip this
+    # demo's header comment promises. The golden-combining Data resume path
+    # (onResume.fromData: Golden) is exercised by the e2e demo suite's
+    # micro-VM cases; with Full on both triggers no Data snapshot is ever
+    # written here, so no onResume block is needed.
+    onCommit: Full
     location: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
   volumes:
   - name: data

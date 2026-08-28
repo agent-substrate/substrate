@@ -127,28 +127,18 @@ func main() {
 	go hasher.Run(ctx)
 
 	// Create a signer for servicedns.ate.dev/identity
-	serviceDNSCAPoolBytes, err := os.ReadFile(*serviceDNSCAPoolFile)
+	serviceDNSCAPool, err := localca.NewRefreshingPool(*serviceDNSCAPoolFile)
 	if err != nil {
-		slog.ErrorContext(ctx, "Error reading servicedns.ate.dev/identity CA pool state", slog.Any("err", err))
-		os.Exit(1)
-	}
-	serviceDNSCAPool, err := localca.Unmarshal(serviceDNSCAPoolBytes)
-	if err != nil {
-		slog.ErrorContext(ctx, "Error unmarshing servicedns.ate.dev/identity CA pool state", slog.Any("err", err))
+		slog.ErrorContext(ctx, "Error loading servicedns.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
 	serviceDNSSignerController := signercontroller.New(clock.RealClock{}, servicednssigner.NewImpl(kc, serviceDNSCAPool, clock.RealClock{}), kc, hasher)
 	go serviceDNSSignerController.Run(ctx, *workersPerSigner)
 
 	// Create a signer for podidentity.podcert.ate.dev/identity
-	podIdentityCAPoolBytes, err := os.ReadFile(*podCAPoolFile)
+	podIdentityCAPool, err := localca.NewRefreshingPool(*podCAPoolFile)
 	if err != nil {
-		slog.ErrorContext(ctx, "Error reading podidentity.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
-		os.Exit(1)
-	}
-	podIdentityCAPool, err := localca.Unmarshal(podIdentityCAPoolBytes)
-	if err != nil {
-		slog.ErrorContext(ctx, "Error unmarshing podidentity.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
+		slog.ErrorContext(ctx, "Error loading podidentity.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
 	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, clock.RealClock{}), kc, hasher)

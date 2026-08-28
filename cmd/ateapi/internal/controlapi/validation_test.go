@@ -625,3 +625,154 @@ func TestValidateObjectRef(t *testing.T) {
 		})
 	}
 }
+
+func validSystemInfoVolumeSource(mutate ...func(*ateapipb.SystemInfoVolumeSource)) *ateapipb.SystemInfoVolumeSource {
+	// This is valid with as many fields populated as possible.
+	s := &ateapipb.SystemInfoVolumeSource{
+		DataSources: []*ateapipb.SystemInfoDataSource{{
+			ActorMetadata: &ateapipb.ActorMetadataDataSource{
+				Items: []*ateapipb.ActorMetadataItem{{
+					Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME,
+					Path:  "actor-name",
+				}, {
+					Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_UID,
+					Path:  "actor-uid",
+				}},
+			},
+		}, {
+			TrustBundle: &ateapipb.TrustBundleDataSource{
+				Name: "egress-mitm.ate.dev",
+				Path: "trust-bundle.pem",
+			},
+		}},
+	}
+	for _, m := range mutate {
+		m(s)
+	}
+	return s
+}
+
+func TestValidateSystemInfoVolumeSource(t *testing.T) {
+	valid := validSystemInfoVolumeSource
+	dsPath := field.NewPath("data_sources")
+	itemsPath := dsPath.Index(0).Child("actor_metadata", "items")
+
+	tests := []struct {
+		name string
+		obj  *ateapipb.SystemInfoVolumeSource
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "valid: no data sources",
+		obj:  valid(func(s *ateapipb.SystemInfoVolumeSource) { s.DataSources = nil }),
+	}, {
+		name: "too many data sources",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			for len(s.DataSources) <= 8 {
+				s.DataSources = append(s.DataSources, &ateapipb.SystemInfoDataSource{
+					TrustBundle: &ateapipb.TrustBundleDataSource{Name: "egress-mitm.ate.dev", Path: "tb.pem"},
+				})
+			}
+		}),
+		want: field.ErrorList{field.TooMany(dsPath, 9, 8).WithOrigin("maxItems")},
+	}, {
+		name: "no union member set",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata = nil
+		}),
+		want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
+	}, {
+		name: "both union members set",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].TrustBundle = &ateapipb.TrustBundleDataSource{
+				Name: "egress-mitm.ate.dev",
+				Path: "tb2.pem",
+			}
+		}),
+		want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
+	}, {
+		name: "empty items",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items = nil
+		}),
+		want: field.ErrorList{field.Required(itemsPath, "")},
+	}, {
+		name: "duplicate projected field",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[1].Field = ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME
+		}),
+		want: field.ErrorList{field.Duplicate(itemsPath.Index(1), nil)},
+	}, {
+		name: "unspecified item field",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Field = ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED
+		}),
+		want: field.ErrorList{field.Required(itemsPath.Index(0).Child("field"), "")},
+	}, {
+		name: "empty item path",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = ""
+		}),
+		want: field.ErrorList{field.Required(itemsPath.Index(0).Child("path"), "")},
+	}, {
+		name: "item path too long",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = strings.Repeat("p", 256)
+		}),
+		want: field.ErrorList{field.TooLong(itemsPath.Index(0).Child("path"), nil, 255).WithOrigin("maxLength")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_SystemInfoVolumeSource(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateTrustBundleDataSource(t *testing.T) {
+	valid := func(mutate ...func(*ateapipb.TrustBundleDataSource)) *ateapipb.TrustBundleDataSource {
+		tb := &ateapipb.TrustBundleDataSource{
+			Name: "egress-mitm.ate.dev",
+			Path: "trust-bundle.pem",
+		}
+		for _, m := range mutate {
+			m(tb)
+		}
+		return tb
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateapipb.TrustBundleDataSource
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "empty name",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name: "name too long",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Name = strings.Repeat("n", 254) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("name"), nil, 253).WithOrigin("maxLength")},
+	}, {
+		name: "empty path",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("path"), "")},
+	}, {
+		name: "path too long",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = strings.Repeat("p", 256) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("path"), nil, 255).WithOrigin("maxLength")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_TrustBundleDataSource(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}

@@ -91,6 +91,79 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  # Large-memory variants: same load shape as the 1-user baseline, but the
+  # GluttonUser fills the actor's RAM to --mem-target through the
+  # glutton WriteRAM API before the first suspend, so every suspend/resume
+  # cycle is measured against a realistically-sized actor. actorMemory =
+  # target + headroom (glutton itself, the guest, and on microvm the 128Mi
+  # VMM reserve). The golden snapshot and cold boot stay small: the working
+  # set exists from the first fill onward.
+  - name: glutton_mem_1gi_gvisor
+    type: locust
+    description: "Large-memory: 1Gi resident working set, gvisor"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    actorMemory: "1536Mi"
+    flags:
+      - "--mem-target"
+      - "1Gi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_mem_1gi_microvm
+    type: locust
+    description: "Large-memory: 1Gi resident working set, microvm"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    sandboxClass: microvm
+    actorMemory: "1536Mi"
+    flags:
+      - "--mem-target"
+      - "1Gi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_mem_2gi_gvisor
+    type: locust
+    description: "Large-memory: 2Gi resident working set, gvisor"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    actorMemory: "2560Mi"
+    flags:
+      - "--mem-target"
+      - "2Gi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_mem_2gi_microvm
+    type: locust
+    description: "Large-memory: 2Gi resident working set, microvm"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    sandboxClass: microvm
+    actorMemory: "2560Mi"
+    flags:
+      - "--mem-target"
+      - "2Gi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
   - name: glutton_baseline_5_users
     type: locust
     description: "Glutton baseline: 5 concurrent users for 1 minute"

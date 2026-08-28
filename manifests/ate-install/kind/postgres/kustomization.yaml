@@ -18,10 +18,9 @@ kind: Kustomization
 resources:
   - ../../postgres.yaml
 
-# The base reserves a full CPU for a single-replica database. On a kind node --
-# 4 vCPU on a GitHub runner -- that is a quarter of the node held for a test
-# database. Only the request (what the scheduler subtracts) is lowered; the
-# 2-CPU limit is untouched, so PostgreSQL can still burst as far as it did.
+# The base sizes the database for a real install under activation load. On a
+# kind node -- 4 vCPU and a small disk on a GitHub runner -- that would crowd
+# out everything else, so restore the small test-database footprint.
 patches:
   - patch: |-
       apiVersion: apps/v1
@@ -37,3 +36,13 @@ patches:
               resources:
                 requests:
                   cpu: 250m
+                limits:
+                  cpu: "2"
+  - target:
+      kind: StatefulSet
+      name: postgres
+      namespace: ate-system
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 1Gi

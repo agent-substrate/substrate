@@ -44,8 +44,9 @@ const (
 //
 // Echo is the smallest service that can prove a gRPC request and its response
 // crossed a network path intact. It exists for the egress e2e coverage: the
-// origin is internal/e2e/fixtures/grpcecho and the client is the egress demo
-// actor, which reaches it through the egress gateway's CONNECT tunnel.
+// origin is internal/e2e/fixtures/testserver (its grpc subcommand) and the
+// client is the egress demo actor, which reaches it through the egress gateway's
+// CONNECT tunnel.
 //
 // One method per streaming shape, because they fail differently. A unary
 // response carries its status in trailers sent immediately after the message; a
@@ -127,8 +128,9 @@ type Echo_EchoBidiClient = grpc.BidiStreamingClient[EchoRequest, EchoResponse]
 //
 // Echo is the smallest service that can prove a gRPC request and its response
 // crossed a network path intact. It exists for the egress e2e coverage: the
-// origin is internal/e2e/fixtures/grpcecho and the client is the egress demo
-// actor, which reaches it through the egress gateway's CONNECT tunnel.
+// origin is internal/e2e/fixtures/testserver (its grpc subcommand) and the
+// client is the egress demo actor, which reaches it through the egress gateway's
+// CONNECT tunnel.
 //
 // One method per streaming shape, because they fail differently. A unary
 // response carries its status in trailers sent immediately after the message; a

@@ -70,69 +70,13 @@ func TestActorResourceLimits(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{Resources: tc.res}}
-			cpu, mem := actorResourceLimits(tmpl)
+			tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{Resources: tc.res}})
+			cpu, mem, err := actorResourceLimits(tmpl)
+			if err != nil {
+				t.Fatalf("actorResourceLimits() error: %v", err)
+			}
 			if cpu != tc.wantCPU || mem != tc.wantMemory {
 				t.Fatalf("actorResourceLimits() = (%d, %d), want (%d, %d)", cpu, mem, tc.wantCPU, tc.wantMemory)
-			}
-		})
-	}
-}
-
-// TestWorkerCapacity covers the worker-side extraction: capacity comes from the
-// ateom container's limits, not the pod total, and other containers are ignored.
-func TestWorkerCapacity(t *testing.T) {
-	pod := func(ctrs ...corev1.Container) *corev1.Pod {
-		return &corev1.Pod{Spec: corev1.PodSpec{Containers: ctrs}}
-	}
-	limited := func(name, cpu, mem string) corev1.Container {
-		lim := corev1.ResourceList{}
-		if cpu != "" {
-			lim[corev1.ResourceCPU] = resource.MustParse(cpu)
-		}
-		if mem != "" {
-			lim[corev1.ResourceMemory] = resource.MustParse(mem)
-		}
-		return corev1.Container{Name: name, Resources: corev1.ResourceRequirements{Limits: lim}}
-	}
-
-	tests := []struct {
-		name       string
-		pod        *corev1.Pod
-		wantCPU    int64
-		wantMemory int64
-	}{
-		{
-			name:       "no ateom container yields zero",
-			pod:        pod(limited("sidecar", "1", "1Gi")),
-			wantCPU:    0,
-			wantMemory: 0,
-		},
-		{
-			name:       "ateom container limits become capacity",
-			pod:        pod(limited(ateomContainerName, "4", "8Gi")),
-			wantCPU:    4000,
-			wantMemory: 8 << 30,
-		},
-		{
-			name:       "only the ateom container counts, not the pod total",
-			pod:        pod(limited("sidecar", "16", "64Gi"), limited(ateomContainerName, "2", "2Gi")),
-			wantCPU:    2000,
-			wantMemory: 2 << 30,
-		},
-		{
-			name:       "unset dimension reports zero",
-			pod:        pod(limited(ateomContainerName, "2", "")),
-			wantCPU:    2000,
-			wantMemory: 0,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := workerCapacity(tc.pod)
-			if got.GetCpuMilli() != tc.wantCPU || got.GetMemoryBytes() != tc.wantMemory {
-				t.Fatalf("workerCapacity() = (%d, %d), want (%d, %d)",
-					got.GetCpuMilli(), got.GetMemoryBytes(), tc.wantCPU, tc.wantMemory)
 			}
 		})
 	}

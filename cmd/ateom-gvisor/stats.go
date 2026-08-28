@@ -54,8 +54,8 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // ateom into /sys/fs/cgroup/ateom precisely so that one level up is the
 // delegated scope.
 //
-// The actor's own containers get leaves too, since cmdCreate calls
-// ensureContainerCgroupsPath for each of them, but those leaves stay empty by
+// The actor's own containers get leaves too, since cmdCreate shapes a
+// cgroupsPath into each of their specs, but those leaves stay empty by
 // design. gVisor's setupCgroupForSubcontainer creates them with empty resources
 // and explains why: "Since subcontainers run exclusively inside the sandbox,
 // subcontainer cgroups on the host have no effect on them. However, some tools
@@ -84,8 +84,8 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // accounting, which the proto already says is not reported here.
 //
 // The name has to agree with the cgroupsPath convention in
-// runsc.ensureContainerCgroupsPath, which is "/" + containerName relative to
-// the same scope.
+// ocispec.ShapeGVisor, which is "/" + containerName relative to the same
+// scope.
 const sandboxCgroupContainer = "pause"
 
 // GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.

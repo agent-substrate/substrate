@@ -38,6 +38,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -49,31 +50,10 @@ const (
 	typeVirtioFS   = "virtiofs"
 	virtioFSDriver = "virtio-fs"
 	// guestSharedDir is where the agent mounts the kataShared tag in the guest;
-	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs, durable
-	// volumes at <guestSharedDir>/durable/<volumeName>, CSI volumes at
-	// <guestSharedDir>/csi/<volumeName>, and system-info volumes at
-	// <guestSharedDir>/system-info/<volumeName>.
-	guestSharedDir = "/run/kata-containers/shared/containers/"
+	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs, and the
+	// volume shares at the subdirectories ocispec.ShapeMicroVM points binds at.
+	guestSharedDir = ocispec.GuestSharedDir + "/"
 )
-
-// GuestDurableVolumeDir is the in-guest path holding one durable volume's
-// contents, i.e. the bind source for that volume's container mount points.
-func GuestDurableVolumeDir(volumeName string) string {
-	return guestSharedDir + "durable/" + volumeName
-}
-
-// GuestCSIVolumeDir is the in-guest path holding one CSI volume's
-// contents, i.e. the bind source for that volume's container mount points.
-func GuestCSIVolumeDir(volumeName string) string {
-	return guestSharedDir + "csi/" + volumeName
-}
-
-// GuestSystemInfoVolumeDir is the in-guest path holding one system-info
-// volume's contents, i.e. the read-only bind source for that volume's
-// container mount points.
-func GuestSystemInfoVolumeDir(volumeName string) string {
-	return guestSharedDir + "system-info/" + volumeName
-}
 
 // SharedDir is the host directory virtiofsd serves into the guest as the RO base.
 // Its layout (<cid>/rootfs) is what find-paths re-opens by path on restore.
@@ -103,13 +83,13 @@ func GuestSharedRootfs(containerID string) string { return guestSharedDir + cont
 // GuestSharedVolumeDir is the in-guest path one image volume's contents appear
 // at, beside the container's rootfs in the same kataShared tree.
 func GuestSharedVolumeDir(containerID, volumeName string) string {
-	return filepath.Join(guestSharedDir, containerID, "volumes", volumeName)
+	return filepath.Join(guestSharedDir, containerID, ocispec.ShareVolumes, volumeName)
 }
 
 // SharedVolumeDir is the host path under virtiofsd's served tree that
 // GuestSharedVolumeDir resolves to.
 func SharedVolumeDir(id, containerID, volumeName string) string {
-	return filepath.Join(SharedDir(id), containerID, "volumes", volumeName)
+	return filepath.Join(SharedDir(id), containerID, ocispec.ShareVolumes, volumeName)
 }
 
 // VirtiofsdOptions configures StartVirtiofsd.
@@ -398,9 +378,8 @@ func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSand
 func (a *AgentClient) StartRootfsContainer(ctx context.Context, cid string, spec *specs.Spec) error {
 	pbSpec := SpecToAgentPB(spec)
 	pbSpec.Root = &agentpb.Root{Path: GuestSharedRootfs(cid), Readonly: false}
-	// Per-container cgroup: the shaped spec carries the actor-wide
-	// /ateomchv/<actorName> (spec.go), which collides across an actor's
-	// containers — use the per-id path.
+	// Per-container cgroup under the shared /ateomchv parent, so the guest
+	// kernel accounts an actor's containers hierarchically (see agentstats).
 	if pbSpec.Linux != nil {
 		pbSpec.Linux.CgroupsPath = "/ateomchv/" + cid
 	}

@@ -37,6 +37,10 @@ jobs:
       with:
         go-version-file: 'go.mod'
     - run: go test -race -v ./...
+    # tools/apitool has its own module so we need to run it explicitly.
+    - name: apitool tests
+      working-directory: tools/apitool
+      run: go test -race -v ./...
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.

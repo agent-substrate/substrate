@@ -921,6 +921,9 @@ func (x *XdsServer) buildConnectTerminateHCM(statPrefix string) *anypb.Any {
 			{
 				UpgradeType: ConnectUpgradeType,
 			},
+			{
+				UpgradeType: "websocket",
+			},
 		},
 		CodecType: hcmv3.HttpConnectionManager_AUTO,
 		HttpFilters: []*hcmv3.HttpFilter{
@@ -1050,7 +1053,10 @@ func (x *XdsServer) buildHcm(statPrefix string, captureAuthority bool) *anypb.An
 	hcm := newAny(&hcmv3.HttpConnectionManager{
 		StatPrefix:        statPrefix,
 		GenerateRequestId: &wrapperspb.BoolValue{Value: true},
-		Tracing:           x.buildTracing(),
+		UpgradeConfigs: []*hcmv3.HttpConnectionManager_UpgradeConfig{
+			{UpgradeType: "websocket"},
+		},
+		Tracing: x.buildTracing(),
 		AccessLog: []*accesslogv3.AccessLog{
 			{
 				Name: "envoy.access_loggers.stdout",

@@ -27,11 +27,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/localca"
 	secretservice "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	"google.golang.org/grpc"
-
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/sdsmint/certauth"
-	"github.com/agent-substrate/substrate/internal/localca"
 )
 
 func run(ctx context.Context, cfg config) error {
@@ -51,15 +49,13 @@ func run(ctx context.Context, cfg config) error {
 		return err
 	}
 
-	signer, err := loadSigner(cfg.CAPoolPath, cfg.CAID)
+	pool, err := localca.NewRefreshingPool(cfg.CAPoolPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("while loading CA pool: %w", err)
 	}
 
-	// Named m because minter is the type.
-	m, err := newMinter(signer, minterOptions{
-		TTL:    cfg.LeafCertTTL,
-		Logger: logger,
+	m, err := newMinter(pool, minterOptions{
+		TTL: cfg.LeafCertTTL,
 	})
 	if err != nil {
 		return fmt.Errorf("building minter: %w", err)
@@ -122,20 +118,4 @@ func newLogger(level string) (*slog.Logger, error) {
 		return nil, fmt.Errorf("--log-level %q: %w", level, err)
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})), nil
-}
-
-func loadSigner(poolPath, id string) (*certauth.Signer, error) {
-	poolBytes, err := os.ReadFile(poolPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading CA pool %s: %w", poolPath, err)
-	}
-	pool, err := localca.Unmarshal(poolBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parsing CA pool %s: %w", poolPath, err)
-	}
-	signer, err := certauth.New(pool, id)
-	if err != nil {
-		return nil, fmt.Errorf("loading CA from %s: %w", poolPath, err)
-	}
-	return signer, nil
 }

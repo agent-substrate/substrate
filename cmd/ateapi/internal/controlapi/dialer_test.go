@@ -30,13 +30,13 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/utils/lru"
 )
 
 const testAteletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
@@ -161,7 +161,7 @@ func newDialerForPods(t *testing.T, workerPod, ateletPod *corev1.Pod) *AteletDia
 	return &AteletDialer{
 		workerIndexer: workerIndexer,
 		ateletIndexer: ateletIndexer,
-		ateletConns:   lru.New(16),
+		ateletConns:   newAteletConnCache(16),
 		dialCredentials: func(string) (credentials.TransportCredentials, error) {
 			return insecure.NewCredentials(), nil
 		},
@@ -403,6 +403,28 @@ func TestDialForAteletOnNode(t *testing.T) {
 		}
 		if again != conn {
 			t.Error("second DialForAteletOnNode returned a different connection, want the cached one")
+		}
+	})
+
+	t.Run("closes conns evicted from the cache", func(t *testing.T) {
+		d := NewAteletDialer(nil, newTestAteletIndexer(t,
+			ateletPod("atelet-1", "uid-1", "node1", "10.0.0.1"),
+			ateletPod("atelet-2", "uid-2", "node2", "10.0.0.2"),
+		), "", "", WithDialCredentials(func(string) (credentials.TransportCredentials, error) {
+			return insecure.NewCredentials(), nil
+		}))
+		d.ateletConns = newAteletConnCache(1)
+
+		first, err := d.DialForAteletOnNode("node1")
+		if err != nil {
+			t.Fatalf("DialForAteletOnNode(node1): %v", err)
+		}
+		if _, err := d.DialForAteletOnNode("node2"); err != nil {
+			t.Fatalf("DialForAteletOnNode(node2): %v", err)
+		}
+
+		if got := first.GetState(); got != connectivity.Shutdown {
+			t.Errorf("evicted conn state = %v, want %v (closed on eviction)", got, connectivity.Shutdown)
 		}
 	})
 }

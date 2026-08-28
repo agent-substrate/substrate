@@ -448,8 +448,8 @@ func TestValidateRunRequest(t *testing.T) {
 		{"invalid atespace", func(r *ateletpb.RunRequest) { r.Atespace = "../escape" }, true},
 		{"invalid actor name", func(r *ateletpb.RunRequest) { r.ActorName = "../escape" }, true},
 		{"invalid actor uid", func(r *ateletpb.RunRequest) { r.ActorUid = "../escape" }, true},
-		{"invalid actor template namespace", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace = "Not_Valid" }, true},
-		{"invalid actor template name", func(r *ateletpb.RunRequest) { r.ActorTemplateName = "Not_Valid" }, true},
+		{"any actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "Not_Valid", "Not_Valid" }, false},
+		{"empty actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "", "" }, false},
 		{"invalid container name", func(r *ateletpb.RunRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}, true},
@@ -488,8 +488,10 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		{"invalid atespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorName = "../escape" }), true},
 		{"invalid actor uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorUid = "../escape" }), true},
-		{"invalid actor template namespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
-		{"invalid actor template name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateName = "Not_Valid" }), true},
+		{"any actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.ActorTemplateNamespace, r.ActorTemplateName = "Not_Valid", "Not_Valid"
+		}), false},
+		{"empty actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "", "" }), false},
 		{"invalid container name", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}), true},
@@ -546,8 +548,10 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid atespace", makeReq(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorName = "../escape" }), true},
 		{"invalid actor uid", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorUid = "../escape" }), true},
-		{"invalid actor template namespace", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
-		{"invalid actor template name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateName = "Not_Valid" }), true},
+		{"any actor template identity accepted", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.ActorTemplateNamespace, r.ActorTemplateName = "Not_Valid", "Not_Valid"
+		}), false},
+		{"empty actor template identity accepted", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "", "" }), false},
 		{"invalid container name", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}), true},
@@ -823,28 +827,11 @@ func TestRPCBoundariesReject(t *testing.T) {
 		wantInvalidArgument(t, "Restore", err)
 	})
 	t.Run("Terminate", func(t *testing.T) {
-		const okTargetAteomUID = "123e4567-e89b-12d3-a456-426614174001"
 		t.Run("invalid ateom UID", func(t *testing.T) {
 			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 				Atespace: okAtespace, ActorName: okID,
 				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
 				TargetAteomUid: badUID, Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
-		})
-		t.Run("missing template namespace", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateName: "template",
-				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
-		})
-		t.Run("missing template name", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateNamespace: "default",
-				TargetAteomUid: okTargetAteomUID, Spec: okSpec,
 			})
 			wantInvalidArgument(t, "Terminate", err)
 		})
@@ -1877,7 +1864,10 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		{"golden atespace rejected", func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = resources.GoldenActorAtespace }, true},
 		{"invalid actor name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorName = "UPPER" }, true},
 		{"invalid actor uid", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "" }, true},
-		{"invalid template namespace", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateNamespace = "no/slashes" }, true},
+		{"any actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateNamespace = "no/slashes" }, false},
+		{"empty actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.ActorTemplateNamespace, r.ActorTemplateName = "", ""
+		}, false},
 		{"invalid snapshot name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "../escape" }, true},
 		{"invalid snapshot uri", func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }, true},
 		{"unspecified scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
