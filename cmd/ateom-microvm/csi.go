@@ -23,8 +23,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // hasCsiVolumes reports whether any container mounts a CSI volume.
@@ -37,22 +37,6 @@ func hasCsiVolumes(containers []*ateompb.Container) bool {
 	return false
 }
 
-// csiMounts returns the OCI mounts that expose a container's CSI
-// volumes at the paths it declared. Each source is that volume's directory
-// inside the guest's CSI share, which the agent mounts at sandbox creation.
-func csiMounts(mounts []*ateompb.VolumeMount) []specs.Mount {
-	out := make([]specs.Mount, 0, len(mounts))
-	for _, m := range mounts {
-		out = append(out, specs.Mount{
-			Destination: m.GetMountPath(),
-			Source:      kata.GuestCSIVolumeDir(m.GetVolumeName()),
-			Type:        "bind",
-			Options:     []string{"rbind", "rw"},
-		})
-	}
-	return out
-}
-
 // stageCsiVolumes bind-mounts the actor's host CSI volumes directory
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/csi.
 func (s *AteomService) stageCsiVolumes(ctx context.Context, actorUID string) error {
@@ -60,7 +44,7 @@ func (s *AteomService) stageCsiVolumes(ctx context.Context, actorUID string) err
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking CSI volumes dir %q: %w", src, err)
 	}
-	if err := kata.BindIntoShare(ctx, src, actorUID, "csi"); err != nil {
+	if err := kata.BindIntoShare(ctx, src, actorUID, ocispec.ShareCSI); err != nil {
 		return fmt.Errorf("while binding CSI volumes into the shared tree: %w", err)
 	}
 	return nil

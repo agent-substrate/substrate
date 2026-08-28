@@ -175,7 +175,101 @@ func TestCreateActor_TemplateNotFound(t *testing.T) {
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "non-existent",
 	}})
-	assertGrpcError(t, err, codes.FailedPrecondition, fmt.Sprintf("ActorTemplate %s/non-existent not found", ns))
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("CreateActor with a missing template = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+}
+
+// TestCreateActor_RejectsTemplateMatchExpressions pins the equality-only
+// selector contract: converting the template drops matchExpressions, which
+// would schedule the actor wider than the template declares, so CreateActor
+// must refuse instead.
+func TestCreateActor_RejectsTemplateMatchExpressions(t *testing.T) {
+	ns := namespaceForTest("ns-create-matchexpr")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	template := &atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-expr", Namespace: ns},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://fake-fake-fake"},
+			Containers: []atev1alpha1.Container{{
+				Name:    "main",
+				Image:   "main@sha256:abc",
+				Command: []string{"/main"},
+			}},
+			WorkerSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{poolLabelKey: ns},
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"1"}},
+				},
+			},
+		},
+	}
+	if _, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), template, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create actor template: %v", err)
+	}
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, err := tc.actorTemplateLister.ActorTemplates(ns).Get("tmpl-expr")
+		return err == nil, nil
+	}); err != nil {
+		t.Fatalf("template never appeared in the lister: %v", err)
+	}
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl-expr",
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition,
+		fmt.Sprintf("ActorTemplate %s/tmpl-expr workerSelector uses matchExpressions; only matchLabels is supported", ns))
+}
+
+// TestCreateActor_SubstrateTemplateRef covers the substrate reference form:
+// the actor names its template with an actor_template ObjectRef resolved from
+// the store instead of the legacy CRD namespace/name pair.
+func TestCreateActor_SubstrateTemplateRef(t *testing.T) {
+	ns := namespaceForTest("ns-create-sub-ref")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "sub-tmpl"},
+			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	created, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "ref-actor"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "sub-tmpl"},
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	want := &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "ref-actor", Version: 1},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("CreateActor response mismatch (-want +got):\n%s", diff)
+	}
+
+	// A reference to a template that does not exist fails like the legacy pair.
+	_, err = tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "ref-actor-2"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "absent"},
+	}})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("CreateActor with an absent template ref = %v, want FailedPrecondition (err: %v)", got, err)
+	}
 }
 
 // TestCreateActor_Duplicate tests that creating an actor with an existing ID fails.

@@ -638,9 +638,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -906,9 +907,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
 	var containersToDelete []string
 	defer func() {
