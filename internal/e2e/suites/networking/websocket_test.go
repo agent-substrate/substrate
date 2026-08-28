@@ -88,14 +88,11 @@ func TestWebsocketPingPong(t *testing.T) {
 
 	var c *websocket.Conn
 
-	dialer := websocket.DefaultDialer
-	dialer.Proxy = nil // Explicitly circumvent HTTP_PROXY so Cloudtop BeyondCorp doesn't block ws://127.0.0.1 dialing
-
 	// Ride out atenet-router xDS snapshot sync lag (up to ~30s), similar to waitForRouteReady
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		var resp *http.Response
-		c, resp, err = dialer.DialContext(ctx, u.String(), header)
+		c, resp, err = websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 		if err == nil {
 			break
 		}
