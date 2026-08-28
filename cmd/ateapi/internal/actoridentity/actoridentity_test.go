@@ -796,7 +796,9 @@ func TestMintCertActorUID(t *testing.T) {
 		wantCode   codes.Code
 	}{
 		"Matching": {requestUID: func(actorUID string) string { return actorUID }, wantCode: codes.OK},
-		"Stale":    {requestUID: func(string) string { return "uid-of-a-previous-incarnation" }, wantCode: codes.FailedPrecondition},
+		// The stale uid is well-formed on purpose: a malformed one is rejected
+		// as INVALID_ARGUMENT by request validation before the guard runs.
+		"Stale": {requestUID: func(string) string { return "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63" }, wantCode: codes.FailedPrecondition},
 	} {
 		t.Run(name, func(t *testing.T) {
 			leaf, actorUID, err := mintCertFor(t, func(actorUID string) *ateapipb.MintCertRequest {
