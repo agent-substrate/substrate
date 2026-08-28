@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package glutton
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/proto/glutton"
+	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -40,14 +40,14 @@ import (
 // on a real listener and exercises both protocols against it: the readyz
 // probe is a plain HTTP GET, and it must not stop gRPC from being served.
 func TestSplitGRPCServesReadyzAndGRPCOnOneListener(t *testing.T) {
-	svc, err := newGluttonService(t.TempDir())
+	svc, err := New(t.TempDir())
 	if err != nil {
-		t.Fatalf("newGluttonService: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	defer svc.Close()
 
 	grpcSrv := grpc.NewServer()
-	glutton.RegisterGluttonServer(grpcSrv, svc)
+	gluttonpb.RegisterGluttonServer(grpcSrv, svc)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +58,7 @@ func TestSplitGRPCServesReadyzAndGRPCOnOneListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv := newServer(splitGRPC(grpcSrv, mux))
+	srv := NewServer(splitGRPC(grpcSrv, mux))
 	go srv.Serve(lis)
 	defer srv.Close()
 
@@ -81,7 +81,7 @@ func TestSplitGRPCServesReadyzAndGRPCOnOneListener(t *testing.T) {
 	}
 	defer conn.Close()
 
-	pong, err := glutton.NewGluttonClient(conn).Ping(ctx, &glutton.PingRequest{Message: "hi"})
+	pong, err := gluttonpb.NewGluttonClient(conn).Ping(ctx, &gluttonpb.PingRequest{Message: "hi"})
 	if err != nil {
 		t.Fatalf("Ping over gRPC: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSplitGRPCRoutesOnContentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv := newServer(handler)
+	srv := NewServer(handler)
 	go srv.Serve(lis)
 	defer srv.Close()
 
@@ -123,7 +123,7 @@ func TestSplitGRPCRoutesOnContentType(t *testing.T) {
 
 func TestWriteDiskReadDiskRoundTrip(t *testing.T) {
 	tempDir := t.TempDir()
-	svc, err := newGluttonService(tempDir)
+	svc, err := New(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create glutton service: %v", err)
 	}
@@ -142,10 +142,10 @@ func TestWriteDiskReadDiskRoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			writeResp, err := svc.WriteDisk(ctx, &glutton.WriteDiskRequest{
+			writeResp, err := svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
 				Key:       tt.key,
 				Size:      tt.size,
-				WriteMode: glutton.WriteMode_WRITE_MODE_TRUNCATE,
+				WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
 			})
 			if err != nil {
 				t.Fatalf("WriteDisk failed: %v", err)
@@ -155,9 +155,9 @@ func TestWriteDiskReadDiskRoundTrip(t *testing.T) {
 			}
 
 			// 1. Full data read
-			readResp, err := svc.ReadDisk(ctx, &glutton.ReadDiskRequest{
+			readResp, err := svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{
 				Key:      tt.key,
-				ReadMode: glutton.ReadMode_READ_MODE_DATA,
+				ReadMode: gluttonpb.ReadMode_READ_MODE_DATA,
 			})
 			if err != nil {
 				t.Fatalf("ReadDisk (DATA) failed: %v", err)
@@ -179,9 +179,9 @@ func TestWriteDiskReadDiskRoundTrip(t *testing.T) {
 			}
 
 			// 2. Digest-only read
-			digestResp, err := svc.ReadDisk(ctx, &glutton.ReadDiskRequest{
+			digestResp, err := svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{
 				Key:      tt.key,
-				ReadMode: glutton.ReadMode_READ_MODE_DIGEST_ONLY,
+				ReadMode: gluttonpb.ReadMode_READ_MODE_DIGEST_ONLY,
 			})
 			if err != nil {
 				t.Fatalf("ReadDisk (DIGEST_ONLY) failed: %v", err)
@@ -201,7 +201,7 @@ func TestWriteDiskReadDiskRoundTrip(t *testing.T) {
 
 func TestWriteDiskTruncateProducesExactSize(t *testing.T) {
 	tempDir := t.TempDir()
-	svc, err := newGluttonService(tempDir)
+	svc, err := New(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create glutton service: %v", err)
 	}
@@ -211,10 +211,10 @@ func TestWriteDiskTruncateProducesExactSize(t *testing.T) {
 	key := "testfile"
 	size := int32(2048)
 
-	_, err = svc.WriteDisk(ctx, &glutton.WriteDiskRequest{
+	_, err = svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
 		Key:       key,
 		Size:      size,
-		WriteMode: glutton.WriteMode_WRITE_MODE_TRUNCATE,
+		WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
 	})
 	if err != nil {
 		t.Fatalf("WriteDisk failed: %v", err)
@@ -232,7 +232,7 @@ func TestWriteDiskTruncateProducesExactSize(t *testing.T) {
 
 func TestWriteDiskOverwriteDigestMatchesReadDisk(t *testing.T) {
 	tempDir := t.TempDir()
-	svc, err := newGluttonService(tempDir)
+	svc, err := New(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create glutton service: %v", err)
 	}
@@ -242,20 +242,20 @@ func TestWriteDiskOverwriteDigestMatchesReadDisk(t *testing.T) {
 	key := "overwrittenfile"
 
 	// 1. Initial write of large file (4096 bytes)
-	_, err = svc.WriteDisk(ctx, &glutton.WriteDiskRequest{
+	_, err = svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
 		Key:       key,
 		Size:      4096,
-		WriteMode: glutton.WriteMode_WRITE_MODE_TRUNCATE,
+		WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
 	})
 	if err != nil {
 		t.Fatalf("WriteDisk (large) failed: %v", err)
 	}
 
 	// 2. Overwrite prefix with smaller size (1024 bytes) without truncation
-	overwriteResp, err := svc.WriteDisk(ctx, &glutton.WriteDiskRequest{
+	overwriteResp, err := svc.WriteDisk(ctx, &gluttonpb.WriteDiskRequest{
 		Key:       key,
 		Size:      1024,
-		WriteMode: glutton.WriteMode_WRITE_MODE_OVERWRITE,
+		WriteMode: gluttonpb.WriteMode_WRITE_MODE_OVERWRITE,
 	})
 	if err != nil {
 		t.Fatalf("WriteDisk (overwrite) failed: %v", err)
@@ -266,9 +266,9 @@ func TestWriteDiskOverwriteDigestMatchesReadDisk(t *testing.T) {
 	}
 
 	// 3. ReadDisk reads the entire file (4096 bytes)
-	readResp, err := svc.ReadDisk(ctx, &glutton.ReadDiskRequest{
+	readResp, err := svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{
 		Key:      key,
-		ReadMode: glutton.ReadMode_READ_MODE_DATA,
+		ReadMode: gluttonpb.ReadMode_READ_MODE_DATA,
 	})
 	if err != nil {
 		t.Fatalf("ReadDisk failed: %v", err)
@@ -284,14 +284,14 @@ func TestWriteDiskOverwriteDigestMatchesReadDisk(t *testing.T) {
 
 func TestReadDiskRejectsInvalidKey(t *testing.T) {
 	tempDir := t.TempDir()
-	svc, err := newGluttonService(tempDir)
+	svc, err := New(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create glutton service: %v", err)
 	}
 	defer svc.Close()
 
 	ctx := context.Background()
-	_, err = svc.ReadDisk(ctx, &glutton.ReadDiskRequest{Key: "../escape"})
+	_, err = svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{Key: "../escape"})
 	if err == nil {
 		t.Error("expected error for invalid key with path traversal, got nil")
 	}
@@ -302,14 +302,14 @@ func TestReadDiskRejectsInvalidKey(t *testing.T) {
 
 func TestReadDiskNotFound(t *testing.T) {
 	tempDir := t.TempDir()
-	svc, err := newGluttonService(tempDir)
+	svc, err := New(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create glutton service: %v", err)
 	}
 	defer svc.Close()
 
 	ctx := context.Background()
-	_, err = svc.ReadDisk(ctx, &glutton.ReadDiskRequest{Key: "nonexistent"})
+	_, err = svc.ReadDisk(ctx, &gluttonpb.ReadDiskRequest{Key: "nonexistent"})
 	if err == nil {
 		t.Error("expected error for nonexistent file, got nil")
 	}
@@ -320,7 +320,7 @@ func TestReadDiskNotFound(t *testing.T) {
 
 func TestHTTPRoutes(t *testing.T) {
 	tempDir := t.TempDir()
-	svc, err := newGluttonService(tempDir)
+	svc, err := New(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create glutton service: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestHTTPRoutes(t *testing.T) {
 	res.Body.Close()
 
 	// 4. POST /ping -> 200 OK & protobuf Content-Type & ServerElapsedTrailer & echo message
-	pingReqBytes, _ := proto.Marshal(&glutton.PingRequest{Message: "hello"})
+	pingReqBytes, _ := proto.Marshal(&gluttonpb.PingRequest{Message: "hello"})
 	res, err = http.Post(ts.URL+"/ping", "application/x-protobuf", bytes.NewReader(pingReqBytes))
 	if err != nil {
 		t.Fatalf("POST /ping failed: %v", err)
@@ -376,7 +376,7 @@ func TestHTTPRoutes(t *testing.T) {
 	}
 	body, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	var pingResp glutton.PingResponse
+	var pingResp gluttonpb.PingResponse
 	if err := proto.Unmarshal(body, &pingResp); err != nil {
 		t.Fatalf("unmarshal PingResponse failed: %v", err)
 	}
@@ -385,10 +385,10 @@ func TestHTTPRoutes(t *testing.T) {
 	}
 
 	// 5. POST /writedisk -> 200 OK & protobuf Content-Type
-	writeReqBytes, _ := proto.Marshal(&glutton.WriteDiskRequest{
+	writeReqBytes, _ := proto.Marshal(&gluttonpb.WriteDiskRequest{
 		Key:       "httpfile",
 		Size:      512,
-		WriteMode: glutton.WriteMode_WRITE_MODE_TRUNCATE,
+		WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
 	})
 	res, err = http.Post(ts.URL+"/writedisk", "application/x-protobuf", bytes.NewReader(writeReqBytes))
 	if err != nil {
@@ -399,7 +399,7 @@ func TestHTTPRoutes(t *testing.T) {
 	}
 	body, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	var writeResp glutton.WriteDiskResponse
+	var writeResp gluttonpb.WriteDiskResponse
 	if err := proto.Unmarshal(body, &writeResp); err != nil {
 		t.Fatalf("unmarshal WriteDiskResponse failed: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestHTTPRoutes(t *testing.T) {
 	}
 
 	// 6. POST /readdisk -> 200 OK & matching size & digest
-	readReqBytes, _ := proto.Marshal(&glutton.ReadDiskRequest{Key: "httpfile"})
+	readReqBytes, _ := proto.Marshal(&gluttonpb.ReadDiskRequest{Key: "httpfile"})
 	res, err = http.Post(ts.URL+"/readdisk", "application/x-protobuf", bytes.NewReader(readReqBytes))
 	if err != nil {
 		t.Fatalf("POST /readdisk failed: %v", err)
@@ -418,7 +418,7 @@ func TestHTTPRoutes(t *testing.T) {
 	}
 	body, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	var readResp glutton.ReadDiskResponse
+	var readResp gluttonpb.ReadDiskResponse
 	if err := proto.Unmarshal(body, &readResp); err != nil {
 		t.Fatalf("unmarshal ReadDiskResponse failed: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestHTTPRoutes(t *testing.T) {
 	}
 
 	// 7. unknown key -> 404 (NotFound mapping)
-	missBytes, _ := proto.Marshal(&glutton.ReadDiskRequest{Key: "nosuchfile"})
+	missBytes, _ := proto.Marshal(&gluttonpb.ReadDiskRequest{Key: "nosuchfile"})
 	res, err = http.Post(ts.URL+"/readdisk", "application/x-protobuf", bytes.NewReader(missBytes))
 	if err != nil {
 		t.Fatalf("POST /readdisk miss failed: %v", err)
@@ -441,7 +441,7 @@ func TestHTTPRoutes(t *testing.T) {
 	res.Body.Close()
 
 	// 8. traversal key -> 400 (InvalidArgument mapping)
-	badBytes, _ := proto.Marshal(&glutton.ReadDiskRequest{Key: "../etc/passwd"})
+	badBytes, _ := proto.Marshal(&gluttonpb.ReadDiskRequest{Key: "../etc/passwd"})
 	res, err = http.Post(ts.URL+"/readdisk", "application/x-protobuf", bytes.NewReader(badBytes))
 	if err != nil {
 		t.Fatalf("POST /readdisk bad key failed: %v", err)
