@@ -501,6 +501,8 @@ message ActorTemplate {
   // +k8s:optional
   Selector worker_selector = 2;
 
+  // +k8s:required # at least one container
+  // +k8s:listType=atomic
   repeated Container containers = 3;
 
   // +k8s:optional
@@ -629,33 +631,53 @@ message OnResumeConfig {
 
 // Container is a single application container of an ActorTemplate.
 message Container {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
 
+  // +k8s:required
+  // TODO: validate that this is a well-formed image reference
   string image = 2;
 
   // Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
   // ignored and the process argv is command + args. Unlike Kubernetes,
   // $(VAR_NAME) references are NOT expanded.
+  //
+  // +k8s:optional
+  // +k8s:listType=atomic
   repeated string command = 3;
 
   // Arguments to the entrypoint; the image's CMD is used if unset (unless
   // command is set, which discards the image's CMD).
+  //
+  // +k8s:optional
+  // +k8s:listType=atomic
   repeated string args = 4;
 
+  // +k8s:optional
+  // +k8s:listType=atomic
   repeated EnvVar env = 5;
 
   // readyz is an optional HTTP readiness probe; when set the actor is not
   // ready until the endpoint returns 200.
+  //
+  // +k8s:optional
   ContainerReadyz readyz = 6;
 
+  // +k8s:optional
+  // +k8s:listType=atomic
   repeated VolumeMount volume_mounts = 7;
 
   // security_context adjusts the container's security settings. Unset leaves
   // the default capability set.
+  //
+  // +k8s:optional
   SecurityContext security_context = 8;
 
   // resources carries this container's compute limits, enforced inside the
   // actor's sandbox. Only cpu and memory limits are supported.
+  //
+  // +k8s:optional
   Resources resources = 9;
 }
 
@@ -682,9 +704,14 @@ message Capabilities {
 // expanded with Kubernetes-style $(VAR) references.
 message EnvVar {
   // name may be any printable ASCII character except '='.
+  //
+  // +k8s:required
+  // TODO: validate the printable-ASCII-except-'=' rule
   string name = 1;
 
   // value is the literal value.
+  //
+  // +k8s:optional
   string value = 2;
 }
 

@@ -427,6 +427,33 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(99)}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshots_config", "on_resume", "from_data"), nil, "").WithOrigin("maximum")},
+	}, {
+		name:   "no containers",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers = nil },
+		want:   field.ErrorList{field.Required(field.NewPath("containers"), "")},
+	}, {
+		name:   "container missing name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers[0].Name = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("name"), "")},
+	}, {
+		name:   "container invalid name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers[0].Name = "Main_1" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name:   "container missing image",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers[0].Image = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("image"), "")},
+	}, {
+		name: "valid env",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "PORT", Value: "8080"}, {Name: "DEBUG"}}
+		},
+	}, {
+		name: "env missing name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Value: "8080"}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

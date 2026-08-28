@@ -1648,8 +1648,10 @@ type ActorTemplate struct {
 	// may use.
 	//
 	// +k8s:optional
-	WorkerSelector *Selector    `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
-	Containers     []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
+	WorkerSelector *Selector `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
+	// +k8s:required # at least one container
+	// +k8s:listType=atomic
+	Containers []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
 	// +k8s:optional
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	// +k8s:required
@@ -2177,25 +2179,45 @@ func (x *OnResumeConfig) GetFromData() ResumeSource {
 // Container is a single application container of an ActorTemplate.
 type Container struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Image string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:required
+	// TODO: validate that this is a well-formed image reference
+	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
 	// ignored and the process argv is command + args. Unlike Kubernetes,
 	// $(VAR_NAME) references are NOT expanded.
+	//
+	// +k8s:optional
+	// +k8s:listType=atomic
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	// Arguments to the entrypoint; the image's CMD is used if unset (unless
 	// command is set, which discards the image's CMD).
-	Args []string  `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`
-	Env  []*EnvVar `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
+	//
+	// +k8s:optional
+	// +k8s:listType=atomic
+	Args []string `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`
+	// +k8s:optional
+	// +k8s:listType=atomic
+	Env []*EnvVar `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
 	// readyz is an optional HTTP readiness probe; when set the actor is not
 	// ready until the endpoint returns 200.
-	Readyz       *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
-	VolumeMounts []*VolumeMount   `protobuf:"bytes,7,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
+	//
+	// +k8s:optional
+	Readyz *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
+	// +k8s:optional
+	// +k8s:listType=atomic
+	VolumeMounts []*VolumeMount `protobuf:"bytes,7,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// security_context adjusts the container's security settings. Unset leaves
 	// the default capability set.
+	//
+	// +k8s:optional
 	SecurityContext *SecurityContext `protobuf:"bytes,8,opt,name=security_context,json=securityContext,proto3" json:"security_context,omitempty"`
 	// resources carries this container's compute limits, enforced inside the
 	// actor's sandbox. Only cpu and memory limits are supported.
+	//
+	// +k8s:optional
 	Resources     *Resources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2404,8 +2426,13 @@ func (x *Capabilities) GetDrop() []string {
 type EnvVar struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name may be any printable ASCII character except '='.
+	//
+	// +k8s:required
+	// TODO: validate the printable-ASCII-except-'=' rule
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// value is the literal value.
+	//
+	// +k8s:optional
 	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
