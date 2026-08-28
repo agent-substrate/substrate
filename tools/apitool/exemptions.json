@@ -361,6 +361,16 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.KubeNamespacedObjectRef.name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.KubeNamespacedObjectRef.namespace",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.Limits",
     "message": "message has no doc comment"
   },
@@ -586,6 +596,26 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.Worker.node_name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.worker_pod",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.worker_pod_uid",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Worker.worker_pool",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.WorkerCapacity.cpu_milli",
     "message": "field has no doc comment"
   },
@@ -603,5 +633,10 @@
     "rule": "documented",
     "subject": "ateapi.WorkerStatus",
     "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.WorkerStatus.state",
+    "message": "field has no doc comment"
   }
 ]
