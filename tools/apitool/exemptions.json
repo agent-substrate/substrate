@@ -61,11 +61,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorSnapshotTag.scope",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorSnapshotTagScope",
     "message": "enum has no doc comment"
   },
@@ -113,16 +108,6 @@
     "rule": "documented",
     "subject": "ateapi.ArchAssets",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Capabilities.add",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Capabilities.drop",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -276,11 +261,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ImageVolumeSource.reference",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.KubeNamespacedObjectRef",
     "message": "message has no doc comment"
   },
@@ -313,21 +293,6 @@
     "rule": "documented",
     "subject": "ateapi.ListActorSnapshotsRequest",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsRequest.atespace",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsRequest.page_size",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotsRequest.page_token",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -431,11 +396,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SecurityContext.capabilities",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.SnapshotContentScope",
     "message": "enum has no doc comment"
   },
@@ -477,11 +437,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.Volume.external_volume_template",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Volume.image",
     "message": "field has no doc comment"
   },
   {
