@@ -1001,6 +1001,8 @@ func Validate_Container(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_ContainerReadyz(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -1027,11 +1029,19 @@ func Validate_Container(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_VolumeMount); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			return
 		}
@@ -1096,6 +1106,80 @@ func Validate_Container(
 				return oldObj.Resources
 			})
 		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_ContainerReadyz validates an instance of ContainerReadyz according
+// to declarative validation rules in the API schema.
+func Validate_ContainerReadyz(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ContainerReadyz) (errs field.ErrorList) {
+
+	{ // field ateapipb.ContainerReadyz.HttpGet
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.HTTPGetAction,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_HTTPGetAction(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ContainerReadyz) *ateapipb.HTTPGetAction {
+				return oldObj.HttpGet
+			})
+		errs = append(errs, fn(fldPath.Child("http_get"), obj.HttpGet, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ContainerReadyz.TimeoutSeconds
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3600); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ContainerReadyz) *int32 {
+				return &oldObj.TimeoutSeconds
+			})
+		errs = append(errs, fn(fldPath.Child("timeout_seconds"), &obj.TimeoutSeconds, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -1400,6 +1484,85 @@ func Validate_GetAtespaceRequest(
 				return oldObj.Atespace
 			})
 		errs = append(errs, fn(fldPath.Child("atespace"), obj.Atespace, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_HTTPGetAction validates an instance of HTTPGetAction according
+// to declarative validation rules in the API schema.
+func Validate_HTTPGetAction(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.HTTPGetAction) (errs field.ErrorList) {
+
+	{ // field ateapipb.HTTPGetAction.Path
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_HTTPGetAction_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 1024); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.HTTPGetAction) *string {
+				return &oldObj.Path
+			})
+		errs = append(errs, fn(fldPath.Child("path"), &obj.Path, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.HTTPGetAction.Port
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 65535); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.HTTPGetAction) *int32 {
+				return &oldObj.Port
+			})
+		errs = append(errs, fn(fldPath.Child("port"), &obj.Port, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2393,6 +2556,83 @@ func Validate_Volume(
 
 	// field ateapipb.Volume.Image has no validation
 	// field ateapipb.Volume.Type has no validation
+	return errs
+}
+
+// Validate_VolumeMount validates an instance of VolumeMount according
+// to declarative validation rules in the API schema.
+func Validate_VolumeMount(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.VolumeMount) (errs field.ErrorList) {
+
+	{ // field ateapipb.VolumeMount.Name
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.VolumeMount) *string {
+				return &oldObj.Name
+			})
+		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.VolumeMount.MountPath
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_VolumeMount_MountPath(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 4096); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.VolumeMount) *string {
+				return &oldObj.MountPath
+			})
+		errs = append(errs, fn(fldPath.Child("mount_path"), &obj.MountPath, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

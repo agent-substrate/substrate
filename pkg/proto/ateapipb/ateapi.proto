@@ -666,6 +666,7 @@ message Container {
 
   // +k8s:optional
   // +k8s:listType=atomic
+  // +k8s:maxItems=32
   repeated VolumeMount volume_mounts = 7;
 
   // security_context adjusts the container's security settings. Unset leaves
@@ -718,18 +719,32 @@ message EnvVar {
 // ContainerReadyz configures the readiness signal for a container.
 message ContainerReadyz {
   // http_get specifies the HTTP request to perform. Required.
+  //
+  // +k8s:required
   HTTPGetAction http_get = 1;
 
   // timeout_seconds bounds how long to poll http_get before failing the
   // actor start. 0 means the server-applied default (30s).
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=3600
   int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction describes an HTTP GET against the container's interior IP.
 message HTTPGetAction {
-  // path defaults to "/readyz".
+  // path defaults to "/readyz". Must be a URL path starting with "/", using
+  // only RFC 3986 path-segment characters, without query or fragment.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=1024
+  // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
 
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=65535
   int32 port = 2;
 }
 
@@ -854,9 +869,18 @@ message TrustBundleDataSource {
 // VolumeMount mounts a named Volume into a container.
 message VolumeMount {
   // name must match the name of a Volume.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
 
-  // mount_path within the container. Must be a clean absolute Unix path.
+  // mount_path within the container. Must be a clean absolute Unix path:
+  // must start with '/', not be '/', and contain no ':', '..', '.', '//',
+  // trailing '/', or control characters.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
 }
 

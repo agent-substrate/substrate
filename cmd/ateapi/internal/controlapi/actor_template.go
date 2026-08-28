@@ -18,12 +18,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -278,4 +281,42 @@ func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorLi
 func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
 	// TODO: implement this
 	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
+}
+
+// httpGetPathRE mirrors the ActorTemplate CRD's pattern for readyz paths:
+// RFC 3986 path-segment characters only, with well-formed percent-escapes,
+// and no query string or fragment.
+var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
+
+func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if !httpGetPathRE.MatchString(*value) {
+		return field.ErrorList{field.Invalid(fldPath, *value, "must be a URL path starting with '/', using only RFC 3986 path-segment characters, without query or fragment")}
+	}
+	return nil
+}
+
+// mountPathBadSegmentRE matches '.' or '..' path segments.
+var mountPathBadSegmentRE = regexp.MustCompile(`(^|/)[.][.]?(/|$)`)
+
+// ValidateCustom_VolumeMount_MountPath mirrors the ActorTemplate CRD's CEL
+// rule: a clean absolute Unix path that starts with '/', is not '/', and
+// contains no ':', '.' or '..' segments, '//', trailing '/', or control
+// characters.
+func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	p := *value
+	bad := !strings.HasPrefix(p, "/") || len(p) == 1 ||
+		strings.HasSuffix(p, "/") || strings.Contains(p, "//") ||
+		strings.Contains(p, ":") || mountPathBadSegmentRE.MatchString(p)
+	if !bad {
+		for _, r := range p {
+			if r < 0x20 || r == 0x7f {
+				bad = true
+				break
+			}
+		}
+	}
+	if bad {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters")}
+	}
+	return nil
 }

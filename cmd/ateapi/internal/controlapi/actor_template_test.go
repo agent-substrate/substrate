@@ -454,6 +454,109 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Value: "8080"}}
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), "")},
+	}, {
+		name: "valid readyz",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Path: "/healthz", Port: 8080},
+				TimeoutSeconds: 60,
+			}
+		},
+	}, {
+		name: "readyz missing http_get",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{TimeoutSeconds: 60}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get"), "")},
+	}, {
+		name: "readyz timeout_seconds out of range",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080},
+				TimeoutSeconds: 3601,
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "timeout_seconds"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "negative readyz timeout_seconds",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
+				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080},
+				TimeoutSeconds: -1,
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "timeout_seconds"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "readyz missing port",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), "")},
+	}, {
+		name: "readyz port out of range",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: 65536}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "readyz path with query string",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Path: "/readyz?verbose=1", Port: 8080}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), nil, "")},
+	}, {
+		name: "readyz path not starting with slash",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Path: "readyz", Port: 8080}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "path"), nil, "")},
+	}, {
+		name: "valid volume_mount",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+		},
+	}, {
+		name: "volume_mount missing name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{MountPath: "/var/data"}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "")},
+	}, {
+		name: "volume_mount invalid name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "Data_1", MountPath: "/var/data"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "volume_mount missing mount_path",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data"}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), "")},
+	}, {
+		name: "relative mount_path",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "var/data"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
+	}, {
+		name: "root mount_path",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
+	}, {
+		name: "mount_path with dot-dot segment",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/../etc"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
+	}, {
+		name: "mount_path with trailing slash",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data/"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

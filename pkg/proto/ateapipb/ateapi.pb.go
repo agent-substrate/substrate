@@ -2208,6 +2208,7 @@ type Container struct {
 	Readyz *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
 	// +k8s:optional
 	// +k8s:listType=atomic
+	// +k8s:maxItems=32
 	VolumeMounts []*VolumeMount `protobuf:"bytes,7,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// security_context adjusts the container's security settings. Unset leaves
 	// the default capability set.
@@ -2486,9 +2487,15 @@ func (x *EnvVar) GetValue() string {
 type ContainerReadyz struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// http_get specifies the HTTP request to perform. Required.
+	//
+	// +k8s:required
 	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// timeout_seconds bounds how long to poll http_get before failing the
 	// actor start. 0 means the server-applied default (30s).
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=3600
 	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -2541,9 +2548,17 @@ func (x *ContainerReadyz) GetTimeoutSeconds() int32 {
 // HTTPGetAction describes an HTTP GET against the container's interior IP.
 type HTTPGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// path defaults to "/readyz".
-	Path          string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Port          int32  `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	// path defaults to "/readyz". Must be a URL path starting with "/", using
+	// only RFC 3986 path-segment characters, without query or fragment.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=1024
+	// +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=65535
+	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3115,8 +3130,17 @@ func (x *TrustBundleDataSource) GetPath() string {
 type VolumeMount struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name must match the name of a Volume.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// mount_path within the container. Must be a clean absolute Unix path.
+	// mount_path within the container. Must be a clean absolute Unix path:
+	// must start with '/', not be '/', and contain no ':', '..', '.', '//',
+	// trailing '/', or control characters.
+	//
+	// +k8s:required
+	// +k8s:maxLength=4096
+	// +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
 	MountPath     string `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
