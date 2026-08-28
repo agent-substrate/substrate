@@ -15,25 +15,10 @@
 package controlapi
 
 import (
-	"log/slog"
-
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
-
-// convert atev1alpha1.SnapshotScope to ateletpb.SnapshotScope
-func toAteletSnapshotScope(in atev1alpha1.SnapshotScope) ateletpb.SnapshotScope {
-	switch in {
-	case atev1alpha1.SnapshotScopeFull:
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
-	case atev1alpha1.SnapshotScopeData:
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-	default:
-		slog.Warn("unknown SnapshotScope; falling back to Full", "scope", string(in))
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
-	}
-}
 
 func toActorSnapshotContentScope(in atev1alpha1.SnapshotScope) ateapipb.SnapshotContentScope {
 	if in == atev1alpha1.SnapshotScopeData {
@@ -47,4 +32,26 @@ func actorSnapshotContentScopeToAtelet(in ateapipb.SnapshotContentScope) ateletp
 		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 	}
 	return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
+}
+
+// effectiveContentScope normalizes a template snapshot scope for comparisons:
+// UNSPECIFIED means FULL, on both the converted CRD and the stored resource.
+func effectiveContentScope(in ateapipb.SnapshotContentScope) ateapipb.SnapshotContentScope {
+	if in == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
+		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+	}
+	return in
+}
+
+// sandboxClassString renders the proto enum in the CRD's lower-case string
+// form, which the scheduler and the metric labels share.
+func sandboxClassString(in ateapipb.SandboxClass) string {
+	switch in {
+	case ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR:
+		return string(atev1alpha1.SandboxClassGvisor)
+	case ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM:
+		return string(atev1alpha1.SandboxClassMicroVM)
+	default:
+		return ""
+	}
 }

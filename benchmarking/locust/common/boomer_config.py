@@ -19,6 +19,7 @@ Flag registration lives in the modules that own each flag:
   * --min-wait-time / --max-wait-time → common.wait_time.init_wait_time
   * --resume-mode                   → common.resume_mode.add_resume_mode_arguments
   * --durdir-*                      → common.durdir_config.add_durdir_arguments
+  * --mem-target                    → common.memload_config.add_memload_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
 the operator set in the web UI form:
@@ -52,6 +53,7 @@ _FLAGS = {
     "--resume-mode": str,
     "--durdir-read-mode": str,
     "--durdir-template": str,
+    "--mem-target": str,
 }
 
 
@@ -128,6 +130,7 @@ def init_boomer_config() -> None:
     from locust.env import Environment
 
     from common.durdir_config import add_durdir_arguments
+    from common.memload_config import add_memload_arguments
     from common.resume_mode import add_resume_mode_arguments
     from common.trace import init_tracing
     from common.wait_time import init_wait_time

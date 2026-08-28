@@ -355,7 +355,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := workloadSpecFromActorTemplate(tt.template, nil)
+			got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(tt.template), nil)
 			if err != nil {
 				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 			}
@@ -367,7 +367,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 }
 
 func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
-	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+	got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-readyz", Namespace: "agent-ns"},
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Containers: []atev1alpha1.Container{
@@ -385,7 +385,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 				},
 			},
 		},
-	}, nil)
+	}), nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 }
 
 func TestAppendExternalVolumes(t *testing.T) {
-	template := &atev1alpha1.ActorTemplate{
+	template := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Containers: []atev1alpha1.Container{
 				{
@@ -447,7 +447,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
@@ -504,7 +504,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 }
 
 func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
-	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+	got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-caps", Namespace: "agent-ns"},
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Containers: []atev1alpha1.Container{
@@ -531,7 +531,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 				},
 			},
 		},
-	}, nil)
+	}), nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -565,41 +565,51 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 
 func TestToAteletResources(t *testing.T) {
 	tests := []struct {
-		name string
-		in   *atev1alpha1.ContainerResources
-		want *ateletpb.ResourceLimits
+		name    string
+		in      *ateapipb.Resources
+		want    *ateletpb.ResourceLimits
+		wantErr bool
 	}{{
 		name: "nil resources",
 		in:   nil,
 		want: nil,
 	}, {
 		name: "empty limits",
-		in:   &atev1alpha1.ContainerResources{},
+		in:   &ateapipb.Resources{},
 		want: nil,
 	}, {
 		name: "memory only",
-		in: &atev1alpha1.ContainerResources{Limits: atev1alpha1.ContainerResourceList{
-			corev1.ResourceMemory: resource.MustParse("256Mi"),
-		}},
+		in:   &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "256Mi"}}},
 		want: &ateletpb.ResourceLimits{MemoryBytes: 268435456},
 	}, {
 		name: "cpu only",
-		in: &atev1alpha1.ContainerResources{Limits: atev1alpha1.ContainerResourceList{
-			corev1.ResourceCPU: resource.MustParse("200m"),
-		}},
+		in:   &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "200m"}}},
 		want: &ateletpb.ResourceLimits{CpuMillis: 200},
 	}, {
 		name: "both",
-		in: &atev1alpha1.ContainerResources{Limits: atev1alpha1.ContainerResourceList{
-			corev1.ResourceMemory: resource.MustParse("1Gi"),
-			corev1.ResourceCPU:    resource.MustParse("1"),
+		in: &ateapipb.Resources{Limits: []*ateapipb.Limits{
+			{Name: "cpu", Quantity: "1"},
+			{Name: "memory", Quantity: "1Gi"},
 		}},
 		want: &ateletpb.ResourceLimits{MemoryBytes: 1073741824, CpuMillis: 1000},
+	}, {
+		name:    "invalid quantity",
+		in:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "banana"}}},
+		wantErr: true,
 	}}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := toAteletResources(tc.in)
+			got, err := toAteletResources(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("toAteletResources() error = nil, want parse error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("toAteletResources() failed: %v", err)
+			}
 			if tc.want == nil {
 				if got != nil {
 					t.Fatalf("toAteletResources() = %v, want nil", got)
@@ -624,7 +634,7 @@ func TestToAteletResources(t *testing.T) {
 // literal leaves every test in the repository green while limits never leave
 // ate-api-server.
 func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
-	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+	got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-limits", Namespace: "agent-ns"},
 		Spec: atev1alpha1.ActorTemplateSpec{
 			SandboxClass: atev1alpha1.SandboxClassMicroVM,
@@ -642,7 +652,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 				{Name: "unlimited", Image: "main"},
 			},
 		},
-	}, nil)
+	}), nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}

@@ -91,7 +91,12 @@ ${EXTERNAL_VOLUME_MOUNTS}
       workload: counter
   snapshotsConfig:
     onPause: Full
-    onCommit: Data
+    # Full, so a suspend captures process memory as well as the durable
+    # volumes and the tutorial's in-memory counter really does continue
+    # across suspend/resume. Data-scope behavior (durable volumes only,
+    # memory cold-boots) is exercised by the e2e demo suite's own
+    # parameterized templates, not by this one.
+    onCommit: Full
     location: gs://${BUCKET_NAME}/ate-demo-counter/
   volumes:
   - name: data

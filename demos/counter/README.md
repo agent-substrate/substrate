@@ -2,7 +2,7 @@
 
 This directory contains a demo of a stateful counter application running on Agent Substrate.
 
-It deploys a simple Go HTTP server (`counter.go`) that increments a counter on every request and preserves state across suspends and resumes.
+It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `onCommit: Full` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `Data`-scope snapshot policy, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot.)
 
 ## Prerequisites
 
@@ -81,6 +81,11 @@ kubectl ate get actor my-counter-1 -a demo
 ```bash
 kubectl ate suspend actor my-counter-1 -a demo
 ```
+
+Repeat the `curl` from step 1 and the actor resumes from its snapshot —
+possibly on a different worker — with **both** counters continuing from where
+they left off: the memory count comes back from the `Full` snapshot's process
+memory, the file counter from the durable volume.
 
 4. To permanently delete the suspended actor, then the now-empty atespace:
 ```bash

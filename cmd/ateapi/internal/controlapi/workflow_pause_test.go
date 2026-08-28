@@ -60,7 +60,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	w := &ActorWorkflow{store: st}
-	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &atev1alpha1.ActorTemplate{})
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef, mustTemplateFromCRD(&atev1alpha1.ActorTemplate{}))
 	if err != nil {
 		t.Fatalf("ensurePausedFinalized: %v", err)
 	}
@@ -137,9 +137,9 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			}
 
 			w := &ActorWorkflow{store: st}
-			tmpl := &atev1alpha1.ActorTemplate{
+			tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 				Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{OnPause: tc.onPause}},
-			}
+			})
 			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
 			if err != nil {
 				t.Fatalf("ensurePausedFinalized: %v", err)
@@ -284,7 +284,7 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
-			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &atev1alpha1.ActorTemplate{}); err == nil {
+			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, mustTemplateFromCRD(&atev1alpha1.ActorTemplate{})); err == nil {
 				t.Fatal("ensureAteletPaused: want error for dangling worker, got nil")
 			}
 

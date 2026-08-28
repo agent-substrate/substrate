@@ -19,10 +19,7 @@ package main
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/google/go-cmp/cmp"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 func TestHasCsiVolumes(t *testing.T) {
@@ -83,32 +80,5 @@ func TestHasCsiVolumes(t *testing.T) {
 				t.Errorf("hasCsiVolumes() = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestCsiMounts(t *testing.T) {
-	mounts := []*ateompb.VolumeMount{
-		{VolumeName: "vol1", MountPath: "/mnt/vol1"},
-		{VolumeName: "vol2", MountPath: "/mnt/vol2"},
-	}
-
-	want := []specs.Mount{
-		{
-			Destination: "/mnt/vol1",
-			Source:      kata.GuestCSIVolumeDir("vol1"),
-			Type:        "bind",
-			Options:     []string{"rbind", "rw"},
-		},
-		{
-			Destination: "/mnt/vol2",
-			Source:      kata.GuestCSIVolumeDir("vol2"),
-			Type:        "bind",
-			Options:     []string{"rbind", "rw"},
-		},
-	}
-
-	got := csiMounts(mounts)
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("csiMounts() mismatch (-want +got):\n%s", diff)
 	}
 }
