@@ -206,10 +206,10 @@ func TestActorLogLabels(t *testing.T) {
 	const containerName = "counter"
 
 	attribution := resources.ActorAttribution{
-		Ref:               resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
-		UID:               "uid-abc",
-		TemplateNamespace: "ate-agents",
-		TemplateName:      "support-agent",
+		Ref:              resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
+		UID:              "uid-abc",
+		TemplateAtespace: "ate-agents",
+		TemplateName:     "support-agent",
 	}
 
 	tests := []struct {

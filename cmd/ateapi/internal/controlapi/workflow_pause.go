@@ -187,13 +187,13 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
-		TargetAteomUid:         assignment.GetWorkerPodUid(),
-		Atespace:               actor.GetMetadata().GetAtespace(),
-		ActorName:              actor.GetMetadata().GetName(),
-		ActorTemplateNamespace: actor.GetActorTemplateNamespace(),
-		ActorTemplateName:      actor.GetActorTemplateName(),
-		Spec:                   workloadSpec,
-		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		Atespace:              actor.GetMetadata().GetAtespace(),
+		ActorName:             actor.GetMetadata().GetName(),
+		ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
+		ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+		Spec:                  workloadSpec,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
 				SnapshotName: actor.GetStatus().GetInProgressLocalSnapshotName(),

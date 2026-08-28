@@ -342,7 +342,7 @@ func ActorLogLabels(a resources.ActorAttribution, containerName string) map[stri
 		string(AtespaceKey):          a.Ref.Atespace,
 		string(ActorNameKey):         a.Ref.Name,
 		string(ActorUIDKey):          a.UID,
-		string(TemplateNamespaceKey): a.TemplateNamespace,
+		string(TemplateNamespaceKey): a.TemplateAtespace,
 		string(TemplateNameKey):      a.TemplateName,
 	}
 	if containerName != "" {

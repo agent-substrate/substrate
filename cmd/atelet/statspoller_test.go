@@ -59,12 +59,12 @@ func (f *fakeStatsAteom) GetActiveWorkloadStats(ctx context.Context, req *ateomp
 func executingResponse(templateNS, templateName string, class ateompb.SandboxClass, source ateompb.StatsSource, current, workingSet uint64) *ateompb.GetActiveWorkloadStatsResponse {
 	return &ateompb.GetActiveWorkloadStatsResponse{
 		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: &ateompb.WorkloadStatsSample{
-			ActorTemplateNamespace: templateNS,
-			ActorTemplateName:      templateName,
-			SandboxClass:           class,
-			Source:                 source,
-			MemoryCurrentBytes:     current,
-			MemoryWorkingSetBytes:  workingSet,
+			ActorTemplateAtespace: templateNS,
+			ActorTemplateName:     templateName,
+			SandboxClass:          class,
+			Source:                source,
+			MemoryCurrentBytes:    current,
+			MemoryWorkingSetBytes: workingSet,
 		}},
 	}
 }
@@ -281,12 +281,12 @@ func gaugePointCount(t *testing.T, reader *sdkmetric.ManualReader, name string) 
 func cpuResponse(actorUID string, cpuUsec uint64) *ateompb.GetActiveWorkloadStatsResponse {
 	return &ateompb.GetActiveWorkloadStatsResponse{
 		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: &ateompb.WorkloadStatsSample{
-			ActorUid:               actorUID,
-			ActorTemplateNamespace: "ns-a",
-			ActorTemplateName:      "tmpl-a",
-			SandboxClass:           ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
-			Source:                 ateompb.StatsSource_STATS_SOURCE_CGROUP,
-			CpuUsageUsec:           cpuUsec,
+			ActorUid:              actorUID,
+			ActorTemplateAtespace: "ns-a",
+			ActorTemplateName:     "tmpl-a",
+			SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			Source:                ateompb.StatsSource_STATS_SOURCE_CGROUP,
+			CpuUsageUsec:          cpuUsec,
 		}},
 	}
 }

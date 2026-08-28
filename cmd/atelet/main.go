@@ -511,17 +511,17 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
 	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
-		Atespace:               actorRef.Atespace,
-		ActorName:              actorRef.Name,
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		RunscPath:              runscPathFor(assetPaths),
-		RuntimeAssetPaths:      assetPaths,
-		Spec:                   spec,
-		ActorUid:               actorUID,
-		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
-		CpuMilli:               req.GetCpuMilli(),
-		MemoryBytes:            req.GetMemoryBytes(),
+		Atespace:              actorRef.Atespace,
+		ActorName:             actorRef.Name,
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+		RunscPath:             runscPathFor(assetPaths),
+		RuntimeAssetPaths:     assetPaths,
+		Spec:                  spec,
+		ActorUid:              actorUID,
+		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
+		CpuMilli:              req.GetCpuMilli(),
+		MemoryBytes:           req.GetMemoryBytes(),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
@@ -548,7 +548,7 @@ func initSnapshotSizeMetric() error {
 // recordSnapshotSize labels each image with the registry's file.name. That
 // label used to be spelled "kind", which means the snapshot's provenance
 // everywhere else in the ate.* namespace, not one of its files.
-func recordSnapshotSize(ctx context.Context, file, path, atNamespace, atName string) {
+func recordSnapshotSize(ctx context.Context, file, path, templateAtespace, templateName string) {
 	if snapshotSizeBytes == nil {
 		return
 	}
@@ -563,8 +563,8 @@ func recordSnapshotSize(ctx context.Context, file, path, atNamespace, atName str
 	}
 	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
 		semconv.FileNameKey.String(file),
-		ateattr.TemplateNamespaceKey.String(atNamespace),
-		ateattr.TemplateNameKey.String(atName),
+		ateattr.TemplateNamespaceKey.String(templateAtespace),
+		ateattr.TemplateNameKey.String(templateName),
 	))
 }
 
@@ -581,7 +581,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	tStart := time.Now()
 	var dAssets, dAteom, dPersist time.Duration
 	op := snapshotOp{
-		templateNamespace: req.GetActorTemplateNamespace(),
+		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
 		kind:              checkpointSnapshotKind(req),
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
@@ -629,15 +629,15 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	tAteom := time.Now()
 	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
-		Atespace:               actorRef.Atespace,
-		ActorName:              actorRef.Name,
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		RunscPath:              runscPathFor(assetPaths),
-		RuntimeAssetPaths:      assetPaths,
-		Spec:                   spec,
-		Scope:                  toAteomSnapshotScope(req.GetScope()),
-		ActorUid:               actorUID,
+		Atespace:              actorRef.Atespace,
+		ActorName:             actorRef.Name,
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+		RunscPath:             runscPathFor(assetPaths),
+		RuntimeAssetPaths:     assetPaths,
+		Spec:                  spec,
+		Scope:                 toAteomSnapshotScope(req.GetScope()),
+		ActorUid:              actorUID,
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
@@ -654,7 +654,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.Atespace = req.GetAtespace()
 	sandboxRec.ActorName = req.GetActorName()
 	sandboxRec.ActorUID = req.GetActorUid()
-	sandboxRec.ActorTemplateNamespace = req.GetActorTemplateNamespace()
+	sandboxRec.ActorTemplateAtespace = req.GetActorTemplateAtespace()
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 	sandboxRec.Scope = ateattr.SnapshotScopeValue(req.GetScope())
 
@@ -725,7 +725,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	for _, fileName := range rec.SnapshotFiles {
 		src := filepath.Join(checkpointDir, fileName)
 		dst := filepath.Join(localCheckpointPath, fileName)
-		recordSnapshotSize(ctx, fileName, src, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+		recordSnapshotSize(ctx, fileName, src, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
 		if err := os.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
@@ -763,7 +763,7 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	if err != nil {
 		return err
 	}
-	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 }
 
 // uploadSnapshot uploads rec's snapshot files from srcDir to uri (each
@@ -772,11 +772,11 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 // assume every file it lists is already present. A crash mid-upload thus
 // leaves only orphaned files, never a manifest pointing at files that never
 // landed; retries overwrite the deterministic object names.
-func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateNamespace, templateName string) error {
+func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string) error {
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range rec.SnapshotFiles {
 		local := filepath.Join(srcDir, fileName)
-		recordSnapshotSize(ctx, fileName, local, templateNamespace, templateName)
+		recordSnapshotSize(ctx, fileName, local, templateAtespace, templateName)
 		g.Go(func() error {
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
@@ -818,7 +818,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 	tStart := time.Now()
 	var dPersist time.Duration
 	op := snapshotOp{
-		templateNamespace: req.GetActorTemplateNamespace(),
+		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
 		// Always the actor's durable latest: golden actors are never paused
 		// (validation above rejects the golden atespace).
@@ -910,7 +910,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		}
 	}
 
-	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 }
 
 // narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA
@@ -955,7 +955,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	tStart := time.Now()
 	var dMount, dManifest, dAssets, dDownload, dBundles, dAteom time.Duration
 	op := snapshotOp{
-		templateNamespace: req.GetActorTemplateNamespace(),
+		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
 	}
@@ -1179,18 +1179,18 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	tAteom := time.Now()
 	_, err = client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
-		Atespace:               actorRef.Atespace,
-		ActorName:              actorRef.Name,
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		RunscPath:              runscPathFor(assetPaths),
-		RuntimeAssetPaths:      assetPaths,
-		Spec:                   spec,
-		Scope:                  toAteomSnapshotScope(req.GetScope()),
-		ActorUid:               req.GetActorUid(),
-		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
-		CpuMilli:               req.GetCpuMilli(),
-		MemoryBytes:            req.GetMemoryBytes(),
+		Atespace:              actorRef.Atespace,
+		ActorName:             actorRef.Name,
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+		RunscPath:             runscPathFor(assetPaths),
+		RuntimeAssetPaths:     assetPaths,
+		Spec:                  spec,
+		Scope:                 toAteomSnapshotScope(req.GetScope()),
+		ActorUid:              req.GetActorUid(),
+		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
+		CpuMilli:              req.GetCpuMilli(),
+		MemoryBytes:           req.GetMemoryBytes(),
 		// Informational: for DATA_ON_GOLDEN the golden snapshot's files are
 		// already staged into the restore dir by the combined download above;
 		// ateom restores from the shared dir and never fetches this URI.
@@ -1252,13 +1252,13 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
 	}
 	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
-		Atespace:               req.GetAtespace(),
-		ActorName:              req.GetActorName(),
-		ActorUid:               req.GetActorUid(),
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		RunscPath:              runscPathFor(assetPaths),
-		Spec:                   spec,
+		Atespace:              req.GetAtespace(),
+		ActorName:             req.GetActorName(),
+		ActorUid:              req.GetActorUid(),
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+		RunscPath:             runscPathFor(assetPaths),
+		Spec:                  spec,
 	}); err != nil {
 		if status.Code(err) == codes.NotFound {
 			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))

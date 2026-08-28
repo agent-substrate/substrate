@@ -38,10 +38,10 @@ const (
 )
 
 var testAttribution = resources.ActorAttribution{
-	Ref:               resources.ActorRef{Atespace: testAtespace, Name: testActorName},
-	UID:               testActorUID,
-	TemplateNamespace: testTemplateNS,
-	TemplateName:      testTemplateName,
+	Ref:              resources.ActorRef{Atespace: testAtespace, Name: testActorName},
+	UID:              testActorUID,
+	TemplateAtespace: testTemplateNS,
+	TemplateName:     testTemplateName,
 }
 
 // The registry owns the spellings (pinned by ateattr.TestKeySpellings), so the

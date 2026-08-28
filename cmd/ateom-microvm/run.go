@@ -267,14 +267,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	p := actorBootParams{
-		actorRef:      resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:      req.GetActorUid(),
-		templateNS:    req.GetActorTemplateNamespace(),
-		templateName:  req.GetActorTemplateName(),
-		containers:    req.GetSpec().GetContainers(),
-		assetPaths:    req.GetRuntimeAssetPaths(),
-		egressGateway: req.GetEgressGateway(),
-		size:          sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		actorRef:         resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:         req.GetActorUid(),
+		templateAtespace: req.GetActorTemplateAtespace(),
+		templateName:     req.GetActorTemplateName(),
+		containers:       req.GetSpec().GetContainers(),
+		assetPaths:       req.GetRuntimeAssetPaths(),
+		egressGateway:    req.GetEgressGateway(),
+		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 
 	attribution := p.actorAttribution()
@@ -305,12 +305,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // request, or from a Restore request whose snapshot scope covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
-	actorRef     resources.ActorRef
-	actorUID     string
-	templateNS   string
-	templateName string
-	containers   []*ateompb.Container
-	assetPaths   map[string]string
+	actorRef         resources.ActorRef
+	actorUID         string
+	templateAtespace string
+	templateName     string
+	containers       []*ateompb.Container
+	assetPaths       map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
@@ -324,10 +324,10 @@ type actorBootParams struct {
 // request, for retention in AteomService.activeActor.
 func (p actorBootParams) actorAttribution() resources.ActorAttribution {
 	return resources.ActorAttribution{
-		Ref:               p.actorRef,
-		UID:               p.actorUID,
-		TemplateNamespace: p.templateNS,
-		TemplateName:      p.templateName,
+		Ref:              p.actorRef,
+		UID:              p.actorUID,
+		TemplateAtespace: p.templateAtespace,
+		TemplateName:     p.templateName,
 	}
 }
 

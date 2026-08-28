@@ -287,7 +287,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 			}
 
 			key := templateKey{
-				templateNamespace: sample.GetActorTemplateNamespace(),
+				templateNamespace: sample.GetActorTemplateAtespace(),
 				templateName:      sample.GetActorTemplateName(),
 				sandboxClass:      sandboxClassLabel(sample.GetSandboxClass()),
 				source:            statsSourceLabel(sample.GetSource()),
