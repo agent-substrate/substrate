@@ -484,13 +484,15 @@ enum SandboxClass {
 
 message ActorTemplate {
   // Common resource metadata: atespace, name, uid, version, timestamps.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
   // worker_selector restricts which worker pools actors from this template
   // may use.
   //
-  // +k8s:opaqueType
+  // +k8s:optional
   Selector worker_selector = 2;
 
   repeated Container containers = 3;
