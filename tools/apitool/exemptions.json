@@ -166,11 +166,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Container.image",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Container.name",
     "message": "field has no doc comment"
   },
@@ -381,11 +376,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Limits.quantity",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ListActorSnapshotsRequest",
     "message": "message has no doc comment"
   },
@@ -483,11 +473,6 @@
     "rule": "documented",
     "subject": "ateapi.Resources",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Resources.limits",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
