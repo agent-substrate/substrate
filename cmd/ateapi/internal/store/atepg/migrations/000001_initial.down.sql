@@ -22,6 +22,7 @@ DROP TABLE IF EXISTS workers;
 DROP TABLE IF EXISTS actor_snapshot_tags;
 DROP TABLE IF EXISTS actor_snapshots;
 DROP TABLE IF EXISTS actor_templates;
+DROP TABLE IF EXISTS actor_egress_policies;
 DROP TABLE IF EXISTS actors;
 DROP TABLE IF EXISTS atespaces;
 

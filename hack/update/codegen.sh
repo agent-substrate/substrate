@@ -97,6 +97,7 @@ function codegen::validation() {
             --output-file=zz_generated.validation.go \
             --readonly-pkg=google.golang.org/protobuf/types/known/timestamppb \
             --readonly-pkg=google.golang.org/protobuf/types/known/fieldmaskpb \
+            --readonly-pkg=google.golang.org/protobuf/types/known/emptypb \
             "./${dir}"
     done
 }

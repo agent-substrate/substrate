@@ -21,6 +21,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -92,18 +93,42 @@ func newServer() *grpc.Server {
 	return server
 }
 
-// newGRPCCmd is the gRPC origin the egress e2e suites dial through the egress
-// gateway. It serves cleartext HTTP/2 -- no TLS anywhere -- because the leg
-// under test is the tunnel, not the origin's identity, and because the gateway
+// newHealthHandler answers the HTTP readiness probe. Deliberately trivial: it
+// reports that the process is up, and the gRPC listener is opened before this
+// one, so a 200 here means the RPC port is already accepting.
+func newHealthHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	})
+	return mux
+}
+
+// newGRPCCmd is the gRPC server both networking e2e suites talk to. One
+// subcommand serves both directions so the two legs cannot drift apart in what
+// they consider a working RPC:
+//
+//   - egress: deployed as a plain pod, it is the origin an Actor dials through
+//     the egress gateway.
+//   - ingress: deployed as an Actor, it is the origin a client reaches through
+//     atenet-router.
+//
+// It serves cleartext HTTP/2 -- no TLS anywhere -- because the leg under test
+// is the tunnel, not the origin's identity, and because the egress gateway
 // relays a terminated CONNECT as opaque TCP: whatever the actor speaks is what
 // arrives here.
 //
-// It answers the grpc health service as well as Echo, which is what the pod's
-// readinessProbe checks. A separate HTTP port for readiness would need an h2c
-// handler multiplexed onto this listener, and the whole point of this mode is
-// that nothing between the actor and here parses HTTP.
+// It answers the grpc health service as well as Echo, which is what the egress
+// pod's readinessProbe checks. Multiplexing readiness onto that listener as an
+// h2c handler would defeat the point of the egress fixture, where nothing
+// between the actor and here parses HTTP -- so --health-listen puts it on a
+// second port instead, off unless asked for. The ingress Actor needs it because
+// an ActorTemplate's readyz is an HTTP GET and nothing else: a gRPC server
+// answers one with a protocol error, so without it the Actor never boots.
 func newGRPCCmd() *cobra.Command {
 	var listenAddress string
+	var healthAddress string
 	cmd := &cobra.Command{
 		Use:   "grpc",
 		Short: "Serve a cleartext HTTP/2 gRPC echo origin.",
@@ -114,9 +139,24 @@ func newGRPCCmd() *cobra.Command {
 				return fmt.Errorf("listening on %s: %w", listenAddress, err)
 			}
 			log.Printf("testserver grpc: serving on %s", listener.Addr())
+
+			// Bound before Serve below, so a readiness 200 can never precede
+			// the gRPC port being open.
+			if healthAddress != "" {
+				healthListener, err := net.Listen("tcp", healthAddress)
+				if err != nil {
+					return fmt.Errorf("listening for health on %s: %w", healthAddress, err)
+				}
+				log.Printf("testserver grpc: serving /readyz on %s", healthListener.Addr())
+				go func() {
+					log.Fatal(http.Serve(healthListener, newHealthHandler()))
+				}()
+			}
+
 			return newServer().Serve(listener)
 		},
 	}
 	cmd.Flags().StringVar(&listenAddress, "listen", ":50051", "Address the gRPC server listens on, cleartext HTTP/2.")
+	cmd.Flags().StringVar(&healthAddress, "health-listen", "", "Address for an HTTP/1.1 /readyz listener. Empty serves no HTTP at all, which is what the egress fixture wants; the ingress Actor sets it because an ActorTemplate readyz is an HTTP GET.")
 	return cmd
 }

@@ -40,6 +40,7 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
+source "${ROOT}"/hack/install-demo-counter-substrate.sh
 source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-jupyter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
@@ -266,7 +267,11 @@ render_atenet_egress_manifest() {
       echo "Error: --experimental-additional-egress-extproc-service requires --atenet-router=envoy" >&2
       return 1
     fi
-    kubectl kustomize manifests/ate-install/agentgateway-egress \
+    local agentgateway_egress="manifests/ate-install/agentgateway-egress"
+    if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]]; then
+      agentgateway_egress="manifests/ate-install/agentgateway-egress-mitm"
+    fi
+    kubectl kustomize "${agentgateway_egress}" \
       --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   elif additional_egress_extproc_enabled; then
     patch_atenet_egress_manifest | run_ko resolve -f -
@@ -425,10 +430,13 @@ create_egress_mitm_ca_pool_secret() {
     --key-type=ECDSAP256
 }
 
-# Only the sdsmint egress variant mounts this pool.
+# Both egress implementations read this pool only in their opt-in MITM mode:
+# AgentGateway consumes its exported TLS chain and key, while Envoy's sdsmint
+# sidecar consumes the serialized pool.
 ensure_egress_mitm_ca_pool_secret() {
-  [[ "$(atenet_router)" != "agentgateway" ]] || return 0
-  [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]] || return 0
+  if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
+    return 0
+  fi
   run_kubectl get secret -n ate-system egress-mitm-ca-pool >/dev/null 2>&1 \
     || create_egress_mitm_ca_pool_secret
 }
@@ -798,6 +806,82 @@ delete_demo_actors() {
         <<<"${actors_json}"
     )
   done
+}
+
+# delete_demo_actors_substrate is delete_demo_actors for actors created from a
+# substrate ActorTemplate resource: those reference their template via the
+# actorTemplate {atespace, name} ref instead of the legacy CRD namespace/name
+# pair. Arguments are alternating atespace and template name.
+delete_demo_actors_substrate() {
+  if ! command -v jq &>/dev/null; then
+    echo "jq is required to delete demo actors" >&2
+    return 1
+  fi
+
+  if (($# == 0 || $# % 2 != 0)); then
+    echo "delete_demo_actors_substrate expects atespace/template pairs" >&2
+    return 1
+  fi
+
+  if ! run_kubectl get deployment/ate-api-server -n ate-system >/dev/null 2>&1; then
+    log_step "ate-api-server not found; skipping actor cleanup"
+    return 0
+  fi
+
+  local actors_json
+  if ! actors_json=$(run_kubectl_ate get actors -A -o json 2>/dev/null); then
+    echo "warning: could not list actors; skipping actor cleanup" >&2
+    return 0
+  fi
+
+  local template_atespace tmpl atespace actor_name
+  while (($# > 0)); do
+    template_atespace="$1"
+    tmpl="$2"
+    shift 2
+
+    log_step "Deleting actors for ${template_atespace}/${tmpl}"
+    while IFS=$'\t' read -r atespace actor_name; do
+      [[ -z "${actor_name}" ]] && continue
+      log_step "  preparing actor ${atespace}/${actor_name} for delete"
+      prepare_actor_for_delete "${actor_name}" "${atespace}"
+      run_kubectl_ate delete actor "${actor_name}" -a "${atespace}"
+    done < <(
+      jq -r --arg as "${template_atespace}" --arg tmpl "${tmpl}" \
+        '.actors[]? | select(.actorTemplate.atespace == $as and .actorTemplate.name == $tmpl) | "\(.metadata.atespace)\t\(.metadata.name)"' \
+        <<<"${actors_json}"
+    )
+  done
+}
+
+# wait_actortemplate_ready polls a substrate ActorTemplate resource until its
+# golden snapshot exists (the substrate counterpart of `kubectl wait
+# --for=condition=Ready actortemplate/...`). Fails fast when the template
+# reconciler reports an error.
+wait_actortemplate_ready() {
+  local atespace="$1"
+  local template="$2"
+  local timeout_secs="${3:-300}"
+  local deadline=$((SECONDS + timeout_secs))
+  local json snapshot error_message
+
+  while ((SECONDS < deadline)); do
+    if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
+      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.name // empty' <<<"${json}")
+      if [[ -n "${snapshot}" ]]; then
+        return 0
+      fi
+      error_message=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.errorMessage // empty' <<<"${json}")
+      if [[ -n "${error_message}" ]]; then
+        echo "actor template ${atespace}/${template} failed: ${error_message}" >&2
+        return 1
+      fi
+    fi
+    sleep 5
+  done
+
+  echo "timed out waiting for actor template ${atespace}/${template} golden snapshot" >&2
+  return 1
 }
 
 delete_ate_system() {

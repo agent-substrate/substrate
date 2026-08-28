@@ -32,9 +32,9 @@ spec:
   assets:
     amd64:
       gvisor:
-        url: "gs://gvisor/releases/release/20260803/x86_64/gvisor.tar.bz2"
-        sha256: "9e7a5fcc2cbd28c9cd4af910a9327abcf07a8efcce242c285b860d79010c2db5"
+        url: "gs://gvisor/releases/nightly/2026-08-28/x86_64/gvisor.tar.bz2"
+        sha256: "97f83fa5f352f2c6337d792b1c23c4e73a9c47529c08f6531029f8e0722cfe2c"
     arm64:
       gvisor:
-        url: "gs://gvisor/releases/release/20260803/aarch64/gvisor.tar.bz2"
-        sha256: "294d54dea2a18bcd2614a4b5072d6f32f0e8938f9e6e71c9e86b843c4a7b707b"
+        url: "gs://gvisor/releases/nightly/2026-08-28/aarch64/gvisor.tar.bz2"
+        sha256: "561e281b7f8af95205b1df140c453a795a7fbc0db348c63b305e6521350734ef"

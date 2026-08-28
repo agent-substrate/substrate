@@ -31,3 +31,13 @@ def add_memload_arguments(parser: LocustArgumentParser) -> None:
         "realistically-sized memory (default: empty = disabled). Size the "
         "actorMemory limit above it for headroom.",
     )
+    group.add_argument(
+        "--mem-churn",
+        type=str,
+        default="",
+        help="How much of the working set each GluttonUser re-randomizes in "
+        "place every cycle (WriteRAM overwrite), with an optional unit "
+        "suffix (e.g. '64Mi'), so repeated suspends snapshot changing "
+        "memory like a live application's (default: empty = disabled). "
+        "Requires --mem-target.",
+    )
