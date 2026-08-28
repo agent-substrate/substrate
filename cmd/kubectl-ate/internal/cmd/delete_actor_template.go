@@ -25,9 +25,8 @@ import (
 var deleteActorTemplateAtespaceFlag string
 
 var deleteActorTemplateCmd = &cobra.Command{
-	Use:     "actortemplate <template-name>",
-	Aliases: []string{"actortemplates"},
-	Short:   "Delete an actor template",
+	Use:   "actor-template <template-name>",
+	Short: "Delete an actor template",
 	Long: `Delete an actor template (substrate resource, not the ActorTemplate CRD).
 
 The server also deletes the template's golden actor and golden snapshot.`,

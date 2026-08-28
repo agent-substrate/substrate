@@ -18,7 +18,7 @@
 #
 # Substrate-resource variant of the counter demo: the worker pool is still a
 # CRD manifest, but the ActorTemplate is created through the ate API with
-# `kubectl ate create actortemplate` instead of being applied as a CRD.
+# `kubectl ate create actor-template` instead of being applied as a CRD.
 # The micro-VM variant additionally needs the cluster-wide `microvm`
 # SandboxConfig from hack/install-microvm-deps.sh --install.
 
@@ -101,8 +101,8 @@ demo-counter-substrate_deploy_variant() {
   # delete the demo and redeploy to change it.
   if ! sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${template_manifest}" \
       | run_ko resolve -f - \
-      | run_kubectl_ate create actortemplate -f -; then
-    if run_kubectl_ate get actortemplate "${template}" -a "${atespace}" >/dev/null 2>&1; then
+      | run_kubectl_ate create actor-template -f -; then
+    if run_kubectl_ate get actor-template "${template}" -a "${atespace}" >/dev/null 2>&1; then
       log_step "actor template ${atespace}/${template} already exists; keeping it (delete the demo to replace it)"
     else
       echo "error: failed to create actor template ${atespace}/${template}" >&2
@@ -127,7 +127,7 @@ demo-counter-substrate_delete_variant() {
 
   delete_demo_actors_substrate "${atespace}" "${template}"
   # Also removes the template's golden actor and golden snapshot server-side.
-  run_kubectl_ate delete actortemplate "${template}" -a "${atespace}" 2>/dev/null \
+  run_kubectl_ate delete actor-template "${template}" -a "${atespace}" 2>/dev/null \
     || log_step "actor template ${atespace}/${template} not deleted (may not exist)"
   run_kubectl_ate delete atespace "${atespace}" 2>/dev/null \
     || log_step "atespace ${atespace} not deleted (may not exist or is not empty)"

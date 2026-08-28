@@ -108,7 +108,7 @@ kubectl ate get workers -l <label-selector>
 |---|---|
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
-| `TEMPLATE` | The `ActorTemplate` the actor was created from, as `<atespace>/<name>` (`--template-ref`). |
+| `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
 | `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
 | `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `ATEOM IP` | The pod IP of that worker. Empty while suspended. |
@@ -163,21 +163,21 @@ one.
 # Create a template from a manifest (protojson-shaped ateapipb.ActorTemplate,
 # a single YAML/JSON document; use -f - for stdin). The metadata's atespace
 # must already exist.
-kubectl ate create actortemplate -f template.yaml
+kubectl ate create actor-template -f template.yaml
 
 # List templates, or get one (also: -o yaml prints the re-applyable manifest).
-kubectl ate get actortemplates -a <atespace>
-kubectl ate get actortemplate <name> -a <atespace> -o yaml
+kubectl ate get actor-templates -a <atespace>
+kubectl ate get actor-template <name> -a <atespace> -o yaml
 
 # Delete a template. This also deletes its golden actor and golden snapshot.
-kubectl ate delete actortemplate <name> -a <atespace>
+kubectl ate delete actor-template <name> -a <atespace>
 ```
 
 See
 [`demos/counter/counter-substrate-template.yaml.tmpl`](../../demos/counter/counter-substrate-template.yaml.tmpl)
 for a complete manifest example.
 
-#### `kubectl ate get actortemplates` output columns
+#### `kubectl ate get actor-templates` output columns
 
 | Column | Meaning |
 |---|---|
@@ -192,10 +192,10 @@ Manage the execution state of your workloads.
 *(Note: Actors are identified by a user-provided name, which must be a valid DNS-1123 label)*
 
 ```bash
-# Create a new actor deriving from an ActorTemplate.
-# -a/--atespace is required and the atespace must already exist
-# (kubectl ate create atespace <atespace>).
-kubectl ate create actor my-actor --template-ref=<template-atespace>/<template-name> -a <atespace>
+# Create a new actor deriving from an ActorTemplate. The template name is
+# resolved in the actor's atespace. -a/--atespace is required and the
+# atespace must already exist (kubectl ate create atespace <atespace>).
+kubectl ate create actor my-actor --template-ref=<template-name> -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor -a <atespace>

@@ -33,24 +33,24 @@ func TestBuildCreateActorRequest(t *testing.T) {
 	}{
 		{
 			name:        "template ref",
-			templateRef: "ate-demo-counter-substrate/counter",
+			templateRef: "counter",
 			want: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-demo-counter-substrate", Name: "counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
 			},
 		},
 		{
 			name:        "template ref with snapshot tag",
-			templateRef: "ate-demo-counter-substrate/counter",
+			templateRef: "counter",
 			snapshotTag: "demo/before-upgrade",
 			want: &ateapipb.Actor{
 				Metadata:          &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
-				ActorTemplate:     &ateapipb.ObjectRef{Atespace: "ate-demo-counter-substrate", Name: "counter"},
+				ActorTemplate:     &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
 				SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: "demo", Name: "before-upgrade"},
 			},
 		},
-		{name: "malformed template ref", templateRef: "counter", wantErr: true},
-		{name: "malformed snapshot tag", templateRef: "space/counter", snapshotTag: "before-upgrade", wantErr: true},
+		{name: "malformed template ref", templateRef: "ate-demo-counter-substrate/counter", wantErr: true},
+		{name: "malformed snapshot tag", templateRef: "counter", snapshotTag: "before-upgrade", wantErr: true},
 	}
 
 	for _, test := range tests {

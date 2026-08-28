@@ -153,9 +153,9 @@ round trip.
 
 In this variant the `WorkerPool` stays a CRD, but the actor template is an
 `ateapipb.ActorTemplate` created through the ate API with
-`kubectl ate create actortemplate`. Its manifest
+`kubectl ate create actor-template`. Its manifest
 ([`counter-substrate-template.yaml.tmpl`](counter-substrate-template.yaml.tmpl))
-is the message's protojson form — the shape `kubectl ate get actortemplate
+is the message's protojson form — the shape `kubectl ate get actor-template
 -o yaml` prints inside its `actorTemplates` list — and lives in an
 **atespace** rather than a Kubernetes namespace.
 
@@ -166,20 +166,19 @@ golden snapshot):
 ./hack/install-ate.sh --deploy-demo-counter-substrate
 ```
 
-Create an actor from it with `--template-ref` (an `<atespace>/<name>`
-reference to the template):
+Create an actor from it with `--template-ref` (the template's name, resolved
+in the actor's atespace — so the actor lives in the demo's atespace):
 
 ```bash
-kubectl ate create atespace demo
-kubectl ate create actor my-counter-1 -a demo --template-ref ate-demo-counter-substrate/counter
+kubectl ate create actor my-counter-1 -a ate-demo-counter-substrate --template-ref counter
 ```
 
 Everything else — curling through the router, suspend/resume, delete — works
 exactly as in the walkthrough above. Inspect the template with:
 
 ```bash
-kubectl ate get actortemplates -a ate-demo-counter-substrate
-kubectl ate get actortemplate counter -a ate-demo-counter-substrate -o yaml
+kubectl ate get actor-templates -a ate-demo-counter-substrate
+kubectl ate get actor-template counter -a ate-demo-counter-substrate -o yaml
 ```
 
 For the micro-VM variant, pass `--substrate` to the one-shot bring-up (or run
@@ -205,9 +204,8 @@ Uninstall with:
 ./hack/install-ate.sh --delete-demo-counter-substrate-microvm
 ```
 
-This also deletes the actors created from the demo templates, but not the
-`demo` atespace created above — remove it with
-`kubectl ate delete atespace demo`.
+This also deletes the actors created from the demo templates and the demo's
+atespace.
 
 ## How to Uninstall
 

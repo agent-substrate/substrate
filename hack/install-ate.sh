@@ -833,7 +833,7 @@ wait_actortemplate_ready() {
   local json snapshot error_message
 
   while ((SECONDS < deadline)); do
-    if json=$(run_kubectl_ate get actortemplate "${template}" -a "${atespace}" -o json 2>/dev/null); then
+    if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
       snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.name // empty' <<<"${json}")
       if [[ -n "${snapshot}" ]]; then
         return 0

@@ -30,15 +30,14 @@ import (
 var createActorTemplateFilenameFlag string
 
 var createActorTemplateCmd = &cobra.Command{
-	Use:     "actortemplate -f <manifest>",
-	Aliases: []string{"actortemplates"},
-	Short:   "Create an actor template from a manifest",
+	Use:   "actor-template -f <manifest>",
+	Short: "Create an actor template from a manifest",
 	Long: `Create an actor template (substrate resource, not the ActorTemplate CRD)
 from a manifest file.
 
 The manifest is a single YAML (or JSON) document holding one ateapipb.ActorTemplate
 message in its protojson form, exactly as printed by
-"kubectl ate get actortemplate <name> -a <atespace> -o yaml".
+"kubectl ate get actor-template <name> -a <atespace> -o yaml".
 The template's atespace and name come from the manifest's metadata.
 The atespace must already exist.
 

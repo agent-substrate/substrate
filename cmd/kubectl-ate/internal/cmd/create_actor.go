@@ -66,11 +66,12 @@ func buildCreateActorRequest(actorName, atespace, template, templateRef, snapsho
 		},
 	}
 	if templateRef != "" {
-		ref, err := parseNamespacedName(templateRef)
-		if err != nil {
-			return nil, fmt.Errorf("malformed --template-ref: %w", err)
+		// The template name is resolved in the actor's atespace; cross-atespace
+		// references are intentionally not expressible here.
+		if strings.Contains(templateRef, "/") {
+			return nil, fmt.Errorf("malformed --template-ref: %s (expected a bare template name, resolved in the actor's atespace)", templateRef)
 		}
-		actor.ActorTemplate = ref
+		actor.ActorTemplate = &ateapipb.ObjectRef{Atespace: atespace, Name: templateRef}
 	} else {
 		parts := strings.Split(template, "/")
 		if len(parts) != 2 {
@@ -91,7 +92,8 @@ func buildCreateActorRequest(actorName, atespace, template, templateRef, snapsho
 
 func init() {
 	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Legacy ActorTemplate CRD to derive the actor from, in <namespace>/<name> format")
-	createActorCmd.Flags().StringVar(&templateRefFlag, "template-ref", "", "Substrate ActorTemplate resource to derive the actor from, in <atespace>/<name> format")
+	// TODO: rename "template-ref" to "template" when we fully cutover.
+	createActorCmd.Flags().StringVar(&templateRefFlag, "template-ref", "", "Name of the substrate ActorTemplate resource to derive the actor from, resolved in the actor's atespace (--atespace)")
 	createActorCmd.MarkFlagsMutuallyExclusive("template", "template-ref")
 	createActorCmd.MarkFlagsOneRequired("template", "template-ref")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
