@@ -5491,6 +5491,7 @@ type ActorAssignment struct {
 	// Exactly one is set.
 	//
 	// +k8s:optional
+	// +k8s:unionMember
 	ActorTemplate *KubeNamespacedObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
@@ -5498,9 +5499,9 @@ type ActorAssignment struct {
 	// +k8s:required
 	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// +k8s:opaqueType
-	// TODO: Add DV (subfield(atespace)=required) and enforce "exactly one of
-	// actor_template, actor_template_ref" once union tags are available.
+	// +k8s:optional
+	// +k8s:unionMember
+	// +k8s:subfield(atespace)=+k8s:required
 	ActorTemplateRef *ObjectRef `protobuf:"bytes,4,opt,name=actor_template_ref,json=actorTemplateRef,proto3" json:"actor_template_ref,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

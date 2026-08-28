@@ -317,11 +317,29 @@ func Validate_Actor(
 	return errs
 }
 
+var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_ActorAssignment_ = validate.NewUnionMembership(validate.NewUnionMember("actor_template"), validate.NewUnionMember("actor_template_ref"))
+
 // Validate_ActorAssignment validates an instance of ActorAssignment according
 // to declarative validation rules in the API schema.
 func Validate_ActorAssignment(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.ActorAssignment) (errs field.ErrorList) {
+
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_ActorAssignment_,
+		func(obj *ateapipb.ActorAssignment) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.ActorTemplate != nil
+		},
+		func(obj *ateapipb.ActorAssignment) bool {
+			if obj == nil {
+				return false
+			}
+			return obj.ActorTemplateRef != nil
+		}); len(e) != 0 {
+		errs = append(errs, e...)
+	}
 
 	{ // field ateapipb.ActorAssignment.ActorTemplate
 		fn := func(
@@ -431,7 +449,51 @@ func Validate_ActorAssignment(
 		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
 	}
 
-	// field ateapipb.ActorAssignment.ActorTemplateRef has no validation
+	{ // field ateapipb.ActorAssignment.ActorTemplateRef
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ObjectRef,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ateapipb.ObjectRef) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			// call the type's validation function
+			errs = append(errs, Validate_ObjectRef(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorAssignment) *ateapipb.ObjectRef {
+				return oldObj.ActorTemplateRef
+			})
+		errs = append(errs, fn(fldPath.Child("actor_template_ref"), obj.ActorTemplateRef, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

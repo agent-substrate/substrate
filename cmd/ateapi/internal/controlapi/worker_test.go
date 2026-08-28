@@ -681,6 +681,39 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		},
 		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "assignment", "actor", "atespace"), "")},
 	}, {
+		name: "assignment with a template resource ref passes",
+		mutate: func(w *ateapipb.Worker) {
+			assignment := newAPIAssignment(apiOtherWorkerName)
+			assignment.ActorTemplate = nil
+			assignment.ActorTemplateRef = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl"}
+			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Assignment: assignment}
+		},
+	}, {
+		name: "assignment template ref needs an atespace",
+		mutate: func(w *ateapipb.Worker) {
+			assignment := newAPIAssignment(apiOtherWorkerName)
+			assignment.ActorTemplate = nil
+			assignment.ActorTemplateRef = &ateapipb.ObjectRef{Name: "tmpl"}
+			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Assignment: assignment}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "assignment", "actor_template_ref", "atespace"), "")},
+	}, {
+		name: "assignment must name its template exactly once: both set",
+		mutate: func(w *ateapipb.Worker) {
+			assignment := newAPIAssignment(apiOtherWorkerName)
+			assignment.ActorTemplateRef = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl"}
+			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Assignment: assignment}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment"), nil, "").WithOrigin("union")},
+	}, {
+		name: "assignment must name its template exactly once: neither set",
+		mutate: func(w *ateapipb.Worker) {
+			assignment := newAPIAssignment(apiOtherWorkerName)
+			assignment.ActorTemplate = nil
+			w.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Assignment: assignment}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment"), nil, "").WithOrigin("union")},
+	}, {
 		name: "assignment template name must be a long name",
 		mutate: func(w *ateapipb.Worker) {
 			assignment := newAPIAssignment(apiOtherWorkerName)

@@ -1264,6 +1264,7 @@ message ActorAssignment {
   // Exactly one is set.
   //
   // +k8s:optional
+  // +k8s:unionMember
   KubeNamespacedObjectRef actor_template = 1;
 
   // +k8s:required
@@ -1274,9 +1275,9 @@ message ActorAssignment {
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
 
-  // +k8s:opaqueType
-  // TODO: Add DV (subfield(atespace)=required) and enforce "exactly one of
-  // actor_template, actor_template_ref" once union tags are available.
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
 }
 
