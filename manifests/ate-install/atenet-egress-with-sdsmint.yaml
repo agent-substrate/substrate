@@ -146,8 +146,6 @@ data:
                   - object_key: ate.actor.identity
                     factory_key: envoy.string
                     shared_with_upstream: ONCE
-                    # Nothing downstream may overwrite an authenticated identity.
-                    read_only: true
                     skip_if_empty: true
                     format_string:
                       text_format_source:
@@ -863,7 +861,7 @@ spec:
           readOnly: true
       containers:
       - name: envoy
-        image: envoyproxy/envoy:v1.37-latest@sha256:1c2b79776c6e3b38e8b0113b825e6a599f9bfc08d680c199d80bf8964856c529
+        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

@@ -267,7 +267,7 @@ spec:
         - name: "drain-signal"
           mountPath: "/var/run/atenet"
       - name: envoy
-        image: envoyproxy/envoy:v1.39-latest
+        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
         command:
         - "/usr/local/bin/envoy"
         - "-c"
