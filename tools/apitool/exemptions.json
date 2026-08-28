@@ -11,7 +11,37 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.Actor.actor_template_name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorAssignment.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorAssignment.actor_template_ref",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.ActorAssignment.actor_uid",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorMetadataItem.field",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorMetadataItem.path",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorSnapshot.metadata",
     "message": "field has no doc comment"
   },
   {
@@ -51,6 +81,11 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.ActorSnapshotStatus.source_actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.ActorSnapshotStatus.source_actor_uid",
     "message": "field has no doc comment"
   },
@@ -62,6 +97,11 @@
   {
     "rule": "documented",
     "subject": "ateapi.ActorSnapshotTag.scope",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorSnapshotTag.snapshot",
     "message": "field has no doc comment"
   },
   {
@@ -97,6 +137,11 @@
   {
     "rule": "documented",
     "subject": "ateapi.ActorTemplate.status",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ActorTemplate.volumes",
     "message": "field has no doc comment"
   },
   {
@@ -176,6 +221,11 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.DeleteActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.DeleteActorRequest.any_state",
     "message": "field has no doc comment"
   },
@@ -186,13 +236,28 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.DeleteActorSnapshotTagRequest.actor_snapshot_tag",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.DeleteActorTemplateRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
+    "subject": "ateapi.DeleteActorTemplateRequest.actor_template",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.DeleteAtespaceRequest",
     "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.DeleteAtespaceRequest.atespace",
+    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -226,8 +291,18 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.GetActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.GetActorSnapshotRequest",
     "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetActorSnapshotRequest.actor_snapshot",
+    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -236,13 +311,28 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.GetActorSnapshotTagRequest.actor_snapshot_tag",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.GetActorTemplateRequest",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
+    "subject": "ateapi.GetActorTemplateRequest.actor_template",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.GetAtespaceRequest",
     "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.GetAtespaceRequest.atespace",
+    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -376,6 +466,11 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.PauseActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.PauseActorResponse",
     "message": "message has no doc comment"
   },
@@ -398,6 +493,11 @@
     "rule": "documented",
     "subject": "ateapi.ResumeActorRequest",
     "message": "message has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.ResumeActorRequest.actor",
+    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -431,6 +531,11 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.SuspendActorRequest.actor",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.SuspendActorResponse",
     "message": "message has no doc comment"
   },
@@ -446,6 +551,21 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.SystemInfoDataSource.trust_bundle",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.TrustBundleDataSource.name",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.TrustBundleDataSource.path",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.UpdateWorkerRequest",
     "message": "message has no doc comment"
   },
@@ -457,6 +577,11 @@
   {
     "rule": "documented",
     "subject": "ateapi.Volume.external_volume_template",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
+    "subject": "ateapi.Volume.system_info",
     "message": "field has no doc comment"
   },
   {
