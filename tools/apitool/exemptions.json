@@ -11,11 +11,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorAssignment.actor_uid",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorSnapshot.status",
     "message": "field has no doc comment"
   },
@@ -113,16 +108,6 @@
     "rule": "documented",
     "subject": "ateapi.ArchAssets",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Capabilities.add",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Capabilities.drop",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -276,23 +261,8 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ImageVolumeSource.reference",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.KubeNamespacedObjectRef",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef.namespace",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -431,11 +401,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SecurityContext.capabilities",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.SnapshotContentScope",
     "message": "enum has no doc comment"
   },
@@ -481,37 +446,7 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Volume.image",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Worker.ip",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Worker.labels",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Worker.node_name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Worker.worker_pod",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Worker.worker_pod_uid",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Worker.worker_pool",
     "message": "field has no doc comment"
   },
   {
@@ -533,10 +468,5 @@
     "rule": "documented",
     "subject": "ateapi.WorkerStatus",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.WorkerStatus.state",
-    "message": "field has no doc comment"
   }
 ]
