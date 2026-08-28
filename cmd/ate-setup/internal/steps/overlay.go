@@ -200,18 +200,24 @@ func emitAdditionalEgressExtprocCluster(address, port, serverName string) string
         tls_params:
           tls_minimum_protocol_version: TLSv1_3
           tls_maximum_protocol_version: TLSv1_3
-        tls_certificates:
-        - certificate_chain: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
-          private_key: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
-          watched_directory: { path: /run/podidentity.podcert.ate.dev }
-        validation_context:
-          trusted_ca:
-            filename: /run/servicedns.podcert.ate.dev/trust-bundle.pem
-            watched_directory: { path: /run/servicedns.podcert.ate.dev }
-          match_typed_subject_alt_names:
-          - san_type: DNS
-            matcher:
-              exact: %s
+        tls_certificate_sds_secret_configs:
+        - name: podidentity_client_cert
+          sds_config:
+            resource_api_version: V3
+            path_config_source:
+              path: /etc/envoy/sds-podidentity-cert.yaml
+        combined_validation_context:
+          default_validation_context:
+            match_typed_subject_alt_names:
+            - san_type: DNS
+              matcher:
+                exact: %s
+          validation_context_sds_secret_config:
+            name: servicedns_validation_context
+            sds_config:
+              resource_api_version: V3
+              path_config_source:
+                path: /etc/envoy/sds-servicedns-validation.yaml
   load_assignment:
     cluster_name: %s
     endpoints:
