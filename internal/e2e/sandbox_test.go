@@ -29,6 +29,7 @@ var fixtureManifests = []string{
 	"internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
 	"internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 	"internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
+	"internal/e2e/fixtures/testserver/grpcecho.yaml.tmpl",
 }
 
 // renderFixture renders a manifest and decodes the two resources the

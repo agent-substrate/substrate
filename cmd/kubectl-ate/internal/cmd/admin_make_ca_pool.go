@@ -75,14 +75,25 @@ var makeCaPoolCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("while marshaling pool: %w", err)
 		}
+		certificateChain, err := ca.TLSCertificateChainPEM()
+		if err != nil {
+			return fmt.Errorf("while encoding CA certificate chain: %w", err)
+		}
+		privateKey, err := ca.TLSPrivateKeyPEM()
+		if err != nil {
+			return fmt.Errorf("while encoding CA private key: %w", err)
+		}
 
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: targetSecretNamespace,
 				Name:      targetSecretName,
 			},
+			Type: corev1.SecretTypeTLS,
 			Data: map[string][]byte{
-				"pool": poolBytes,
+				"pool":                  poolBytes,
+				corev1.TLSCertKey:       certificateChain,
+				corev1.TLSPrivateKeyKey: privateKey,
 			},
 		}
 

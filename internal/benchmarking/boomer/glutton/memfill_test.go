@@ -21,6 +21,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
+	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 )
 
 func newTestGluttonUser(t *testing.T, srv *fake.Server, dyn dynconfig.Config) *gluttonUser {
@@ -65,6 +66,52 @@ func TestEnsureRAMFilledDisabledByDefault(t *testing.T) {
 	}
 	if got := len(srv.RecordedRAMWriteSizes()); got != 0 {
 		t.Errorf("WriteRAM calls with zero target = %d, want 0", got)
+	}
+}
+
+func TestChurnRAMOverwritesEachCycle(t *testing.T) {
+	srv := &fake.Server{}
+	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi", MemChurn: "64Mi"})
+	ctx := context.Background()
+
+	// Churn before fill is a no-op: there is nothing to overwrite yet.
+	u.churnRAM(ctx)
+	if got := len(srv.RecordedRAMWriteSizes()); got != 0 {
+		t.Fatalf("WriteRAM calls from churn before fill = %d, want 0", got)
+	}
+
+	// Fill, then two cycles of churn.
+	u.ensureRAMFilled(ctx)
+	u.churnRAM(ctx)
+	u.churnRAM(ctx)
+
+	sizes := srv.RecordedRAMWriteSizes()
+	modes := srv.RecordedRAMWriteModes()
+	wantSizes := []string{"1Gi", "64Mi", "64Mi"}
+	wantModes := []gluttonpb.WriteMode{
+		gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
+		gluttonpb.WriteMode_WRITE_MODE_OVERWRITE,
+		gluttonpb.WriteMode_WRITE_MODE_OVERWRITE,
+	}
+	if len(sizes) != len(wantSizes) {
+		t.Fatalf("WriteRAM calls = %d (%v), want %d", len(sizes), sizes, len(wantSizes))
+	}
+	for i := range wantSizes {
+		if sizes[i] != wantSizes[i] || modes[i] != wantModes[i] {
+			t.Errorf("call %d = (%s, %v), want (%s, %v)", i, sizes[i], modes[i], wantSizes[i], wantModes[i])
+		}
+	}
+}
+
+func TestChurnRAMDisabledByDefault(t *testing.T) {
+	srv := &fake.Server{}
+	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi"})
+	ctx := context.Background()
+
+	u.ensureRAMFilled(ctx)
+	u.churnRAM(ctx)
+	if got := len(srv.RecordedRAMWriteSizes()); got != 1 {
+		t.Errorf("WriteRAM calls with churn unset = %d, want 1 (fill only)", got)
 	}
 }
 

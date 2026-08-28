@@ -152,15 +152,14 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 			"actor %s routing failed", actorRef)
 	}
 
-	// atunnel's ingress server listens on :443 (mTLS) and forwards to
-	// targetPort on the actor; the router's client cert comes from the
-	// ORIGINAL_DST cluster's upstream TLS context (xds.go).
+	// atunnel's regular HTTPS ingress listens on :443 and forwards to the
+	// actor's targetPort.
 	targetAddr := net.JoinHostPort(workerIP, "443")
 
 	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
-	// Envoy and agentgateway both pick the upstream from dynamic metadata,
-	// so the resolved address and port go there.
+	// ext_proc clients may use regular HTTPS on :443 or choose to CONNECT to
+	// atunnel instead.
 	dynamicMetadata, err := structpb.NewStruct(map[string]any{
 		OriginalDstMetadataKey: map[string]any{
 			OriginalDstAddressKey: targetAddr,
