@@ -96,16 +96,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorSnapshotTag.scope",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotTag.snapshot",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorSnapshotTagScope",
     "message": "enum has no doc comment"
   },
