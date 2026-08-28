@@ -272,7 +272,7 @@ func TestValidateGetActorTemplateRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateGetActorTemplateRequest(tt.req), tt.want)
+			assertValidateErr(t, validateGetActorTemplateRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -297,15 +297,15 @@ func TestValidateListActorTemplatesRequest(t *testing.T) {
 	}, {
 		"invalid atespace filter",
 		&ateapipb.ListActorTemplatesRequest{Atespace: "NS_1"},
-		field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS_1", "")},
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS_1", "").WithOrigin("format=k8s-short-name")},
 	}, {
 		"negative page size",
 		&ateapipb.ListActorTemplatesRequest{PageSize: -1},
-		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "")},
+		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "").WithOrigin("minimum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateListActorTemplatesRequest(tt.req), tt.want)
+			assertValidateErr(t, validateListActorTemplatesRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -334,7 +334,7 @@ func TestValidateDeleteActorTemplateRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateDeleteActorTemplateRequest(tt.req), tt.want)
+			assertValidateErr(t, validateDeleteActorTemplateRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }

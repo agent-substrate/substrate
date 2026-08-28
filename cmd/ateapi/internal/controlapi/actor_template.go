@@ -88,7 +88,7 @@ func validateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 }
 
 func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
-	if errs := validateGetActorTemplateRequest(req); len(errs) > 0 {
+	if errs := validateGetActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
@@ -108,21 +108,14 @@ func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resource
 	return s.store.GetActorTemplate(ctx, templateRef)
 }
 
-func validateGetActorTemplateRequest(req *ateapipb.GetActorTemplateRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.ActorTemplate, fldPath.Child("actor_template"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateGetActorTemplateRequest(ctx context.Context, req *ateapipb.GetActorTemplateRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_GetActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
-	if errs := validateListActorTemplatesRequest(req); len(errs) > 0 {
+	if errs := validateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
@@ -141,24 +134,14 @@ func (s *ServiceImpl) ListActorTemplates(ctx context.Context, atespace string, o
 	return s.store.ListActorTemplates(ctx, atespace, opts)
 }
 
-func validateListActorTemplatesRequest(req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	// An empty atespace is allowed here and means "all atespaces".
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val != "" {
-		errs = append(errs, resources.ValidateResourceName(val, fldPath)...)
-	}
-
-	if val, fldPath := req.PageSize, fldPath.Child("page_size"); val < 0 {
-		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
-	}
-
-	return errs
+func validateListActorTemplatesRequest(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ListActorTemplatesRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
-	if errs := validateDeleteActorTemplateRequest(req); len(errs) > 0 {
+	if errs := validateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
@@ -182,17 +165,10 @@ func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resou
 	return s.store.DeleteActorTemplate(ctx, templateRef)
 }
 
-func validateDeleteActorTemplateRequest(req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.ActorTemplate, fldPath.Child("actor_template"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
 func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
