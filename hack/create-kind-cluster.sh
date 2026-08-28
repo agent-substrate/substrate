@@ -156,6 +156,33 @@ for attempt in $(seq 60); do
   sleep 2
 done
 
+# Where the daemon lives in a VM (Lima on macOS), kind publishes the port inside
+# the VM and limactl re-forwards it to the host's v4 loopback only, so kind's
+# own kubeconfig entry is unreachable. See
+# https://github.com/lima-vm/lima/issues/1540 for more details.
+#
+# Probe that entry once and, if it is refused, repoint at localhost — the only
+# spelling that reaches it: it falls back to the v4 loopback limactl forwards,
+# and unlike 127.0.0.1 it is a SAN on the cert an IPv6-only cluster issues.
+answers() {
+  kubectl --context="${KUBECTL_CONTEXT}" --server="$1" \
+    --request-timeout=5s get --raw /healthz >/dev/null 2>&1
+}
+server="$(kubectl config view \
+  -o jsonpath="{.clusters[?(@.name==\"${KUBECTL_CONTEXT}\")].cluster.server}")"
+if ! answers "${server}"; then
+  fallback="https://localhost:${server##*:}"
+  if ! answers "${fallback}"; then
+    echo "error: the apiserver answers inside the node but neither ${server} nor" >&2
+    echo "       ${fallback} reaches it from here. Check where the daemon" >&2
+    echo "       published the port, and whether it reaches this host:" >&2
+    echo "         docker port ${KIND_CLUSTER_NAME}-control-plane 6443" >&2
+    exit 1
+  fi
+  echo "The kubeconfig server ${server} is unreachable; repointing at ${fallback}..."
+  kubectl config set-cluster "${KUBECTL_CONTEXT}" --server="${fallback}" >/dev/null
+fi
+
 # A daemon with IPv6 off hands kind a v4-only network whatever it asked for.
 if [[ "${IP_FAMILY}" != "ipv4" &&
       "$(docker network inspect kind --format '{{.EnableIPv6}}')" != "true" ]]; then
