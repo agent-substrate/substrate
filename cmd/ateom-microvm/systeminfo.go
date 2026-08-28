@@ -25,9 +25,8 @@
 // the actor's directories are reset.
 //
 // ateom exposes that host directory to the guest under the single kataShared
-// virtio-fs share at SharedDir(actorUID)/system-info (in-guest path:
-// kata.GuestSystemInfoVolumeDir(volume)), like durable-dir and CSI volumes —
-// no extra virtio-fs device. Read-only is enforced twice: the host bind is
+// virtio-fs share at SharedDir(actorUID)/system-info, like durable-dir and CSI
+// volumes — no extra virtio-fs device. Read-only is enforced twice: the host bind is
 // remounted read-only (so nothing in the guest can write through the share),
 // and each container bind adds "ro" (so the workload can't write the mount).
 //
@@ -50,8 +49,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // hasSystemInfoVolumes reports whether any container mounts a system-info
@@ -65,23 +64,6 @@ func hasSystemInfoVolumes(containers []*ateompb.Container) bool {
 	return false
 }
 
-// systemInfoMounts returns the OCI mounts that expose a container's
-// system-info volumes at the paths it declared, read-only. Each source is that
-// volume's directory inside the guest's shared tree, which the agent mounts at
-// sandbox creation.
-func systemInfoMounts(mounts []*ateompb.SystemInfoVolumeMount) []specs.Mount {
-	out := make([]specs.Mount, 0, len(mounts))
-	for _, m := range mounts {
-		out = append(out, specs.Mount{
-			Destination: m.GetMountPath(),
-			Source:      kata.GuestSystemInfoVolumeDir(m.GetVolumeName()),
-			Type:        "bind",
-			Options:     []string{"rbind", "ro"},
-		})
-	}
-	return out
-}
-
 // stageSystemInfoVolumes bind-mounts the actor's host system-info directory
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/system-info,
 // then remounts the bind read-only: atelet is the only writer, and it writes
@@ -91,7 +73,7 @@ func (s *AteomService) stageSystemInfoVolumes(ctx context.Context, actorUID stri
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking system-info volumes dir %q: %w", src, err)
 	}
-	dst := filepath.Join(kata.SharedDir(actorUID), "system-info")
+	dst := filepath.Join(kata.SharedDir(actorUID), ocispec.ShareSystemInfo)
 	// Drop any stale mount first (lazy if busy), then ensure clean mountpoint.
 	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
 		_ = reaper.Run(exec.Command("umount", "-l", dst))

@@ -200,6 +200,11 @@ spec:
           readOnly: true
         - name: kubelet-plugins
           mountPath: /var/lib/kubelet/plugins
+        - name: device-plugins
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: host-dev
+          mountPath: /host/dev
+          readOnly: true
       volumes:
       - name: run-ateom
         hostPath:
@@ -210,6 +215,22 @@ spec:
         hostPath:
           path: /var/lib/kubelet/plugins
           type: DirectoryOrCreate
+      # atelet advertises host devices (e.g. /dev/kvm) to kubelet as extended
+      # resources so worker pods can be granted just those devices instead of
+      # running privileged. Registering requires talking to kubelet's socket in
+      # this directory and creating a plugin socket beside it.
+      - name: device-plugins
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: DirectoryOrCreate
+      # Read-only view of the node's device nodes, used only to detect which
+      # ones exist (atelet's own /dev is the container's, and does not show
+      # /dev/kvm). Detection is all this grants: atelet drops every capability
+      # and its own cgroup device filter still denies opening these.
+      - name: host-dev
+        hostPath:
+          path: /dev
+          type: Directory
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
       # serving cert (which requires DNS SANs it would not have); the

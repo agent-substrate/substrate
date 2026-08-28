@@ -15,6 +15,7 @@
 package controllers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -27,6 +28,7 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -246,9 +248,10 @@ func TestBuildDeploymentApplyConfigMetadata(t *testing.T) {
 	}
 }
 
-// TestMicroVMPodShape asserts the micro-VM sandbox class adds the /dev/kvm
-// device (volume + container mount) and node placement (nodeSelector +
-// toleration on ate.dev/sandboxClass); other classes get none of it.
+// TestMicroVMPodShape asserts the micro-VM sandbox class requests the host
+// devices as extended resources (served by atelet's device plugin) and
+// tolerates the ate.dev/sandboxClass taint; other classes get none of it.
+// Placement comes from the device request, so no nodeSelector is added.
 func TestMicroVMPodShape(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -265,82 +268,157 @@ func TestMicroVMPodShape(t *testing.T) {
 			wp.Spec.SandboxClass = tt.class
 			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
 
-			hasVol := false
+			// /dev/kvm must come from the device plugin, never a hostPath: a
+			// hostPath mount carries no cgroup device allow rule, and the
+			// runtime denies /dev/kvm by default. /dev/net/tun is the
+			// opposite — allowed by default, so it is bind-mounted.
 			for _, v := range ps.Volumes {
-				if v.Name != nil && *v.Name == "dev-kvm" {
-					hasVol = true
-					if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != "/dev/kvm" ||
-						v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
-						t.Errorf("dev-kvm volume = %+v, want /dev/kvm CharDevice", v.HostPath)
-					}
+				if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path == tunDevicePath {
+					continue
+				}
+				if strings.HasPrefix(*v.HostPath.Path, "/dev/") {
+					t.Errorf("device %q must be requested as a resource, not hostPath-mounted", *v.HostPath.Path)
 				}
 			}
-			hasMount := false
-			for _, c := range ps.Containers {
-				for _, m := range c.VolumeMounts {
-					if m.MountPath != nil && *m.MountPath == "/dev/kvm" {
-						hasMount = true
-					}
+			hasTunMount := false
+			for _, v := range ps.Volumes {
+				if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != tunDevicePath {
+					continue
+				}
+				hasTunMount = true
+				// Without CharDevice, kubelet would happily create a directory
+				// there on a node where the tun module has yet to load.
+				if v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
+					t.Errorf("%s hostPath type = %v, want CharDevice", tunDevicePath, v.HostPath.Type)
 				}
 			}
-			_, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]
+			if hasTunMount && !containerMountsPath(ps.Containers[0], tunDevicePath) {
+				t.Errorf("%s is a pod volume but the ateom container does not mount it", tunDevicePath)
+			}
+
+			hasDeviceRequest := true
+			for _, name := range []string{deviceplugin.ResourceKVM} {
+				qty, ok := deviceLimit(ps.Containers[0], name)
+				if !ok {
+					hasDeviceRequest = false
+					continue
+				}
+				if qty != "1" {
+					t.Errorf("%s limit = %s, want 1", name, qty)
+				}
+			}
+
+			// The device request handles placement, so the class must not also
+			// pin a nodeSelector (which would re-introduce the hand-applied
+			// label as a scheduling requirement).
+			if _, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]; hasSelector {
+				t.Errorf("nodeSelector on ate.dev/sandboxClass should be gone; placement comes from the device request")
+			}
 			hasTol := false
 			for _, tol := range ps.Tolerations {
 				if tol.Key != nil && *tol.Key == "ate.dev/sandboxClass" {
 					hasTol = true
 				}
 			}
-			if hasVol != tt.wantMicroVM || hasMount != tt.wantMicroVM || hasSelector != tt.wantMicroVM || hasTol != tt.wantMicroVM {
-				t.Errorf("microvm shape: vol=%v mount=%v selector=%v toleration=%v, want all %v",
-					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
+			if hasDeviceRequest != tt.wantMicroVM || hasTol != tt.wantMicroVM || hasTunMount != tt.wantMicroVM {
+				t.Errorf("microvm shape: deviceRequest=%v toleration=%v tunMount=%v, want all %v",
+					hasDeviceRequest, hasTol, hasTunMount, tt.wantMicroVM)
 			}
 		})
 	}
 }
 
-// TestAteomSecurityContextByClass asserts the gVisor worker runs unprivileged
-// with the explicit capability set while the micro-VM worker stays privileged,
-// and that an empty class defaults to gVisor.
+// containerMountsPath reports whether c mounts anything at path.
+func containerMountsPath(c corev1ac.ContainerApplyConfiguration, path string) bool {
+	for _, m := range c.VolumeMounts {
+		if m.MountPath != nil && *m.MountPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+// deviceLimit returns the container's limit for an extended resource.
+func deviceLimit(c corev1ac.ContainerApplyConfiguration, name string) (string, bool) {
+	if c.Resources == nil || c.Resources.Limits == nil {
+		return "", false
+	}
+	qty, ok := (*c.Resources.Limits)[corev1.ResourceName(name)]
+	if !ok {
+		return "", false
+	}
+	return qty.String(), true
+}
+
+// A pod template's own resource limits must survive the device requests being
+// merged in.
+func TestMicroVMDeviceRequestsPreserveTemplateResources(t *testing.T) {
+	wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+		Resources: &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+		},
+	})
+	wp.Spec.SandboxClass = atev1alpha1.SandboxClassMicroVM
+	c := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec.Containers[0]
+
+	if got, ok := deviceLimit(c, string(corev1.ResourceMemory)); !ok || got != "2Gi" {
+		t.Errorf("memory limit = %q (present=%v), want 2Gi", got, ok)
+	}
+	if got, ok := deviceLimit(c, deviceplugin.ResourceKVM); !ok || got != "1" {
+		t.Errorf("%s limit = %q (present=%v), want 1", deviceplugin.ResourceKVM, got, ok)
+	}
+}
+
+// TestAteomSecurityContextByClass asserts no worker runs privileged: every class
+// drops ALL capabilities and adds back an explicit set. Only the micro-VM class
+// gives up the runtime's default seccomp profile, and only so virtiofsd can keep
+// its own sandbox. An empty class defaults to gVisor.
 func TestAteomSecurityContextByClass(t *testing.T) {
 	tests := []struct {
-		name           string
-		class          atev1alpha1.SandboxClass
-		wantPrivileged bool
-		wantCaps       bool
+		name     string
+		class    atev1alpha1.SandboxClass
+		wantCaps []corev1.Capability
+		// wantSeccompUnconfined is micro-VM only: virtiofsd's sandbox pivot_root()s,
+		// which the default profile denies.
+		wantSeccompUnconfined bool
 	}{
-		{"gvisor default", "", false, true},
-		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, false, true},
-		{"microvm", atev1alpha1.SandboxClassMicroVM, true, false},
+		{"gvisor default", "", ateomGvisorCapabilities, false},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, ateomGvisorCapabilities, false},
+		{"microvm", atev1alpha1.SandboxClassMicroVM, ateomMicroVMCapabilities, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sc := ateomSecurityContext(tt.class)
-			if sc.Privileged == nil || *sc.Privileged != tt.wantPrivileged {
-				t.Errorf("Privileged = %v, want %v", sc.Privileged, tt.wantPrivileged)
+			if sc.Privileged == nil || *sc.Privileged {
+				t.Errorf("Privileged = %v, want false for every class", sc.Privileged)
 			}
 			if sc.RunAsUser == nil || *sc.RunAsUser != 0 || sc.RunAsGroup == nil || *sc.RunAsGroup != 0 {
 				t.Errorf("RunAsUser/Group = %v/%v, want 0/0", sc.RunAsUser, sc.RunAsGroup)
 			}
-			hasCaps := sc.Capabilities != nil && len(sc.Capabilities.Add) > 0
-			if hasCaps != tt.wantCaps {
-				t.Errorf("has capabilities = %v, want %v", hasCaps, tt.wantCaps)
+			if sc.Capabilities == nil {
+				t.Fatalf("capabilities must be set so the default set is dropped")
 			}
-			if tt.wantCaps {
-				if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
-					t.Errorf("capabilities drop = %v, want [ALL]", sc.Capabilities.Drop)
-				}
-				if diff := cmp.Diff(ateomGvisorCapabilities, sc.Capabilities.Add); diff != "" {
-					t.Errorf("capabilities add mismatch (-want +got):\n%s", diff)
-				}
+			if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+				t.Errorf("capabilities drop = %v, want [ALL]", sc.Capabilities.Drop)
 			}
-			// The gVisor worker runs AppArmor-unconfined (runsc + cgroup remount
-			// need mount); the privileged micro-VM worker leaves it unset.
-			wantAppArmor := tt.wantCaps
-			hasAppArmor := sc.AppArmorProfile != nil &&
-				sc.AppArmorProfile.Type != nil &&
-				*sc.AppArmorProfile.Type == corev1.AppArmorProfileTypeUnconfined
-			if hasAppArmor != wantAppArmor {
-				t.Errorf("AppArmor Unconfined = %v, want %v", hasAppArmor, wantAppArmor)
+			if diff := cmp.Diff(tt.wantCaps, sc.Capabilities.Add); diff != "" {
+				t.Errorf("capabilities add mismatch (-want +got):\n%s", diff)
+			}
+			// Every class mounts inside the worker, which the default AppArmor
+			// profile denies.
+			if sc.AppArmorProfile == nil || sc.AppArmorProfile.Type == nil ||
+				*sc.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
+				t.Errorf("AppArmorProfile = %v, want Unconfined", sc.AppArmorProfile)
+			}
+			// gVisor must keep the runtime default (an unset profile), so the
+			// micro-VM relaxation cannot leak to it.
+			gotSeccompUnconfined := sc.SeccompProfile != nil && sc.SeccompProfile.Type != nil &&
+				*sc.SeccompProfile.Type == corev1.SeccompProfileTypeUnconfined
+			if gotSeccompUnconfined != tt.wantSeccompUnconfined {
+				t.Errorf("seccomp Unconfined = %v, want %v", gotSeccompUnconfined, tt.wantSeccompUnconfined)
+			}
+			if !tt.wantSeccompUnconfined && sc.SeccompProfile != nil {
+				t.Errorf("SeccompProfile = %v, want unset so the runtime default applies", sc.SeccompProfile)
 			}
 		})
 	}

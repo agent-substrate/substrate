@@ -39,8 +39,7 @@ spec:
   containers:
   - name: ${NAME}
     image: ${IMAGE}
-    args:
-    - "--listen=:${PORT}"
+${ARGS}
     ports:
     - name: serve
       containerPort: ${PORT}

@@ -20,9 +20,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/agent-substrate/substrate/tools/apitool/internal/exemption"
 	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/parser"
+	"github.com/agent-substrate/substrate/tools/apitool/internal/validate"
 )
 
 var validateCmd = &cobra.Command{
@@ -33,48 +33,88 @@ var validateCmd = &cobra.Command{
 	SilenceErrors: true,
 }
 
+// updateExemptions backs the --update flag.
+var updateExemptions bool
+
 func init() {
+	validateCmd.Flags().BoolVar(&updateExemptions, "update", false, "instead of validating, rewrite the exemptions file to match every current finding")
 	rootCmd.AddCommand(validateCmd)
 }
 
-const substrateServiceName = "Control"
-
 func runValidate(cmd *cobra.Command, args []string) error {
-	fd, err := parser.Parse(cmd.Context())
+	api, err := validate.API(cmd.Context())
 	if err != nil {
-		return fmt.Errorf("while building file descriptor: %w", err)
+		return err
 	}
-
-	api := model.ScopeToService(model.Build(fd), substrateServiceName)
+	path, err := validate.DefaultExemptionsPath()
+	if err != nil {
+		return err
+	}
+	results, err := validate.All(api)
+	if err != nil {
+		return err
+	}
 	out := cmd.OutOrStdout()
 
-	fmt.Fprintf(out, "Validating ateapi.proto (%s), %d rule(s)...\n\n", substrateServiceName, len(lint.All))
-
-	var total, failedRules int
-	for _, rule := range lint.All {
-		findings, err := rule.Check(api)
-		if err != nil {
-			return fmt.Errorf("rule %s: %w", rule.Name, err)
+	if updateExemptions {
+		current := validate.AsExemptions(results)
+		if err := exemption.Save(path, current); err != nil {
+			return err
 		}
-		if len(findings) == 0 {
-			fmt.Fprintf(out, "  %s %s\n", passIcon(), rule.Name)
+		fmt.Fprintf(out, "wrote %d exemption(s) to %s\n", len(current), path)
+		return nil
+	}
+
+	exemptions, err := exemption.Load(path)
+	if err != nil {
+		return err
+	}
+	remaining := exemption.NewSet(exemptions)
+
+	fmt.Fprintf(out, "Validating ateapi.proto (%s), %d rule(s), %d exemption(s)...\n\n", api.Services[0].Name, len(lint.All), len(exemptions))
+
+	var total, failedRules, exempted int
+	for _, r := range results {
+		var shown []lint.Finding
+		for _, f := range r.Findings {
+			if remaining.Consume(r.Rule.Name, f.Subject, f.Message) {
+				exempted++
+				continue
+			}
+			shown = append(shown, f)
+		}
+
+		if len(shown) == 0 {
+			fmt.Fprintf(out, "  %s %s\n", passIcon(), r.Rule.Name)
 			continue
 		}
 		failedRules++
-		total += len(findings)
-		fmt.Fprintf(out, "  %s %s\n", failIcon(), rule.Name)
-		for _, f := range findings {
+		total += len(shown)
+		fmt.Fprintf(out, "  %s %s\n", failIcon(), r.Rule.Name)
+		for _, f := range shown {
 			fmt.Fprintf(out, "      %s: %s\n", f.Subject, f.Message)
 		}
 	}
 	fmt.Fprintln(out)
 
-	if total == 0 {
-		fmt.Fprintf(out, "%s all %d rules passed\n", passIcon(), len(lint.All))
+	stale := remaining.Unused()
+	if len(stale) > 0 {
+		fmt.Fprintf(out, "%s %d exemption(s) no longer match any finding - remove them by running `apitool validate --update`:\n", failIcon(), len(stale))
+		for _, e := range stale {
+			fmt.Fprintf(out, "      [%s] %s: %s\n", e.Rule, e.Subject, e.Message)
+		}
+		fmt.Fprintln(out)
+	}
+
+	if total == 0 && len(stale) == 0 {
+		fmt.Fprintf(out, "%s all %d rules passed (%d finding(s) exempted)\n", passIcon(), len(lint.All), exempted)
 		return nil
 	}
-	fmt.Fprintf(out, "%s %d finding(s) across %d rule(s)\n", failIcon(), total, failedRules)
-	return fmt.Errorf("%d finding(s)", total)
+	if total > 0 {
+		fmt.Fprintf(out, "Fix the finding(s) above, or if they're intentional for now, run `apitool validate --update` to add them to exemptions.json.\n\n")
+	}
+	fmt.Fprintf(out, "%s %d finding(s) across %d rule(s), %d stale exemption(s)\n", failIcon(), total, failedRules, len(stale))
+	return fmt.Errorf("%d finding(s), %d stale exemption(s)", total, len(stale))
 }
 
 const (

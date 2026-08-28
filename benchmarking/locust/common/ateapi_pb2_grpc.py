@@ -328,6 +328,7 @@ class ControlServicer:
     def DrainWorker(self, request, context):
         """Mark a Worker as terminating so the scheduler stops routing new Actors to
         it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
+        Returns ABORTED if another write lands on the Worker first; retry.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

@@ -288,7 +288,7 @@ var clusterCmd = &cobra.Command{
 func init() {
 	createCmd.AddCommand(clusterCmd)
 	clusterCmd.Flags().StringVar(&cfg.ClusterName, "name", getEnv("CLUSTER_NAME", "substrate-poc"), "Name of the GKE cluster [env: CLUSTER_NAME]")
-	clusterCmd.Flags().StringVar(&cfg.ClusterLocation, "location", getEnv("CLUSTER_LOCATION", "us-central1-c"), "Zone or region for the cluster [env: CLUSTER_LOCATION]")
+	clusterCmd.Flags().StringVar(&cfg.ClusterLocation, "location", getEnv("CLUSTER_LOCATION", "us-west1-c"), "Zone or region for the cluster [env: CLUSTER_LOCATION]")
 	clusterCmd.Flags().StringVar(&cfg.ClusterVersion, "version", getEnv("CLUSTER_VERSION", ""), "Kubernetes version [env: CLUSTER_VERSION]")
 	clusterCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")

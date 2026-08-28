@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -178,16 +179,8 @@ func workloadIDs(ctrs []actorContainer) []string {
 type actorContainer struct {
 	name         string
 	bundleRootfs string
-	spec         *specs.Spec
-	// durableMounts are the durable-dir volumes this container mounts, and where
-	// (see durable.go). Empty for containers that declare none.
-	durableMounts []*ateompb.DurableDirVolumeMount
-	// csiMounts are the CSI volumes this container mounts, and where (see csi.go).
-	// Empty for containers that declare none.
-	csiMounts []*ateompb.VolumeMount
-	// systemInfoMounts are the system-info volumes this container mounts, and
-	// where (see systeminfo.go). Empty for containers that declare none.
-	systemInfoMounts []*ateompb.SystemInfoVolumeMount
+	// spec is the container's OCI spec shaped for micro-VM execution.
+	spec *specs.Spec
 	// imageMounts are the image volumes this container mounts, and where.
 	imageMounts []*ateompb.ImageVolumeMount
 }
@@ -628,14 +621,16 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
 func (s *AteomService) buildActorContainers(actorUID string, containers []*ateompb.Container) ([]actorContainer, error) {
-	netnsPath := ateompath.AteomNetNSPath(s.podUID)
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
 		bundle := ateompath.OCIBundlePath(actorUID, cn)
-		spec, err := ensureKataCompatibleSpec(bundle, actorUID, netnsPath)
+		spec, err := ocispec.Load(bundle)
 		if err != nil {
-			return nil, fmt.Errorf("while preparing kata OCI spec for %q: %w", cn, err)
+			return nil, fmt.Errorf("while reading the OCI spec for %q: %w", cn, err)
+		}
+		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorUID: actorUID, ContainerID: cn}); err != nil {
+			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
 		// Compose the bundle rootfs from the node's cached image layers (an
 		// overlay mounted in this pod's namespace; no-op for bundles without an
@@ -655,13 +650,10 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 			return nil, fmt.Errorf("while writing guest resolv.conf for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
-			name:             cn,
-			bundleRootfs:     bundleRootfs,
-			spec:             spec,
-			durableMounts:    c.GetDurableDirVolumeMounts(),
-			csiMounts:        c.GetCsiVolumeMounts(),
-			systemInfoMounts: c.GetSystemInfoVolumeMounts(),
-			imageMounts:      c.GetImageVolumeMounts(),
+			name:         cn,
+			bundleRootfs: bundleRootfs,
+			spec:         spec,
+			imageMounts:  c.GetImageVolumeMounts(),
 		}
 	}
 	return ctrs, nil
@@ -915,12 +907,10 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 // stock kata flow: create + start against shared/<name>/rootfs). On failure it
 // dumps the guest's view of the shared tree.
 //
-// With a durable-dir volume, the container also binds it at its declared mount
-// paths (workloadSpec) — the merged rootfs is writable, so the agent can create
-// missing mount points.
+// Its spec binds every declared volume at its mount path.
 func startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err := ac.StartRootfsContainer(cCtx, c.name, workloadSpec(c))
+	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
 	cancel()
 	if err != nil {
 		dump := kata.DebugConsoleDump(ctx, vsockPath,

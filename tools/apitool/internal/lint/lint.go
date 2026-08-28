@@ -17,8 +17,6 @@
 package lint
 
 import (
-	"fmt"
-
 	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
 
@@ -36,18 +34,4 @@ type Rule struct {
 	Name        string
 	Description string
 	Check       func(api *model.API) ([]Finding, error)
-}
-
-// Run executes every rule against api and returns every finding. Stops and
-// returns the error from the first rule that fails to evaluate.
-func Run(api *model.API, rules []Rule) ([]Finding, error) {
-	var findings []Finding
-	for _, r := range rules {
-		rf, err := r.Check(api)
-		if err != nil {
-			return nil, fmt.Errorf("rule %s: %w", r.Name, err)
-		}
-		findings = append(findings, rf...)
-	}
-	return findings, nil
 }
