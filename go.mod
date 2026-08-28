@@ -25,7 +25,6 @@ require (
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/hashicorp/go-reap v0.0.0-20260220095743-4e27870b4f51
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.19.0
 	github.com/myzhan/boomer v1.6.1-0.20250711115830-8a2c7ce4c7b1
