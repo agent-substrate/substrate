@@ -24,9 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,6 +31,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -151,7 +149,7 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
-		if err := configureDockerHost(ctx); err != nil {
+		if err := dockerenv.Configure(ctx); err != nil {
 			containerErr = err
 			return
 		}
@@ -188,32 +186,4 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 		t.Skipf("PostgreSQL testcontainer unavailable (requires Docker): %v", containerErr)
 	}
 	return adminPool
-}
-
-func configureDockerHost(ctx context.Context) error {
-	if os.Getenv("DOCKER_HOST") != "" {
-		return nil
-	}
-	output, err := exec.CommandContext(ctx, "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}").Output()
-	if err != nil {
-		return fmt.Errorf("inspecting Docker context: %w", err)
-	}
-	host := strings.TrimSpace(string(output))
-	if host == "" {
-		return errors.New("Docker context has no endpoint")
-	}
-	if err := os.Setenv("DOCKER_HOST", host); err != nil {
-		return fmt.Errorf("setting DOCKER_HOST: %w", err)
-	}
-	if os.Getenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE") == "" {
-		socket := host
-		if runtime.GOOS == "darwin" {
-			// The reaper runs inside the Docker VM and must mount its socket path.
-			socket = "/var/run/docker.sock"
-		}
-		if err := os.Setenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", socket); err != nil {
-			return fmt.Errorf("setting TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE: %w", err)
-		}
-	}
-	return nil
 }

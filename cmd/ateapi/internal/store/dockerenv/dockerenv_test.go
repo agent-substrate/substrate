@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package storetest
+package dockerenv
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 	"testing"
 )
 
-func TestConfigureDockerHostFromContext(t *testing.T) {
+func TestConfigureFromContext(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "")
 	t.Setenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "")
 	dir := t.TempDir()
@@ -32,8 +32,8 @@ func TestConfigureDockerHostFromContext(t *testing.T) {
 	}
 	t.Setenv("PATH", dir)
 
-	if err := configureDockerHost(context.Background()); err != nil {
-		t.Fatalf("configureDockerHost() error = %v", err)
+	if err := Configure(context.Background()); err != nil {
+		t.Fatalf("Configure() error = %v", err)
 	}
 	if got, want := os.Getenv("DOCKER_HOST"), "unix:///custom/docker.sock"; got != want {
 		t.Errorf("DOCKER_HOST = %q, want %q", got, want)
@@ -47,12 +47,12 @@ func TestConfigureDockerHostFromContext(t *testing.T) {
 	}
 }
 
-func TestConfigureDockerHostPreservesEnvironment(t *testing.T) {
+func TestConfigurePreservesEnvironment(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://docker.example:2376")
 	t.Setenv("PATH", t.TempDir())
 
-	if err := configureDockerHost(context.Background()); err != nil {
-		t.Fatalf("configureDockerHost() error = %v", err)
+	if err := Configure(context.Background()); err != nil {
+		t.Fatalf("Configure() error = %v", err)
 	}
 	if got, want := os.Getenv("DOCKER_HOST"), "tcp://docker.example:2376"; got != want {
 		t.Errorf("DOCKER_HOST = %q, want %q", got, want)
