@@ -1656,6 +1656,7 @@ type ActorTemplate struct {
 	// +k8s:listType=atomic
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	// +k8s:required
+	// +k8s:customValidation # on_commit must be a subset of on_pause
 	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
 	// sandbox_config selects the sandbox runtime this version's actors run on.
 	//
