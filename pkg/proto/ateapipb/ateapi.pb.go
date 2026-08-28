@@ -997,6 +997,7 @@ type EgressPolicy struct {
 	// later rules would also match. A request is denied when no rule matches.
 	//
 	// +k8s:optional
+	// +k8s:maxItems=256
 	Rules         []*EgressRule `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1141,6 +1142,8 @@ type HostnameRule struct {
 	// trailing dot are invalid.
 	//
 	// +k8s:required
+	// +k8s:maxItems=256
+	// +k8s:listType=set
 	// +k8s:customValidation # format
 	Patterns []string `protobuf:"bytes,1,rep,name=patterns,proto3" json:"patterns,omitempty"`
 	// Effects do not authorize traffic. They are applied only when this is the
@@ -1205,6 +1208,8 @@ type IPBlockRule struct {
 	// matches when the original destination IP belongs to any prefix.
 	//
 	// +k8s:required
+	// +k8s:maxItems=256
+	// +k8s:listType=set
 	// +k8s:customValidation # format
 	Cidrs         []string `protobuf:"bytes,1,rep,name=cidrs,proto3" json:"cidrs,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1257,6 +1262,11 @@ type EgressRuleEffects struct {
 	// Header names must be unique case-insensitively.
 	//
 	// +k8s:optional
+	// +k8s:maxItems=16
+	// +k8s:listType=map
+	// +k8s:listMapKey=header
+	// +k8s:customUnique # case-insensitive
+	// +k8s:customValidation # for duplicate headers
 	InjectStaticHeader []*CredentialHeaderInjection `protobuf:"bytes,1,rep,name=inject_static_header,json=injectStaticHeader,proto3" json:"inject_static_header,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache

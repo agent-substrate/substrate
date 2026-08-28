@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -390,6 +391,14 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		}
 	}
 	withoutEffects := func(p *ateapipb.EgressPolicy) { p.Rules[0].Hostnames.Effects = nil }
+	trivialHostnameRule := func(hostname string) *ateapipb.EgressRule {
+		return &ateapipb.EgressRule{
+			Hostnames: &ateapipb.HostnameRule{
+				Patterns: []string{hostname},
+			},
+		}
+	}
+
 	tests := []struct {
 		name   string
 		mutate func(*ateapipb.EgressPolicy)
@@ -400,6 +409,25 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		name: "empty rules",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules = nil
+		},
+	}, {
+		name: "multiple rules",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules = nil
+			for i := range 256 {
+				p.Rules = append(p.Rules, trivialHostnameRule(fmt.Sprintf("api%d.example.com", i)))
+			}
+		},
+	}, {
+		name: "too many rules",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules = nil
+			for i := range 257 {
+				p.Rules = append(p.Rules, trivialHostnameRule(fmt.Sprintf("api%d.example.com", i)))
+			}
+		},
+		want: field.ErrorList{
+			field.TooMany(root.Child("rules"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "all",
@@ -421,6 +449,44 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		name: "canonical IPv6 CIDR",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"2001:db8::/32"}}}
+		},
+	}, {
+		name: "mixed IPv4 and IPv6 CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: []string{"192.0.2.0/24", "2001:db8::/32"},
+				},
+			}
+		},
+	}, {
+		name: "many CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var cidrs []string
+			for i := range 256 {
+				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
+			}
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: cidrs,
+				},
+			}
+		},
+	}, {
+		name: "too many CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var cidrs []string
+			for i := range 257 {
+				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
+			}
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: cidrs,
+				},
+			}
+		},
+		want: field.ErrorList{
+			field.TooMany(rule.Child("ip_blocks", "cidrs"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "nil rule",
@@ -454,6 +520,29 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 		want: field.ErrorList{
 			field.Required(hostnames.Child("patterns"), ""),
+		},
+	}, {
+		name: "long hostname list",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var pats []string
+			for i := range 256 {
+				pats = append(pats, fmt.Sprintf("api%d.example.com", i))
+			}
+			p.Rules[0].Hostnames.Patterns = pats
+			withoutEffects(p)
+		},
+	}, {
+		name: "too-long hostname list",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var pats []string
+			for i := range 257 {
+				pats = append(pats, fmt.Sprintf("api%d.example.com", i))
+			}
+			p.Rules[0].Hostnames.Patterns = pats
+			withoutEffects(p)
+		},
+		want: field.ErrorList{
+			field.TooMany(hostnames.Child("patterns"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "missing hostname",
@@ -620,6 +709,33 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		name: "same header in later rule",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules = append(p.Rules, proto.Clone(p.Rules[0]).(*ateapipb.EgressRule))
+		},
+	}, {
+		name: "many headers",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var injections []*ateapipb.CredentialHeaderInjection
+			for i := range 16 {
+				injections = append(injections, &ateapipb.CredentialHeaderInjection{
+					Header:        fmt.Sprintf("X-Header-%d", i),
+					CredentialUri: "substrate-secret://example.com/provider/secret",
+				})
+			}
+			p.Rules[0].Hostnames.Effects.InjectStaticHeader = injections
+		},
+	}, {
+		name: "too many headers",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var injections []*ateapipb.CredentialHeaderInjection
+			for i := range 17 {
+				injections = append(injections, &ateapipb.CredentialHeaderInjection{
+					Header:        fmt.Sprintf("X-Header-%d", i),
+					CredentialUri: "substrate-secret://example.com/provider/secret",
+				})
+			}
+			p.Rules[0].Hostnames.Effects.InjectStaticHeader = injections
+		},
+		want: field.ErrorList{
+			field.TooMany(hostnames.Child("effects", "inject_static_header"), 17, 16).WithOrigin("maxItems"),
 		},
 	}}
 	for _, tc := range tests {

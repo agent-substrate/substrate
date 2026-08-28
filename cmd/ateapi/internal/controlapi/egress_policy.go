@@ -172,15 +172,8 @@ func ValidateCustom_EgressPolicy_Metadata(_ context.Context, _ operation.Operati
 
 func ValidateCustom_HostnameRule_Patterns(_ context.Context, _ operation.Operation, p *field.Path, patterns, _ []string) field.ErrorList {
 	var errs field.ErrorList
-	seenPatterns := map[string]bool{}
 	for i, raw := range patterns {
-		patternPath := p.Index(i)
-		normalized, patternErrs := validateHostnamePattern(raw, patternPath)
-		errs = append(errs, patternErrs...)
-		if normalized != "" && seenPatterns[normalized] {
-			errs = append(errs, field.Duplicate(patternPath, raw))
-		}
-		seenPatterns[normalized] = normalized != ""
+		errs = append(errs, validateHostnamePattern(raw, p.Index(i))...)
 	}
 	return errs
 }
@@ -190,43 +183,44 @@ func ValidateCustom_EgressRuleEffects(_ context.Context, _ operation.Operation, 
 	if len(effects.GetInjectStaticHeader()) == 0 {
 		errs = append(errs, field.Required(p, "at least one effect must be specified"))
 	}
+	return errs
+}
+
+func ValidateCustom_EgressRuleEffects_InjectStaticHeader(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeaderInjection) field.ErrorList {
+	var errs field.ErrorList
 	seenHeaders := map[string]bool{}
-	for i, injection := range effects.GetInjectStaticHeader() {
-		if injection != nil {
-			errPath := p.Child("inject_static_header").Index(i).Child("header")
-			errs = append(errs, recordInjectionHeader(injection.GetHeader(), errPath, seenHeaders)...)
+	for i, inj := range injections {
+		if inj == nil {
+			continue // handled by DV
 		}
+		norm := strings.ToLower(inj.Header)
+		if seenHeaders[norm] {
+			errs = append(errs, field.Duplicate(p.Index(i).Child("header"), inj.Header))
+		}
+		seenHeaders[norm] = true
 	}
 	return errs
 }
 
 func ValidateCustom_IPBlockRule_Cidrs(_ context.Context, _ operation.Operation, p *field.Path, cidrs, _ []string) field.ErrorList {
 	var errs field.ErrorList
-	seen := map[string]bool{}
 	for i, cidr := range cidrs {
-		cidrPath := p.Index(i)
-		before := len(errs)
-		errs = append(errs, validation.IsValidCIDR(cidrPath, cidr)...)
-		if len(errs) == before && seen[cidr] {
-			errs = append(errs, field.Duplicate(cidrPath, cidr))
-		}
-		seen[cidr] = cidr != ""
+		errs = append(errs, validation.IsValidCIDR(p.Index(i), cidr)...)
 	}
 	return errs
 }
 
-func validateHostnamePattern(raw string, p *field.Path) (string, field.ErrorList) {
+func validateHostnamePattern(raw string, p *field.Path) field.ErrorList {
 	if raw == "" {
-		return "", field.ErrorList{field.Required(p, "")}
+		return field.ErrorList{field.Required(p, "")}
 	}
 	name := strings.TrimPrefix(raw, "*.")
 	if len(content.IsDNS1123Subdomain(name)) != 0 || len(validation.IsValidIP(p, name)) == 0 {
-		errs := field.ErrorList{
+		return field.ErrorList{
 			field.Invalid(p, raw, "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
 		}
-		return "", errs
 	}
-	return raw, nil
+	return nil
 }
 
 func ValidateCustom_CredentialHeaderInjection_Header(_ context.Context, _ operation.Operation, p *field.Path, header, _ *string) field.ErrorList {
@@ -253,18 +247,6 @@ func ValidateCustom_CredentialHeaderInjection_CredentialUri(_ context.Context, _
 			field.Invalid(p, *uri, "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
 		}
 	}
-	return nil
-}
-
-func recordInjectionHeader(header string, p *field.Path, seen map[string]bool) field.ErrorList {
-	normalized := strings.ToLower(header)
-	if normalized == "" || !validHeaderName(normalized) {
-		return nil
-	}
-	if seen[normalized] {
-		return field.ErrorList{field.Duplicate(p, header)}
-	}
-	seen[normalized] = true
 	return nil
 }
 
