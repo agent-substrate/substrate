@@ -188,9 +188,11 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	// ATE_STORAGE_BACKEND selects a snapshot storage broker (e.g. "s3"); empty
-	// disables signing and atelet reads/writes snapshots with its own client.
-	storageBroker, err := storagebroker.New(ctx, os.Getenv("ATE_STORAGE_BACKEND"))
+	// ATE_SNAPSHOT_BROKER selects the out-of-process snapshot storage broker
+	// (e.g. "uds"); empty disables signing and atelet reads and writes snapshots
+	// with its own client. Distinct from atelet's ATE_STORAGE_BACKEND, which
+	// selects the node's own object-store client (gcs or s3).
+	storageBroker, err := storagebroker.New(ctx, os.Getenv("ATE_SNAPSHOT_BROKER"))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create storage broker", err)
 	}
