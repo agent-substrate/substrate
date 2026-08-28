@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -40,7 +41,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -51,8 +51,6 @@ import (
 const (
 	userClass    = "GluttonUser"
 	templateName = "glutton"
-	// templateAtespace is the atespace holding the benchmark ActorTemplates
-	// (see benchmarking/workloads/manifests).
 	templateAtespace = "benchmark-workloads"
 	actorDomain      = "actors.resources.substrate.ate.dev"
 	pingPath         = "/ping"
@@ -60,9 +58,6 @@ const (
 	readRAMPath      = "/readram"
 	memLoadKey       = "memload"
 	memReadAll       = "all"
-
-	sourceClient = "client"
-	sourceServer = "server"
 )
 
 func init() {
@@ -276,11 +271,11 @@ func (u *gluttonUser) tracedCall(ctx context.Context, name string, do func(conte
 	err := do(ctx, &tr)
 	clientLatency := time.Since(start)
 
-	latency, source := elapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
-	if source == sourceServer {
-		span.SetAttributes(attribute.Float64("server.elapsed_ms", msFloat(latency)))
+	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
+	if source == boomerutil.SourceServer {
+		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
 	}
-	logSampledTrace(span, name, latency, source, err)
+	boomerutil.LogSampledTrace(span, name, latency, source, err)
 	if err != nil {
 		bmetrics.RecordFailure("grpc", name, userClass, latency, err.Error())
 		return err
@@ -326,24 +321,24 @@ func (u *gluttonUser) ping(ctx context.Context) {
 
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, httpErr)
+		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, httpErr)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, httpErr.Error())
 		return
 	}
 
 	pong := &gluttonpb.PingResponse{}
 	if err := proto.Unmarshal(respBody, pong); err != nil {
-		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, err)
+		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, err)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, err.Error())
 		return
 	}
 	if pong.Message != message {
 		mismatch := fmt.Errorf("ping echo mismatch: sent=%q recv=%q", message, pong.Message)
-		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, mismatch)
+		boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, mismatch)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, mismatch.Error())
 		return
 	}
-	logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, nil)
+	boomerutil.LogSampledTrace(span, "GluttonPing", clientLatency, boomerutil.SourceClient, nil)
 	bmetrics.RecordSuccess("http", "GluttonPing", userClass, clientLatency, int64(len(respBody)))
 }
 
@@ -370,7 +365,7 @@ func (u *gluttonUser) ensureRAMFilled(ctx context.Context) {
 
 	err := u.writeRAM(ctx, memLoadKey, target, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE)
 	clientLatency := time.Since(start)
-	logSampledTrace(span, "GluttonFillRAM", clientLatency, sourceClient, err)
+	boomerutil.LogSampledTrace(span, "GluttonFillRAM", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
 		bmetrics.RecordFailure("http", "GluttonFillRAM", userClass, clientLatency, err.Error())
 		return
@@ -400,7 +395,7 @@ func (u *gluttonUser) churnRAM(ctx context.Context) {
 
 	err := u.writeRAM(ctx, memLoadKey, churn, gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE)
 	clientLatency := time.Since(start)
-	logSampledTrace(span, "GluttonChurnRAM", clientLatency, sourceClient, err)
+	boomerutil.LogSampledTrace(span, "GluttonChurnRAM", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
 		bmetrics.RecordFailure("http", "GluttonChurnRAM", userClass, clientLatency, err.Error())
 		return
@@ -431,7 +426,7 @@ func (u *gluttonUser) readRAM(ctx context.Context) {
 	resp := &gluttonpb.ReadRAMResponse{}
 	err := u.postProto(ctx, readRAMPath, &gluttonpb.ReadRAMRequest{Key: memLoadKey, Size: size}, resp)
 	clientLatency := time.Since(start)
-	logSampledTrace(span, "GluttonReadRAM", clientLatency, sourceClient, err)
+	boomerutil.LogSampledTrace(span, "GluttonReadRAM", clientLatency, boomerutil.SourceClient, err)
 	if err != nil {
 		bmetrics.RecordFailure("http", "GluttonReadRAM", userClass, clientLatency, err.Error())
 		return
@@ -484,42 +479,7 @@ func (u *gluttonUser) postProto(ctx context.Context, path string, req, resp prot
 	return proto.Unmarshal(respBody, resp)
 }
 
-// logSampledTrace emits a single structured line per sampled span. Operators
-// (and runner.py) grep stdout for `trace_id=` to find the trace IDs to look
-// up in the OTLP backend. Matches the format of the Python locust workers'
-// equivalent log line so a single regex covers both sources.
-func logSampledTrace(span trace.Span, name string, latency time.Duration, source string, err error) {
-	sc := span.SpanContext()
-	if !sc.IsSampled() {
-		return
-	}
-	attrs := []any{
-		slog.String("name", name),
-		slog.String("trace_id", sc.TraceID().String()),
-		slog.Float64("duration_ms", msFloat(latency)),
-		slog.String("source", source),
-	}
-	if err != nil {
-		attrs = append(attrs, slog.String("err", err.Error()))
-		slog.Info("traced span (failed)", attrs...)
-		return
-	}
-	slog.Info("traced span", attrs...)
-}
 
-func elapsedFromMD(tr metadata.MD, key string, fallback time.Duration) (time.Duration, string) {
-	vals := tr.Get(key)
-	if len(vals) == 0 {
-		return fallback, sourceClient
-	}
-	us, err := strconv.ParseInt(vals[0], 10, 64)
-	if err != nil {
-		return fallback, sourceClient
-	}
-	return time.Duration(us) * time.Microsecond, sourceServer
-}
-
-func msFloat(d time.Duration) float64 { return float64(d.Nanoseconds()) / 1e6 }
 
 // goroutineID extracts the runtime's per-goroutine ID via the standard
 // runtime.Stack trick. Used to key per-VU state because boomer's Task model

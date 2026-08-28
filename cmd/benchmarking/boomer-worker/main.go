@@ -28,12 +28,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"
+
+	// Register user classes via init():
+	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 )
 
 func main() {
@@ -74,7 +77,7 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	conn, apiStub, err := glutton.DialControl(*apiEndpoint)
+	conn, apiStub, err := boomerutil.DialControl(*apiEndpoint)
 	if err != nil {
 		slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
 		os.Exit(1)
