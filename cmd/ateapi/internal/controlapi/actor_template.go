@@ -338,3 +338,39 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 	}
 	return nil
 }
+
+// cpuLimitMax mirrors the ActorTemplate CRD's bound: cpu limits must be less
+// than 1000 cores.
+var cpuLimitMax = resource.MustParse("1k")
+
+// ValidateCustom_Resources_Limits mirrors the ActorTemplate CRD's CEL rules
+// on ContainerResources: only cpu and memory limits are supported, each
+// quantity must be greater than zero, and the cpu limit must be less than
+// 1000 cores. Presence and uniqueness of names are enforced by tags.
+func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.Limits) field.ErrorList {
+	var errs field.ErrorList
+	for i, limit := range value {
+		if limit == nil {
+			continue
+		}
+		if limit.Name != "cpu" && limit.Name != "memory" {
+			errs = append(errs, field.NotSupported(fldPath.Index(i).Child("name"), limit.Name, []string{"cpu", "memory"}))
+			continue
+		}
+		if limit.Quantity == "" {
+			continue // required is enforced by tags
+		}
+		q, err := resource.ParseQuantity(limit.Quantity)
+		if err != nil {
+			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err)))
+			continue
+		}
+		if q.Sign() <= 0 {
+			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, "must be greater than zero"))
+		}
+		if limit.Name == "cpu" && q.Cmp(cpuLimitMax) >= 0 {
+			errs = append(errs, field.Invalid(fldPath.Index(i).Child("quantity"), limit.Quantity, "cpu limit must be less than 1000 cores"))
+		}
+	}
+	return errs
+}

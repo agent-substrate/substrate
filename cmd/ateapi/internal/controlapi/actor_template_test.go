@@ -636,6 +636,75 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "Fast SSD"}}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "storage_class_name"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
+		name: "valid resources",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{
+				{Name: "cpu", Quantity: "500m"}, {Name: "memory", Quantity: "2Gi"},
+			}}
+		},
+	}, {
+		name: "limit missing name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Quantity: "2Gi"}}}
+		},
+		want: field.ErrorList{
+			field.Required(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("name"), ""),
+			field.NotSupported[string](field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("name"), nil, nil),
+		},
+	}, {
+		name: "limit missing quantity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu"}}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), "")},
+	}, {
+		name: "unsupported limit name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}}}
+		},
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("name"), nil, nil)},
+	}, {
+		name: "duplicate limit name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{
+				{Name: "cpu", Quantity: "1"}, {Name: "cpu", Quantity: "2"},
+			}}
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("resources", "limits").Index(1), nil)},
+	}, {
+		name: "malformed limit quantity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "two gigs"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "zero limit quantity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "0"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "cpu limit of 1000 cores",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1k"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "too many limits",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{
+				{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}, {Name: "cpu", Quantity: "2"},
+			}}
+		},
+		// maxItems short-circuits the per-item and uniqueness checks.
+		want: field.ErrorList{field.TooMany(field.NewPath("containers").Index(0).Child("resources", "limits"), 3, 2).WithOrigin("maxItems")},
+	}, {
+		name: "template-level resources validated too",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}}}
+		},
+		want: field.ErrorList{field.NotSupported[string](field.NewPath("resources", "limits").Index(0).Child("name"), nil, nil)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

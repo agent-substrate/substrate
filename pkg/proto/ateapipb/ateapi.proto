@@ -518,17 +518,35 @@ message ActorTemplate {
   SandboxConfig sandbox_config = 6;
 
   // Resource usage configuration.
+  //
+  // +k8s:optional
   Resources resources = 7;
 
   ActorTemplateStatus status = 8;
 }
 
 message Resources {
+  // limits is the maximum amount of compute resources allowed. Only "cpu"
+  // and "memory" are supported, each at most once, and each quantity must be
+  // greater than zero; the cpu limit must be less than 1000 cores.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=2
+  // +k8s:listType=atomic
+  // +k8s:unique=map
+  // +k8s:listMapKey=name
+  // +k8s:customValidation # names, quantity parse/positivity, cpu bound
   repeated Limits limits = 1;
 }
 
 message Limits {
+  // +k8s:required
   string name = 1;
+
+  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
+  // "2Gi").
+  //
+  // +k8s:required
   string quantity = 2;
 }
 

@@ -755,7 +755,36 @@ func Validate_ActorTemplate(
 		errs = append(errs, fn(fldPath.Child("sandbox_config"), obj.SandboxConfig, oldVal, oldObj != nil)...)
 	}
 
-	// field ateapipb.ActorTemplate.Resources has no validation
+	{ // field ateapipb.ActorTemplate.Resources
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.Resources,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorTemplate) *ateapipb.Resources {
+				return oldObj.Resources
+			})
+		errs = append(errs, fn(fldPath.Child("resources"), obj.Resources, oldVal, oldObj != nil)...)
+	}
+
 	// field ateapipb.ActorTemplate.Status has no validation
 	return errs
 }
@@ -1099,6 +1128,8 @@ func Validate_Container(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_Resources(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -1687,6 +1718,73 @@ func Validate_ImageVolumeSource(
 	return errs
 }
 
+// Validate_Limits validates an instance of Limits according
+// to declarative validation rules in the API schema.
+func Validate_Limits(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.Limits) (errs field.ErrorList) {
+
+	{ // field ateapipb.Limits.Name
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Limits) *string {
+				return &oldObj.Name
+			})
+		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.Limits.Quantity
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Limits) *string {
+				return &oldObj.Quantity
+			})
+		errs = append(errs, fn(fldPath.Child("quantity"), &obj.Quantity, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_ListAtespacesRequest validates an instance of ListAtespacesRequest according
 // to declarative validation rules in the API schema.
 func Validate_ListAtespacesRequest(
@@ -2086,6 +2184,65 @@ func Validate_ResourceMetadata(
 				return oldObj.UpdateTime
 			})
 		errs = append(errs, fn(fldPath.Child("update_time"), obj.UpdateTime, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_Resources validates an instance of Resources according
+// to declarative validation rules in the API schema.
+func Validate_Resources(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.Resources) (errs field.ErrorList) {
+
+	{ // field ateapipb.Resources.Limits
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateapipb.Limits,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateapipb.Limits](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 2).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_Resources_Limits(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.Limits, b *ateapipb.Limits) bool { return a.Name == b.Name }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.Limits, b *ateapipb.Limits) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_Limits); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Resources) []*ateapipb.Limits {
+				return oldObj.Limits
+			})
+		errs = append(errs, fn(fldPath.Child("limits"), obj.Limits, oldVal, oldObj != nil)...)
 	}
 
 	return errs

@@ -1653,6 +1653,7 @@ type ActorTemplate struct {
 	// +k8s:listType=atomic
 	Containers []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
 	// +k8s:optional
+	// +k8s:listType=atomic
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	// +k8s:required
 	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
@@ -1661,6 +1662,8 @@ type ActorTemplate struct {
 	// +k8s:required
 	SandboxConfig *SandboxConfig `protobuf:"bytes,6,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
 	// Resource usage configuration.
+	//
+	// +k8s:optional
 	Resources     *Resources           `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
 	Status        *ActorTemplateStatus `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1754,8 +1757,18 @@ func (x *ActorTemplate) GetStatus() *ActorTemplateStatus {
 }
 
 type Resources struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Limits        []*Limits              `protobuf:"bytes,1,rep,name=limits,proto3" json:"limits,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// limits is the maximum amount of compute resources allowed. Only "cpu"
+	// and "memory" are supported, each at most once, and each quantity must be
+	// greater than zero; the cpu limit must be less than 1000 cores.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=2
+	// +k8s:listType=atomic
+	// +k8s:unique=map
+	// +k8s:listMapKey=name
+	// +k8s:customValidation # names, quantity parse/positivity, cpu bound
+	Limits        []*Limits `protobuf:"bytes,1,rep,name=limits,proto3" json:"limits,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1798,9 +1811,14 @@ func (x *Resources) GetLimits() []*Limits {
 }
 
 type Limits struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Quantity      string                 `protobuf:"bytes,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:required
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
+	// "2Gi").
+	//
+	// +k8s:required
+	Quantity      string `protobuf:"bytes,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
