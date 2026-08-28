@@ -347,6 +347,46 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	}
 }
 
+// TestEnsureSuspendedFinalized_StampsSubstrateTemplateRef verifies a
+// ref-mode actor's commit snapshot records the substrate template reference
+// alongside the template uid, with the legacy CRD fields left empty.
+func TestEnsureSuspendedFinalized_StampsSubstrateTemplateRef(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+
+	const snapshotName = "2026-01-01t00-00-00z-ref"
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status: &ateapipb.ActorStatus{
+			State:                                ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotName:               snapshotName,
+			InProgressSnapshotSourceActorVersion: 1,
+		},
+	})
+
+	w := &ActorWorkflow{store: persistence}
+	if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, template); err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+
+	snapshot, err := persistence.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: snapshotName})
+	if err != nil {
+		t.Fatalf("GetActorSnapshot: %v", err)
+	}
+	st := snapshot.GetStatus()
+	if st.GetActorTemplate().GetAtespace() != "team-a" || st.GetActorTemplate().GetName() != "sub-tmpl" {
+		t.Errorf("snapshot ActorTemplate ref = %v, want team-a/sub-tmpl", st.GetActorTemplate())
+	}
+	if st.GetActorTemplateUid() != template.GetMetadata().GetUid() {
+		t.Errorf("snapshot ActorTemplateUid = %q, want %q", st.GetActorTemplateUid(), template.GetMetadata().GetUid())
+	}
+	if st.GetActorTemplateNamespace() != "" || st.GetActorTemplateName() != "" {
+		t.Errorf("legacy template fields = %q/%q, want empty for a ref-mode actor", st.GetActorTemplateNamespace(), st.GetActorTemplateName())
+	}
+}
+
 func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	tests := []struct {
 		name               string

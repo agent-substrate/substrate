@@ -26,7 +26,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // DeleteActor executes the workflow to delete an actor. Idempotent.
@@ -51,19 +50,14 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	// is retained in the store in the DELETING state.
 	// TODO: Ensure GC collects all the remaining resources if the cleanup fails.
 	var errs []error
-	actorTemplate := (*ateapipb.ActorTemplate)(nil)
-	if actor.GetActorTemplateNamespace() != "" && actor.GetActorTemplateName() != "" {
-		tmpl, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
-		if err != nil && !k8serrors.IsNotFound(err) {
-			errs = append(errs, fmt.Errorf("while fetching actor template: %w", err))
-		}
-		// Cleanup stays best-effort: an unconvertible template is recorded and
-		// the remaining steps run without it, like a missing one.
-		if tmpl != nil {
-			if actorTemplate, err = actorTemplateFromCRD(tmpl); err != nil {
-				errs = append(errs, fmt.Errorf("while converting actor template: %w", err))
-			}
-		}
+	// Cleanup stays best-effort: an unresolvable template is recorded and
+	// the remaining steps run without it, like a missing one.
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
+	if errors.Is(err, errActorTemplateNotFound) {
+		actorTemplate, err = nil, nil
+	}
+	if err != nil {
+		errs = append(errs, fmt.Errorf("while fetching actor template: %w", err))
 	}
 
 	var atletTerminatedErr, volumesDetachedErr error

@@ -311,7 +311,7 @@ The relay is best-effort. If the socket is absent when ateom starts — `atelet`
 
 For verified ateom sources, the relay forwards each request verbatim rather than decoding and re-exporting, which is what keeps every ateom its own service in Jaeger/GCP Trace instead of being absorbed into `atelet`'s. `ate-controller` injects `k8s.pod.name`, `k8s.namespace.name`, `k8s.pod.uid`, and `service.instance.id` directly into `OTEL_RESOURCE_ATTRIBUTES` via the Kubernetes Downward API; because the relay preserves resources verbatim, Kubernetes attributes remain intact even though the TCP connection to the collector originates from `atelet` rather than the worker pod IP (bypassing reliance on collector-side IP-based `k8sattributes` enrichment).
 
-Verbatim forwarding is restricted to known ateom sources and refuses anything else with `PermissionDenied`. Actor telemetry is what that excludes: actors share a hostname (`runsc`) and an interior IP, so their series merge unless identity is injected from outside the actor ([#761](https://github.com/agent-substrate/substrate/issues/761)) — a rewrite, which will be implemented as an explicit rewriting path alongside this forwarder.
+Verbatim forwarding is restricted to known ateom sources and refuses anything else with `PermissionDenied`. Actor telemetry is what that excludes: actors share a hostname (`actor`) and an interior IP, so their series merge unless identity is injected from outside the actor ([#761](https://github.com/agent-substrate/substrate/issues/761)) — a rewrite, which will be implemented as an explicit rewriting path alongside this forwarder.
 
 ---
 

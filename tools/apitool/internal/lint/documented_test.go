@@ -37,6 +37,9 @@ func TestDocumented(t *testing.T) {
 		{"method undocumented", "a request", "a state", "does a thing", "", 1},
 		{"nothing documented", "", "", "", "", 4},
 		{"whitespace-only comment counts as undocumented", "\t", "\t", "   ", "\n", 4},
+		{"empty comment lines", "a request", "a state", "\n\n", "does another thing", 1},
+		{"tags only", "+k8s:required", "+k8s:optional", "+k8s:required\n+k8s:format=k8s-short-name", "does another thing", 3},
+		{"prose and tags", "a request\n\n+k8s:required", "a state", "does a thing\n\n+k8s:immutable", "does another thing", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -251,12 +251,16 @@ message Actor {
   // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
+  // The template is named by the legacy CRD namespace/name pair below or by
+  // the substrate actor_template ref; actor_template takes precedence when
+  // set.
+  //
   // TODO: delete both fields once we start using actor_template below.
-  // +k8s:required
+  // +k8s:optional
   // +k8s:format=k8s-short-name
   // +k8s:immutable
   string actor_template_namespace = 2;
-  // +k8s:required
+  // +k8s:optional
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string actor_template_name = 3;
@@ -1225,12 +1229,16 @@ message WorkerCapacity {
 // ActorAssignment names the Actor currently bound to a Worker — the inverse of
 // WorkerAssignment.
 message ActorAssignment {
-  // ActorTemplates are Kubernetes CRDs rather than Substrate API resources, so
-  // this stays a kube reference.
+  // The KubeNamespacedObjectRef actor_template names the CRD-backed template
+  // of an actor created with the legacy CRD path
+  // actor_template_ref names the substrate ActorTemplate resource.
+  // Exactly one is set.
   KubeNamespacedObjectRef actor_template = 1;
   // +k8s:opaqueType
   ObjectRef actor = 2;
   string actor_uid = 3;
+  // +k8s:opaqueType
+  ObjectRef actor_template_ref = 4;
 }
 
 message KubeNamespacedObjectRef {
