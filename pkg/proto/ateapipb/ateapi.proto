@@ -480,6 +480,7 @@ enum SandboxClass {
   SANDBOX_CLASS_UNSPECIFIED = 0;
   SANDBOX_CLASS_GVISOR = 1;
   SANDBOX_CLASS_MICROVM = 2;
+  // Keep this in sync with SandboxConfig.sandbox_class's maximum.
 }
 
 message ActorTemplate {
@@ -503,6 +504,8 @@ message ActorTemplate {
   SnapshotsConfig snapshots_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
+  //
+  // +k8s:required
   SandboxConfig sandbox_config = 6;
 
   // Resource usage configuration.
@@ -546,11 +549,17 @@ message ActorTemplateStatus {
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
 message SandboxConfig {
   // sandbox_class selects the sandbox runtime family.
-  // Required; must be specified..
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SandboxClass enum
   SandboxClass sandbox_class = 1;
 
   // config_name names the cluster-scoped SandboxConfig Kubernetes object
   // supplying the sandbox binaries. Required; must match sandbox_class.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string config_name = 2;
 }
 
