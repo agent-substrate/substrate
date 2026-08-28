@@ -44,7 +44,7 @@ spec:
   replicas: 2
   sandboxClass: microvm
   sandboxConfigName: microvm
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
   # No template.resources, unlike counter-microvm: an unlimited ateom container
   # reports no capacity, which the scheduler reads as unconstrained, and the pod
   # requests nothing so it stays placeable next to the counter-microvm pool's

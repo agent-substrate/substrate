@@ -101,6 +101,11 @@ func (c *RouterClient) Close() {
 	}
 }
 
+// BaseURL returns the local router port-forward address.
+func (c *RouterClient) BaseURL() string {
+	return c.baseURL
+}
+
 // Get issues GET path to actor through the router, setting the actor's DNS Host
 // so the router routes (and resumes) it. The caller must close the body.
 func (c *RouterClient) Get(ctx context.Context, actorRef resources.ActorRef, path string) (*http.Response, error) {

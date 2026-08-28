@@ -42,7 +42,7 @@ func main() {
 		routerURL          = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
 		atespace           = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr           = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		configJSON         = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds, durdir_file_size_bytes, resume_mode, durdir_read_mode, durdir_template, mem_target). Unset fields keep their built-in defaults.")
+		configJSON         = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds, durdir_file_size_bytes, resume_mode, durdir_read_mode, durdir_template, mem_target, mem_churn). Unset fields keep their built-in defaults.")
 		masterWebPort      = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message and fail fatally on error. {master-host} comes from boomer's existing --master-host flag.")
 		configPollInterval = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
 		userClass          = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))

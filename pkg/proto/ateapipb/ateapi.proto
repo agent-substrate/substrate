@@ -16,6 +16,7 @@ syntax = "proto3";
 
 package ateapi;
 
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -44,6 +45,18 @@ service Control {
 
   // Delete an actor. Only suspended actors can be deleted.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
+
+  // Get the egress policy resource nested under an Actor.
+  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {}
+
+  // Create the egress policy resource nested under an Actor.
+  rpc CreateActorEgressPolicy(CreateActorEgressPolicyRequest) returns (EgressPolicy) {}
+
+  // Replace the egress policy resource nested under an Actor.
+  rpc UpdateActorEgressPolicy(UpdateActorEgressPolicyRequest) returns (EgressPolicy) {}
+
+  // Delete the egress policy resource nested under an Actor.
+  rpc DeleteActorEgressPolicy(DeleteActorEgressPolicyRequest) returns (EgressPolicy) {}
 
   // Get an ActorSnapshot.
   rpc GetActorSnapshot(GetActorSnapshotRequest) returns (ActorSnapshot) {}
@@ -292,6 +305,126 @@ message Actor {
   //
   // +k8s:optional
   ActorStatus status = 7;
+}
+
+// EgressPolicy is an egress policy resource nested under an Actor. An Actor has
+// at most one egress policy resource, named "default".
+//
+message EgressPolicy {
+  // Standard resource metadata. Atespace must match the parent Actor and name
+  // must be "default". Both are caller-specified on create and immutable.
+  // UID, version, create_time, and update_time are server-managed.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  // +k8s:customValidation # name must be "default"
+  ResourceMetadata metadata = 1;
+
+  // Rules are evaluated in order. The first matching rule authorizes the
+  // request, only that rule's effects are applied, and evaluation stops even if
+  // later rules would also match. A request is denied when no rule matches.
+  //
+  // +k8s:optional
+  repeated EgressRule rules = 2;
+}
+
+// EgressRule authorizes a request using exactly one destination matcher.
+message EgressRule {
+  // Matches when the request hostname matches any configured pattern. Effects
+  // are applied once when the rule matches.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  HostnameRule hostnames = 1;
+
+  // Matches when the original destination IP belongs to any configured block.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  IPBlockRule ip_blocks = 2;
+
+  // Matches every destination.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  google.protobuf.Empty all = 3;
+}
+
+// HostnameRule matches requests by destination hostname.
+message HostnameRule {
+  // DNS names, or DNS names with a wildcard "*" in the leftmost label. The
+  // rule matches when any pattern matches.
+  //
+  // The DNS name must conform to RFC 1034 and RFC 1123. It must be lowercase
+  // and must not have a trailing dot.
+  //
+  // A wildcard replaces the complete leftmost label. "*.example.com" matches
+  // exactly one non-empty label, such as "api.example.com". It does not match
+  // "example.com" or "nested.api.example.com". No other wildcard syntax is
+  // accepted. A pattern without a wildcard matches only the complete normalized
+  // name.
+  //
+  // Internationalized names must use their IDNA A-label (punycode) form; no
+  // Unicode conversion is performed. URLs, IP addresses, names with ports,
+  // malformed DNS names (for example, "foo..example.com"), and more than one
+  // trailing dot are invalid.
+  //
+  // +k8s:required
+  // +k8s:customValidation # format
+  repeated string patterns = 1;
+
+  // Effects do not authorize traffic. They are applied only when this is the
+  // first matching rule.
+  //
+  // +k8s:optional
+  EgressRuleEffects effects = 2;
+}
+
+// IPBlockRule matches requests by original destination IP address.
+message IPBlockRule {
+  // Canonical IPv4 or IPv6 CIDR prefixes. IPv4 uses dotted-decimal notation,
+  // such as "192.0.2.0/24". IPv6 uses lowercase compressed notation, such as
+  // "2001:db8::/32". Bits after the prefix length must be zero. The rule
+  // matches when the original destination IP belongs to any prefix.
+  //
+  // +k8s:required
+  // +k8s:customValidation # format
+  repeated string cidrs = 1;
+}
+
+// EgressRuleEffects contains effects applied by a matching hostname rule.
+//
+// +k8s:customValidation # for "at least one" and duplicate headers
+message EgressRuleEffects {
+  // Injects values retrieved from credential providers into request headers.
+  // Header names must be unique case-insensitively.
+  //
+  // +k8s:optional
+  repeated CredentialHeaderInjection inject_static_header = 1;
+}
+
+// CredentialHeaderInjection injects credential-provider material into an HTTP
+// request header.
+message CredentialHeaderInjection {
+  // The case-insensitive HTTP request header to inject.
+  //
+  // +k8s:required
+  // +k8s:customValidation # format
+  string header = 1;
+
+  // Prepended verbatim to the credential value. Include any desired separator;
+  // for example, use "Bearer " (including the space) for Authorization.
+  //
+  // +k8s:optional
+  // +k8s:customValidation # format
+  string prefix = 2;
+
+  // Source-agnostic reference interpreted by a registered credential provider:
+  // substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>
+  //
+  // +k8s:required
+  // +k8s:customValidation # format
+  string credential_uri = 3;
 }
 
 enum ActorState {
@@ -982,6 +1115,58 @@ message DeleteActorRequest {
   // +k8s:opaqueType
   ObjectRef actor = 1;
   bool any_state = 2;
+}
+
+// GetActorEgressPolicyRequest identifies an Actor's egress policy.
+message GetActorEgressPolicyRequest {
+  // The parent Actor of the egress policy resource to retrieve.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+}
+
+// CreateActorEgressPolicyRequest creates an egress policy for an Actor.
+//
+// +k8s:customValidation # atespaces must match
+message CreateActorEgressPolicyRequest {
+  // Parent Actor under which to create the policy resource.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // The policy to create. metadata.name must be "default" and
+  // metadata.atespace must match actor.atespace.
+  //
+  // +k8s:required
+  EgressPolicy egress_policy = 2;
+}
+
+// UpdateActorEgressPolicyRequest replaces an Actor's egress policy.
+//
+// +k8s:customValidation
+message UpdateActorEgressPolicyRequest {
+  // Parent Actor under which to update the policy resource.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
+
+  // Full replacement. Metadata UID and version are required preconditions;
+  // atespace and name are immutable and must match the existing policy.
+  //
+  // +k8s:required
+  EgressPolicy egress_policy = 2;
+}
+
+// DeleteActorEgressPolicyRequest identifies an Actor's egress policy.
+message DeleteActorEgressPolicyRequest {
+  // The parent Actor of the egress policy resource to delete.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef actor = 1;
 }
 
 message GetActorSnapshotRequest {

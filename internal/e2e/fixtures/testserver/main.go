@@ -20,6 +20,7 @@
 //	testserver grpc  --listen=:50051   a cleartext HTTP/2 gRPC echo origin
 //	testserver http  --listen=:8080    a plain HTTP origin serving /healthz
 //	testserver egressprobe --listen=:8080  a client that drives the egress gateway
+//	testserver websocket --listen=:8080  a websocket server that responds to PINGs
 //
 // Each pod runs exactly one subcommand on one listener, so the wire behavior of
 // any given pod is unchanged from when these were separate binaries -- the grpc
@@ -42,7 +43,7 @@ func main() {
 		Use:   "testserver",
 		Short: "Multi-mode helper server for the egress e2e suites.",
 	}
-	root.AddCommand(newGRPCCmd(), newHTTPCmd(), newEgressProbeCmd())
+	root.AddCommand(newGRPCCmd(), newHTTPCmd(), newEgressProbeCmd(), newWebsocketCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

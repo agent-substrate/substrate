@@ -156,7 +156,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 		ObjectMeta: metav1.ObjectMeta{Name: probeName, Namespace: ns.Name, Labels: poolLabels},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:          2,
-			AteomImage:        srcPool.Spec.AteomImage,
+			WorkerImage:       srcPool.Spec.WorkerImage,
 			SandboxClass:      srcPool.Spec.SandboxClass,
 			SandboxConfigName: srcPool.Spec.SandboxConfigName,
 		},

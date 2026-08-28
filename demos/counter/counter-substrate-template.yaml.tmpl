@@ -1,0 +1,61 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Substrate ActorTemplate resource (protojson-shaped ateapipb.ActorTemplate,
+# NOT the ate.dev/v1alpha1 CRD) for the counter demo. Applied with
+# `kubectl ate create actor-template -f -` after `ko resolve` replaces the
+# ko:// image reference; the ate-demo-counter-substrate atespace must exist.
+metadata:
+  atespace: ate-demo-counter-substrate
+  name: counter
+workerSelector:
+  matchLabels:
+    workload: counter-substrate
+containers:
+- name: counter
+  image: ko://github.com/agent-substrate/substrate/demos/counter
+  command:
+  - /ko-app/counter
+  # Second listener for atenet-router's arbitrary-port ingress, kept in step
+  # with the CRD variant in counter.yaml.tmpl.
+  - --extra-port=9090
+  - --tcp-port=9091
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 80
+  volumeMounts:
+  - name: data
+    mountPath: /home/counter
+# Sandbox size: at (or below) the pool's per-worker capacity (see
+# internal/sizing). Quantities are strings in the proto.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
+snapshotsConfig:
+  # FULL on both triggers so a suspend captures process memory and the
+  # in-memory count continues across suspend/resume.
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/ate-demo-counter-substrate/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+volumes:
+- name: data
+  type: DurableDir
+  durableDir: {}
