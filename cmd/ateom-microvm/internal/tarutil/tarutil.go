@@ -54,13 +54,41 @@ import (
 // streamBufSize buffers the tar stream against the underlying file. A tar is a
 // sequence of 512-byte blocks, so an unbuffered stream turns every header,
 // every short file, and every padding tail into its own write(2): archiving
-// 30k small files issued 120904 of them, against 31 once buffered.
-const streamBufSize = 1 << 20
+// 30k small files issued 120904 of them, against one per 64 KiB of archive
+// once buffered.
+//
+// 64 KiB rather than something larger: the win is in getting the syscall count
+// off the critical path, and that is spent well before this size. Sweeping
+// 16 KiB..4 MiB over a 30k-file tree is flat to within run-to-run noise, so a
+// bigger buffer buys nothing measurable and only adds memory — which is held
+// per archive in flight, and a worker may checkpoint several actors at once.
+//
+// Staying under copyBufPool's buffer is deliberate, not incidental. bufio hands
+// a write straight to the file when it is larger than the whole buffer, so file
+// contents — which arrive in copyBufPool-sized chunks — bypass this buffer
+// instead of being copied through it, and only the headers and padding it
+// exists for are batched. Raising this above 128 KiB, or shrinking copyBufPool
+// below it, silently puts every content byte back through a memcpy.
+const streamBufSize = 64 << 10
+
+// tarWriterPool and tarReaderPool hold the stream buffers above. These are one
+// per archive rather than one per file, so on their own they save far less
+// garbage than copyBufPool does; pooling them keeps a worker that checkpoints
+// several actors at once reusing a handful of buffers instead of allocating a
+// fresh one per suspend. A buffer must be Reset(nil) before it goes back, or
+// the pooled entry pins the closed *os.File it was last bound to.
+var (
+	tarWriterPool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, streamBufSize) }}
+	tarReaderPool = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, streamBufSize) }}
+)
 
 // copyBufPool holds the scratch buffers used to stream file contents. io.Copy
 // allocates a fresh 32 KiB buffer per call (see copyPooled), and a durable dir
 // holds tens of thousands of files, so the garbage — 965 MiB for a 30k-file
 // tree — and the collections it forces are paid inside the VM's pause window.
+//
+// The size is not free to change: it must stay above streamBufSize, or content
+// stops bypassing the stream buffer (see the note there).
 var copyBufPool = sync.Pool{New: func() any {
 	b := make([]byte, 128<<10)
 	return &b
@@ -110,7 +138,12 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 	}
 	defer f.Close()
 
-	bw := bufio.NewWriterSize(f, streamBufSize)
+	bw := tarWriterPool.Get().(*bufio.Writer)
+	bw.Reset(f)
+	defer func() {
+		bw.Reset(nil)
+		tarWriterPool.Put(bw)
+	}()
 	tw := tar.NewWriter(bw)
 	if err := writeTree(ctx, tw, srcDir, skip); err != nil {
 		return err
@@ -287,7 +320,13 @@ func Extract(tarPath, dstDir string) error {
 	// Buffered for the same reason the writer is: an archive of many small
 	// entries is mostly 512-byte headers, and each one would otherwise be a
 	// read(2) of its own.
-	tr := tar.NewReader(bufio.NewReaderSize(f, streamBufSize))
+	br := tarReaderPool.Get().(*bufio.Reader)
+	br.Reset(f)
+	defer func() {
+		br.Reset(nil)
+		tarReaderPool.Put(br)
+	}()
+	tr := tar.NewReader(br)
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
