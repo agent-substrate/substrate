@@ -150,7 +150,10 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    # V4_ONLY resolves nothing on an IPv6-only cluster. ALL
+                    # returns both families and enables Happy Eyeballs, so
+                    # neither family is stranded.
+                    dns_lookup_family: ALL
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -187,7 +190,7 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: ALL
   # SDS resource for the gateway serving cert. kubelet rotates the projected
   # volume by swapping its ..data symlink, which fires the watch and makes
   # Envoy re-read the bundle (leaf cert and key concatenated in one file).
