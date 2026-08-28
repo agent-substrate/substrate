@@ -40,8 +40,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// CredentialBroker gives an authenticated worker its current actor credential.
+// CredentialBroker provides on-demand services to ateom.
+//
+// TODO(identity): Rename to something more generic like AteomSupportService.
 type CredentialBrokerClient interface {
+	// Request an atunnel certificate for the given actor.
+	//
+	// TODO(identity): Rename to MintAtunnelCertificate, as distinct from
+	// MintActorCertificate (which would be used for certificates projected into
+	// the actor filesystem, when/if we support those).
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
 }
 
@@ -67,8 +74,15 @@ func (c *credentialBrokerClient) MintActorCertificate(ctx context.Context, in *M
 // All implementations must embed UnimplementedCredentialBrokerServer
 // for forward compatibility.
 //
-// CredentialBroker gives an authenticated worker its current actor credential.
+// CredentialBroker provides on-demand services to ateom.
+//
+// TODO(identity): Rename to something more generic like AteomSupportService.
 type CredentialBrokerServer interface {
+	// Request an atunnel certificate for the given actor.
+	//
+	// TODO(identity): Rename to MintAtunnelCertificate, as distinct from
+	// MintActorCertificate (which would be used for certificates projected into
+	// the actor filesystem, when/if we support those).
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
 	mustEmbedUnimplementedCredentialBrokerServer()
 }

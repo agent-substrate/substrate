@@ -20,8 +20,15 @@ option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletp
 
 import "pkg/proto/ateapipb/ateapi.proto";
 
-// CredentialBroker gives an authenticated worker its current actor credential.
+// CredentialBroker provides on-demand services to ateom.
+//
+// TODO(identity): Rename to something more generic like AteomSupportService.
 service CredentialBroker {
+  // Request an atunnel certificate for the given actor.
+  //
+  // TODO(identity): Rename to MintAtunnelCertificate, as distinct from
+  // MintActorCertificate (which would be used for certificates projected into
+  // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
 }
 
@@ -43,13 +50,17 @@ message SetWorkerCapacityResponse {
 }
 
 message MintActorCertificateRequest {
+  // The actor for which the certificate should be issued.
+  string actor_atespace = 3;
+  string actor_name = 4;
+
+  // The UID of the actor --- used to guard against deletion and recreation of
+  // an actor with the same name.
+  string actor_uid = 5;
+
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   bytes certificate_signing_request = 1;
-
-  // Actor incarnation this activation expects. Ateapi resolves the actor from
-  // the authenticated worker and rejects the request if its UID differs.
-  string expected_actor_uid = 2;
 }
 
 message MintActorCertificateResponse {

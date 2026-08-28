@@ -362,7 +362,7 @@ func main() {
 	}
 	brokerServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(brokerTLS)))
 	ateletpb.RegisterCredentialBrokerServer(brokerServer, &credentialBroker{
-		actorIdentityClient: ateapipb.NewActorIdentityClient(ateapiConn),
+		controlClient: ateapipb.NewControlClient(ateapiConn),
 	})
 	ateletpb.RegisterWorkerCapacityServer(brokerServer, &workerCapacityService{
 		workers: ateapipb.NewWorkerServiceClient(ateapiConn),

@@ -1064,14 +1064,14 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 		SocketPath:           ateompath.CredentialBrokerSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
-		ExpectedActorUID:     actorUID,
+		ActorUID:             actorUID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)
 	}
 	// Mint before starting the workload so configured tunneled egress fails
 	// closed. The source retains the private key for mTLS and renewal.
-	expiresAt, err := certificateSource.Mint(ctx)
+	expiresAt, err := certificateSource.MintAteomCertificate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("while obtaining actor certificate: %w", err)
 	}

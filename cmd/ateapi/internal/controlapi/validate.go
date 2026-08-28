@@ -86,7 +86,7 @@ func ValidateCustom_WorkerAssignment_WorkerPodIp(_ context.Context, _ operation.
 // a guardrail, applied here because maxLength does not support bytes fields.
 const maxCSRBytes = 16384
 
-func ValidateCustom_MintCertRequest_CertificateSigningRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []byte) field.ErrorList {
+func ValidateCustom_MintActorCertificateRequest_CertificateSigningRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []byte) field.ErrorList {
 	if len(value) > maxCSRBytes {
 		return field.ErrorList{field.TooLong(fldPath, nil, maxCSRBytes)}
 	}
