@@ -682,10 +682,6 @@ message GoldenSnapshotStatus {
 
 message ActorTemplateStatus {
   GoldenSnapshotStatus golden_snapshot_status = 1;
-
-  // sandbox_assets is the referenced SandboxConfig's content frozen at
-  // creation time.
-  SandboxAssets sandbox_assets = 2;
 }
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
@@ -942,34 +938,6 @@ message VolumeMount {
 
   // mount_path within the container. Must be a clean absolute Unix path.
   string mount_path = 2;
-}
-
-// SandboxAssets is the frozen description of the sandbox binaries an actor
-// boots with: a class plus content-addressed files keyed first by
-// architecture and then by asset name, mirroring the SandboxConfig
-// CRD schema.
-message SandboxAssets {
-  SandboxClass sandbox_class = 1;
-  // assets maps architecture (GOARCH, e.g. "amd64") to that arch's files.
-  map<string, ArchAssets> assets = 2;
-
-  // pause_image is the container to use as the root sandbox container.
-  string pause_image = 3;
-}
-
-message ArchAssets {
-  // files maps asset name (e.g. "gvisor", "kata-kernel") to its file.
-  map<string, AssetFile> files = 1;
-}
-
-// AssetFile is one content-addressed file atelet fetches for a sandbox
-// runtime.
-message AssetFile {
-  // URL to download the asset from (e.g. a gs:// URL).
-  string url = 1;
-
-  // Lower-case hex SHA256 naming the cached file and verifying the download.
-  string sha256 = 2;
 }
 
 message CreateAtespaceRequest {
