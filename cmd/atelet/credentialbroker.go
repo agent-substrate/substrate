@@ -30,24 +30,26 @@ import (
 
 type credentialBroker struct {
 	ateletpb.UnimplementedCredentialBrokerServer
-	// actorIdentityClient resolves the authenticated worker's current assignment
-	// and signs its actor certificate.
-	actorIdentityClient ateapipb.ActorIdentityClient
+	controlClient ateapipb.ControlClient
 }
 
 func (b *credentialBroker) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
-	// TODO: Before release, require the egress PEP to reject actor certificates
-	// whose ActorIdentity purpose is not atunnel.
-	// Worker identity comes only from the mTLS certificate. The expected actor
-	// UID is a stale-activation guard; ateapi derives the actor authoritatively.
-	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	// Check which ateom is calling.
+	_, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := b.actorIdentityClient.MintCert(ctx, &ateapipb.MintCertRequest{
-		// Workers are global-scoped and named by their pod UID.
-		Worker:                    &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		ExpectedActorUid:          req.GetExpectedActorUid(),
+
+	// TODO(identity): Check that we believe that this ateom is running the
+	// requested actor?  ate-api-server will further check that we (the atelet)
+	// are allowed to request a certificate for the actor.
+
+	resp, err := b.controlClient.MintActorCertificate(ctx, &ateapipb.MintActorCertificateRequest{
+		Actor: &ateapipb.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		ActorUid:                  req.GetActorUid(),
 		CertificateSigningRequest: req.GetCertificateSigningRequest(),
 		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 	})

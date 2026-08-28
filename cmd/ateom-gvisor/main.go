@@ -659,7 +659,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for the pause container.
 
-	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
+	egress, err := s.prepareActorEgress(ctx, req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway())
 	if err != nil {
 		return nil, err
 	}
@@ -938,7 +938,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for the pause container.
 	//   * Checkpoint downloaded and placed on disk
 
-	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
+	egress, err := s.prepareActorEgress(ctx, req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetEgressGateway())
 	if err != nil {
 		return nil, err
 	}
@@ -1069,7 +1069,7 @@ type actorEgress struct {
 	expiresAt         time.Time
 }
 
-func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, gateway *ateompb.EgressGateway) (*actorEgress, error) {
+func (s *AteomService) prepareActorEgress(ctx context.Context, actorAtespace, actorName, actorUID string, gateway *ateompb.EgressGateway) (*actorEgress, error) {
 	if gateway == nil {
 		return nil, nil
 	}
@@ -1084,14 +1084,16 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 		SocketPath:           ateompath.CredentialBrokerSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
-		ExpectedActorUID:     actorUID,
+		ActorAtespace:        actorAtespace,
+		ActorName:            actorName,
+		ActorUID:             actorUID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)
 	}
 	// Mint before starting the workload so configured tunneled egress fails
 	// closed. The source retains the private key for mTLS and renewal.
-	expiresAt, err := certificateSource.Mint(ctx)
+	expiresAt, err := certificateSource.MintAteomCertificate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("while obtaining actor certificate: %w", err)
 	}
