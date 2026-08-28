@@ -116,16 +116,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Capabilities.add",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Capabilities.drop",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Container.env",
     "message": "field has no doc comment"
   },
@@ -226,11 +216,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ExternalVolume.status",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.GetActorRequest",
     "message": "message has no doc comment"
   },
@@ -272,11 +257,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.HTTPGetAction.port",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ImageVolumeSource.reference",
     "message": "field has no doc comment"
   },
   {
@@ -431,11 +411,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SecurityContext.capabilities",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.SnapshotContentScope",
     "message": "enum has no doc comment"
   },
@@ -477,11 +452,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.Volume.external_volume_template",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Volume.image",
     "message": "field has no doc comment"
   },
   {
