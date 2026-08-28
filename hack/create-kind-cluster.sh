@@ -21,6 +21,8 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
 reg_port="${KIND_REGISTRY_PORT:-5001}"
+IPV6_DNS_UPSTREAM="${IPV6_DNS_UPSTREAM:-2001:4860:4860::8888 2001:4860:4860::8844}"
+IPV6_DNS64_PREFIX="${IPV6_DNS64_PREFIX:-}"
 
 if [[ $# -gt 0 ]]; then
   case "$1" in
@@ -31,6 +33,14 @@ if [[ $# -gt 0 ]]; then
       echo "Configured through the environment:"
       echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
       echo "  IP_FAMILY          Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
+      echo "  IPV6_DNS_UPSTREAM  Space-separated IPv6 resolvers CoreDNS forwards to when IP_FAMILY=ipv6"
+      echo "                     (default: Google Public DNS). These replace the host's resolver, so any"
+      echo "                     split-horizon names it served stop resolving from pods."
+      echo "  IPV6_DNS64_PREFIX  NAT64 prefix cluster DNS synthesizes external names into when"
+      echo "                     IP_FAMILY=ipv6, e.g. 64:ff9b::/96 (default: empty, no DNS64)."
+      echo "                     Set it only on a host with no IPv6 egress, together with"
+      echo "                     hack/setup-nat64.sh: it routes every external name through the"
+      echo "                     prefix, including names that already have reachable AAAA records."
       exit 0
       ;;
   esac
@@ -135,6 +145,23 @@ fi
 echo "Creating kind cluster '${KIND_CLUSTER_NAME}'..."
 "${ROOT}"/hack/kind.sh create cluster --name "${KIND_CLUSTER_NAME}" --config "${ROOT}/bin/kind-config.yaml"
 
+# kind create returns before the apiserver answers, and every kubectl below races
+# it. Poll from inside the node, where the answer does not depend on how the
+# daemon published the port.
+echo "Waiting for the control plane to answer..."
+for attempt in $(seq 60); do
+  if docker exec "${KIND_CLUSTER_NAME}-control-plane" \
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf get --raw /healthz >/dev/null 2>&1; then
+    break
+  fi
+  if [[ "${attempt}" == 60 ]]; then
+    echo "error: the control plane did not answer /healthz within 2m of create:" >&2
+    echo "         docker logs ${KIND_CLUSTER_NAME}-control-plane" >&2
+    exit 1
+  fi
+  sleep 2
+done
+
 # A daemon with IPv6 off hands kind a v4-only network whatever it asked for.
 if [[ "${IP_FAMILY}" != "ipv4" &&
       "$(docker network inspect kind --format '{{.EnableIPv6}}')" != "true" ]]; then
@@ -143,21 +170,6 @@ if [[ "${IP_FAMILY}" != "ipv4" &&
   echo "       /etc/docker/daemon.json and restart dockerd:" >&2
   echo '         {"ipv6": true, "ip6tables": true}' >&2
   exit 1
-fi
-
-# For ipv6 kind writes a kubeconfig pointing at [::1], the address it published
-# the apiserver on, which only works for a client on the Docker host itself: a
-# VM-hosted daemon (Lima on macOS) forwards the port to the *v4* loopback, so
-# every kubectl below fails at connect. localhost is a SAN on the apiserver
-# cert and lets the client pick a family that works from either side.
-if [[ "${IP_FAMILY}" == "ipv6" ]]; then
-  server="$(kubectl config view \
-    -o jsonpath="{.clusters[?(@.name==\"${KUBECTL_CONTEXT}\")].cluster.server}")"
-  if [[ "${server}" == "https://[::1]:"* ]]; then
-    echo "Repointing the kubeconfig for '${KUBECTL_CONTEXT}' at localhost..."
-    kubectl config set-cluster "${KUBECTL_CONTEXT}" \
-      --server="https://localhost:${server##*:}" >/dev/null
-  fi
 fi
 
 # 2.5 Enable Proxy ARP/NDP on kind nodes for gVisor loopback pod-to-pod networking
@@ -194,6 +206,106 @@ done
 echo "Connecting local registry to cluster network..."
 if [ "$(docker inspect -f='{{json .NetworkSettings.Networks.kind}}' "${reg_name}")" = "null" ]; then
   docker network connect "kind" "${reg_name}"
+fi
+
+# 4.5. Point CoreDNS at an IPv6 resolver and teach it the registry's name
+if [[ "${IP_FAMILY}" == "ipv6" ]]; then
+  echo "Repointing CoreDNS at an IPv6 resolver and teaching it '${reg_name}'..."
+  reg_v6="$(docker inspect "${reg_name}" \
+    --format '{{.NetworkSettings.Networks.kind.GlobalIPv6Address}}' 2>/dev/null || true)"
+  if [[ -z "${reg_v6}" ]]; then
+    echo "error: '${reg_name}' has no IPv6 address on the 'kind' network" >&2
+    exit 1
+  fi
+
+  # CoreDNS runs dnsPolicy: Default and inherits the node's IPv4 resolver, which
+  # no pod here can reach.
+  corefile="$(kubectl --context="${KUBECTL_CONTEXT}" -n kube-system get cm coredns \
+    -o jsonpath='{.data.Corefile}')"
+  search="forward . /etc/resolv.conf"
+  # $search unquoted: bash 3.2 splices the quotes in literally.
+  patched="${corefile/$search/forward . ${IPV6_DNS_UPSTREAM}}"
+  if [[ "${patched}" == "${corefile}" ]]; then
+    echo "error: '${search}' not found in the CoreDNS Corefile" >&2
+    echo "       the Corefile layout changed upstream; update this block" >&2
+    exit 1
+  fi
+
+  # Step 3's registry wiring is node-side, while atelet pulls from its own netns,
+  # where "kind-registry" does not resolve. Own zone, so no fallthrough is needed:
+  # only this name reaches the hosts stanza.
+  patched="${patched}
+${reg_name}:53 {
+    errors
+    hosts {
+        ${reg_v6} ${reg_name}
+    }
+}"
+
+  if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+    echo "Synthesizing external names into ${IPV6_DNS64_PREFIX}..."
+    # Plain DNS64 synthesizes only for names with no AAAA, and the names that
+    # matter here have real AAAA records pointing at addresses a host with no
+    # IPv6 egress cannot reach. Only translate_all forces them through the
+    # prefix -- which is why this is opt-in: where IPv6 egress does work it
+    # replaces reachable answers with unreachable ones.
+    #
+    # translate_all cannot share a server block with the cluster zones. dns64
+    # wraps the plugin chain below it and answers AAAA by synthesizing from A,
+    # so for an AAAA-only name it synthesizes from nothing and returns an empty
+    # answer. Every ClusterIP here is AAAA-only, so one block would take out all
+    # in-cluster service discovery. Re-zone what kind shipped to the cluster
+    # zones, lift its forwarder out, and give dns64 the catch-all.
+    #
+    # The prefix goes inside the block, not on the `dns64` line: CoreDNS takes
+    # `dns64 PREFIX { ... }` without complaint and then never applies the block,
+    # so translate_all silently does nothing and only AAAA-less names get
+    # synthesized -- which looks like it works until something with a real AAAA
+    # is the thing that has to be reached.
+    rezoned="$(printf '%s\n' "${patched}" | awk '
+      NR == 1 && /^\.:53[[:space:]]*\{/ {
+        print "cluster.local:53 in-addr.arpa:53 ip6.arpa:53 {"; first = 1; next
+      }
+      first && /^    forward([[:space:]].*)?\{$/ { skip = 1; next }
+      first && skip && /^    \}$/                { skip = 0; next }
+      first && skip                              { next }
+      first && /^\}$/                            { first = 0 }
+      { print }
+    ')"
+    case "${rezoned}" in
+      "cluster.local:53"*) ;;
+      *) echo "error: the Corefile does not open with the '.:53' block kind ships" >&2
+         echo "       the Corefile layout changed upstream; update this block" >&2
+         exit 1 ;;
+    esac
+    if printf '%s' "${rezoned}" | grep -q 'forward'; then
+      echo "error: a forward block survived the re-zone" >&2
+      exit 1
+    fi
+    patched="${rezoned}
+.:53 {
+    errors
+    dns64 {
+        prefix ${IPV6_DNS64_PREFIX}
+        translate_all
+    }
+    forward . ${IPV6_DNS_UPSTREAM} {
+        max_concurrent 1000
+    }
+    cache 30
+    loop
+    reload
+}"
+  fi
+
+  # A YAML patch file avoids escaping the Corefile's newlines into JSON.
+  { printf 'data:\n  Corefile: |\n'; printf '%s\n' "${patched}" | sed 's/^/    /'; } \
+    > "${ROOT}/bin/coredns-patch.yaml"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system patch cm coredns \
+    --type=merge --patch-file "${ROOT}/bin/coredns-patch.yaml"
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout restart deploy/coredns
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout status deploy/coredns \
+    --timeout=120s
 fi
 
 # 5. Document the local registry in kube-public ConfigMap
