@@ -258,7 +258,11 @@ render_atenet_egress_manifest() {
       echo "Error: --experimental-additional-egress-extproc-service requires --atenet-router=envoy" >&2
       return 1
     fi
-    kubectl kustomize manifests/ate-install/agentgateway-egress \
+    local agentgateway_egress="manifests/ate-install/agentgateway-egress"
+    if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]]; then
+      agentgateway_egress="manifests/ate-install/agentgateway-egress-mitm"
+    fi
+    kubectl kustomize "${agentgateway_egress}" \
       --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   elif additional_egress_extproc_enabled; then
     patch_atenet_egress_manifest | run_ko resolve -f -
@@ -408,10 +412,13 @@ create_egress_mitm_ca_pool_secret() {
     --key-type=ECDSAP256
 }
 
-# Only the sdsmint egress variant mounts this pool.
+# Both egress implementations read this pool only in their opt-in MITM mode:
+# AgentGateway consumes its exported TLS chain and key, while Envoy's sdsmint
+# sidecar consumes the serialized pool.
 ensure_egress_mitm_ca_pool_secret() {
-  [[ "$(atenet_router)" != "agentgateway" ]] || return 0
-  [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" == "true" ]] || return 0
+  if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
+    return 0
+  fi
   run_kubectl get secret -n ate-system egress-mitm-ca-pool >/dev/null 2>&1 \
     || create_egress_mitm_ca_pool_secret
 }

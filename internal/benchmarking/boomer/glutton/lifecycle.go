@@ -111,6 +111,9 @@ func (r *taskRuntime) iterate() {
 	// carries the full working set; glutton keeps the allocations across
 	// suspend/resume, so this runs once per actor (retried if it fails).
 	user.ensureRAMFilled(ctx)
+	// Re-dirty part of the working set each cycle so repeated suspends
+	// snapshot an actor whose memory is changing, like a live application's.
+	user.churnRAM(ctx)
 	user.ping(ctx)
 	user.suspend(ctx)
 
@@ -354,7 +357,7 @@ func (u *gluttonUser) ensureRAMFilled(ctx context.Context) {
 	defer span.End()
 	start := time.Now()
 
-	err := u.writeRAM(ctx, "memload", target)
+	err := u.writeRAM(ctx, "memload", target, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE)
 	clientLatency := time.Since(start)
 	logSampledTrace(span, "GluttonFillRAM", clientLatency, sourceClient, err)
 	if err != nil {
@@ -365,14 +368,41 @@ func (u *gluttonUser) ensureRAMFilled(ctx context.Context) {
 	bmetrics.RecordSuccess("http", "GluttonFillRAM", userClass, clientLatency, 0)
 }
 
-// writeRAM POSTs one WriteRAM allocation to the actor through the router,
+// churnRAM re-randomizes the first mem_churn bytes of the working set in
+// place (WriteRAM overwrite on the fill's key), so pages arrive dirty at
+// every suspend instead of only the first: a fill-once set is static, and
+// any future incremental snapshotting would make cycles two onward
+// unrepresentative of a live application. Runs once per iteration, only
+// after the fill has succeeded, and reports as its own GluttonChurnRAM
+// stats row.
+func (u *gluttonUser) churnRAM(ctx context.Context) {
+	churn := u.cfg.Dyn.Load().MemChurn
+	if churn == "" || !u.ramFilled {
+		return
+	}
+
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonChurnRAM")
+	defer span.End()
+	start := time.Now()
+
+	err := u.writeRAM(ctx, "memload", churn, gluttonpb.WriteMode_WRITE_MODE_OVERWRITE)
+	clientLatency := time.Since(start)
+	logSampledTrace(span, "GluttonChurnRAM", clientLatency, sourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonChurnRAM", userClass, clientLatency, err.Error())
+		return
+	}
+	bmetrics.RecordSuccess("http", "GluttonChurnRAM", userClass, clientLatency, 0)
+}
+
+// writeRAM POSTs one WriteRAM request to the actor through the router,
 // mirroring ping's wire format (protobuf over HTTP). size is a suffixed
 // string (e.g. "2Gi") passed through verbatim; glutton parses it.
-func (u *gluttonUser) writeRAM(ctx context.Context, key, size string) error {
+func (u *gluttonUser) writeRAM(ctx context.Context, key, size string, mode gluttonpb.WriteMode) error {
 	body, err := proto.Marshal(&gluttonpb.WriteRAMRequest{
 		Key:       key,
 		Size:      size,
-		WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
+		WriteMode: mode,
 	})
 	if err != nil {
 		return err
