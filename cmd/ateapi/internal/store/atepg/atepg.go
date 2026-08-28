@@ -384,7 +384,10 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
 	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
 	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
-	dbTemplate.Metadata = newCreateMetadata(atespace, name)
+	if dbTemplate.Metadata == nil {
+		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	setCreateMetadata(dbTemplate.Metadata)
 	protoBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
@@ -464,7 +467,10 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
 		return nil, err
 	}
-	dbTemplate.Metadata = newUpdateMetadata(templateBeforeMutation.GetMetadata())
+	if dbTemplate.Metadata == nil {
+		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
 	updatedBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)

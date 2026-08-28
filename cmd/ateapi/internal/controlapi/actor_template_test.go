@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -173,7 +175,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: persistence}
+	s := &RPCService{impl: newServiceImpl(persistence, nil, nil)}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -203,7 +205,7 @@ func TestCreateActorTemplate(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: persistence}
+	s := &RPCService{impl: newServiceImpl(persistence, nil, nil)}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -715,5 +717,58 @@ func TestValidateActorTemplate(t *testing.T) {
 			op := operation.Operation{Type: operation.Create}
 			assertValidateErr(t, Validate_ActorTemplate(context.Background(), op, nil, tmpl, nil), tt.want)
 		})
+	}
+}
+
+// TestUpdateActorTemplateMetadata pins the store's update behavior: the
+// server-assigned metadata is recomputed in place, and metadata identity is
+// immutable.
+func TestUpdateActorTemplateMetadata(t *testing.T) {
+	persistence := newTestPersistence(t)
+	ctx := context.Background()
+
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+	created, err := persistence.CreateActorTemplate(ctx, validActorTemplate())
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	ref := resources.ActorTemplateRefFromActorTemplate(created)
+
+	// A server-owned status write passes validation and bumps the version.
+	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
+		tmpl.Status = &ateapipb.ActorTemplateStatus{SandboxAssets: &ateapipb.SandboxAssets{PauseImage: "example.com/pause@sha256:abc"}}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate failed: %v", err)
+	}
+	if got, want := updated.GetMetadata().GetVersion(), created.GetMetadata().GetVersion()+1; got != want {
+		t.Errorf("updated version = %d, want %d", got, want)
+	}
+
+	// A mutation that touches an immutable field is a server bug, rejected by
+	// the store.
+	for name, mutate := range map[string]func(*ateapipb.ActorTemplate) error{
+		"atespace": func(tmpl *ateapipb.ActorTemplate) error { tmpl.Metadata.Atespace = "ns2"; return nil },
+		"name":     func(tmpl *ateapipb.ActorTemplate) error { tmpl.Metadata.Name = "tmpl-b"; return nil },
+	} {
+		if _, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), mutate); err == nil {
+			t.Errorf("mutating %s succeeded, want error", name)
+		}
+	}
+
+	// Server-assigned metadata edits are overwritten, not errors: the store
+	// restores them from the stored value.
+	reverted, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(updated), func(tmpl *ateapipb.ActorTemplate) error {
+		tmpl.Metadata.Uid = "1e186271-b829-4085-b2b1-6b665c1a4f42"
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate with uid edit failed: %v", err)
+	}
+	if got, want := reverted.GetMetadata().GetUid(), created.GetMetadata().GetUid(); got != want {
+		t.Errorf("uid after update = %q, want %q", got, want)
 	}
 }
