@@ -537,6 +537,7 @@ type LocalSnapshotInfo struct {
 	// time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
 	//
 	// +k8s:optional
+	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
 	ContentScope  SnapshotContentScope `protobuf:"varint,3,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -797,6 +798,7 @@ type ExternalVolume struct {
 	// +k8s:optional
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// +k8s:optional
+	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the Status enum
 	Status ExternalVolume_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.ExternalVolume_Status" json:"status,omitempty"`
 	// volume_context contains metadata returned by the CSI driver during volume

@@ -281,6 +281,11 @@
   },
   {
     "rule": "documented",
+    "subject": "ateapi.ExternalVolume.status",
+    "message": "field has no doc comment"
+  },
+  {
+    "rule": "documented",
     "subject": "ateapi.GetActorRequest",
     "message": "message has no doc comment"
   },

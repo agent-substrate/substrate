@@ -131,6 +131,7 @@ message LocalSnapshotInfo {
   // time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
   //
   // +k8s:optional
+  // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 3;
 }
@@ -261,6 +262,7 @@ message ExternalVolume {
   }
 
   // +k8s:optional
+  // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the Status enum
   Status status = 4;
 

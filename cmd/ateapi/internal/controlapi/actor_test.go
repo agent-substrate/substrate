@@ -412,6 +412,48 @@ func TestValidateActorUpdate(t *testing.T) {
 		field.ErrorList{
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ip"), nil, "").WithOrigin("format=ip-strict"),
 		},
+	}, {
+		"valid actor.status.local_snapshot_info.content_scope",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+		})),
+		nil,
+	}, {
+		"negative actor.status.local_snapshot_info.content_scope",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope(-1)}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "content_scope"), nil, "").WithOrigin("minimum")},
+	}, {
+		"invalid actor.status.local_snapshot_info.content_scope",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{ContentScope: ateapipb.SnapshotContentScope(3)}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "content_scope"), nil, "").WithOrigin("maximum")},
+	}, {
+		"valid actor.status.actor_volumes status",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+		})),
+		nil,
+	}, {
+		"negative actor.status.actor_volumes status",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", Status: ateapipb.ExternalVolume_Status(-1)}}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("status"), nil, "").WithOrigin("minimum")},
+	}, {
+		"invalid actor.status.actor_volumes status",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", Status: ateapipb.ExternalVolume_Status(4)}}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("status"), nil, "").WithOrigin("maximum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
