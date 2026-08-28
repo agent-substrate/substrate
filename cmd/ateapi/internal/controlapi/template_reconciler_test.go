@@ -160,9 +160,17 @@ type fakeGoldenControl struct {
 	// nil simulates a suspend that produced no ActorSnapshot.
 	snapshot *ateapipb.ObjectRef
 
-	createReqs  []*ateapipb.CreateActorRequest
-	resumeReqs  []*ateapipb.ResumeActorRequest
-	suspendReqs []*ateapipb.SuspendActorRequest
+	createReqs   []*ateapipb.CreateActorRequest
+	resumeReqs   []*ateapipb.ResumeActorRequest
+	suspendReqs  []*ateapipb.SuspendActorRequest
+	atespaceReqs []*ateapipb.CreateAtespaceRequest
+}
+
+func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.atespaceReqs = append(c.atespaceReqs, req)
+	return req.GetAtespace(), nil
 }
 
 func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
@@ -543,7 +551,9 @@ func TestReconcileOne(t *testing.T) {
 
 // TestReconcileOne_GoldenActorRequests pins the shape of the control-plane
 // requests the happy path issues: the golden actor is named after the
-// template UID so recreated templates with the same name never collide.
+// template UID so recreated templates with the same name never collide, and
+// lives in the reserved ate-golden atespace so the suspend workflow commits
+// it Full regardless of the template's onCommit scope.
 func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTemplateStore(testTemplate())
@@ -558,11 +568,14 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	if got := created.GetMetadata().GetName(); got != testTemplateUID {
 		t.Errorf("golden actor name = %q, want template UID %q", got, testTemplateUID)
 	}
-	if got := created.GetMetadata().GetAtespace(); got != testAtespace {
-		t.Errorf("golden actor atespace = %q, want %q", got, testAtespace)
+	if got := created.GetMetadata().GetAtespace(); got != resources.GoldenActorAtespace {
+		t.Errorf("golden actor atespace = %q, want %q", got, resources.GoldenActorAtespace)
 	}
 	if got := created.GetActorTemplate().GetName(); got != testTemplateName {
 		t.Errorf("golden actor template ref = %q, want %q", got, testTemplateName)
+	}
+	if len(control.atespaceReqs) != 1 || control.atespaceReqs[0].GetAtespace().GetMetadata().GetName() != resources.GoldenActorAtespace {
+		t.Errorf("atespace ensure requests = %v, want one for %q", control.atespaceReqs, resources.GoldenActorAtespace)
 	}
 	if got := control.resumeReqs[0].GetActor().GetName(); got != testTemplateUID {
 		t.Errorf("resumed actor = %q, want %q", got, testTemplateUID)
