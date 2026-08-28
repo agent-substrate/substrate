@@ -134,9 +134,8 @@ Once installed:
 
 ### Rebuilding gRPC Python clients
 
-Make sure you have a virtual environment created (`python3 -m venv venv`)
-and activated (`source venv/bin/activate`).
-
-Install project requirements: `pip install -r requirements.txt`
-
-Then run `generate_protos.sh` to generate the Python proto clients.
+Run `hack/update/python-codegen.sh` from anywhere in the repository; it manages
+its own virtual environment under `locust/codegen/venv`. `hack/update-all.sh`
+runs it along with the rest of the code generation, and
+`hack/verify/python-codegen.sh` fails if the checked-in clients have drifted
+from the protos.

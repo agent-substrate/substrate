@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Regenerates the Python proto clients used by the locust load tests.
+
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
