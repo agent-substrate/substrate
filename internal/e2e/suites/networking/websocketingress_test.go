@@ -61,7 +61,7 @@ func deployWebsocketFixture(t *testing.T) string {
 	return namespace
 }
 
-func TestWebsocketPingPong(t *testing.T) {
+func TestWebsocketIngressPing(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
