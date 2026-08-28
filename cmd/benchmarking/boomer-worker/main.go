@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// boomer-glutton is the Go re-implementation of the GluttonUser locust test.
+// boomer-worker is the Go re-implementation of the GluttonUser locust test.
 // It speaks the locust worker protocol via myzhan/boomer, so it appears as a
 // regular worker to the Python locust master while sidestepping gevent's
 // scheduling tax.

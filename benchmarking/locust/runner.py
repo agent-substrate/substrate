@@ -18,7 +18,7 @@ Runs locust with the given flags, converts the resulting stats CSV
 to JSONL, and uploads everything to either GCS or local disk under
 <dest>/runs/<tag>/<timestamp>/.
 
-When the test target is glutton.py, also spawns the boomer-glutton Go
+When the test target is glutton.py, also spawns the boomer-worker Go
 worker as a subprocess (locust runs in --master + --expect-workers=1
 mode) so the GluttonUser load comes from boomer instead of Python+gevent.
 
@@ -45,9 +45,9 @@ from typing import IO, TextIO
 
 from common.boomer_config import build_config_json
 
-# Path inside the locust image to the boomer-glutton binary baked in by
+# Path inside the locust image to the boomer-worker binary baked in by
 # benchmarking/locust/Dockerfile.
-BOOMER_BINARY = "/app/boomer-glutton"
+BOOMER_BINARY = "/app/boomer-worker"
 
 # Port for the headless /boomer-config server (common/boomer_config.py), which
 # gives boomer the values that change while a run continues. Locust already

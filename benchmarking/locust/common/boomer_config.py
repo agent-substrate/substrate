@@ -26,7 +26,7 @@ the operator set in the web UI form:
   * init_boomer_config(): ensures the owning init_*() hooks have run, then
     serves the current parsed values at /boomer-config on the master.
   * build_config_json(): parses an argv list and returns the JSON payload
-    that runner.py hands to boomer-glutton via --config-json in headless
+    that runner.py hands to boomer-worker via --config-json in headless
     mode (no web UI to fetch from).
   * serve_config_headless(): the same /boomer-config payload from a plain
     HTTP server, for a headless run whose values change while it runs.
@@ -64,7 +64,7 @@ def _attr(flag: str) -> str:
 
 
 def build_config_json(argv: Iterable[str]) -> str:
-    """Parse `argv` and return the JSON config payload for boomer-glutton's
+    """Parse `argv` and return the JSON config payload for boomer-worker's
     --config-json flag. Unknown args are ignored; unset flags are omitted so
     boomer falls back to its own defaults."""
     p = argparse.ArgumentParser(add_help=False)

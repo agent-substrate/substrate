@@ -51,7 +51,7 @@ scheduler and not the telemetry of a working system. Raise `workerCount` with
 the steps to go higher.
 
 The locust web UI is for manual examination only, and it holds no ladder. Two
-conditions apply there. The `boomer-glutton` sidecar makes its own load for
+conditions apply there. The `boomer-worker` sidecar makes its own load for
 each user class that you select in the form. Also, the form changes the sample
 rate of the boomer worker but not of the Python workers: `locust.yaml` gives
 boomer `--master-web-port`, thus boomer reads `/boomer-config` from the master
