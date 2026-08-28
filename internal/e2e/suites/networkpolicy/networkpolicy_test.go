@@ -52,8 +52,8 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 			Namespace: nsObj.Name,
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:   1,
-			AteomImage: "ateom:v1",
+			Replicas:    1,
+			WorkerImage: "ateom:v1",
 		},
 	}
 
@@ -300,7 +300,7 @@ func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:          1,
-			AteomImage:        existingWp.Spec.AteomImage,
+			WorkerImage:       existingWp.Spec.WorkerImage,
 			SandboxClass:      existingWp.Spec.SandboxClass,
 			SandboxConfigName: existingWp.Spec.SandboxConfigName,
 		},

@@ -223,7 +223,7 @@ func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Client
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:          1, // deliberately undersized: 2 actors will contend for it
-			AteomImage:        existingWp.Spec.AteomImage,
+			WorkerImage:       existingWp.Spec.WorkerImage,
 			SandboxClass:      existingWp.Spec.SandboxClass,
 			SandboxConfigName: existingWp.Spec.SandboxConfigName,
 		},

@@ -52,14 +52,21 @@ func sortActors(actors []*ateapipb.Actor) {
 		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
 			return c
 		}
-		if c := cmp.Compare(a.GetActorTemplateNamespace(), b.GetActorTemplateNamespace()); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(a.GetActorTemplateName(), b.GetActorTemplateName()); c != 0 {
+		if c := cmp.Compare(actorTemplateDisplay(a), actorTemplateDisplay(b)); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
 	})
+}
+
+// actorTemplateDisplay renders the template an actor was created from, in
+// "<atespace>/<name>" form for substrate-resource references and
+// "<namespace>/<name>" form for legacy CRD references.
+func actorTemplateDisplay(a *ateapipb.Actor) string {
+	if ref := a.GetActorTemplate(); ref != nil {
+		return ref.GetAtespace() + "/" + ref.GetName()
+	}
+	return a.GetActorTemplateNamespace() + "/" + a.GetActorTemplateName()
 }
 
 // PrintActorsTo prints a slice of actors to the provided writer.
@@ -74,7 +81,7 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 		for _, actor := range actors {
 			atespace := actor.GetMetadata().GetAtespace()
 			name := actor.GetMetadata().GetName()
-			template := actor.GetActorTemplateNamespace() + "/" + actor.GetActorTemplateName()
+			template := actorTemplateDisplay(actor)
 			state := actor.GetStatus().GetState().String()
 
 			assignment := actor.GetStatus().GetWorkerAssignment()
@@ -129,8 +136,14 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 			assignedActor := "<none>"
 			if wass := worker.GetStatus().GetAssignment(); wass != nil {
 				status = "ASSIGNED"
-				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
-					wass.ActorTemplate.Namespace, wass.ActorTemplate.Name, wass.Actor.Atespace, wass.Actor.Name)
+				// The assignment names the template either as a substrate
+				// resource ref or as a legacy CRD ref; exactly one is set.
+				template := wass.GetActorTemplate().GetNamespace() + "/" + wass.GetActorTemplate().GetName()
+				if ref := wass.GetActorTemplateRef(); ref != nil {
+					template = ref.GetAtespace() + "/" + ref.GetName()
+				}
+				assignedActor = fmt.Sprintf("%s/%s/%s",
+					template, wass.GetActor().GetAtespace(), wass.GetActor().GetName())
 			}
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ns, pool, class, pod, status, assignedActor)
@@ -233,6 +246,51 @@ func PrintWorkerTopYAML(out io.Writer, items []*WorkerTopItem) error {
 // PrintActor prints a single actor in the requested format.
 func PrintActor(actor *ateapipb.Actor, format string) error {
 	return PrintActors([]*ateapipb.Actor{actor}, format)
+}
+
+// PrintActorTemplates prints a slice of actor templates to stdout in the
+// requested format.
+func PrintActorTemplates(templates []*ateapipb.ActorTemplate, format string) error {
+	return PrintActorTemplatesTo(os.Stdout, templates, format)
+}
+
+func sortActorTemplates(templates []*ateapipb.ActorTemplate) {
+	slices.SortFunc(templates, func(a, b *ateapipb.ActorTemplate) int {
+		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
+	})
+}
+
+// PrintActorTemplatesTo prints a slice of actor templates to the provided writer.
+func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, format string) error {
+	sortActorTemplates(templates)
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapipb.ListActorTemplatesResponse{ActorTemplates: templates}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tSTATUS\tAGE")
+		for _, t := range templates {
+			status := "Failed"
+			if t.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot() != nil {
+				status = "Ready"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
+				t.GetSandboxConfig().GetSandboxClass(), status,
+				formatAge(t.GetMetadata().GetCreateTime()))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+// PrintActorTemplate prints a single actor template in the requested format.
+func PrintActorTemplate(template *ateapipb.ActorTemplate, format string) error {
+	return PrintActorTemplates([]*ateapipb.ActorTemplate{template}, format)
 }
 
 // PrintActorSnapshots prints actor snapshots to stdout in the requested format.

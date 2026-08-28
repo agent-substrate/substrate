@@ -85,10 +85,11 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	Replicas int32 `json:"replicas"`
 
-	// AteomImage is the ateom container image to deploy as workers.
-	// +kubebuilder:validation:MinLength=1
-	// +required
-	AteomImage string `json:"ateomImage"`
+	// WorkerImage is the ateom container image to deploy as workers. When
+	// unset, the controller injects a versioned default image for the pool's
+	// SandboxClass.
+	// +optional
+	WorkerImage string `json:"workerImage,omitempty"`
 
 	// Template holds optional metadata, scheduling, and resource settings for worker workloads.
 	//
@@ -98,7 +99,7 @@ type WorkerPoolSpec struct {
 	// SandboxClass selects the sandbox runtime family for this pool, which drives
 	// the worker pod shape (KVM/vhost device mounts and node placement) and which
 	// SandboxConfigs are eligible. The concrete binary is still selected by
-	// AteomImage. Defaults to gvisor.
+	// WorkerImage. Defaults to gvisor.
 	//
 	// See Also: TODOs in ActorTemplate SandboxClass
 	//
