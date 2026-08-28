@@ -39,7 +39,7 @@ spec:
   replicas: 2
   sandboxClass: microvm
   sandboxConfigName: microvm
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
   template:
     # Per-worker resources; the micro-VM sandbox is sized by the ActorTemplate's
     # resources, which must leave VMM-reserve headroom under this memory limit

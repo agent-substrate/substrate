@@ -152,7 +152,7 @@ metadata:
     workload: stateful-agent
 spec:
   replicas: 5
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
 ---
 apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate

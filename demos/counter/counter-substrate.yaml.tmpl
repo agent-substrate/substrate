@@ -34,7 +34,7 @@ spec:
   # Two workers: one for the demo actor, one spare for the golden actor the
   # template reconciler runs while building the golden snapshot.
   replicas: 2
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
   template:
     # Per-worker resources; the sandbox itself is sized by the ActorTemplate's
     # resources (see internal/sizing and counter.yaml.tmpl for the rationale).
