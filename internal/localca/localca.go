@@ -219,7 +219,7 @@ type CA struct {
 // TLSCertificateChainPEM returns the CA certificate in the PEM encoding used
 // by TLS servers.
 func (ca *CA) TLSCertificateChainPEM() ([]byte, error) {
-	if ca == nil || ca.RootCertificate == nil {
+	if ca.RootCertificate == nil {
 		return nil, fmt.Errorf("ca certificate: is nil")
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.RootCertificate.Raw}), nil
@@ -228,7 +228,7 @@ func (ca *CA) TLSCertificateChainPEM() ([]byte, error) {
 // TLSPrivateKeyPEM returns the CA signing key in the PKCS#8 PEM encoding used
 // by TLS servers.
 func (ca *CA) TLSPrivateKeyPEM() ([]byte, error) {
-	if ca == nil || ca.SigningKey == nil {
+	if ca.SigningKey == nil {
 		return nil, fmt.Errorf("ca key: is nil")
 	}
 
