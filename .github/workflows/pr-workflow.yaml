@@ -83,12 +83,17 @@ jobs:
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
       run: hack/install-ate-kind.sh --deploy-ate-system
-    - name: Deploy micro-VM counter demo
-      # Stages the (cached) assets into the cluster's rustfs and applies the
-      # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh
-    - name: Deploy gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter
+    - name: Deploy substrate micro-VM counter demo
+      # Stages the (cached) micro-VM assets into the cluster's rustfs (the
+      # egress-microvm demo and the micro-VM e2e lane need them too), then
+      # deploys the substrate counter-microvm demo and blocks on its golden
+      # snapshot.
+      run: hack/run-microvm-demo-kind.sh --substrate
+    - name: Deploy substrate gVisor counter demo
+      # The counter-based suites copy their per-test templates' resolved
+      # runtime from the deployed substrate counter template (GetActorTemplate),
+      # so both lane variants must exist before their e2e lanes run.
+      run: hack/install-ate-kind.sh --deploy-demo-counter-substrate
     - name: Deploy egress demos
       # TestActorEgress in the networking suite builds its Actor from the egress
       # ActorTemplate for the class under test, so both fixtures have to exist
@@ -96,10 +101,6 @@ jobs:
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
-    - name: Wait for micro-VM golden snapshot
-      run: |
-        kubectl --context kind-kind wait --for=condition=Ready \
-          actortemplate/counter-microvm -n ate-demo-counter-microvm --timeout=600s
     - name: Run E2E tests (gVisor)
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Run E2E tests (micro-VM)

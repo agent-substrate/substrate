@@ -49,27 +49,56 @@ type Fixture struct {
 	DeployWith string
 }
 
-// CounterFixture returns the counter demo for the sandbox class under test.
-// E2E_TEMPLATE_NAMESPACE / E2E_TEMPLATE_NAME override it, for a cluster that
-// installs the fixture somewhere else.
-func CounterFixture() Fixture {
-	f := Fixture{
-		Namespace:  "ate-demo-counter",
-		Name:       "counter",
-		DeployWith: "hack/install-ate-kind.sh --deploy-demo-counter",
+// SubstrateFixture identifies an installed substrate ActorTemplate (the proto
+// resource created through the ate API, not the CRD) plus the CRD WorkerPool
+// backing it. Suites copy the resolved runtime — container images, sandbox
+// config, sandbox size — out of the template, and the ateom image and sandbox
+// class out of the pool.
+type SubstrateFixture struct {
+	// Atespace and Name locate the ActorTemplate for GetActorTemplate.
+	Atespace string
+	Name     string
+	// PoolNamespace and PoolName locate the WorkerPool CRD.
+	PoolNamespace string
+	PoolName      string
+	// DeployWith is the install flag or script that creates the fixture, so a
+	// missing one reports how to fix it rather than just failing.
+	DeployWith string
+}
+
+// SubstrateCounterFixture returns the substrate-resource counter demo for the
+// sandbox class under test. E2E_SUBSTRATE_TEMPLATE_ATESPACE /
+// E2E_SUBSTRATE_TEMPLATE_NAME / E2E_SUBSTRATE_POOL_NAMESPACE /
+// E2E_SUBSTRATE_POOL_NAME override it, for a cluster that installs the
+// fixture somewhere else.
+func SubstrateCounterFixture() SubstrateFixture {
+	f := SubstrateFixture{
+		Atespace:      "ate-demo-counter-substrate",
+		Name:          "counter",
+		PoolNamespace: "ate-demo-counter-substrate",
+		PoolName:      "counter-substrate",
+		DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-substrate",
 	}
 	if IsMicroVM() {
-		f = Fixture{
-			Namespace:  "ate-demo-counter-microvm",
-			Name:       "counter-microvm",
-			DeployWith: "hack/run-microvm-demo-kind.sh",
+		f = SubstrateFixture{
+			Atespace:      "ate-demo-counter-substrate-microvm",
+			Name:          "counter-microvm",
+			PoolNamespace: "ate-demo-counter-substrate-microvm",
+			PoolName:      "counter-substrate-microvm",
+			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-substrate-microvm",
 		}
 	}
-	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
-		f.Namespace = v
+	if v := os.Getenv("E2E_SUBSTRATE_TEMPLATE_ATESPACE"); v != "" {
+		f.Atespace = v
 	}
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
+	if v := os.Getenv("E2E_SUBSTRATE_TEMPLATE_NAME"); v != "" {
 		f.Name = v
+	}
+	if v := os.Getenv("E2E_SUBSTRATE_POOL_NAMESPACE"); v != "" {
+		f.PoolNamespace = v
+	}
+	if v := os.Getenv("E2E_SUBSTRATE_POOL_NAME"); v != "" {
+		f.PoolName = v
 	}
 	return f
 }
