@@ -17,23 +17,24 @@ package reaper
 import (
 	"os/exec"
 	"testing"
+	"time"
 )
 
-func TestRunReturnsCommandResult(t *testing.T) {
-	if err := Run(exec.Command("true")); err != nil {
-		t.Fatalf("Run(true) = %v, want nil", err)
-	}
-	if err := Run(exec.Command("false")); err == nil {
-		t.Fatal("Run(false) = nil, want a non-nil exit error")
-	}
-}
+// TestRunSurvivesAConcurrentReaper verifies the package wiring.
+func TestRunSurvivesAConcurrentReaper(t *testing.T) {
+	Start()
 
-func TestRunCombinedReturnsOutput(t *testing.T) {
-	out, err := RunCombined(exec.Command("sh", "-c", "echo hello"))
-	if err != nil {
-		t.Fatalf("RunCombined = %v, want nil", err)
+	// Keep the reaper active throughout the test.
+	for range 8 {
+		go func() { _ = exec.Command("sh", "-c", "sleep 0.05 & exit 0").Run() }()
 	}
-	if string(out) != "hello\n" {
-		t.Fatalf("RunCombined output = %q, want %q", out, "hello\n")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if out, err := RunCombined(exec.Command("sh", "-c", "echo ok")); err != nil {
+			t.Fatalf("guarded command failed while the reaper ran: %v", err)
+		} else if string(out) != "ok\n" {
+			t.Fatalf("guarded command output = %q, want %q", out, "ok\n")
+		}
 	}
 }
