@@ -129,6 +129,7 @@ enum SnapshotContentScope {
   SNAPSHOT_CONTENT_SCOPE_FULL = 1;
   // Captures durable data without process memory or root filesystem changes.
   SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 enum ActorSnapshotTagScope {
@@ -501,6 +502,7 @@ message ActorTemplate {
   // +k8s:optional
   repeated Volume volumes = 4;
 
+  // +k8s:required
   SnapshotsConfig snapshots_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
@@ -564,19 +566,33 @@ message SandboxConfig {
 }
 
 message SnapshotsConfig {
-  // on_pause selects what is captured during pause actor.
+  // on_pause selects what is captured during pause actor. UNSPECIFIED is
+  // tolerated for compatibility and reads as FULL.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope on_pause = 1;
 
   // on_commit selects what captures.
   // Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope on_commit = 2;
 
   // on_resume selects, per snapshot situation, what supplies the guest state
   // at resume. Unset means the defaults documented on OnResumeConfig.
+  //
+  // +k8s:optional
   OnResumeConfig on_resume = 3;
 
   // storage_location is the base object-storage URI snapshots of actors on
   // this version are stored under. Required.
+  //
+  // +k8s:required
+  // TODO: validate that this is a well-formed object-storage URI
   string storage_location = 4;
 }
 
@@ -590,6 +606,7 @@ enum ResumeSource {
   // Restores with the version's golden snapshot and the actor's own
   // durable data.
   RESUME_SOURCE_GOLDEN = 2;
+  // Keep this in sync with OnResumeConfig.from_data's maximum.
 }
 
 // OnResumeConfig selects, per snapshot situation, what supplies the guest
@@ -598,7 +615,11 @@ enum ResumeSource {
 // from their own content and are not configurable here.
 message OnResumeConfig {
   // from_data applies when the resume uses a DATA-scope snapshot (from
-  // on_pause or on_commit).
+  // on_pause or on_commit). UNSPECIFIED selects the documented default.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the ResumeSource enum
   ResumeSource from_data = 1;
 }
 

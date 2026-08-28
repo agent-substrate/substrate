@@ -44,7 +44,7 @@ const (
 	// Captures process memory, root filesystem changes, and durable data.
 	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL SnapshotContentScope = 1
 	// Captures durable data without process memory or root filesystem changes.
-	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2
+	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2 // Keep this in sync with the maximums on fields of this type.
 )
 
 // Enum value maps for SnapshotContentScope.
@@ -270,7 +270,7 @@ const (
 	ResumeSource_RESUME_SOURCE_COLD_BOOT ResumeSource = 1
 	// Restores with the version's golden snapshot and the actor's own
 	// durable data.
-	ResumeSource_RESUME_SOURCE_GOLDEN ResumeSource = 2
+	ResumeSource_RESUME_SOURCE_GOLDEN ResumeSource = 2 // Keep this in sync with OnResumeConfig.from_data's maximum.
 )
 
 // Enum value maps for ResumeSource.
@@ -1647,7 +1647,8 @@ type ActorTemplate struct {
 	WorkerSelector *Selector    `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
 	Containers     []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
 	// +k8s:optional
-	Volumes         []*Volume        `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	// +k8s:required
 	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
 	// sandbox_config selects the sandbox runtime this version's actors run on.
 	//
@@ -2028,16 +2029,30 @@ func (x *SandboxConfig) GetConfigName() string {
 
 type SnapshotsConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// on_pause selects what is captured during pause actor.
+	// on_pause selects what is captured during pause actor. UNSPECIFIED is
+	// tolerated for compatibility and reads as FULL.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
 	OnPause SnapshotContentScope `protobuf:"varint,1,opt,name=on_pause,json=onPause,proto3,enum=ateapi.SnapshotContentScope" json:"on_pause,omitempty"`
 	// on_commit selects what captures.
 	// Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
 	OnCommit SnapshotContentScope `protobuf:"varint,2,opt,name=on_commit,json=onCommit,proto3,enum=ateapi.SnapshotContentScope" json:"on_commit,omitempty"`
 	// on_resume selects, per snapshot situation, what supplies the guest state
 	// at resume. Unset means the defaults documented on OnResumeConfig.
+	//
+	// +k8s:optional
 	OnResume *OnResumeConfig `protobuf:"bytes,3,opt,name=on_resume,json=onResume,proto3" json:"on_resume,omitempty"`
 	// storage_location is the base object-storage URI snapshots of actors on
 	// this version are stored under. Required.
+	//
+	// +k8s:required
+	// TODO: validate that this is a well-formed object-storage URI
 	StorageLocation string `protobuf:"bytes,4,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -2108,7 +2123,11 @@ func (x *SnapshotsConfig) GetStorageLocation() string {
 type OnResumeConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// from_data applies when the resume uses a DATA-scope snapshot (from
-	// on_pause or on_commit).
+	// on_pause or on_commit). UNSPECIFIED selects the documented default.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the ResumeSource enum
 	FromData      ResumeSource `protobuf:"varint,1,opt,name=from_data,json=fromData,proto3,enum=ateapi.ResumeSource" json:"from_data,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

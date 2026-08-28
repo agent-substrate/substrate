@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -332,6 +333,109 @@ func TestValidateDeleteActorTemplateRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateDeleteActorTemplateRequest(tt.req), tt.want)
+		})
+	}
+}
+
+// TestValidateActorTemplate exercises the generated resource validation
+// directly. The request handler still runs the hand-written validator; this
+// pins each declarative rule as it is added, ahead of the conversion.
+func TestValidateActorTemplate(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*ateapipb.ActorTemplate) // nil leaves the template valid
+		want   field.ErrorList
+	}{{
+		name: "valid",
+	}, {
+		name:   "missing metadata",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata = nil },
+		want:   field.ErrorList{field.Required(field.NewPath("metadata"), "")},
+	}, {
+		name:   "missing metadata.atespace",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata.Atespace = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("metadata", "atespace"), "")},
+	}, {
+		name:   "invalid metadata.atespace",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata.Atespace = "NS1" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name:   "invalid metadata.name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata.Name = "TMPL A" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "worker_selector with an invalid label value",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "Not Valid"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_selector", "match_labels").Key("tier"), nil, "").WithOrigin("format=k8s-label-value")},
+	}, {
+		name:   "missing sandbox_config",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig = nil },
+		want:   field.ErrorList{field.Required(field.NewPath("sandbox_config"), "")},
+	}, {
+		name: "unspecified sandbox_class",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED
+		},
+		want: field.ErrorList{field.Required(field.NewPath("sandbox_config", "sandbox_class"), "")},
+	}, {
+		name:   "sandbox_class outside the enum",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass(99) },
+		want:   field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "sandbox_class"), nil, "").WithOrigin("maximum")},
+	}, {
+		name:   "negative sandbox_class",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.SandboxClass = ateapipb.SandboxClass(-1) },
+		want:   field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "sandbox_class"), nil, "").WithOrigin("minimum")},
+	}, {
+		name:   "missing config_name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.ConfigName = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("sandbox_config", "config_name"), "")},
+	}, {
+		name:   "invalid config_name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SandboxConfig.ConfigName = "NOT_A_NAME" },
+		want:   field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "config_name"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
+		name:   "missing snapshots_config",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotsConfig = nil },
+		want:   field.ErrorList{field.Required(field.NewPath("snapshots_config"), "")},
+	}, {
+		name:   "missing storage_location",
+		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotsConfig.StorageLocation = "" },
+		want:   field.ErrorList{field.Required(field.NewPath("snapshots_config", "storage_location"), "")},
+	}, {
+		name: "unspecified snapshot scopes are allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+			tmpl.SnapshotsConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+		},
+	}, {
+		name: "on_commit outside the enum",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnCommit = ateapipb.SnapshotContentScope(99)
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshots_config", "on_commit"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "negative on_pause",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnPause = ateapipb.SnapshotContentScope(-1)
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshots_config", "on_pause"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "on_resume from_data outside the enum",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(99)}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshots_config", "on_resume", "from_data"), nil, "").WithOrigin("maximum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := validActorTemplate()
+			if tt.mutate != nil {
+				tt.mutate(tmpl)
+			}
+			op := operation.Operation{Type: operation.Create}
+			assertValidateErr(t, Validate_ActorTemplate(context.Background(), op, nil, tmpl, nil), tt.want)
 		})
 	}
 }
