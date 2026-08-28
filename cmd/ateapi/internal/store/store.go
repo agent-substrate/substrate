@@ -68,9 +68,10 @@ var (
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
 	// Stores a new actor in suspended state and returns the stored resource with
-	// server-assigned metadata (uid, version, timestamps). The input is not
-	// mutated. Returns ErrAlreadyExists if key is taken, or
-	// ErrFailedPrecondition if the actor's atespace does not exist.
+	// server-assigned metadata (uid, version, timestamps). The input may be
+	// mutated in place: the caller passes a dedicated object, so the store
+	// stamps its metadata rather than cloning. Returns ErrAlreadyExists if key
+	// is taken, or ErrFailedPrecondition if the actor's atespace does not exist.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
