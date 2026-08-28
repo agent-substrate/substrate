@@ -149,6 +149,66 @@ different worker), and confirm the count continues — the actor's counter lives
 guest RAM, so a continuing count proves the guest-memory snapshot survived the
 round trip.
 
+## Substrate-resource (proto) variant
+
+In this variant the `WorkerPool` stays a CRD, but the actor template is an
+`ateapipb.ActorTemplate` created through the ate API with
+`kubectl ate create actortemplate`. Its manifest
+([`counter-substrate-template.yaml.tmpl`](counter-substrate-template.yaml.tmpl))
+is the message's protojson form — the shape `kubectl ate get actortemplate
+-o yaml` prints inside its `actorTemplates` list — and lives in an
+**atespace** rather than a Kubernetes namespace.
+
+Deploy the gVisor variant (pool + atespace + template, then wait for the
+golden snapshot):
+
+```bash
+./hack/install-ate.sh --deploy-demo-counter-substrate
+```
+
+Create an actor from it with `--template-ref` (an `<atespace>/<name>`
+reference to the template):
+
+```bash
+kubectl ate create atespace demo
+kubectl ate create actor my-counter-1 -a demo --template-ref ate-demo-counter-substrate/counter
+```
+
+Everything else — curling through the router, suspend/resume, delete — works
+exactly as in the walkthrough above. Inspect the template with:
+
+```bash
+kubectl ate get actortemplates -a ate-demo-counter-substrate
+kubectl ate get actortemplate counter -a ate-demo-counter-substrate -o yaml
+```
+
+For the micro-VM variant, pass `--substrate` to the one-shot bring-up (or run
+`./hack/install-ate.sh --deploy-demo-counter-substrate-microvm` on a cluster
+that already has the micro-VM deps):
+
+```bash
+./hack/run-microvm-demo.sh --substrate
+```
+
+> [!NOTE]
+> Actor templates are immutable: there is no update RPC, and a re-deploy
+> leaves an existing template in place. To change one, delete the demo
+> (below) and deploy again — deleting the demo, not the bare template:
+> deleting a template does not yet clean up its golden actor, and a RUNNING
+> actor left behind can no longer be suspended or deleted until the
+> template is recreated.
+
+Uninstall with:
+
+```bash
+./hack/install-ate.sh --delete-demo-counter-substrate
+./hack/install-ate.sh --delete-demo-counter-substrate-microvm
+```
+
+This also deletes the actors created from the demo templates, but not the
+`demo` atespace created above — remove it with
+`kubectl ate delete atespace demo`.
+
 ## How to Uninstall
 
 To remove the counter demo resources from your cluster, run:
