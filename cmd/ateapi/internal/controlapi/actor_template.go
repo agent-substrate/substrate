@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -317,6 +318,23 @@ func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operati
 	}
 	if bad {
 		return field.ErrorList{field.Invalid(fldPath, p, "must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters")}
+	}
+	return nil
+}
+
+// ValidateCustom_ImageVolumeSource_Reference mirrors the ActorTemplate CRD's
+// CEL rule: image references must be pinned by digest, because changing the
+// image content under a fixed reference invalidates snapshots.
+func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if !strings.Contains(*value, "@") {
+		return field.ErrorList{field.Invalid(fldPath, *value, "must be pinned by digest (changing the image invalidates snapshots)")}
+	}
+	return nil
+}
+
+func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if _, err := resource.ParseQuantity(*value); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
 	}
 	return nil
 }

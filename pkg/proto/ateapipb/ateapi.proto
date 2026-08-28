@@ -506,6 +506,7 @@ message ActorTemplate {
   repeated Container containers = 3;
 
   // +k8s:optional
+  // +k8s:listType=atomic
   repeated Volume volumes = 4;
 
   // +k8s:required
@@ -750,21 +751,38 @@ message HTTPGetAction {
 
 message Volume {
   // name of the volume. Must be a DNS label.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
 
   // Exactly one of durable_dir / external_volume_template / image /
   // system_info must be set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
+
+  // +k8s:optional
+  // +k8s:unionMember
   ExternalVolumeTemplate external_volume_template = 3;
 
   // +k8s:optional
+  // +k8s:unionMember
   SystemInfoVolumeSource system_info = 5;
 
   // image mounts the contents of an OCI image, read-only.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
   ImageVolumeSource image = 6;
 
   // type discriminates the source union: "DurableDir",
   // "ExternalVolumeTemplate", "Image" or "SystemInfo".
+  //
+  // +k8s:optional
+  // TODO: enforce that type matches the populated source, either with a
+  // unionDiscriminator tag or in the service layer.
   string type = 4;
 }
 
@@ -773,6 +791,10 @@ message Volume {
 // snapshots.
 message ImageVolumeSource {
   // reference is the OCI image reference, pinned by digest.
+  //
+  // +k8s:required
+  // +k8s:maxLength=512
+  // +k8s:customValidation # must be pinned by digest; no contains tag exists
   string reference = 1;
 }
 
@@ -785,10 +807,16 @@ message DurableDirVolumeSource {}
 message ExternalVolumeTemplate {
   // capacity of the volume to create, in Kubernetes resource.Quantity string
   // form (e.g. "10Gi"). Required.
+  //
+  // +k8s:required
+  // +k8s:customValidation # must parse as a resource.Quantity
   string capacity = 1;
 
   // storage_class_name names the cluster-scoped Kubernetes StorageClass to
   // create the volume from. Required.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string storage_class_name = 2;
 }
 

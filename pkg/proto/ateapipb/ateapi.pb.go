@@ -2610,17 +2610,33 @@ func (x *HTTPGetAction) GetPort() int32 {
 type Volume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name of the volume. Must be a DNS label.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Exactly one of durable_dir / external_volume_template / image /
 	// system_info must be set.
-	DurableDir             *DurableDirVolumeSource `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
+	//
+	// +k8s:optional
+	// +k8s:unionMember
+	DurableDir *DurableDirVolumeSource `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
+	// +k8s:optional
+	// +k8s:unionMember
 	ExternalVolumeTemplate *ExternalVolumeTemplate `protobuf:"bytes,3,opt,name=external_volume_template,json=externalVolumeTemplate,proto3" json:"external_volume_template,omitempty"`
 	// +k8s:optional
+	// +k8s:unionMember
 	SystemInfo *SystemInfoVolumeSource `protobuf:"bytes,5,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
 	// image mounts the contents of an OCI image, read-only.
+	//
+	// +k8s:optional
+	// +k8s:unionMember
 	Image *ImageVolumeSource `protobuf:"bytes,6,opt,name=image,proto3" json:"image,omitempty"`
 	// type discriminates the source union: "DurableDir",
 	// "ExternalVolumeTemplate", "Image" or "SystemInfo".
+	//
+	// +k8s:optional
+	// TODO: enforce that type matches the populated source, either with a
+	// unionDiscriminator tag or in the service layer.
 	Type          string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2704,6 +2720,10 @@ func (x *Volume) GetType() string {
 type ImageVolumeSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// reference is the OCI image reference, pinned by digest.
+	//
+	// +k8s:required
+	// +k8s:maxLength=512
+	// +k8s:customValidation # must be pinned by digest; no contains tag exists
 	Reference     string `protobuf:"bytes,1,opt,name=reference,proto3" json:"reference,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2790,9 +2810,15 @@ type ExternalVolumeTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// capacity of the volume to create, in Kubernetes resource.Quantity string
 	// form (e.g. "10Gi"). Required.
+	//
+	// +k8s:required
+	// +k8s:customValidation # must parse as a resource.Quantity
 	Capacity string `protobuf:"bytes,1,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	// storage_class_name names the cluster-scoped Kubernetes StorageClass to
 	// create the volume from. Required.
+	//
+	// +k8s:required
+	// +k8s:format=k8s-long-name
 	StorageClassName string `protobuf:"bytes,2,opt,name=storage_class_name,json=storageClassName,proto3" json:"storage_class_name,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

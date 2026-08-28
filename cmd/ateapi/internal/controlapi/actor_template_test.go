@@ -557,6 +557,85 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data/"}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
+	}, {
+		name: "valid durable_dir volume",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+		},
+	}, {
+		name: "volume missing name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("volumes").Index(0).Child("name"), "")},
+	}, {
+		name: "volume invalid name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "Scratch_1", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "volume with no source",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "scratch"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "one of").WithOrigin("union")},
+	}, {
+		name: "volume with two sources",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{
+				Name:       "scratch",
+				DurableDir: &ateapipb.DurableDirVolumeSource{},
+				Image:      &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"},
+			}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "one of").WithOrigin("union")},
+	}, {
+		name: "valid image volume",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"}}}
+		},
+	}, {
+		name: "image volume missing reference",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{}}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("volumes").Index(0).Child("image", "reference"), "")},
+	}, {
+		name: "image volume reference not pinned by digest",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app:v1"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("image", "reference"), nil, "")},
+	}, {
+		name: "valid external volume template",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "fast-ssd"}}}
+		},
+	}, {
+		name: "external volume template missing capacity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "fast-ssd"}}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), "")},
+	}, {
+		name: "external volume template malformed capacity",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "ten gigs", StorageClassName: "fast-ssd"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "capacity"), nil, "")},
+	}, {
+		name: "external volume template missing storage_class_name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi"}}}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("volumes").Index(0).Child("external_volume_template", "storage_class_name"), "")},
+	}, {
+		name: "external volume template invalid storage_class_name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "Fast SSD"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("external_volume_template", "storage_class_name"), nil, "").WithOrigin("format=k8s-long-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
