@@ -25,8 +25,6 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,8 +47,8 @@ import (
 )
 
 const (
-	userClass    = "GluttonUser"
-	templateName = "glutton"
+	userClass        = "GluttonUser"
+	templateName     = "glutton"
 	templateAtespace = "benchmark-workloads"
 	actorDomain      = "actors.resources.substrate.ate.dev"
 	pingPath         = "/ping"
@@ -90,7 +88,7 @@ type taskRuntime struct {
 // (the analog of locust's per-user on_start); subsequent calls run a
 // resume/ping/suspend cycle.
 func (r *taskRuntime) iterate() {
-	gid := goroutineID()
+	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
 		u, err := r.startUser(context.Background())
@@ -477,26 +475,4 @@ func (u *gluttonUser) postProto(ctx context.Context, path string, req, resp prot
 		return fmt.Errorf("%s: HTTP %d: %s", path, httpResp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return proto.Unmarshal(respBody, resp)
-}
-
-
-
-// goroutineID extracts the runtime's per-goroutine ID via the standard
-// runtime.Stack trick. Used to key per-VU state because boomer's Task model
-// has no built-in per-VU hook — see the runtime.shutdown comment for the
-// limitation this implies on user-count rescale.
-func goroutineID() int64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	line := string(buf[:n])
-	const prefix = "goroutine "
-	if !strings.HasPrefix(line, prefix) {
-		return 0
-	}
-	end := strings.IndexByte(line[len(prefix):], ' ')
-	if end < 0 {
-		return 0
-	}
-	id, _ := strconv.ParseInt(line[len(prefix):len(prefix)+end], 10, 64)
-	return id
 }

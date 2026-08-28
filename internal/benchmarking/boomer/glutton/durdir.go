@@ -93,7 +93,7 @@ func (r *durDirRuntime) dynamicWait() time.Duration {
 }
 
 func (r *durDirRuntime) iterate() {
-	gid := goroutineID()
+	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
 		dynCfg := r.cfg.Dyn.Load()
