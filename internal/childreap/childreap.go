@@ -15,6 +15,8 @@
 // Package childreap reaps orphaned children without racing subprocess waits.
 // Reaping waits for tracked subprocesses to finish because wait4(-1) can
 // consume an exit status expected by os/exec.
+//go:build unix
+
 package childreap
 
 import (
