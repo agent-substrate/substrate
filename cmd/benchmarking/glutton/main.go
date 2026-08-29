@@ -35,7 +35,7 @@ var (
 	listenAddr        = pflag.String("grpc-listen-addr", ":8080", "Address and port the server should listen on (name kept for back-compat; serves whatever --mode picks).")
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the Prometheus metrics server should listen on.")
 	dataDir           = pflag.String("data-dir", "", "Directory under which WriteDisk files are stored. Required.")
-	mode              = pflag.String("mode", "grpc", "Wire protocol for the main listener: grpc (default) or http.")
+	mode              = pflag.String("mode", glutton.ModeGRPC, "Wire protocol for the main listener: grpc (default) or http.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
@@ -55,7 +55,7 @@ func main() {
 	serverboot.InitLogger()
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: "glutton",
+		ServiceName: glutton.Name,
 		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentNeverSampling()),
 	})
 	if err != nil {
@@ -63,7 +63,7 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, "glutton")
+	mp, err := serverboot.InitMetrics(ctx, glutton.Name)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
