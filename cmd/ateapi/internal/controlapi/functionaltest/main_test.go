@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/testenv"
 	"google.golang.org/grpc"
@@ -97,6 +98,8 @@ func TestMain(m *testing.M) {
 	ateletGrpcServer.Stop()
 
 	stopEnv()
+
+	storetest.Shutdown()
 
 	os.Exit(code)
 }

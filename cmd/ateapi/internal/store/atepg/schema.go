@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS actors (
     PRIMARY KEY (atespace, name)
 );
 
+CREATE TABLE IF NOT EXISTS actor_egress_policies (
+    atespace    text NOT NULL,
+    actor_name  text NOT NULL,
+    uid         text NOT NULL,
+    version     bigint NOT NULL,
+    proto       bytea NOT NULL,
+    PRIMARY KEY (atespace, actor_name),
+    FOREIGN KEY (atespace, actor_name)
+        REFERENCES actors(atespace, name) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS actor_templates (
     atespace  text NOT NULL
         REFERENCES atespaces(name) ON DELETE RESTRICT,

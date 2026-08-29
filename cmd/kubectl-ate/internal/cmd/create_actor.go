@@ -25,6 +25,7 @@ import (
 )
 
 var templateFlag string
+var templateRefFlag string
 var atespaceFlag string
 var sourceSnapshotTagFlag string
 
@@ -33,6 +34,11 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateFlag, templateRefFlag, sourceSnapshotTagFlag)
+		if err != nil {
+			return err
+		}
+
 		ctx := cmd.Context()
 		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
@@ -40,29 +46,6 @@ var createActorCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		actorName := args[0]
-		parts := strings.Split(templateFlag, "/")
-		if len(parts) != 2 {
-			return fmt.Errorf("malformed --template: %s (expected <namespace>/<name>)", templateFlag)
-		}
-
-		request := &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{
-					Atespace: atespaceFlag,
-					Name:     actorName,
-				},
-				ActorTemplateNamespace: parts[0],
-				ActorTemplateName:      parts[1],
-			},
-		}
-		if sourceSnapshotTagFlag != "" {
-			ref, err := parseNamespacedName(sourceSnapshotTagFlag)
-			if err != nil {
-				return err
-			}
-			request.Actor.SourceSnapshotTag = ref
-		}
 		resp, err := apiClient.CreateActor(ctx, request)
 		if err != nil {
 			return fmt.Errorf("failed to create actor: %w", err)
@@ -72,9 +55,47 @@ var createActorCmd = &cobra.Command{
 	},
 }
 
+// buildCreateActorRequest assembles the CreateActor request from the command
+// flags. Exactly one of template (legacy CRD reference) and templateRef
+// (substrate ActorTemplate resource) is set; cobra enforces that.
+func buildCreateActorRequest(actorName, atespace, template, templateRef, snapshotTag string) (*ateapipb.CreateActorRequest, error) {
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: atespace,
+			Name:     actorName,
+		},
+	}
+	if templateRef != "" {
+		// The template name is resolved in the actor's atespace; cross-atespace
+		// references are intentionally not expressible here.
+		if strings.Contains(templateRef, "/") {
+			return nil, fmt.Errorf("malformed --template-ref: %s (expected a bare template name, resolved in the actor's atespace)", templateRef)
+		}
+		actor.ActorTemplate = &ateapipb.ObjectRef{Atespace: atespace, Name: templateRef}
+	} else {
+		parts := strings.Split(template, "/")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("malformed --template: %s (expected <namespace>/<name>)", template)
+		}
+		actor.ActorTemplateNamespace = parts[0]
+		actor.ActorTemplateName = parts[1]
+	}
+	if snapshotTag != "" {
+		ref, err := parseNamespacedName(snapshotTag)
+		if err != nil {
+			return nil, err
+		}
+		actor.SourceSnapshotTag = ref
+	}
+	return &ateapipb.CreateActorRequest{Actor: actor}, nil
+}
+
 func init() {
-	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Template to derive the actor from in <namespace>/<name> format (required)")
-	_ = createActorCmd.MarkFlagRequired("template")
+	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Legacy ActorTemplate CRD to derive the actor from, in <namespace>/<name> format")
+	// TODO: rename "template-ref" to "template" when we fully cutover.
+	createActorCmd.Flags().StringVar(&templateRefFlag, "template-ref", "", "Name of the substrate ActorTemplate resource to derive the actor from, resolved in the actor's atespace (--atespace)")
+	createActorCmd.MarkFlagsMutuallyExclusive("template", "template-ref")
+	createActorCmd.MarkFlagsOneRequired("template", "template-ref")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
 	createActorCmd.Flags().StringVar(&sourceSnapshotTagFlag, "snapshot-tag", "", "Initialize from an ActorSnapshot tag in <atespace>/<name> format")

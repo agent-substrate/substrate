@@ -16,13 +16,17 @@ package controllers
 
 import (
 	"os"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -86,11 +90,11 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 
 	containerAC := corev1ac.Container().
 		WithName("ateom").
-		WithImage(wp.Spec.AteomImage).
+		WithImage(wp.Spec.WorkerImage).
 		WithArgs(
 			"--pod-uid=$(POD_UID)",
 			"--atunnel-listen-address=0.0.0.0:443",
-			"--atunnel-connect-listen-address=0.0.0.0:444",
+			"--atunnel-connect-listen-address=0.0.0.0:8443",
 			"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 			"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 			"--atunnel-egress-listen-address=0.0.0.0:15001",
@@ -102,8 +106,16 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithProtocol(corev1.ProtocolTCP),
 			corev1ac.ContainerPort().
 				WithName("connect").
-				WithContainerPort(444).
+				WithContainerPort(8443).
+				WithProtocol(corev1.ProtocolTCP),
+			corev1ac.ContainerPort().
+				WithName("readyz").
+				WithContainerPort(8080).
 				WithProtocol(corev1.ProtocolTCP)).
+		WithReadinessProbe(corev1ac.Probe().
+			WithHTTPGet(corev1ac.HTTPGetAction().
+				WithPath("/readyz").
+				WithPort(intstr.FromString("readyz")))).
 		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
 		WithEnv(ateomContainerEnv(otel)...).
 		WithVolumeMounts(
@@ -250,30 +262,58 @@ var ateomGvisorCapabilities = []corev1.Capability{
 	"FOWNER", "CHOWN", "MKNOD", "NET_RAW", "SETFCAP",
 }
 
+// ateomMicroVMCapabilities is the capability set an unprivileged micro-VM worker
+// needs: the gVisor set, which covers the same worker-side work, plus FSETID and
+// DAC_READ_SEARCH for virtiofsd. virtiofsd re-applies a fixed set to its
+// sandboxed child, and the kernel refuses to raise a capability the bounding set
+// omits, so without those two it exits with "can't apply the child capabilities"
+// and the VM never gets its virtio-fs device.
+//
+// The hypervisor devices are not capabilities: they come from atelet's device
+// plugin (see maybeApplyMicroVMPodShape).
+var ateomMicroVMCapabilities = slices.Concat(ateomGvisorCapabilities, []corev1.Capability{
+	"FSETID", "DAC_READ_SEARCH",
+})
+
 // ateomSecurityContext returns the ateom container security context for a sandbox
-// class. The gVisor worker runs unprivileged with an explicit capability set; the
-// micro-VM worker stays privileged because kata + cloud-hypervisor needs broad
-// host access (vhost devices, mounts). An empty class defaults to gVisor.
+// class. Neither class runs privileged; they differ in their capability set and
+// in seccomp. An empty class defaults to gVisor.
 func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
+	// Both runtimes mount inside the worker — runsc pivots root and the worker
+	// remounts /sys/fs/cgroup to nest per-actor cgroups; the micro-VM worker
+	// shares /run/kata-containers and remounts /proc/sys — and the default
+	// AppArmor profile denies mount (enforced on GKE COS and Ubuntu, a no-op on
+	// nodes that do not load AppArmor). A privileged worker got this implicitly;
+	// unprivileged must request it. Replacing Unconfined with a tailored profile
+	// per runtime is a follow-up.
 	sc := corev1ac.SecurityContext().
 		WithRunAsUser(0).
-		WithRunAsGroup(0)
-	if class == atev1alpha1.SandboxClassMicroVM {
-		return sc.WithPrivileged(true)
-	}
-	// runsc mounts and pivots root inside the sandbox, and the worker remounts
-	// /sys/fs/cgroup read-write to nest per-actor cgroups; the default AppArmor
-	// profile denies those mounts (enforced on GKE COS, a no-op on nodes that do
-	// not load AppArmor). A privileged worker got this implicitly; unprivileged
-	// must request it. seccomp stays at the runtime default. Confining runsc with
-	// a tailored AppArmor profile instead of Unconfined is a follow-up.
-	return sc.
+		WithRunAsGroup(0).
 		WithPrivileged(false).
-		WithCapabilities(corev1ac.Capabilities().
-			WithDrop("ALL").
-			WithAdd(ateomGvisorCapabilities...)).
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
+
+	if class == atev1alpha1.SandboxClassMicroVM {
+		// Give up the default seccomp profile so virtiofsd keeps its own sandbox,
+		// which pivot_root()s — a syscall the profile denies whatever capabilities
+		// the worker holds. The trade favors containing the guest: virtiofsd parses
+		// requests from it, so its namespaces are part of the guest-to-host
+		// boundary, while the pod-wide profile mostly confines ateom, which we
+		// trust. Both guest-facing processes confine themselves anyway, virtiofsd
+		// with its own seccomp filter and nine capabilities, cloud-hypervisor with
+		// per-thread filters.
+		return sc.
+			WithCapabilities(corev1ac.Capabilities().
+				WithDrop("ALL").
+				WithAdd(ateomMicroVMCapabilities...)).
+			WithSeccompProfile(corev1ac.SeccompProfile().
+				WithType(corev1.SeccompProfileTypeUnconfined))
+	}
+	// gVisor needs no such relaxation and keeps the runtime default.
+	return sc.
+		WithCapabilities(corev1ac.Capabilities().
+			WithDrop("ALL").
+			WithAdd(ateomGvisorCapabilities...))
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
@@ -294,34 +334,64 @@ func maybeApplyMicroVMPodShape(
 		return
 	}
 
-	// The micro-VM runtime needs /dev/kvm. The container is already privileged
-	// (so it can also reach vhost devices), but we mount /dev/kvm explicitly.
+	// The micro-VM runtime needs /dev/kvm to create the VM. Request it as an
+	// extended resource served by atelet's device plugin rather than
+	// hostPath-mounting it: a container's device access is gated by the cgroup
+	// device controller, which denies /dev/kvm by default, and kubelet's device
+	// manager is what adds the matching allow rule. A hostPath mount alone
+	// yields EPERM unless the pod is privileged, which would hand over every
+	// other device on the node too.
+	//
+	// atelet advertises it only on nodes where the device exists, so the
+	// request also keeps the pod off nodes that cannot run a micro-VM.
+	addDeviceResourceLimits(containerAC, deviceplugin.ResourceKVM)
+
+	// The runtime also opens /dev/net/tun to build the guest's tap, but that
+	// one needs no grant: it is in the runtime's default device allow-list, so
+	// a bind mount is enough and creating the tap is a capability question
+	// (CAP_NET_ADMIN, above) rather than a device one. That default is a
+	// compatibility guarantee rather than an accident — runc dropped the rule
+	// once, restored it when it broke users, and crun matched.
+	//
+	// Advertising tun as a resource would only add a placement constraint that
+	// can fail: it is not scarce, and a node where the tun module has yet to
+	// load would refuse a worker that needs nothing from it.
 	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
-		WithName("dev-kvm").
-		WithMountPath("/dev/kvm"))
+		WithName(tunDeviceVolume).
+		WithMountPath(tunDevicePath))
 	podSpecAC.WithVolumes(corev1ac.Volume().
-		WithName("dev-kvm").
+		WithName(tunDeviceVolume).
 		WithHostPath(corev1ac.HostPathVolumeSource().
-			WithPath("/dev/kvm").
+			WithPath(tunDevicePath).
 			WithType(corev1.HostPathCharDev)))
 
-	// Pin placement to KVM-capable, nested-virt nodes via nodeSelector +
-	// toleration on ate.dev/sandboxClass=microvm. This is our own convention
-	// (GKE attaches no label/taint to nested-virt pools): applied to kind nodes
-	// by hack/create-kind-cluster.sh and via --node-labels at GKE pool creation.
-	// Additive on top of the WorkerPool's configurable scheduling fields
-	// (spec.template nodeSelector/tolerations/affinity, added in #247) — merge,
-	// don't overwrite.
-	if podSpecAC.NodeSelector == nil {
-		podSpecAC.NodeSelector = map[string]string{}
-	}
-	podSpecAC.NodeSelector["ate.dev/sandboxClass"] = string(atev1alpha1.SandboxClassMicroVM)
+	// Placement onto KVM-capable nodes comes from the device request above: the
+	// scheduler only picks nodes advertising the resource, and atelet advertises
+	// it only where the device exists. That is derived from the node itself,
+	// unlike an ate.dev/sandboxClass label, which is a hand-applied convention
+	// that can be wrong in both directions (a labeled node without KVM takes
+	// pods that then fail at runtime; an unlabeled KVM node is invisible
+	// capacity). Note this makes the pool depend on atelet having registered:
+	// with no node advertising the resource, workers stay Pending rather than
+	// landing somewhere they cannot run.
+	//
+	// The toleration stays: extended resources constrain where this pod fits but
+	// repel nothing, so a cluster reserving nested-virt nodes with a taint still
+	// needs it. Additive on top of the WorkerPool's configurable scheduling
+	// fields (spec.template nodeSelector/tolerations/affinity, added in #247) —
+	// merge, don't overwrite.
 	podSpecAC.WithTolerations(corev1ac.Toleration().
 		WithKey("ate.dev/sandboxClass").
 		WithOperator(corev1.TolerationOpEqual).
 		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
 		WithEffect(corev1.TaintEffectNoSchedule))
 }
+
+// The tun device node a micro-VM worker bind-mounts to build the guest's tap.
+const (
+	tunDeviceVolume = "dev-net-tun"
+	tunDevicePath   = "/dev/net/tun"
+)
 
 // nvidiaToolkitContainerPath is where the host toolkit is mounted inside the
 // worker; ateom-gvisor's toolkitDir must match this. It sits outside
@@ -407,6 +477,22 @@ func templateRequestsGPU(tmpl *atev1alpha1.WorkerPoolPodTemplate) bool {
 		return true
 	}
 	return false
+}
+
+// addDeviceResourceLimits requests one unit of each named extended resource,
+// merging into whatever limits the pod template already set.
+func addDeviceResourceLimits(containerAC *corev1ac.ContainerApplyConfiguration, resourceNames ...string) {
+	if containerAC.Resources == nil {
+		containerAC.WithResources(corev1ac.ResourceRequirements())
+	}
+	limits := corev1.ResourceList{}
+	if containerAC.Resources.Limits != nil {
+		limits = *containerAC.Resources.Limits
+	}
+	for _, name := range resourceNames {
+		limits[corev1.ResourceName(name)] = resource.MustParse("1")
+	}
+	containerAC.Resources.WithLimits(limits)
 }
 
 func applyWorkerPoolPodTemplate(

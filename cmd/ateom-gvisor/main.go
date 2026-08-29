@@ -66,12 +66,13 @@ var (
 
 	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
 	atunnelListenAddress        = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
-	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", "0.0.0.0:444", "Address for actor ingress mTLS CONNECT")
+	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", "0.0.0.0:8443", "Address for actor ingress mTLS CONNECT")
 	workerCredentialBundle      = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
 	podIdentityTrustBundle      = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
 	atunnelClientIdentity       = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
 	atunnelEgressListenAddress  = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	egressGatewayTrustBundle    = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+	readinessListenAddress      = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -218,6 +219,7 @@ func do(ctx context.Context) error {
 	)
 	ateompb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
+	readiness := &serverboot.Readiness{}
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination
 	// grace period) and propagate it into the sandbox so the actor can save its
@@ -227,12 +229,15 @@ func do(ctx context.Context) error {
 	go func() {
 		sig := <-sigCh
 		slog.InfoContext(ctx, "Received signal; beginning graceful shutdown", slog.String("signal", sig.String()))
+		readiness.MarkNotReady()
 		// Use a fresh context: the do() context is torn down on return, but the
 		// shutdown must outlive it until the sandbox has stopped.
 		ateomService.gracefulShutdown(context.Background())
 		// Stop the server gracefully. This blocks until all in-flight RPCs have completed.
 		svr.GracefulStop()
 	}()
+
+	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
 
 	if err := svr.Serve(lis); err != nil {
 		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
@@ -633,9 +638,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -901,9 +907,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
 	var containersToDelete []string
 	defer func() {

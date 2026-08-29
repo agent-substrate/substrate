@@ -170,13 +170,13 @@ for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); d
   docker exec "${node}" sysctl -e net.ipv6.conf.all.proxy_ndp=1
 done
 
-# 2.6 When KVM is available: make /dev/kvm usable inside the node and label
-# nodes so micro-VM WorkerPools (nodeSelector ate.dev/sandboxClass=microvm) schedule.
+# 2.6 When KVM is available: make /dev/kvm usable inside the node. Micro-VM
+# WorkerPools reach these nodes through the device atelet advertises for them,
+# so no node label is needed.
 if [ "${HAS_KVM}" = "1" ]; then
   echo "Preparing kind nodes for micro-VM (kata + cloud-hypervisor) runtime..."
   for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
     docker exec "${node}" chmod 666 /dev/kvm
-    kubectl --context="${KUBECTL_CONTEXT}" label node "${node}" ate.dev/sandboxClass=microvm --overwrite
   done
 fi
 

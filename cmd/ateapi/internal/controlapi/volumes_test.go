@@ -51,7 +51,7 @@ func (f *fakeStorageClassLister) Get(name string) (*storagev1.StorageClass, erro
 var _ storagev1listers.StorageClassLister = (*fakeStorageClassLister)(nil)
 
 func TestInitialActorVolumes_PendingState(t *testing.T) {
-	tmpl := &atev1alpha1.ActorTemplate{
+	tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Volumes: []atev1alpha1.Volume{
 				{
@@ -81,7 +81,7 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	want := []*ateapipb.ExternalVolume{
 		{
@@ -120,7 +120,7 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 func TestCreateActorVolumes(t *testing.T) {
 	ctx := context.Background()
 
-	standardTmpl := &atev1alpha1.ActorTemplate{
+	standardTmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Volumes: []atev1alpha1.Volume{
 				{
@@ -133,9 +133,9 @@ func TestCreateActorVolumes(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
-	multiVolTmpl := &atev1alpha1.ActorTemplate{
+	multiVolTmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Volumes: []atev1alpha1.Volume{
 				{
@@ -164,11 +164,11 @@ func TestCreateActorVolumes(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
 	tests := []struct {
 		name         string
-		tmpl         *atev1alpha1.ActorTemplate
+		tmpl         *ateapipb.ActorTemplate
 		inputVolumes []*ateapipb.ExternalVolume
 		wantErr      bool
 		wantRes      []*ateapipb.ExternalVolume
@@ -247,11 +247,11 @@ func TestCreateActorVolumes(t *testing.T) {
 		},
 		{
 			name: "volume not found in template returns error",
-			tmpl: &atev1alpha1.ActorTemplate{
+			tmpl: mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 				Spec: atev1alpha1.ActorTemplateSpec{
 					Volumes: []atev1alpha1.Volume{},
 				},
-			},
+			}),
 			inputVolumes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "missing-vol",

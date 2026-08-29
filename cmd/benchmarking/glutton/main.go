@@ -185,6 +185,7 @@ func newMux(svc *gluttonService) *http.ServeMux {
 	mux.HandleFunc("/ping", protoRoute("Ping", svc.Ping))
 	mux.HandleFunc("/writedisk", protoRoute("WriteDisk", svc.WriteDisk))
 	mux.HandleFunc("/readdisk", protoRoute("ReadDisk", svc.ReadDisk))
+	mux.HandleFunc("/writeram", protoRoute("WriteRAM", svc.WriteRAM))
 	return mux
 }
 
@@ -384,10 +385,14 @@ func (s *gluttonService) WriteRAM(ctx context.Context, req *glutton.WriteRAMRequ
 	if req.GetKey() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key is required")
 	}
-	if req.GetSize() < 0 {
+	sizeBytes, err := parseBytes(req.GetSize())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "size: %v", err)
+	}
+	if sizeBytes < 0 {
 		return nil, status.Error(codes.InvalidArgument, "size must be non-negative")
 	}
-	size := int(req.GetSize())
+	size := int(sizeBytes)
 
 	switch req.GetWriteMode() {
 	case glutton.WriteMode_WRITE_MODE_TRUNCATE:

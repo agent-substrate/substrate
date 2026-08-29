@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"net/url"
@@ -30,7 +31,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/clock"
@@ -40,39 +40,14 @@ import (
 const Name = "podidentity.podcert.ate.dev/identity"
 const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
 
-// atelet's identity, as installed by manifests/ate-install/atelet.yaml. Pods
-// running as atelet serve TLS (e.g. to ate-apiserver), so their certs also
-// carry the serverAuth EKU.
-const (
-	ateletNamespace      = "ate-system"
-	ateletServiceAccount = "atelet"
-)
-
-// workerPoolLabel marks pods created by atecontroller for a WorkerPool. Worker
-// pods host the atunnel ingress server, presenting this cert as a TLS server
-// cert to atenet-router, so they need the serverAuth EKU too. They run as the
-// actor namespace's default ServiceAccount, so the label is what distinguishes
-// them rather than their identity.
-const workerPoolLabel = "ate.dev/worker-pool"
-
-func extKeyUsages(pod *corev1.Pod, namespace, serviceAccount string) []x509.ExtKeyUsage {
-	usages := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	_, isWorker := pod.ObjectMeta.Labels[workerPoolLabel]
-	isAtelet := namespace == ateletNamespace && serviceAccount == ateletServiceAccount
-	if isAtelet || isWorker {
-		usages = append(usages, x509.ExtKeyUsageServerAuth)
-	}
-	return usages
-}
-
 type Impl struct {
 	kc     kubernetes.Interface
-	caPool *localca.Pool
+	caPool localca.Pool
 
 	clock clock.PassiveClock
 }
 
-func NewImpl(kc kubernetes.Interface, caPool *localca.Pool, clock clock.PassiveClock) *Impl {
+func NewImpl(kc kubernetes.Interface, caPool localca.Pool, clock clock.PassiveClock) *Impl {
 	return &Impl{
 		kc:     kc,
 		caPool: caPool,
@@ -86,14 +61,19 @@ func (h *Impl) SignerName() string {
 	return Name
 }
 
-func (h *Impl) DesiredClusterTrustBundles() []*certsv1beta1.ClusterTrustBundle {
+func (h *Impl) DesiredClusterTrustBundles() ([]*certsv1beta1.ClusterTrustBundle, error) {
 	name := CTBPrefix + "primary-bundle"
 
+	trustAnchors, err := h.caPool.TrustAnchors()
+	if err != nil {
+		return nil, fmt.Errorf("while retrieving CA pool trust anchors: %w", err)
+	}
+
 	wantTrustBundle := bytes.Buffer{}
-	for _, ca := range h.caPool.CAs {
+	for _, anchor := range trustAnchors {
 		block := pem.EncodeToMemory(&pem.Block{
 			Type:  "CERTIFICATE",
-			Bytes: ca.RootCertificate.Raw,
+			Bytes: anchor.Raw,
 		})
 		_, _ = wantTrustBundle.Write(block)
 	}
@@ -113,7 +93,7 @@ func (h *Impl) DesiredClusterTrustBundles() []*certsv1beta1.ClusterTrustBundle {
 
 	return []*certsv1beta1.ClusterTrustBundle{
 		wantCTB,
-	}
+	}, nil
 }
 
 func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateRequest) error {
@@ -148,20 +128,26 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		Path:   path.Join("ns", pcr.ObjectMeta.Namespace, "sa", pcr.Spec.ServiceAccountName),
 	}
 
-	parent := h.caPool.CAs[0].RootCertificate
-
 	template := &x509.Certificate{
+		// Some golang certificate handling code assumes that if the parent and
+		// template Subject fields compare equal, we are doing a self-signing
+		// operation [1].
+		//
+		// I'm not sure if this is correct, but for defense in depth include
+		// some random content in the subject.
+		//
+		// [1] https://cs.opensource.google/go/go/+/refs/tags/go1.27.0:src/crypto/x509/x509.go;l=1871
+		Subject: pkix.Name{
+			CommonName: rand.Text(),
+		},
 		BasicConstraintsValid: true,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		URIs:                  []*url.URL{spiffeURI},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           extKeyUsages(pod, pcr.ObjectMeta.Namespace, pcr.Spec.ServiceAccountName),
-		// Link the leaf to its issuing CA by key id so verifiers can disambiguate
-		// a multi-CA trust bundle when a service trusts both the servicedns and
-		// podidentity CAs).
-		// https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.1
-		AuthorityKeyId: parent.SubjectKeyId,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		// AuthorityKeyID is automatically set to the SubjectKeyID of the parent
+		// certificate.
 	}
 
 	// Fields are sourced from the PCR spec (attested by kube-apiserver) rather
@@ -179,14 +165,9 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		return fmt.Errorf("while adding pod identity to certificate: %w", err)
 	}
 
-	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, parent, subjectPublicKey, h.caPool.CAs[0].SigningKey)
+	chainDER, err := h.caPool.CreateCertificate(template, subjectPublicKey)
 	if err != nil {
-		return fmt.Errorf("while signing subject cert: %w", err)
-	}
-
-	chainDER := [][]byte{subjectCertDER}
-	for _, intermed := range h.caPool.CAs[0].IntermediateCertificates {
-		chainDER = append(chainDER, intermed.Raw)
+		return fmt.Errorf("while signing certificate: %w", err)
 	}
 
 	chainPEM := &bytes.Buffer{}

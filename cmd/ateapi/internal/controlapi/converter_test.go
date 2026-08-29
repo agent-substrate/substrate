@@ -19,9 +19,13 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func TestToAteletSnapshotScope(t *testing.T) {
+// TestSnapshotScopeToAtelet covers the wire scope derivation for CRD scopes
+// converted to proto content scopes: unknown and empty CRD scopes fall back
+// to Full, matching the CRD's default.
+func TestSnapshotScopeToAtelet(t *testing.T) {
 	tests := []struct {
 		name     string
 		in       atev1alpha1.SnapshotScope
@@ -51,10 +55,45 @@ func TestToAteletSnapshotScope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := toAteletSnapshotScope(tt.in)
+			result := actorSnapshotContentScopeToAtelet(toActorSnapshotContentScope(tt.in))
 			if result != tt.expected {
-				t.Errorf("toAteletSnapshotScope(%q) = %v, want %v", tt.in, result, tt.expected)
+				t.Errorf("actorSnapshotContentScopeToAtelet(toActorSnapshotContentScope(%q)) = %v, want %v", tt.in, result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestEffectiveContentScope pins UNSPECIFIED-means-FULL: stored substrate
+// templates may legitimately leave scopes unset.
+func TestEffectiveContentScope(t *testing.T) {
+	tests := []struct {
+		in, expected ateapipb.SnapshotContentScope
+	}{
+		{ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+		{ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+		{ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+	}
+	for _, tt := range tests {
+		if got := effectiveContentScope(tt.in); got != tt.expected {
+			t.Errorf("effectiveContentScope(%v) = %v, want %v", tt.in, got, tt.expected)
+		}
+	}
+}
+
+// TestSandboxClassString pins the label values the scheduler and metrics
+// share with the CRD's lower-case enum.
+func TestSandboxClassString(t *testing.T) {
+	tests := []struct {
+		in       ateapipb.SandboxClass
+		expected string
+	}{
+		{ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, "gvisor"},
+		{ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, "microvm"},
+		{ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED, ""},
+	}
+	for _, tt := range tests {
+		if got := sandboxClassString(tt.in); got != tt.expected {
+			t.Errorf("sandboxClassString(%v) = %q, want %q", tt.in, got, tt.expected)
+		}
 	}
 }

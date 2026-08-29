@@ -31,8 +31,6 @@ import (
 	secretservice "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
-
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/sdsmint/certauth"
 )
 
 // DeltaSecrets is what DELTA_GRPC drives. It is a long-lived loop that mints
@@ -183,7 +181,7 @@ func (d *deltaStream) handleSubscribe(ctx context.Context, names []string) error
 }
 
 // pack wraps a minted cert as a versioned delta Resource.
-func (d *deltaStream) pack(name string, cert *certauth.MintedCert) (*discovery.Resource, error) {
+func (d *deltaStream) pack(name string, cert *MintedCert) (*discovery.Resource, error) {
 	secret := toSecret(name, cert)
 	body, err := anypb.New(secret)
 	if err != nil {
@@ -265,7 +263,7 @@ func inlineBytes(b []byte) *corev3.DataSource {
 // toSecret packs a minted cert into the Secret proto Envoy expects back. The
 // secret's name MUST equal the requested resource name (the SNI), or Envoy
 // will not match the response to its subscription.
-func toSecret(name string, c *certauth.MintedCert) *tlsv3.Secret {
+func toSecret(name string, c *MintedCert) *tlsv3.Secret {
 	return &tlsv3.Secret{
 		Name: name,
 		Type: &tlsv3.Secret_TlsCertificate{

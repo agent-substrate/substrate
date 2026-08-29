@@ -26,10 +26,8 @@ package main
 // directories are reset.
 //
 // ateom exposes that host directory to the guest under the single kataShared
-// virtio-fs share at SharedDir(actorUID)/durable (in-guest path:
-// kata.GuestDurableVolumeDir(volume)), bind-mounted from there into every
-// container that declares it. An actor may have any number of them: they cost a
-// subdirectory each, not a device, so nothing here scales with the volume count.
+// virtio-fs share at SharedDir(actorUID)/durable, where each container's bind
+// is attached.
 //
 // Snapshots carry the contents as a tar of the whole per-actor directory, so
 // every volume rides along and the layout is reproduced verbatim on restore.
@@ -46,8 +44,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/tarutil"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // durableTarFile is the snapshot file holding the tar of the actor's durable-dir
@@ -67,44 +65,6 @@ func hasDurableVolumes(containers []*ateompb.Container) bool {
 	return false
 }
 
-// durableMounts returns the OCI mounts that expose a container's durable-dir
-// volumes at the paths it declared. Each source is that volume's directory
-// inside the guest's durable share, which the agent mounts at sandbox creation.
-func durableMounts(mounts []*ateompb.DurableDirVolumeMount) []specs.Mount {
-	out := make([]specs.Mount, 0, len(mounts))
-	for _, m := range mounts {
-		out = append(out, specs.Mount{
-			Destination: m.GetMountPath(),
-			Source:      kata.GuestDurableVolumeDir(m.GetVolumeName()),
-			Type:        "bind",
-			Options:     []string{"rbind", "rw"},
-		})
-	}
-	return out
-}
-
-// workloadSpec returns the OCI spec to start a container with: the prepared
-// spec, plus a bind for each durable-dir volume (writable), CSI volume,
-// system-info volume (read-only), and image volume (read-only) it mounts.
-//
-// The spec is copied rather than mutated so the bundle's on-disk config.json
-// stays as prepared — only the started container sees the binds.
-func workloadSpec(c actorContainer) *specs.Spec {
-	if len(c.durableMounts) == 0 && len(c.csiMounts) == 0 && len(c.systemInfoMounts) == 0 && len(c.imageMounts) == 0 {
-		return c.spec
-	}
-	spec := *c.spec
-
-	var mounts []specs.Mount
-	mounts = append(mounts, c.spec.Mounts...)
-	mounts = append(mounts, durableMounts(c.durableMounts)...)
-	mounts = append(mounts, csiMounts(c.csiMounts)...)
-	mounts = append(mounts, systemInfoMounts(c.systemInfoMounts)...)
-	mounts = append(mounts, imageVolumeMounts(c.imageMounts, c.name)...)
-	spec.Mounts = mounts
-	return &spec
-}
-
 // stageDurableVolumes bind-mounts the actor's host durable-dir directory
 // into the sandbox's shared virtio-fs tree at SharedDir(actorUID)/durable.
 func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID string) error {
@@ -112,7 +72,7 @@ func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID string)
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("while checking durable-dir volumes dir %q: %w", src, err)
 	}
-	if err := kata.BindIntoShare(ctx, src, actorUID, "durable"); err != nil {
+	if err := kata.BindIntoShare(ctx, src, actorUID, ocispec.ShareDurable); err != nil {
 		return fmt.Errorf("while binding durable-dir volumes into the shared tree: %w", err)
 	}
 	return nil

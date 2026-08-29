@@ -1122,7 +1122,7 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:          5,
-			AteomImage:        existingWp.Spec.AteomImage,
+			WorkerImage:       existingWp.Spec.WorkerImage,
 			SandboxClass:      existingWp.Spec.SandboxClass,
 			SandboxConfigName: existingWp.Spec.SandboxConfigName,
 		},
