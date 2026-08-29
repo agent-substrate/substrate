@@ -1,5 +1,3 @@
-//go:build linux
-
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,7 +48,7 @@ func TestShortSubprocessesAreNotPacedByLongOnes(t *testing.T) {
 	for range 4 {
 		wg.Go(func() {
 			for run.Err() == nil {
-				cmd := exec.Command("/bin/true")
+				cmd := exec.Command("true")
 				if cmd.Start() != nil {
 					return
 				}
@@ -113,7 +111,7 @@ func TestReapCollectsOrphans(t *testing.T) {
 	go r.Run(ctx)
 
 	// Leave the child for the reaper.
-	cmd := exec.Command("/bin/true")
+	cmd := exec.Command("true")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
