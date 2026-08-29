@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -147,13 +148,22 @@ func ctxWithCert(cert *x509.Certificate) context.Context {
 func newTestServer(t *testing.T, st store.Interface) *Server {
 	t.Helper()
 
-	ca, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
+	certificateAuthority, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("generate CA: %v", err)
 	}
-	pool := &localca.ConcretePool{
-		CAs:              []*localca.CA{ca},
+	certificateAuthorityPool := &localca.ConcretePool{
+		CAs:              []*localca.CA{certificateAuthority},
 		ActiveForSigning: "test-actor-ca",
+	}
+
+	jwtAuthority, err := localjwtauthority.GenerateECDSAP256Authority("1")
+	if err != nil {
+		t.Fatalf("while generating JWT authority: %v", err)
+	}
+	jwtAuthorityPool := &localjwtauthority.ConcretePool{
+		Authorities:      []*localjwtauthority.Authority{jwtAuthority},
+		ActiveForSigning: "1",
 	}
 
 	var workers *workercache.Cache
@@ -165,7 +175,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", "", pool, st, workers)
+	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers)
 }
 
 // staleWatchStore wraps a store with a WatchWorkers that never delivers,
@@ -319,12 +329,25 @@ func TestMintCertReadsThroughWorkerCacheMiss(t *testing.T) {
 func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercache.Cache) *Server {
 	t.Helper()
 
-	ca, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
+	certificateAuthority, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("generate CA: %v", err)
 	}
-	pool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
-	return New("issuer", "", pool, st, workers)
+	certificateAuthorityPool := &localca.ConcretePool{
+		CAs:              []*localca.CA{certificateAuthority},
+		ActiveForSigning: "test-actor-ca",
+	}
+
+	jwtAuthority, err := localjwtauthority.GenerateECDSAP256Authority("1")
+	if err != nil {
+		t.Fatalf("while generating JWT authority: %v", err)
+	}
+	jwtAuthorityPool := &localjwtauthority.ConcretePool{
+		Authorities:      []*localjwtauthority.Authority{jwtAuthority},
+		ActiveForSigning: "1",
+	}
+
+	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
@@ -909,16 +932,25 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ca, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
+	certificateAuthority, err := localca.GenerateCA("test-actor-ca", localca.KeyTypeED25519, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("generate CA: %v", err)
 	}
-	pool := &localca.ConcretePool{
-		CAs:              []*localca.CA{ca},
+	certificateAuthorityPool := &localca.ConcretePool{
+		CAs:              []*localca.CA{certificateAuthority},
 		ActiveForSigning: "test-actor-ca",
 	}
 
-	srv := New("issuer", "", pool, st, workers)
+	jwtAuthority, err := localjwtauthority.GenerateECDSAP256Authority("1")
+	if err != nil {
+		t.Fatalf("while generating JWT authority: %v", err)
+	}
+	jwtAuthorityPool := &localjwtauthority.ConcretePool{
+		Authorities:      []*localjwtauthority.Authority{jwtAuthority},
+		ActiveForSigning: "1",
+	}
+
+	srv := New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {

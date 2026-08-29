@@ -48,8 +48,9 @@ var makeJwtPoolCmd = &cobra.Command{
 			return fmt.Errorf("while generating JWT authority: %w", err)
 		}
 
-		pool := &localjwtauthority.Pool{
-			Authorities: []*localjwtauthority.Authority{authority},
+		pool := &localjwtauthority.ConcretePool{
+			Authorities:      []*localjwtauthority.Authority{authority},
+			ActiveForSigning: keyID,
 		}
 
 		poolBytes, err := localjwtauthority.Marshal(pool)

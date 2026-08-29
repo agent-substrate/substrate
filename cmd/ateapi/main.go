@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -193,10 +194,15 @@ func main() {
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
-		serverboot.Fatal(ctx, "while loading the Actor ID CA", err)
+		serverboot.Fatal(ctx, "while loading the Actor ID certificate authority pool", err)
 	}
 
-	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, actorIDCAPool, persistence, workerCache)
+	actorIDJWTAuthorityPool, err := localjwtauthority.NewRefreshingPool(*actorIDJWTPoolFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
+	}
+
+	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, actorIDJWTAuthorityPool, actorIDCAPool, persistence, workerCache)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)

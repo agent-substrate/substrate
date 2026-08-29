@@ -44,8 +44,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"k8s.io/utils/clock"
 )
 
 // Pool is the interface for a CA pool.
@@ -82,7 +80,6 @@ type Pool interface {
 // components to restart.
 type RefreshingPool struct {
 	stateFile string
-	clock     clock.PassiveClock
 
 	// lock covers nextLoad and pool
 	lock     sync.Mutex
@@ -95,8 +92,9 @@ var _ Pool = (*RefreshingPool)(nil)
 func NewRefreshingPool(stateFile string) (*RefreshingPool, error) {
 	rp := &RefreshingPool{
 		stateFile: stateFile,
-		clock:     clock.RealClock{},
 	}
+	rp.lock.Lock()
+	defer rp.lock.Unlock()
 	if err := rp.refreshIfNecessary(); err != nil {
 		return nil, fmt.Errorf("while loading pool: %w", err)
 	}
@@ -105,7 +103,7 @@ func NewRefreshingPool(stateFile string) (*RefreshingPool, error) {
 
 // refreshIfNecessary must be called while p.lock is held.
 func (p *RefreshingPool) refreshIfNecessary() error {
-	if p.pool != nil && p.clock.Now().Before(p.nextLoad) {
+	if p.pool != nil && time.Now().Before(p.nextLoad) {
 		return nil
 	}
 
@@ -120,7 +118,7 @@ func (p *RefreshingPool) refreshIfNecessary() error {
 	}
 
 	p.pool = pool
-	p.nextLoad = p.clock.Now().Add(time.Minute)
+	p.nextLoad = time.Now().Add(time.Minute)
 
 	return nil
 }

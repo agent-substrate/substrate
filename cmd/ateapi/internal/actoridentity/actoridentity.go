@@ -23,14 +23,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"os"
 	"path"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
@@ -49,11 +48,12 @@ import (
 type Server struct {
 	ateapipb.UnimplementedActorIdentityServer
 
+	// TODO(identity): Issuer is probably logically a property of the JWT
+	// signing pool.
 	actorIdentityJWTIssuer string
 
-	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
-	actorIDJWTPoolFile string
-	actorIDCAPool      localca.Pool
+	actorIDJWTPool localjwtauthority.Pool
+	actorIDCAPool  localca.Pool
 
 	// store is the actor database. MintCert consults it to confirm the caller
 	// is entitled to the actor it is asking for a credential for.
@@ -63,10 +63,10 @@ type Server struct {
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer string, actorIDJWTPool localjwtauthority.Pool, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
-		actorIDJWTPoolFile:     actorIDJWTPoolFile,
+		actorIDJWTPool:         actorIDJWTPool,
 		actorIDCAPool:          actorIDCAPool,
 		store:                  store,
 		workers:                workers,
@@ -102,15 +102,9 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	// TODO: Cross-check the verified caller and requested actor against the actor database.
 
-	// TODO: Cache signing keys in memory, so we don't read from disk every time.
-	signingPoolBytes, err := os.ReadFile(s.actorIDJWTPoolFile)
-	if err != nil {
-		return nil, fmt.Errorf("while reading signing pool bytes: %w", err)
-	}
-
-	signingPool, err := localjwtauthority.Unmarshal(signingPoolBytes)
-	if err != nil {
-		return nil, fmt.Errorf("while unmarshaling signing pool: %w", err)
+	// We only issue tokens with audience bindings.
+	if len(req.GetAudience()) == 0 {
+		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
 	actorClaims := &actoridjwt.Claims{
@@ -131,13 +125,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		},
 	}
 
-	actorWireClaims, err := actoridjwt.ClaimsToWire(actorClaims)
-	if err != nil {
-		return nil, fmt.Errorf("while making actor JWT claims: %w", err)
-	}
-
-	// Assume the first authority is the one to use for signing.
-	actorJWT, err := actoridjwt.Sign(actorWireClaims, signingPool.Authorities[0].SigningKey, signingPool.Authorities[0].Algorithm, signingPool.Authorities[0].ID)
+	actorJWT, err := s.actorIDJWTPool.SignJWT(actorClaims)
 	if err != nil {
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
