@@ -93,8 +93,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		WithImage(wp.Spec.WorkerImage).
 		WithArgs(
 			"--pod-uid=$(POD_UID)",
-			"--atunnel-listen-address=0.0.0.0:443",
-			"--atunnel-connect-listen-address=0.0.0.0:8443",
+			"--atunnel-listen-address=:443",
+			"--atunnel-connect-listen-address=:8443",
 			"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 			"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 			"--atunnel-egress-listen-address=0.0.0.0:15001",
