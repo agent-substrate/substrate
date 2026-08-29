@@ -134,8 +134,13 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		return nil, fmt.Errorf("while making actor JWT claims: %w", err)
 	}
 
-	// Assume the first authority is the one to use for signing.
-	actorJWT, err := actoridjwt.Sign(actorWireClaims, signingPool.Authorities[0].SigningKey, signingPool.Authorities[0].Algorithm, signingPool.Authorities[0].ID)
+	authority, err := signingAuthority(signingPool)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to select an actor JWT signing authority", slog.Any("err", err))
+		return nil, status.Errorf(codes.Internal, "Failed to load actor signing key")
+	}
+
+	actorJWT, err := actoridjwt.Sign(actorWireClaims, authority.SigningKey, authority.Algorithm, authority.ID)
 	if err != nil {
 		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
@@ -143,6 +148,20 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 	return &ateapipb.MintJWTResponse{
 		ActorJwt: actorJWT,
 	}, nil
+}
+
+// signingAuthority picks the authority to sign an actor JWT with.
+//
+// localjwtauthority.Unmarshal reports no error for JSON that carries no
+// authorities, so an empty or incompletely written signing pool file arrives
+// here as an empty pool. Report that instead of indexing into it, the way
+// MintCert already handles an empty actor CA pool.
+func signingAuthority(pool *localjwtauthority.Pool) (*localjwtauthority.Authority, error) {
+	if pool == nil || len(pool.Authorities) == 0 {
+		return nil, fmt.Errorf("signing pool contains no authorities")
+	}
+	// Assume the first authority is the one to use for signing.
+	return pool.Authorities[0], nil
 }
 
 func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*ateapipb.MintCertResponse, error) {

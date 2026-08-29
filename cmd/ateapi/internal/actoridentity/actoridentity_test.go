@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -40,6 +41,53 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
+
+// TestSigningAuthorityEmptyPool covers the pool shapes that carry no signing
+// authority. localjwtauthority.Unmarshal accepts JSON with no authorities
+// without reporting an error, so MintJWT reaches this selection with an empty
+// pool whenever the signing pool file is empty or was written incompletely.
+// Selecting from it must report an error rather than panic and take the whole
+// ate-api-server down, matching how MintCert treats an empty actor CA pool.
+func TestSigningAuthorityEmptyPool(t *testing.T) {
+	tests := []struct {
+		name string
+		pool *localjwtauthority.Pool
+	}{
+		{"nil pool", nil},
+		{"no authorities", &localjwtauthority.Pool{}},
+		{"empty authority slice", &localjwtauthority.Pool{Authorities: []*localjwtauthority.Authority{}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := signingAuthority(tc.pool)
+			if err == nil {
+				t.Fatalf("signingAuthority() error = nil, want an error; authority = %+v", got)
+			}
+			if got != nil {
+				t.Errorf("signingAuthority() = %+v alongside an error, want nil", got)
+			}
+		})
+	}
+}
+
+// TestSigningAuthorityPicksFirst pins the selection rule the signer relies on.
+func TestSigningAuthorityPicksFirst(t *testing.T) {
+	first := &localjwtauthority.Authority{ID: "kid-first", Algorithm: "ES256"}
+	pool := &localjwtauthority.Pool{
+		Authorities: []*localjwtauthority.Authority{
+			first,
+			{ID: "kid-second", Algorithm: "RS256"},
+		},
+	}
+
+	got, err := signingAuthority(pool)
+	if err != nil {
+		t.Fatalf("signingAuthority() error = %v, want nil", err)
+	}
+	if got != first {
+		t.Errorf("signingAuthority() = %+v, want the first authority %+v", got, first)
+	}
+}
 
 const (
 	testAtespace  = "team-alpha"

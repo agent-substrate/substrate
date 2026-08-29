@@ -120,21 +120,30 @@ func Sign(wireClaims *WireClaims, signingKey crypto.PrivateKey, algorithm, keyID
 	var sigBytes []byte
 	switch algorithm {
 	case "RS256":
-		rsaKey := signingKey.(*rsa.PrivateKey)
+		rsaKey, ok := signingKey.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("algorithm %s requires an RSA key, got %T", algorithm, signingKey)
+		}
 		toBeSignedDigest := hashBytes(crypto.SHA256.New(), []byte(toBeSigned))
 		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, toBeSignedDigest)
 		if err != nil {
 			return "", fmt.Errorf("while performing RSA PKCS1v15 signature: %w", err)
 		}
 	case "RS384":
-		rsaKey := signingKey.(*rsa.PrivateKey)
+		rsaKey, ok := signingKey.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("algorithm %s requires an RSA key, got %T", algorithm, signingKey)
+		}
 		toBeSignedDigest := hashBytes(crypto.SHA384.New(), []byte(toBeSigned))
 		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA384, toBeSignedDigest)
 		if err != nil {
 			return "", fmt.Errorf("while performing RSA PKCS1v15 signature: %w", err)
 		}
 	case "RS512":
-		rsaKey := signingKey.(*rsa.PrivateKey)
+		rsaKey, ok := signingKey.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("algorithm %s requires an RSA key, got %T", algorithm, signingKey)
+		}
 		toBeSignedDigest := hashBytes(crypto.SHA512.New(), []byte(toBeSigned))
 		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA512, toBeSignedDigest)
 		if err != nil {
@@ -142,7 +151,10 @@ func Sign(wireClaims *WireClaims, signingKey crypto.PrivateKey, algorithm, keyID
 		}
 	case "ES256":
 		// JOSE ES256 defined at https://datatracker.ietf.org/doc/rfc7518/ section 3.4
-		ecdsaKey := signingKey.(*ecdsa.PrivateKey)
+		ecdsaKey, ok := signingKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("algorithm %s requires an ECDSA key, got %T", algorithm, signingKey)
+		}
 		if ecdsaKey.Curve != elliptic.P256() {
 			return "", fmt.Errorf("ES256 requires a P256 key")
 		}
