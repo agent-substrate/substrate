@@ -1267,9 +1267,9 @@ type EgressRuleEffects struct {
 	// +k8s:listMapKey=header
 	// +k8s:customUnique # case-insensitive
 	// +k8s:customValidation # for duplicate headers
-	InjectStaticHeader []*CredentialHeaderInjection `protobuf:"bytes,1,rep,name=inject_static_header,json=injectStaticHeader,proto3" json:"inject_static_header,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	InjectStaticHeaders []*CredentialHeaderInjection `protobuf:"bytes,1,rep,name=inject_static_headers,json=injectStaticHeaders,proto3" json:"inject_static_headers,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *EgressRuleEffects) Reset() {
@@ -1302,9 +1302,9 @@ func (*EgressRuleEffects) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *EgressRuleEffects) GetInjectStaticHeader() []*CredentialHeaderInjection {
+func (x *EgressRuleEffects) GetInjectStaticHeaders() []*CredentialHeaderInjection {
 	if x != nil {
-		return x.InjectStaticHeader
+		return x.InjectStaticHeaders
 	}
 	return nil
 }
@@ -6572,9 +6572,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bpatterns\x18\x01 \x03(\tR\bpatterns\x123\n" +
 	"\aeffects\x18\x02 \x01(\v2\x19.ateapi.EgressRuleEffectsR\aeffects\"#\n" +
 	"\vIPBlockRule\x12\x14\n" +
-	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\"h\n" +
-	"\x11EgressRuleEffects\x12S\n" +
-	"\x14inject_static_header\x18\x01 \x03(\v2!.ateapi.CredentialHeaderInjectionR\x12injectStaticHeader\"r\n" +
+	"\x05cidrs\x18\x01 \x03(\tR\x05cidrs\"j\n" +
+	"\x11EgressRuleEffects\x12U\n" +
+	"\x15inject_static_headers\x18\x01 \x03(\v2!.ateapi.CredentialHeaderInjectionR\x13injectStaticHeaders\"r\n" +
 	"\x19CredentialHeaderInjection\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
@@ -7118,7 +7118,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	17,  // 14: ateapi.EgressRule.ip_blocks:type_name -> ateapi.IPBlockRule
 	113, // 15: ateapi.EgressRule.all:type_name -> google.protobuf.Empty
 	18,  // 16: ateapi.HostnameRule.effects:type_name -> ateapi.EgressRuleEffects
-	19,  // 17: ateapi.EgressRuleEffects.inject_static_header:type_name -> ateapi.CredentialHeaderInjection
+	19,  // 17: ateapi.EgressRuleEffects.inject_static_headers:type_name -> ateapi.CredentialHeaderInjection
 	2,   // 18: ateapi.ActorStatus.state:type_name -> ateapi.ActorState
 	22,  // 19: ateapi.ActorStatus.worker_assignment:type_name -> ateapi.WorkerAssignment
 	27,  // 20: ateapi.ActorStatus.latest_snapshot:type_name -> ateapi.ObjectRef

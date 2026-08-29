@@ -37,7 +37,7 @@ func validEgressPolicy() *ateapipb.EgressPolicy {
 			Hostnames: &ateapipb.HostnameRule{
 				Patterns: []string{"api.example.com"},
 				Effects: &ateapipb.EgressRuleEffects{
-					InjectStaticHeader: []*ateapipb.CredentialHeaderInjection{{
+					InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
 						Header:        "Authorization",
 						Prefix:        "Bearer ",
 						CredentialUri: "substrate-secret://kubernetes.io/provider/ns/name",
@@ -383,7 +383,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	rule := root.Child("rules").Index(0)
 	hostnames := rule.Child("hostnames")
 	pattern := hostnames.Child("patterns").Index(0)
-	staticHeader := hostnames.Child("effects", "inject_static_header").Index(0)
+	staticHeader := hostnames.Child("effects", "inject_static_headers").Index(0)
 	validReq := func() *ateapipb.CreateActorEgressPolicyRequest {
 		return &ateapipb.CreateActorEgressPolicyRequest{
 			Actor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
@@ -644,7 +644,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "missing static header",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].Header = ""
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Header = ""
 		},
 		want: field.ErrorList{
 			field.Required(staticHeader.Child("header"), ""),
@@ -652,7 +652,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "invalid static header",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].Header = "bad header"
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Header = "bad header"
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("header"), "bad header", "must be an HTTP header name"),
@@ -660,7 +660,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "invalid prefix",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].Prefix = "Bearer\r"
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Prefix = "Bearer\r"
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value prefix"),
@@ -668,7 +668,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "missing credential URI",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].CredentialUri = ""
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = ""
 		},
 		want: field.ErrorList{
 			field.Required(staticHeader.Child("credential_uri"), ""),
@@ -676,7 +676,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "invalid credential URI",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].CredentialUri = "https://example.com/secret"
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = "https://example.com/secret"
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
@@ -697,13 +697,13 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "duplicate header",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader = append(
-				p.Rules[0].Hostnames.Effects.InjectStaticHeader,
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = append(
+				p.Rules[0].Hostnames.Effects.InjectStaticHeaders,
 				&ateapipb.CredentialHeaderInjection{Header: "authorization", CredentialUri: "substrate-secret://example.com/provider/secret"},
 			)
 		},
 		want: field.ErrorList{
-			field.Duplicate(hostnames.Child("effects", "inject_static_header").Index(1).Child("header"), "authorization"),
+			field.Duplicate(hostnames.Child("effects", "inject_static_headers").Index(1).Child("header"), "authorization"),
 		},
 	}, {
 		name: "same header in later rule",
@@ -720,7 +720,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 					CredentialUri: "substrate-secret://example.com/provider/secret",
 				})
 			}
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader = injections
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = injections
 		},
 	}, {
 		name: "too many headers",
@@ -732,10 +732,10 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 					CredentialUri: "substrate-secret://example.com/provider/secret",
 				})
 			}
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader = injections
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = injections
 		},
 		want: field.ErrorList{
-			field.TooMany(hostnames.Child("effects", "inject_static_header"), 17, 16).WithOrigin("maxItems"),
+			field.TooMany(hostnames.Child("effects", "inject_static_headers"), 17, 16).WithOrigin("maxItems"),
 		},
 	}}
 	for _, tc := range tests {
@@ -789,7 +789,7 @@ func TestActorEgressPolicy(t *testing.T) {
 				Hostnames: &ateapipb.HostnameRule{
 					Patterns: []string{"api.example.com"},
 					Effects: &ateapipb.EgressRuleEffects{
-						InjectStaticHeader: []*ateapipb.CredentialHeaderInjection{{
+						InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
 							Header:        "Authorization",
 							Prefix:        "Bearer ",
 							CredentialUri: "substrate-secret://kubernetes.io/provider/ns/name",
@@ -810,7 +810,7 @@ func TestActorEgressPolicy(t *testing.T) {
 	}); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("create collision status = %v, want AlreadyExists", status.Code(err))
 	}
-	if created.GetRules()[0].GetHostnames().GetEffects().GetInjectStaticHeader()[0].GetHeader() != "Authorization" {
+	if created.GetRules()[0].GetHostnames().GetEffects().GetInjectStaticHeaders()[0].GetHeader() != "Authorization" {
 		t.Fatalf("policy input was rewritten: %v", created)
 	}
 	if md := created.GetMetadata(); md.GetName() != "default" || md.GetAtespace() != testAtespace || md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {

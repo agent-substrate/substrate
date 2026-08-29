@@ -180,13 +180,13 @@ func ValidateCustom_HostnameRule_Patterns(_ context.Context, _ operation.Operati
 
 func ValidateCustom_EgressRuleEffects(_ context.Context, _ operation.Operation, p *field.Path, effects, _ *ateapipb.EgressRuleEffects) field.ErrorList {
 	var errs field.ErrorList
-	if len(effects.GetInjectStaticHeader()) == 0 {
+	if len(effects.GetInjectStaticHeaders()) == 0 {
 		errs = append(errs, field.Required(p, "at least one effect must be specified"))
 	}
 	return errs
 }
 
-func ValidateCustom_EgressRuleEffects_InjectStaticHeader(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeaderInjection) field.ErrorList {
+func ValidateCustom_EgressRuleEffects_InjectStaticHeaders(_ context.Context, _ operation.Operation, p *field.Path, injections, _ []*ateapipb.CredentialHeaderInjection) field.ErrorList {
 	var errs field.ErrorList
 	seenHeaders := map[string]bool{}
 	for i, inj := range injections {

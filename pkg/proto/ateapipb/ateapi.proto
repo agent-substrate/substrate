@@ -410,7 +410,7 @@ message EgressRuleEffects {
   // +k8s:listMapKey=header
   // +k8s:customUnique # case-insensitive
   // +k8s:customValidation # for duplicate headers
-  repeated CredentialHeaderInjection inject_static_header = 1;
+  repeated CredentialHeaderInjection inject_static_headers = 1;
 }
 
 // CredentialHeaderInjection injects credential-provider material into an HTTP

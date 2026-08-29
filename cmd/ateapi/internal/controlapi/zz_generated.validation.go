@@ -1318,7 +1318,7 @@ func Validate_EgressRuleEffects(
 		errs = append(errs, e...)
 	}
 
-	{ // field ateapipb.EgressRuleEffects.InjectStaticHeader
+	{ // field ateapipb.EgressRuleEffects.InjectStaticHeaders
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []*ateapipb.CredentialHeaderInjection,
@@ -1347,7 +1347,7 @@ func Validate_EgressRuleEffects(
 				return // do not proceed
 			}
 			// custom validation
-			if e := ValidateCustom_EgressRuleEffects_InjectStaticHeader(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := ValidateCustom_EgressRuleEffects_InjectStaticHeaders(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
@@ -1361,9 +1361,9 @@ func Validate_EgressRuleEffects(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.EgressRuleEffects) []*ateapipb.CredentialHeaderInjection {
-				return oldObj.InjectStaticHeader
+				return oldObj.InjectStaticHeaders
 			})
-		errs = append(errs, fn(fldPath.Child("inject_static_header"), obj.InjectStaticHeader, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("inject_static_headers"), obj.InjectStaticHeaders, oldVal, oldObj != nil)...)
 	}
 
 	return errs
