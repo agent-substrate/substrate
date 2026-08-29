@@ -406,12 +406,12 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}{{
 		name: "valid",
 	}, {
-		name: "empty rules",
+		name: "no rules",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules = nil
 		},
 	}, {
-		name: "multiple rules",
+		name: "many rules",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules = nil
 			for i := range 256 {
@@ -430,65 +430,6 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.TooMany(root.Child("rules"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
-		name: "all",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{All: &emptypb.Empty{}}
-		},
-	}, {
-		name: "wildcard without effects",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
-			withoutEffects(p)
-		},
-	}, {
-		name: "canonical IPv4 CIDR",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"192.0.2.0/24"}}}
-		},
-	}, {
-		name: "canonical IPv6 CIDR",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"2001:db8::/32"}}}
-		},
-	}, {
-		name: "mixed IPv4 and IPv6 CIDRs",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{
-				IpBlocks: &ateapipb.IPBlockRule{
-					Cidrs: []string{"192.0.2.0/24", "2001:db8::/32"},
-				},
-			}
-		},
-	}, {
-		name: "many CIDRs",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			var cidrs []string
-			for i := range 256 {
-				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
-			}
-			p.Rules[0] = &ateapipb.EgressRule{
-				IpBlocks: &ateapipb.IPBlockRule{
-					Cidrs: cidrs,
-				},
-			}
-		},
-	}, {
-		name: "too many CIDRs",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			var cidrs []string
-			for i := range 257 {
-				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
-			}
-			p.Rules[0] = &ateapipb.EgressRule{
-				IpBlocks: &ateapipb.IPBlockRule{
-					Cidrs: cidrs,
-				},
-			}
-		},
-		want: field.ErrorList{
-			field.TooMany(rule.Child("ip_blocks", "cidrs"), 257, 256).WithOrigin("maxItems"),
-		},
-	}, {
 		name: "nil rule",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0] = nil
@@ -497,7 +438,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Required(rule, ""),
 		},
 	}, {
-		name: "missing predicate",
+		name: "no predicates",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0] = &ateapipb.EgressRule{}
 		},
@@ -511,6 +452,11 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 		want: field.ErrorList{
 			field.Invalid(rule, nil, "one of").WithOrigin("union"),
+		},
+	}, {
+		name: "match all",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{All: &emptypb.Empty{}}
 		},
 	}, {
 		name: "empty hostname list",
@@ -602,12 +548,71 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Invalid(pattern, "example.com:443", "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
 		},
 	}, {
-		name: "invalid wildcard",
+		name: "hostname wildcard without effects",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
+			withoutEffects(p)
+		},
+	}, {
+		name: "hostname wildcard with effects",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
+		},
+	}, {
+		name: "invalid hostname wildcard",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0].Hostnames.Patterns[0] = "api.*.example.com"
 		},
 		want: field.ErrorList{
 			field.Invalid(pattern, "api.*.example.com", "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
+		},
+	}, {
+		name: "canonical IPv4 CIDR",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"192.0.2.0/24"}}}
+		},
+	}, {
+		name: "canonical IPv6 CIDR",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"2001:db8::/32"}}}
+		},
+	}, {
+		name: "mixed IPv4 and IPv6 CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: []string{"192.0.2.0/24", "2001:db8::/32"},
+				},
+			}
+		},
+	}, {
+		name: "many CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var cidrs []string
+			for i := range 256 {
+				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
+			}
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: cidrs,
+				},
+			}
+		},
+	}, {
+		name: "too many CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var cidrs []string
+			for i := range 257 {
+				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
+			}
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: cidrs,
+				},
+			}
+		},
+		want: field.ErrorList{
+			field.TooMany(rule.Child("ip_blocks", "cidrs"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "missing CIDR",
@@ -658,43 +663,6 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Invalid(staticHeader.Child("header"), "bad header", "must be an HTTP header name"),
 		},
 	}, {
-		name: "invalid prefix",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Prefix = "Bearer\r"
-		},
-		want: field.ErrorList{
-			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value prefix"),
-		},
-	}, {
-		name: "missing credential URI",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = ""
-		},
-		want: field.ErrorList{
-			field.Required(staticHeader.Child("credential_uri"), ""),
-		},
-	}, {
-		name: "invalid credential URI",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = "https://example.com/secret"
-		},
-		want: field.ErrorList{
-			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
-		},
-	}, {
-		name: "empty effects",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects = &ateapipb.EgressRuleEffects{}
-		},
-		want: field.ErrorList{
-			field.Required(hostnames.Child("effects"), "at least one effect must be specified"),
-		},
-	}, {
-		name: "wildcard with effects",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
-		},
-	}, {
 		name: "duplicate header",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = append(
@@ -736,6 +704,38 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 		want: field.ErrorList{
 			field.TooMany(hostnames.Child("effects", "inject_static_headers"), 17, 16).WithOrigin("maxItems"),
+		},
+	}, {
+		name: "invalid prefix",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Prefix = "Bearer\r"
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value prefix"),
+		},
+	}, {
+		name: "missing credential URI",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = ""
+		},
+		want: field.ErrorList{
+			field.Required(staticHeader.Child("credential_uri"), ""),
+		},
+	}, {
+		name: "invalid credential URI",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = "https://example.com/secret"
+		},
+		want: field.ErrorList{
+			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
+		},
+	}, {
+		name: "empty effects",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Effects = &ateapipb.EgressRuleEffects{}
+		},
+		want: field.ErrorList{
+			field.Required(hostnames.Child("effects"), "at least one effect must be specified"),
 		},
 	}}
 	for _, tc := range tests {
