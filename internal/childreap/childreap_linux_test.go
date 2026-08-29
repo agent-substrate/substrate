@@ -269,3 +269,39 @@ func TestALateDeadlineCallbackLeavesNothingBehind(t *testing.T) {
 		t.Fatal("a later Enter is blocked: a deadline callback left reaper state behind")
 	}
 }
+
+// An abandoned round leaves children unreaped, and SIGCHLD fires on a
+// transition, so nothing will announce them again. Releasing the entry that
+// held the reaper off has to be what brings it back.
+func TestAnAbandonedRoundRetriesOnceTheEntryLeaves(t *testing.T) {
+	const horizon = 10 * time.Minute
+
+	synctest.Test(t, func(t *testing.T) {
+		r := New()
+
+		leave := r.Enter()
+
+		gaveUp := make(chan bool, 1)
+		go func() { gaveUp <- r.acquire(t.Context()) }()
+
+		time.Sleep(horizon)
+		synctest.Wait()
+		if got := <-gaveUp; got {
+			t.Fatal("acquire reported it reaped, want it to have given the round up")
+		}
+
+		select {
+		case <-r.retry:
+			t.Fatal("the reaper was re-armed while the entry was still held")
+		default:
+		}
+
+		leave()
+		synctest.Wait()
+		select {
+		case <-r.retry:
+		default:
+			t.Fatal("leaving the entry did not re-arm the reaper; the orphans it gave up on stay zombies")
+		}
+	})
+}

@@ -46,10 +46,16 @@ type Reaper struct {
 	reaping bool
 	// draining blocks new subprocesses until inFlight reaches zero.
 	draining bool
+	// abandoned records that a reap gave up with children left unreaped.
+	abandoned bool
+	// retry re-runs an abandoned reap once the subprocesses that held it off
+	// are gone. SIGCHLD fires on a transition, so a child that died before the
+	// abandoned round will never announce itself again.
+	retry chan struct{}
 }
 
 func New() *Reaper {
-	r := &Reaper{}
+	r := &Reaper{retry: make(chan struct{}, 1)}
 	r.cond = sync.NewCond(&r.mu)
 	return r
 }
@@ -89,7 +95,19 @@ func (r *Reaper) leave() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.inFlight--
+	if r.inFlight < 0 {
+		// The exclusion is now meaningless: a later reap would see a quiet
+		// process that is not quiet and take a subprocess's exit status.
+		panic("childreap: leave called more times than Enter")
+	}
 	if r.inFlight == 0 {
+		if r.abandoned {
+			r.abandoned = false
+			select {
+			case r.retry <- struct{}{}:
+			default:
+			}
+		}
 		r.cond.Broadcast()
 	}
 }
@@ -105,6 +123,7 @@ func (r *Reaper) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-sigs:
+		case <-r.retry:
 		}
 		// A burst of SIGCHLD needs only one pass over wait4.
 		drain(sigs)
@@ -153,6 +172,32 @@ func (r *Reaper) reapOnce(ctx context.Context) {
 // acquire waits for in-flight subprocesses, blocking new ones after MaxDefer.
 // It returns false if ctx ends or the drain exceeds MaxDrain.
 func (r *Reaper) acquire(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	// Nothing to wait for is the ordinary case, and it needs no deadlines.
+	if r.tryAcquire() {
+		return true
+	}
+	return r.awaitAcquire(ctx)
+}
+
+// tryAcquire takes the reap if no subprocess is running, and reports whether
+// it did.
+func (r *Reaper) tryAcquire() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inFlight > 0 || r.reaping {
+		return false
+	}
+	r.draining = false
+	r.reaping = true
+	return true
+}
+
+// awaitAcquire is acquire once something is in the way, so it is the only path
+// that pays for the deadlines.
+func (r *Reaper) awaitAcquire(ctx context.Context) bool {
 	// sync.Cond has no timed wait, so each deadline is a timer that broadcasts
 	// and the loop reads the clock itself.
 	drainAt := time.Now().Add(MaxDefer)
@@ -191,6 +236,7 @@ func (r *Reaper) acquire(ctx context.Context) bool {
 			// Reaping now could consume the tracked subprocess's exit status.
 			slog.ErrorContext(ctx, "Gave up reaping: a subprocess has held off the reaper too long",
 				slog.Duration("waited", MaxDefer+MaxDrain), slog.Int("inFlight", r.inFlight))
+			r.abandoned = true
 			r.stopDrainingLocked()
 			return false
 		}
