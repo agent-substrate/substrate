@@ -200,7 +200,8 @@ func (r *Reaper) tryAcquire() bool {
 func (r *Reaper) awaitAcquire(ctx context.Context) bool {
 	// sync.Cond has no timed wait, so each deadline is a timer that broadcasts
 	// and the loop reads the clock itself.
-	drainAt := time.Now().Add(MaxDefer)
+	startedAt := time.Now()
+	drainAt := startedAt.Add(MaxDefer)
 	giveUpAt := drainAt.Add(MaxDrain)
 	for _, at := range []time.Time{drainAt, giveUpAt} {
 		timer := time.AfterFunc(time.Until(at), r.wake)
@@ -226,7 +227,7 @@ func (r *Reaper) awaitAcquire(ctx context.Context) bool {
 		if r.inFlight == 0 {
 			if !now.Before(drainAt) {
 				slog.WarnContext(ctx, "Reaped children only after holding off subprocesses",
-					slog.Duration("waited", MaxDefer))
+					slog.Duration("waited", now.Sub(startedAt)))
 			}
 			r.draining = false
 			r.reaping = true
@@ -235,7 +236,7 @@ func (r *Reaper) awaitAcquire(ctx context.Context) bool {
 		if !now.Before(giveUpAt) {
 			// Reaping now could consume the tracked subprocess's exit status.
 			slog.ErrorContext(ctx, "Gave up reaping: a subprocess has held off the reaper too long",
-				slog.Duration("waited", MaxDefer+MaxDrain), slog.Int("inFlight", r.inFlight))
+				slog.Duration("waited", now.Sub(startedAt)), slog.Int("inFlight", r.inFlight))
 			r.abandoned = true
 			r.stopDrainingLocked()
 			return false
