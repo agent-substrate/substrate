@@ -172,7 +172,8 @@ func (s *ServiceImpl) AcquireLease(ctx context.Context, key string) (*store.Leas
 	return s.store.AcquireLease(ctx, key)
 }
 
-// Pass-through.
+// Pass-through. Test-only, like the store method it forwards to; it exists so
+// ServiceImpl still satisfies store.Interface.
 func (s *ServiceImpl) DebugClearAll(ctx context.Context) error {
 	return s.store.DebugClearAll(ctx)
 }

@@ -1625,17 +1625,6 @@ message ActorAssignment {
   ObjectRef actor_template_ref = 4;
 }
 
-// Debug is the RPC interface for administrative and debugging operations
-// (such as wiping state during development).
-service Debug {
-  // Debugging: drop all data from the ate database.
-  rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
-}
-
-message DebugClearRequest {}
-
-message DebugClearResponse {}
-
 // ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
 // substrate actor-level credential. A given substrate actor might migrate

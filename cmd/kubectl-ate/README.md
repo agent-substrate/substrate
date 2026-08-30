@@ -251,7 +251,7 @@ kubectl ate logs actors my-actor -a <atespace> -c my-container
 Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
 
 ### Administration & Setup
-Commands for bootstrapping the Substrate control plane and debugging local environments.
+Commands for bootstrapping the Substrate control plane.
 
 ```bash
 # Generate a new Actor ID CA pool and push it directly to a Kubernetes Secret
@@ -265,7 +265,4 @@ kubectl ate admin make-jwt-pool \
   --name actor-id-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"
-
-# DANGEROUS: Completely clear all Actor and Worker tracking state
-kubectl ate admin debug-clear-store
 ```
