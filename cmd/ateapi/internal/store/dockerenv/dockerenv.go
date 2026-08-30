@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dockerenv points testcontainers at the active Docker context.
+// Package dockerenv points testcontainers at the active Docker context and
+// owns the policy that decides whether a container that fails to start fails
+// the test or skips it (see [FailOrSkip]). Every container-backed test
+// fixture in this tree routes through both, so neither can drift.
 //
 // It lives apart from storetest because storetest imports atepg, so atepg
 // cannot import storetest back, and both need this before starting a

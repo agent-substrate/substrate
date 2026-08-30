@@ -183,7 +183,7 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 		containerErr = fmt.Errorf("pinging PostgreSQL testcontainer after retries: %w", pingErr)
 	})
 	if containerErr != nil {
-		t.Skipf("PostgreSQL testcontainer unavailable (requires Docker): %v", containerErr)
+		dockerenv.FailOrSkip(t, fmt.Errorf("PostgreSQL testcontainer: %w", containerErr))
 	}
 	return adminPool
 }
