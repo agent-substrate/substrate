@@ -498,3 +498,147 @@ func TestAcquireLease_ConcurrentTakeover(t *testing.T) {
 		lease.Close()
 	}
 }
+
+// routerParkedRequestBudget mirrors DefaultParkedRequestBudget in the atenet
+// router's ingress package, which lives under cmd/atenet/internal and so
+// cannot be imported here. It is how long the router parks and retries a
+// request whose actor is not routable yet before returning 503, and it is the
+// budget defaultLeaseTTL is chosen against.
+const routerParkedRequestBudget = 5 * time.Second
+
+// TestLeaseTimingConstraints pins the relationship between the lease TTL, the
+// renew cadence and the router's parked-request budget. These are not
+// independent knobs: see the comment on defaultLeaseTTL.
+func TestLeaseTimingConstraints(t *testing.T) {
+	if defaultLeaseTTL != 15*time.Second {
+		t.Errorf("defaultLeaseTTL = %v, want 15s", defaultLeaseTTL)
+	}
+	if got := leaseRenewInterval(defaultLeaseTTL); got != 5*time.Second {
+		t.Errorf("leaseRenewInterval(defaultLeaseTTL) = %v, want 5s", got)
+	}
+
+	// A crashed holder blocks cold workflows for its actor until the TTL
+	// runs out, and the router only parks a request for its budget, so the
+	// TTL must stay within a handful of budgets -- but it must also outlast
+	// one budget plus renewal slack, so a healthy but slow-renewing holder
+	// is never preempted inside a single parked request.
+	if defaultLeaseTTL <= routerParkedRequestBudget+leaseRenewInterval(defaultLeaseTTL) {
+		t.Errorf("defaultLeaseTTL = %v, want more than the router parked budget (%v) plus one renew interval (%v)",
+			defaultLeaseTTL, routerParkedRequestBudget, leaseRenewInterval(defaultLeaseTTL))
+	}
+	if defaultLeaseTTL > 3*routerParkedRequestBudget {
+		t.Errorf("defaultLeaseTTL = %v, want at most 3 router parked budgets (%v)", defaultLeaseTTL, 3*routerParkedRequestBudget)
+	}
+
+	// Losing the lease cancels the lease context, and with it the atelet
+	// restore running under it. A renewal fires one interval after the last
+	// success and its deadline is anchored at that same success, so the
+	// outage a stalled renewal is guaranteed to ride out is the difference
+	// between the two, and a holder that has given up is still fenced out of
+	// the row until the full TTL. Both margins are what a change to
+	// renewIntervalDivisor or renewDeadlineFraction would eat.
+	for _, ttl := range []time.Duration{defaultLeaseTTL, 6 * time.Second, time.Minute} {
+		if got, want := leaseRenewDeadline(ttl)-leaseRenewInterval(ttl), ttl/3; got < want {
+			t.Errorf("ttl %v: stalled-renew grace window = %v, want at least %v", ttl, got, want)
+		}
+		if got, want := ttl-leaseRenewDeadline(ttl), ttl/3; got < want {
+			t.Errorf("ttl %v: fencing margin = %v, want at least %v", ttl, got, want)
+		}
+	}
+	if got := leaseRenewDeadline(defaultLeaseTTL) - leaseRenewInterval(defaultLeaseTTL); got != 5*time.Second {
+		t.Errorf("stalled-renew grace window at the default TTL = %v, want 5s", got)
+	}
+}
+
+// holdLeaseRowLocked opens a transaction that holds an exclusive row lock on
+// the named lease until releaseAt, modeling a store blip that stalls the
+// holder's renewals for exactly that long.
+func holdLeaseRowLocked(t *testing.T, p *Persistence, key string, releaseAt time.Time) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Until(releaseAt)+30*time.Second)
+	defer cancel()
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("beginning blocking transaction: %v", err)
+	}
+	// A second Rollback after the explicit one below returns pgx.ErrTxClosed;
+	// this only matters on the t.Fatalf paths, where it hands the pooled
+	// connection and the row lock back instead of stranding both.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM leases WHERE key = $1 FOR UPDATE`, key); err != nil {
+		t.Fatalf("locking lease row: %v", err)
+	}
+	time.Sleep(time.Until(releaseAt))
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("releasing lease row lock: %v", err)
+	}
+}
+
+// TestLeaseRenewGraceWindow brackets the window a stalled renewal gets. At a
+// 6s TTL the renewal is due 2s after acquisition and its deadline lands at 4s,
+// so a blip clearing at 3.5s must be ridden out -- canceling the lease context
+// would abort the atelet restore running under it -- and one clearing at 4.5s
+// must cost the lease, which is what fences the row for the next replica.
+func TestLeaseRenewGraceWindow(t *testing.T) {
+	const ttl = 6 * time.Second
+
+	for _, tc := range []struct {
+		name     string
+		blip     time.Duration
+		wantLost bool
+	}{
+		{name: "inside the renew deadline", blip: 3500 * time.Millisecond},
+		{name: "past the renew deadline", blip: 4500 * time.Millisecond, wantLost: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := setupPostgresPersistence(t)
+			ctx := context.Background()
+			s.leaseTTL = ttl
+
+			key := "blipped-lease"
+			lease, err := s.AcquireLease(ctx, key)
+			if err != nil {
+				t.Fatalf("AcquireLease failed: %v", err)
+			}
+			defer lease.Close()
+			// The renew loop anchors its deadline at the moment the lease was
+			// acquired, so the blip is timed from here too.
+			acquired := time.Now()
+
+			var before time.Time
+			if err := s.pool.QueryRow(ctx, `SELECT expires_at FROM leases WHERE key = $1`, key).Scan(&before); err != nil {
+				t.Fatalf("reading initial expires_at: %v", err)
+			}
+
+			holdLeaseRowLocked(t, s, key, acquired.Add(tc.blip))
+
+			if tc.wantLost {
+				select {
+				case <-lease.Context().Done():
+				case <-time.After(leaseRenewInterval(ttl)):
+					t.Fatal("lease context still live after a renewal stalled past its deadline")
+				}
+				return
+			}
+
+			// Let the unblocked renewal land.
+			time.Sleep(500 * time.Millisecond)
+
+			select {
+			case <-lease.Context().Done():
+				t.Fatal("lease context was canceled by a renewal that stalled inside its deadline")
+			default:
+			}
+
+			var after time.Time
+			if err := s.pool.QueryRow(ctx, `SELECT expires_at FROM leases WHERE key = $1`, key).Scan(&after); err != nil {
+				t.Fatalf("reading renewed expires_at: %v", err)
+			}
+			if !after.After(before) {
+				t.Errorf("expires_at = %v, want it advanced past the pre-blip %v", after, before)
+			}
+		})
+	}
+}

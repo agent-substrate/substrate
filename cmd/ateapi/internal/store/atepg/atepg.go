@@ -1473,8 +1473,39 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 // --- Workflow leases ---
 
 // defaultLeaseTTL is how long a lease may go unrenewed before another client
-// can reclaim it.
-const defaultLeaseTTL = 30 * time.Second
+// can reclaim it. The renew cadence and the renew grace window are derived
+// from it by leaseRenewInterval and leaseRenewDeadline, so the TTL is the only
+// number to tune. It is bounded from both sides:
+//
+//   - From above by the router: after a hard crash (SIGKILL, node loss) the
+//     dead replica's row stays valid for the rest of its TTL, and every cold
+//     workflow for that actor keeps failing with ErrLeaseConflict until it
+//     expires. The router parks and retries such a request for its
+//     parked-request budget (5s, DefaultParkedRequestBudget in the atenet
+//     router's ingress package) and then returns 503, so the TTL has to stay
+//     within a small number of those budgets.
+//   - From below by the router as well: the TTL must exceed that budget plus
+//     the slack a renewal can take, or a healthy holder that is merely slow
+//     to renew could be preempted inside a single parked request.
+//   - From below by Postgres: a renewal that is still failing when its
+//     deadline passes cancels the lease context, which is the context that
+//     wraps the atelet restore call, so an expiring lease aborts the cold
+//     operations in flight under it. A renewal is attempted one
+//     leaseRenewInterval after the last successful one, and its deadline sits
+//     leaseRenewDeadline after that same success, so the store outage a
+//     stalled renewal is guaranteed to ride out is the difference between
+//     them: ttl/3, i.e. 5s here. It rises to the full leaseRenewDeadline
+//     (10s) only when the outage happens to begin just after a renewal
+//     lands. An outage past that 5s floor is what costs in-flight cold work,
+//     and it is the reason the TTL is not cut further.
+//   - From below by fencing: a holder abandons its lease at
+//     leaseRenewDeadline after its last successful renewal, while the row
+//     only becomes acquirable at the full TTL, so ttl - leaseRenewDeadline
+//     == ttl/3 (5s here) is the margin in which an abandoned holder's
+//     already-issued atelet RPCs have to unwind before a second replica can
+//     start a restore of its own. Canceling the lease context reaches the
+//     caller at once, but not necessarily work already running on atelet.
+const defaultLeaseTTL = 15 * time.Second
 
 func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	ttl := p.leaseTTL
@@ -1544,9 +1575,27 @@ const (
 	renewDeadlineFraction   = 2.0 / 3.0
 )
 
+// leaseRenewInterval is how often a holder renews its lease, and
+// leaseRenewDeadline is how long after the last successful renewal a renewal
+// that keeps failing may go on retrying before the holder gives the lease up
+// and cancels its lease context. Both are anchored at the last success, so
+// renewDeadlineFraction has to exceed 1/renewIntervalDivisor for a stalled
+// renewal to get any window at all, and the two fractions are picked so that
+// both of the margins defaultLeaseTTL is chosen against come out at ttl/3:
+// leaseRenewDeadline - leaseRenewInterval is the outage a stalled renewal
+// rides out, and ttl - leaseRenewDeadline is the fencing margin before
+// another replica can take the lease over.
+func leaseRenewInterval(ttl time.Duration) time.Duration {
+	return ttl / renewIntervalDivisor
+}
+
+func leaseRenewDeadline(ttl time.Duration) time.Duration {
+	return time.Duration(float64(ttl) * renewDeadlineFraction)
+}
+
 func (p *Persistence) renewLeaseLoop(ctx context.Context, key, token string, ttl time.Duration) {
-	interval := ttl / renewIntervalDivisor
-	renewDeadline := time.Duration(float64(ttl) * renewDeadlineFraction)
+	interval := leaseRenewInterval(ttl)
+	renewDeadline := leaseRenewDeadline(ttl)
 
 	lastRenewed := time.Now()
 	timer := time.NewTimer(interval)

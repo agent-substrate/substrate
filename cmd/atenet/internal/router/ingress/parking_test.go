@@ -157,3 +157,17 @@ type simpleErr string
 func (e simpleErr) Error() string { return string(e) }
 
 const errOther simpleErr = "boom"
+
+// TestDefaultParkedRequestBudget_CoupledToLeaseTTL guards a constant that is
+// mirrored outside this package. atepg's defaultLeaseTTL is chosen as a small
+// multiple of this budget -- a crashed ateapi replica's lease keeps failing
+// cold workflows until it expires, and each park that outlives the budget is a
+// user-visible 503 -- but cmd/ateapi cannot import cmd/atenet, so the value is
+// hand-copied there. Changing it here means revisiting defaultLeaseTTL and the
+// mirror in atepg's TestLeaseTimingConstraints.
+func TestDefaultParkedRequestBudget_CoupledToLeaseTTL(t *testing.T) {
+	if DefaultParkedRequestBudget != 5*time.Second {
+		t.Errorf("DefaultParkedRequestBudget = %v, want 5s; see atepg defaultLeaseTTL before changing it",
+			DefaultParkedRequestBudget)
+	}
+}
