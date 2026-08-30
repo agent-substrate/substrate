@@ -25,6 +25,65 @@ data:
     ssl_key_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
     ssl_ca_file = '/run/podidentity.podcert.ate.dev/trust-bundle.pem'
     hba_file = '/etc/postgresql/pg_hba.conf'
+
+    # Everything below is derived from the memory limit declared on the
+    # postgres container in this file and from the connection budget in
+    # docs/ops/postgres.md. Change them together.
+    #
+    # shared_buffers, effective_cache_size and max_connections need a restart,
+    # and nothing here triggers one: this ConfigMap is mounted into the pod, and
+    # the pod template carries no hash of its contents, so re-applying these
+    # manifests against a live cluster updates the file and leaves the running
+    # server on its old values. An existing install needs an explicit
+    # `kubectl rollout restart statefulset/postgres -n ate-system`, which on
+    # this single-replica StatefulSet is a control-plane outage -- schedule it.
+
+    # The customary 25% of the 2Gi container limit. The compiled-in default is
+    # 128MB, which leaves nearly the whole working set to be copied out of the
+    # kernel page cache on every read.
+    shared_buffers = 512MB
+    # What the planner should believe is cached, counting the page cache that is
+    # charged to the same cgroup: the memory limit less shared_buffers and
+    # backend headroom. The compiled-in default is 4GB, twice the limit, which
+    # makes the planner over-favor index scans.
+    effective_cache_size = 1GB
+    # max_connections = (ateapi replicas + 1 surge pod)
+    #                   x (pool_max_conns + outbox watch pool)
+    #                   + operator sessions
+    #                 = 6 x (12 + 3) + 10
+    #                 = 100
+    # pool_max_conns comes from the connection string the installer builds
+    # (default_postgres_connection_string in hack/install-ate.sh, mirrored in
+    # cmd/ate-setup/internal/config/config.go); the watch pool is
+    # watchPoolMaxConns in cmd/ateapi/internal/store/atepg/atepg.go. The replica
+    # term leaves room to scale ate-api-server to five replicas mid-rollout
+    # without a database restart.
+    #
+    # There is deliberately no superuser_reserved_connections term: the setting
+    # holds slots back from non-superusers only, and pg_hba.conf below trusts
+    # every role while ateapi connects as `postgres`, so ateapi's own pools
+    # could take the reserved slots and an operator would gain nothing. It
+    # becomes real headroom once issue #997 moves ateapi onto a non-superuser
+    # role; add the term back then.
+    #
+    # The total happens to equal the compiled-in default; it is stated so the
+    # ceiling is an explicit thing to re-derive whenever the pool size or the
+    # replica count changes. Raising it needs a larger memory limit first: each
+    # backend costs several MB on top of shared_buffers.
+    max_connections = 100
+    # A session that leaves a transaction open holds back the xmin horizon, and
+    # the WatchWorkers outbox only delivers events below that horizon
+    # (cmd/ateapi/internal/store/atepg/outbox.go), so one forgotten BEGIN in a
+    # psql session stalls worker events for every ateapi replica. This timeout
+    # fires only on sessions idle *between* statements, never on one executing
+    # or waiting for a lock, so it cannot cut short any legitimate ateapi work:
+    # its transactions are a handful of statements issued back-to-back with no
+    # client-side waiting in between, and an outbox maintenance pass is always
+    # either running a statement or blocked on a lock.
+    # Deliberately not paired with a global statement_timeout, which
+    # counts lock-wait time and would kill exactly those legitimate waits; see
+    # docs/ops/postgres.md.
+    idle_in_transaction_session_timeout = 60s
   pg_hba.conf: |
     # Local socket access is limited to processes in this pod and is used by
     # health checks, the workload's idempotent database bootstrap, and the
@@ -203,12 +262,19 @@ spec:
         - name: data
           mountPath: /var/lib/postgresql/data
         # The whole control plane shares this one database; under activation
-        # load it sustains several cores. The kind overlay shrinks this back
+        # load it sustains several cores. The kind overlay shrinks the CPU back
         # down to fit a CI runner.
+        #
+        # The memory request equals the limit on purpose, unlike CPU: with
+        # shared_buffers at 512MB the steady-state footprint sits above a
+        # smaller request, and a container over its memory request is the first
+        # thing the kubelet evicts under node pressure -- which the PDB below
+        # does not prevent, because node-pressure eviction is involuntary.
+        # Requesting the whole limit means usage can never exceed the request.
         resources:
           requests:
             cpu: "2"
-            memory: "1Gi"
+            memory: "2Gi"
           limits:
             cpu: "16"
             memory: "2Gi"
@@ -251,3 +317,29 @@ spec:
           # IOPS/throughput on PD-backed storage classes. The kind overlay
           # shrinks this claim back down.
           storage: 500Gi
+
+---
+# The store is a single replica and the system of record for the whole control
+# plane, so evicting it is an outage. minAvailable: 1 against replicas: 1 blocks
+# voluntary eviction outright, which is the intent: a node drain stops and waits
+# for an operator decision instead of taking the database down as a side effect
+# of routine maintenance. The operator has to take the outage explicitly -- see
+# "Node maintenance" in docs/ops/postgres.md, because a stalled node drain is
+# the visible consequence. It does not protect against involuntary disruption
+# (node loss, node-pressure eviction) and it is not a substitute for the managed
+# Postgres posture described in the same document.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres
+  namespace: ate-system
+spec:
+  minAvailable: 1
+  # An already-unhealthy postgres pod is already an outage, so holding it in
+  # place protects nothing while leaving a drain unable to make progress toward
+  # replacing it. The default IfHealthyBudget would do exactly that here,
+  # because minAvailable equals the replica count.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app: postgres

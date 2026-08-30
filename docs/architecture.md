@@ -226,7 +226,11 @@ environment definitions.
 
 These resources represent the high-frequency, ephemeral state of individual
 actors and workers. They are stored in a high-performance, low-latency state
-store (PostgreSQL) to support real-time operations.
+store (PostgreSQL) to support real-time operations. That database is the system
+of record for them: nothing else holds a copy, and nothing can re-derive them
+from the data plane. See [Operating the PostgreSQL
+Store](ops/postgres.md) for the supported deployment postures, sizing, and the
+runbook for losing it.
 
   * **Actor**: A specific instance of an ActorTemplate. An Actor record tracks
     its globally unique identifier, physical location (Worker IP), current

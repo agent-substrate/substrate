@@ -219,8 +219,15 @@ rollout_timeout() {
   echo "${timeout}"
 }
 
+# pool_max_conns caps ateapi's main pgxpool. Without it pgxpool sizes the pool
+# at max(4, NumCPU) of the *node*, which ignores the container's CPU limit: four
+# connections on a small node and sixty-four on a large one, neither chosen. 12
+# raises the floor and caps the ceiling, and it is one of the terms in the
+# max_connections budget in manifests/ate-install/postgres.yaml -- change both
+# together. Keep this in sync with DefaultPostgresConnectionString in
+# cmd/ate-setup/internal/config/config.go.
 default_postgres_connection_string() {
-  echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+  echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&pool_max_conns=12"
 }
 
 render_ate_system_manifests() {

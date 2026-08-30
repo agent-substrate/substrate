@@ -205,6 +205,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Glossary](docs/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
 * [Integration Repositories](docs/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
+* [Operating the PostgreSQL Store](docs/ops/postgres.md): Supported database postures, sizing and connection budgeting, and what to do if the store is lost.
 * [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
 * [Threat Model](docs/threat-model.md): Trust boundaries, assumptions, and known risks.

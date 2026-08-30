@@ -44,8 +44,10 @@ const DefaultRolloutTimeout = 60 * time.Second
 // DefaultPostgresConnectionString mirrors default_postgres_connection_string in
 // the shell installer: the apiserver reaches PostgreSQL over mTLS using the
 // podcertificate controller's projected servicedns trust bundle and its own
-// podidentity credential bundle.
-const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+// podidentity credential bundle. pool_max_conns caps the pgxpool that would
+// otherwise be sized from the node's CPU count; it is a term in the
+// max_connections budget in manifests/ate-install/postgres.yaml.
+const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&pool_max_conns=12"
 
 // devEnvFile is the optional per-developer environment script at the repo root.
 const devEnvFile = ".ate-dev-env.sh"
