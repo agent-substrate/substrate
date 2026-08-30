@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -317,7 +318,11 @@ func TestCreateActorSnapshotTag_ForeignKeyErrors(t *testing.T) {
 	}
 }
 
-func TestAcquireLease_CleansExpiredLeases(t *testing.T) {
+// TestAcquireLease_DoesNotSweepOtherKeys keeps garbage collection off the
+// acquisition path: acquiring one key must touch only that key's row, never
+// scan or delete rows belonging to other keys. Reclaiming those is the
+// background maintenance sweep's job.
+func TestAcquireLease_DoesNotSweepOtherKeys(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	if _, err := s.pool.Exec(ctx, `
@@ -332,15 +337,11 @@ func TestAcquireLease_CleansExpiredLeases(t *testing.T) {
 	}
 	defer lease.Close()
 
-	var expired, active int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases WHERE key = 'expired'`).Scan(&expired); err != nil {
-		t.Fatalf("counting expired lease: %v", err)
+	if _, ok := leaseToken(t, s, "expired"); !ok {
+		t.Error("AcquireLease deleted an unrelated expired lease; the sweep belongs on the maintenance tick")
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases WHERE key = 'active'`).Scan(&active); err != nil {
-		t.Fatalf("counting active lease: %v", err)
-	}
-	if expired != 0 || active != 1 {
-		t.Errorf("lease counts = expired:%d active:%d, want 0 and 1", expired, active)
+	if _, ok := leaseToken(t, s, "active"); !ok {
+		t.Error("AcquireLease deleted an unrelated live lease")
 	}
 }
 
@@ -448,6 +449,177 @@ func TestAcquireLease_ExpiresAfterHolderStops(t *testing.T) {
 		t.Fatalf("AcquireLease after lease expiration failed: %v", err)
 	}
 	newLease.Close()
+}
+
+// TestAcquireLease_TakesOverExpiredRowWithoutSweep pins the property that lets
+// the expired-lease sweep live on the background maintenance tick instead of
+// on AcquireLease, and so on the actor resume path: an expired row that is
+// still present must be taken over by the acquire statement itself.
+func TestAcquireLease_TakesOverExpiredRowWithoutSweep(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	s.leaseTTL = 200 * time.Millisecond
+
+	holderCtx, cancelHolder := context.WithCancel(ctx)
+	lease, err := s.AcquireLease(holderCtx, "stale-lease")
+	if err != nil {
+		t.Fatalf("AcquireLease failed: %v", err)
+	}
+	// Canceling without Close stops renewal and skips the release delete, so
+	// the row is left behind to expire, as a vanished process leaves it.
+	cancelHolder()
+	<-lease.Context().Done()
+	time.Sleep(s.leaseTTL + 300*time.Millisecond)
+
+	firstToken, ok := leaseToken(t, s, "stale-lease")
+	if !ok {
+		t.Fatal("expired lease row is gone; the test no longer exercises takeover of an existing row")
+	}
+
+	newLease, err := s.AcquireLease(ctx, "stale-lease")
+	if err != nil {
+		t.Fatalf("AcquireLease over an unswept expired row failed: %v", err)
+	}
+	defer newLease.Close()
+
+	secondToken, ok := leaseToken(t, s, "stale-lease")
+	if !ok {
+		t.Fatal("lease row missing after a successful acquisition")
+	}
+	if secondToken == firstToken {
+		t.Errorf("lease token after takeover = %q, want a new token (the expired row was not overwritten)", secondToken)
+	}
+}
+
+// TestSweepExpiredLeases checks the maintenance sweep discards expired rows
+// and leaves a live lease alone -- deleting a live row would let a second
+// holder acquire a key its owner still holds.
+func TestSweepExpiredLeases(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO leases (key, token, expires_at) VALUES
+			('expired-a', 'token-a', clock_timestamp() - interval '1 hour'),
+			('expired-b', 'token-b', clock_timestamp() - interval '1 second'),
+			('live',      'token-c', clock_timestamp() + interval '1 hour')`); err != nil {
+		t.Fatalf("seeding leases failed: %v", err)
+	}
+
+	if err := s.sweepExpiredLeases(ctx); err != nil {
+		t.Fatalf("sweepExpiredLeases failed: %v", err)
+	}
+
+	for _, key := range []string{"expired-a", "expired-b"} {
+		if _, ok := leaseToken(t, s, key); ok {
+			t.Errorf("lease %q survived the sweep, want it deleted", key)
+		}
+	}
+	token, ok := leaseToken(t, s, "live")
+	if !ok {
+		t.Error("the sweep deleted an unexpired lease")
+	} else if token != "token-c" {
+		t.Errorf("live lease token = %q, want %q", token, "token-c")
+	}
+
+	// A pass over a table with nothing left to collect is a no-op.
+	if err := s.sweepExpiredLeases(ctx); err != nil {
+		t.Fatalf("sweepExpiredLeases on an already-swept table failed: %v", err)
+	}
+	if _, ok := leaseToken(t, s, "live"); !ok {
+		t.Error("a second sweep deleted the unexpired lease")
+	}
+}
+
+// TestSweepExpiredLeases_DrainsPastOneBatch checks a backlog larger than
+// leaseSweepBatch -- what an ateapi replica dying mid-flight leaves behind --
+// is reclaimed by a single pass rather than one batch per tick.
+func TestSweepExpiredLeases_DrainsPastOneBatch(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	backlog := leaseSweepBatch + leaseSweepBatch/2
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO leases (key, token, expires_at)
+		SELECT 'expired-' || i, 'token-' || i, clock_timestamp() - interval '1 hour'
+		FROM generate_series(1, $1) AS i`, backlog); err != nil {
+		t.Fatalf("seeding expired leases failed: %v", err)
+	}
+
+	if err := s.sweepExpiredLeases(ctx); err != nil {
+		t.Fatalf("sweepExpiredLeases failed: %v", err)
+	}
+
+	var remaining int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM leases`).Scan(&remaining); err != nil {
+		t.Fatalf("counting leases failed: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("leases remaining after one sweep pass = %d, want 0", remaining)
+	}
+}
+
+// TestSweepExpiredLeases_ConcurrentTakeover pins why the sweep's DELETE keeps
+// its expiry predicate on the leases table itself and not only in the
+// bounding subquery: a sweep racing a takeover of the same expired key must
+// never remove the row that takeover commits. Deleting it would let a third
+// caller acquire a key whose new holder still believes it holds it.
+func TestSweepExpiredLeases_ConcurrentTakeover(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO leases (key, token, expires_at)
+		VALUES ('contended', 'stale', clock_timestamp() - interval '1 hour')`); err != nil {
+		t.Fatalf("seeding expired lease failed: %v", err)
+	}
+
+	// Take the row over in a transaction left open. Its row lock is what the
+	// sweep must either skip or, having blocked on it, re-check against the
+	// committed tuple.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("beginning takeover transaction failed: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var takenKey string
+	if err := tx.QueryRow(ctx, acquireLeaseSQL, "contended", "fresh", 3600.0).Scan(&takenKey); err != nil {
+		t.Fatalf("taking over the expired lease failed: %v", err)
+	}
+
+	sweepDone := make(chan error, 1)
+	go func() { sweepDone <- s.sweepExpiredLeases(ctx) }()
+
+	// Give the sweep time to reach the row and skip or block on its lock.
+	time.Sleep(500 * time.Millisecond)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("committing the takeover failed: %v", err)
+	}
+	if err := <-sweepDone; err != nil {
+		t.Fatalf("sweepExpiredLeases failed: %v", err)
+	}
+
+	token, ok := leaseToken(t, s, "contended")
+	if !ok {
+		t.Fatal("the sweep deleted a lease that was taken over while the sweep ran; two callers can now hold it")
+	}
+	if token != "fresh" {
+		t.Errorf("lease token = %q, want %q", token, "fresh")
+	}
+}
+
+// leaseToken reports the token stored for key, and whether the row exists.
+func leaseToken(t *testing.T, s *Persistence, key string) (string, bool) {
+	t.Helper()
+	var token string
+	err := s.pool.QueryRow(context.Background(), `SELECT token FROM leases WHERE key = $1`, key).Scan(&token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false
+	}
+	if err != nil {
+		t.Fatalf("reading lease %q failed: %v", key, err)
+	}
+	return token, true
 }
 
 // TestAcquireLease_ConcurrentTakeover races many goroutines to acquire an

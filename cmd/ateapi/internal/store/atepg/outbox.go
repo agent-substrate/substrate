@@ -17,7 +17,8 @@
 // (writeAndAppendEvent), per-replica watchers poll it with an xmin-fenced
 // xid cursor (WatchWorkers), and a background loop pre-creates partitions
 // and retires old ones by dropping them, recording a trim high-water mark
-// that lets lagging watchers detect loss and resync (outboxMaintenance).
+// that lets lagging watchers detect loss and resync (backgroundMaintenance,
+// which also sweeps expired lease rows on the same tick).
 
 package atepg
 
@@ -115,14 +116,15 @@ const (
 	// Minimum time retention keeps outbox rows.
 	outboxRetentionAge = 15 * time.Minute
 
-	// Paces partition maintenance.
-	outboxMaintenanceInterval = time.Minute
+	// Paces the background maintenance loop.
+	maintenanceInterval = time.Minute
 
 	// The outbox partition range width.
 	outboxPartitionInterval = 15 * time.Minute
 
-	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
-	// which would permanently starve partition creation. Stalls abort and retry.
+	// Bounds the outbox step of a maintenance pass to prevent indefinite hangs
+	// (e.g., from lock waits) which would permanently starve partition
+	// creation. Stalls abort and retry.
 	outboxMaintenancePassTimeout = 5 * time.Minute
 
 	// How many intervals ahead partitions are pre-created: creation must stall past
@@ -146,9 +148,13 @@ func (p *Persistence) outboxNow(ctx context.Context) (time.Time, error) {
 	return now.UTC(), nil
 }
 
-// Maintains worker_outbox partitions on a fixed timer.
-func (p *Persistence) outboxMaintenance(ctx context.Context) {
-	ticker := time.NewTicker(outboxMaintenanceInterval)
+// backgroundMaintenance runs the store's periodic upkeep on a fixed timer:
+// worker_outbox partitions, and the expired-lease sweep. Both are garbage
+// collection that no request path waits on. Each step gets its own deadline,
+// so a step that spends its whole budget waiting on a lock cannot starve the
+// next one or make it report a timeout it never had.
+func (p *Persistence) backgroundMaintenance(ctx context.Context) {
+	ticker := time.NewTicker(maintenanceInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -156,11 +162,18 @@ func (p *Persistence) outboxMaintenance(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		passCtx, cancel := context.WithTimeout(ctx, outboxMaintenancePassTimeout)
-		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
-			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
-		}
-		cancel()
+		runMaintenanceStep(ctx, "worker outbox maintenance failed", outboxMaintenancePassTimeout, p.maintainWorkerOutboxPartitions)
+		runMaintenanceStep(ctx, "expired lease sweep failed", leaseSweepPassTimeout, p.sweepExpiredLeases)
+	}
+}
+
+// runMaintenanceStep runs one maintenance step under its own deadline, logging
+// failWarning unless the whole loop is shutting down.
+func runMaintenanceStep(ctx context.Context, failWarning string, timeout time.Duration, step func(context.Context) error) {
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := step(stepCtx); err != nil && ctx.Err() == nil {
+		slog.WarnContext(ctx, failWarning, slog.Any("err", err))
 	}
 }
 

@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS workers (
 --
 -- 1. Ordering (xid): writeAndAppendEvent guarantees exactly one row per tx,
 --    ensuring distinct xids so polling batches never split a transaction.
--- 2. Retention (created_at partitions): outboxMaintenance drops expired
+-- 2. Retention (created_at partitions): backgroundMaintenance drops expired
 --    partitions to avoid VACUUM I/O debt. A DEFAULT partition catches overflow.
 -- 3. Durability (UNLOGGED): Skips WAL overhead. Crash recoveries trigger
 --    watchers to rebuild from the primary workers table. worker_outbox_trim

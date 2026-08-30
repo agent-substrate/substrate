@@ -50,8 +50,8 @@ const (
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the outbox side only: the WatchWorkers pollers
-	// and the partition-maintenance loop.
+	// watchPool serves the background side: the WatchWorkers pollers and the
+	// maintenance loop (outbox partitions and the expired-lease sweep).
 	watchPool             *pgxpool.Pool
 	ownsWatchPool         bool
 	leaseTTL              time.Duration
@@ -164,12 +164,12 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 	}
 	go func() {
 		defer close(p.maintenanceDone)
-		p.outboxMaintenance(maintenanceCtx)
+		p.backgroundMaintenance(maintenanceCtx)
 	}()
 	return p, nil
 }
 
-// Close stops the outbox maintenance loop and waits for it to exit,
+// Close stops the background maintenance loop and waits for it to exit,
 // then closes the watch pool if Connect created one. It does not close the
 // main pool, which the caller owns.
 func (p *Persistence) Close() {
@@ -1479,9 +1479,6 @@ const defaultLeaseTTL = 30 * time.Second
 func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	ttl := p.leaseTTL
 	token := uuid.NewString()
-	if err := p.cleanupExpiredLeases(ctx); err != nil {
-		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
-	}
 
 	acquired, err := p.acquireLease(ctx, key, token, ttl)
 	if err != nil {
@@ -1512,23 +1509,74 @@ func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Leas
 	return store.NewLease(leaseCtx, closeFn), nil
 }
 
-func (p *Persistence) cleanupExpiredLeases(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE expires_at <= clock_timestamp()`); err != nil {
-		return fmt.Errorf("deleting expired leases: %w", err)
+const (
+	// leaseSweepBatch bounds one DELETE so a single statement can never take
+	// an unbounded number of row locks. A pass repeats the statement until the
+	// table is drained, so this caps statement size, not how much one pass can
+	// reclaim after a burst of abandoned rows.
+	leaseSweepBatch = 1000
+
+	// leaseSweepPassTimeout bounds one sweep pass. It is far shorter than the
+	// outbox pass budget because the sweep issues only bounded DELETEs that
+	// never wait on a row lock; a pass still running this long is not making
+	// progress and is better retried on the next tick.
+	leaseSweepPassTimeout = 30 * time.Second
+)
+
+// sweepExpiredLeasesSQL collects one bounded batch of aged-out lease rows.
+//
+// Both expiry predicates are load-bearing. The outer one is what READ
+// COMMITTED re-checks against the updated tuple when the DELETE blocks on a
+// row lock: with the predicate only in the bounding subquery, a concurrent
+// takeover of that key would commit a live lease that this statement then
+// deleted, leaving two callers believing they hold the same key. FOR UPDATE
+// SKIP LOCKED keeps a pass from waiting on such rows at all -- another
+// transaction is already dealing with them -- and keeps replicas' sweeps from
+// serializing on each other.
+const sweepExpiredLeasesSQL = `
+	DELETE FROM leases
+	WHERE expires_at <= clock_timestamp()
+	  AND key IN (
+		SELECT key FROM leases
+		WHERE expires_at <= clock_timestamp()
+		LIMIT $1
+		FOR UPDATE SKIP LOCKED)`
+
+// sweepExpiredLeases deletes lease rows that have aged out, one bounded batch
+// at a time until a pass finds nothing more to collect. It is pure garbage
+// collection, never a correctness step: acquireLease treats an expired row as
+// absent and overwrites it, so a row a skipped or failed sweep leaves behind
+// costs a little storage and nothing else. That is why it runs unelected on
+// every replica, on the maintenance pool, off the pool that serves actor
+// resume requests.
+func (p *Persistence) sweepExpiredLeases(ctx context.Context) error {
+	for {
+		tag, err := p.watchPool.Exec(ctx, sweepExpiredLeasesSQL, leaseSweepBatch)
+		if err != nil {
+			return fmt.Errorf("deleting expired leases: %w", err)
+		}
+		if tag.RowsAffected() < leaseSweepBatch || ctx.Err() != nil {
+			return nil
+		}
 	}
-	return nil
 }
+
+// acquireLeaseSQL claims a key, taking over any row whose lease has already
+// expired. The ON CONFLICT ... WHERE clause is what makes an expired row
+// equivalent to a missing one, so acquisition never depends on an expired row
+// having been swept away first. It returns no row when the key is held.
+const acquireLeaseSQL = `
+	INSERT INTO leases (key, token, expires_at)
+	VALUES ($1, $2, clock_timestamp() + make_interval(secs => $3))
+	ON CONFLICT (key) DO UPDATE
+	SET token = EXCLUDED.token,
+	    expires_at = EXCLUDED.expires_at
+	WHERE leases.expires_at <= clock_timestamp()
+	RETURNING key`
 
 func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
 	var returnedKey string
-	err := p.pool.QueryRow(ctx, `
-		INSERT INTO leases (key, token, expires_at)
-		VALUES ($1, $2, clock_timestamp() + make_interval(secs => $3))
-		ON CONFLICT (key) DO UPDATE
-		SET token = EXCLUDED.token,
-		    expires_at = EXCLUDED.expires_at
-		WHERE leases.expires_at <= clock_timestamp()
-		RETURNING key`, key, token, ttl.Seconds()).Scan(&returnedKey)
+	err := p.pool.QueryRow(ctx, acquireLeaseSQL, key, token, ttl.Seconds()).Scan(&returnedKey)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, nil
