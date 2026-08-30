@@ -1479,11 +1479,23 @@ const defaultLeaseTTL = 30 * time.Second
 func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	ttl := p.leaseTTL
 	token := uuid.NewString()
+	// Acquisition runs before any workflow step span opens, so log the two
+	// queries' durations to make this window attributable: the cleanup DELETE
+	// scans the whole table and contends with concurrent acquires/releases.
+	t := time.Now()
 	if err := p.cleanupExpiredLeases(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
 	}
+	dCleanup := time.Since(t)
 
+	t = time.Now()
 	acquired, err := p.acquireLease(ctx, key, token, ttl)
+	dAcquire := time.Since(t)
+	slog.InfoContext(ctx, "PostgreSQL lease acquisition finished",
+		slog.String("key", key),
+		slog.Bool("acquired", acquired && err == nil),
+		slog.Duration("cleanup_expired", dCleanup),
+		slog.Duration("acquire", dAcquire))
 	if err != nil {
 		return nil, err
 	}
@@ -1500,14 +1512,25 @@ func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Leas
 	}()
 
 	closeFn := func() {
+		// Close runs after the last workflow step span ends but inside the
+		// operation, so log its two waits: the renewal goroutine may be
+		// mid-query when cancelled, and the release DELETE contends with
+		// concurrent acquires' full-table cleanup DELETEs.
+		t := time.Now()
 		cancel()
 		<-renewalDone
+		dRenewalStop := time.Since(t)
 
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
+		t = time.Now()
 		if err := p.releaseLease(releaseCtx, key, token); err != nil {
 			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lease, relying on TTL to reclaim it", "key", key, "error", err)
 		}
+		slog.InfoContext(releaseCtx, "PostgreSQL lease released",
+			slog.String("key", key),
+			slog.Duration("renewal_stop", dRenewalStop),
+			slog.Duration("release", time.Since(t)))
 	}
 	return store.NewLease(leaseCtx, closeFn), nil
 }
