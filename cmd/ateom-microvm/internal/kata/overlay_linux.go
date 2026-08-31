@@ -80,6 +80,10 @@ func UpperWorkDirs(upperBase, containerID string) (upper, work string) {
 // stock kata flow.
 func GuestSharedRootfs(containerID string) string { return guestSharedDir + containerID + "/rootfs" }
 
+// GuestHookPath is where the guest image carries OCI hooks, in
+// {prestart,poststart,poststop} subdirectories.
+const GuestHookPath = "/usr/share/oci/hooks"
+
 // GuestSharedVolumeDir is the in-guest path one image volume's contents appear
 // at, beside the container's rootfs in the same kataShared tree.
 func GuestSharedVolumeDir(containerID, volumeName string) string {
@@ -364,10 +368,13 @@ func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSand
 		Fstype:     typeVirtioFS,
 		MountPoint: guestSharedDir,
 	}}
+	// GuestHookPath must be set or the agent never scans for guest hooks, which
+	// makes the documented guest_hook_path mechanism inert.
 	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
-		Hostname:  opts.Hostname,
-		SandboxId: opts.SandboxID,
-		Storages:  storages,
+		Hostname:      opts.Hostname,
+		SandboxId:     opts.SandboxID,
+		Storages:      storages,
+		GuestHookPath: GuestHookPath,
 	})
 }
 
