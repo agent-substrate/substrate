@@ -126,7 +126,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
-	if running, err = w.finalizeRunning(leaseCtx, actorRef); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -671,6 +671,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, err
 	}
 
+	// A snapshot taken under a since-replaced template holds guest state that
+	// cannot be layered onto the new template's golden snapshot, so the
+	// restore is forced to data-only.
+	templateReplaced := actor.GetStatus().GetCurrentActorTemplate() != nil &&
+		actor.GetStatus().GetCurrentActorTemplateUid() != actorTemplate.GetMetadata().GetUid()
+
 	if local := actor.GetStatus().GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
@@ -691,16 +697,17 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
-		// The wire scope describes the restore OPERATION. When the template's
-		// onResume configuration selected the golden snapshot as the boot
-		// source, loadActorForResume resolved the golden URI, and the
-		// pause snapshot restores as DATA_ON_GOLDEN — atelet combines the
-		// golden snapshot's guest state with the actor's data. Otherwise the
-		// scope mirrors what the pause captured.
-		req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
-		if !src.GoldenSnapshotURI.IsZero() {
+		// The wire scope describes the restore OPERATION: DATA_ON_GOLDEN when
+		// loadActorForResume resolved a golden URI per the template's onResume
+		// configuration, else what the pause captured.
+		switch {
+		case templateReplaced:
+			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
+		default:
+			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
@@ -714,13 +721,16 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if actor.GetStatus().GetLatestSnapshot() != nil {
 			tele.SnapshotKind = ateattr.SnapshotKindLatest
 		}
-
-		// Same wire-scope derivation as the local branch above: the snapshot
-		// restores as DATA_ON_GOLDEN when the golden URI was resolved per the
-		// template's onResume configuration.
-		scope := actorSnapshotContentScopeToAtelet(src.Scope)
-		if !src.GoldenSnapshotURI.IsZero() {
+		var scope ateletpb.SnapshotScope
+		var goldenSnapshotURI string
+		switch {
+		case templateReplaced:
+			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		case !src.GoldenSnapshotURI.IsZero():
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			goldenSnapshotURI = src.GoldenSnapshotURI.String()
+		default:
+			scope = actorSnapshotContentScopeToAtelet(src.Scope)
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
@@ -738,7 +748,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			},
 			Scope: scope,
 			// Empty unless this is a Golden data resume.
-			GoldenSnapshotUri: src.GoldenSnapshotURI.String(),
+			GoldenSnapshotUri: goldenSnapshotURI,
 			ActorUid:          actor.GetMetadata().Uid,
 			EgressGateway:     egressGateway,
 			CpuMilli:          cpuMilli,
@@ -783,8 +793,9 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 	return &ateletpb.EgressGateway{Address: w.egressGatewayAddress}
 }
 
-// finalizeRunning re-reads the actor for a fresh version and commits RUNNING.
-func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+// finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
+// recording the template the sprint booted with.
+func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
 
@@ -795,6 +806,13 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		// Recorded at sprint start so the next resume can detect a repointed
+		// template by UID; the snapshot it restores was taken under this one.
+		toUpdate.Status.CurrentActorTemplate = &ateapipb.ObjectRef{
+			Atespace: actorTemplate.GetMetadata().GetAtespace(),
+			Name:     actorTemplate.GetMetadata().GetName(),
+		}
+		toUpdate.Status.CurrentActorTemplateUid = actorTemplate.GetMetadata().GetUid()
 		return nil
 	})
 	if err != nil {

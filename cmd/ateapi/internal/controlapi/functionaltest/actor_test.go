@@ -665,6 +665,63 @@ func TestUpdateActor_Success(t *testing.T) {
 	}
 }
 
+// TestUpdateActor_RepointTemplate verifies UpdateActor can point an actor at
+// a different substrate ActorTemplate (effective on the next ResumeActor),
+// and that a ref to an absent template is rejected.
+func TestUpdateActor_RepointTemplate(t *testing.T) {
+	ns := namespaceForTest("ns-update-repoint")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	for _, name := range []string{"tmpl-a", "tmpl-b"} {
+		if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+			ActorTemplate: &ateapipb.ActorTemplate{
+				Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+				Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+				SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+				SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+			},
+		}); err != nil {
+			t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
+		}
+	}
+
+	created, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "repoint-actor"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// A ref to a template that does not exist is rejected.
+	_, err = tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      created.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "absent"},
+	}})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("UpdateActor with an absent template ref = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+
+	updated, err := tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      created.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	want := &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "repoint-actor", Version: 2},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // TestUpdateActor verifies a typical RMW UpdateActor flow: a
 // client reads an actor, modifies it and send an UpdateActor request.
 // Output-only fields it sets are ignored, and the mutable actor_template ref
@@ -2014,7 +2071,7 @@ func TestSuspendActor(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createTemplate(t, tc, ns)
+	tmpl := createTemplate(t, tc, ns)
 
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 	name := "id1"
@@ -2159,7 +2216,11 @@ func TestSuspendActor(t *testing.T) {
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Status: &ateapipb.ActorStatus{
+			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
+		},
 	}
 
 	if diff := cmp.Diff(want, getResp,
@@ -2203,7 +2264,7 @@ func TestPauseActor(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createTemplate(t, tc, ns)
+	tmpl := createTemplate(t, tc, ns)
 
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
@@ -2251,6 +2312,8 @@ func TestPauseActor(t *testing.T) {
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			},
+			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
 		},
 	}
 

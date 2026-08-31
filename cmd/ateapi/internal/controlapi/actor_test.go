@@ -867,6 +867,54 @@ func TestUpdateActor(t *testing.T) {
 	}
 }
 
+// TestUpdateActor_RepointTemplate covers the mutable actor_template ref: an
+// update may point the actor at a different template (it takes effect on the
+// next ResumeActor), but the new ref must resolve.
+func TestUpdateActor_RepointTemplate(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
+	for _, name := range []string{"tmpl-a", "tmpl-b"} {
+		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+		}); err != nil {
+			t.Fatalf("creating template %s: %v", name, err)
+		}
+	}
+
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+
+	// Repointing at a template that does not exist is rejected.
+	_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      created.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "absent"},
+	}})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("UpdateActor to an absent template = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+
+	// Repointing at an existing template succeeds.
+	updated, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      created.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+	if got, want := updated.GetActorTemplate().GetName(), "tmpl-b"; got != want {
+		t.Errorf("updated actor_template.name = %q, want %q", got, want)
+	}
+}
+
 // TestUpdateActor_DeleteRecreateRace checks that an update is not applied
 // if an actor was deleted and recreated during the update operation.
 func TestUpdateActor_DeleteRecreateRace(t *testing.T) {

@@ -93,6 +93,41 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	}
 }
 
+// TestFinalizeRunning_RecordsSprintTemplate verifies committing RUNNING stamps
+// the template the sprint booted with, overwriting the previous sprint's
+// record, so the next resume can detect a repointed template by UID.
+func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
+		Status: &ateapipb.ActorStatus{
+			State:                   ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
+			CurrentActorTemplateUid: "tmpl-uid-1",
+		},
+	})
+	w := &ActorWorkflow{store: persistence}
+
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl-2", Uid: "tmpl-uid-2"},
+	})
+	if err != nil {
+		t.Fatalf("finalizeRunning: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
+	}
+	want := &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"}
+	if ref := got.GetStatus().GetCurrentActorTemplate(); !proto.Equal(ref, want) {
+		t.Errorf("CurrentActorTemplate = %v, want %v", ref, want)
+	}
+	if uid := got.GetStatus().GetCurrentActorTemplateUid(); uid != "tmpl-uid-2" {
+		t.Errorf("CurrentActorTemplateUid = %q, want %q", uid, "tmpl-uid-2")
+	}
+}
+
 type updateWorkerErrorStore struct {
 	store.Interface
 	err error

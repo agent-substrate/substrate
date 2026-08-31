@@ -564,6 +564,20 @@ message ActorStatus {
   // Not immutable: create validates the final object against the request
   // with op=Update, and immutable rejects that nil->set.
   ActorSourceSnapshotStatus source_snapshot = 9;
+
+  // The actor template the Actor's guest state is currently built on: the
+  // one its latest sprint booted with, recorded when the resume (or first
+  // boot) commits RUNNING. Diverges from the Actor's actor_template ref when
+  // a suspended Actor is repointed at a replacement template.
+  //
+  // +k8s:optional
+  ObjectRef current_actor_template = 10;
+
+  // The UID of the actor template the Actor's guest state is currently
+  // built on, recorded when the resume (or first boot) commits RUNNING.
+  //
+  // +k8s:optional
+  string current_actor_template_uid = 11;
 }
 
 // ActorSourceSnapshotStatus records what an Actor's source_snapshot_tag

@@ -277,6 +277,15 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 
 		// Do any further work on the resource.
 
+		// A repointed template ref must resolve, mirroring CreateActor's check
+		// (same non-atomicity caveat; resume re-resolves and fails cleanly).
+		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
+			// TODO: Add validation that compares the new and previous ActorTemplate.
+			if _, err := resolveActorTemplate(ctx, s.store, newVal); err != nil {
+				return err
+			}
+		}
+
 		// Validate the final value before storing it.
 		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
 			return toGRPCInternalError(errs)
