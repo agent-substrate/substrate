@@ -21,6 +21,9 @@
 # failing fast with 503. The workload is the same counter binary used by the
 # counter demo -- its reply includes the worker pod IP, so you can see which
 # worker served a (possibly parked) request.
+#
+# The ActorTemplate is not a CRD: it lives in parking-template.yaml.tmpl and
+# is created through the ate API with `kubectl ate create actor-template`.
 
 apiVersion: v1
 kind: Namespace
@@ -41,21 +44,3 @@ spec:
   # the pool and exercise the parking path.
   replicas: 2
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: parking
-  namespace: ate-demo-parking
-spec:
-  containers:
-  - name: counter
-    image: ko://github.com/agent-substrate/substrate/demos/counter
-    command: ["/ko-app/counter"]
-  workerSelector:
-    matchLabels:
-      workload: parking
-  snapshotsConfig:
-    location: gs://${BUCKET_NAME}/ate-demo-parking/

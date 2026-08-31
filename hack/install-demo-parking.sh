@@ -31,20 +31,13 @@ demo-parking_cmdline() {
 
 demo-parking_deploy() {
   log_step "demo-parking_deploy"
-  ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/parking/parking.yaml.tmpl \
-    | run_ko apply -f -
-
-  # Wait for the demo to be fully ready before returning: the small WorkerPool
-  # must be rolled out and the ActorTemplate's golden snapshot built.
-  log_step "Waiting for parking demo to be ready..."
-  wait_for_pool_rollout parking ate-demo-parking
-  run_kubectl wait --for=condition=Ready actortemplate/parking -n ate-demo-parking --timeout=300s
+  deploy_substrate_demo render_demo_manifest \
+    demos/parking/parking.yaml.tmpl ate-demo-parking parking 300 \
+    demos/parking/parking-template.yaml.tmpl parking
 }
 
 demo-parking_delete() {
   log_step "demo-parking_delete"
-  delete_demo_actors ate-demo-parking parking
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/parking/parking.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo render_demo_manifest \
+    demos/parking/parking.yaml.tmpl ate-demo-parking parking
 }

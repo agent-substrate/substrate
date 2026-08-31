@@ -49,6 +49,14 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 			relPath: "demos/counter/counter-microvm-csi-test-template.yaml",
 			want:    resources.ActorTemplateRef{Atespace: "ate-demo-counter-microvm-csi", Name: "counter-microvm-csi"},
 		},
+		{
+			relPath: "demos/jupyter/jupyter-template.yaml.tmpl",
+			want:    resources.ActorTemplateRef{Atespace: "ate-demo-jupyter", Name: "jupyter"},
+		},
+		{
+			relPath: "demos/sandbox/manual-test-multi-template.yaml",
+			want:    resources.ActorTemplateRef{Atespace: "ate-manual-test-multi", Name: "sandbox-template"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.relPath, func(t *testing.T) {
