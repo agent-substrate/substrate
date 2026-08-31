@@ -1,0 +1,169 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Config for kube-api-linter (github.com/kubernetes-sigs/kube-api-linter),
+# run by hack/verify/kube-api-linter.sh against the API types in pkg/api/.
+# It is a separate file from .golangci.yaml because the kubeapilinter module
+# plugin only exists in the golangci-lint-kube-api-linter binary, not in the
+# regular golangci-lint one.
+
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - kubeapilinter
+
+  settings:
+    custom:
+      kubeapilinter:
+        type: module
+        description: Kubernetes API conventions linter.
+        settings:
+          # The enabled set below is the default set of the pinned linter
+          # version, spelled out so the enforced rules are visible here.
+          linters:
+            enable:
+              - "arrayofstruct" # Structs in arrays need at least one required field, to avoid ambiguous YAML.
+              - "commentstart" # Field godocs must start with the serialized field name.
+              - "conditions" # Conditions fields need the correct json tags and markers.
+              - "defaultorrequired" # A field cannot have both a default and be required.
+              - "defaults" # Default markers must use the preferred form (see lintersConfig).
+              - "duplicatemarkers" # No exact duplicate markers on types and fields.
+              - "integers" # Only int32 and int64 for integers.
+              - "jsontags" # Every field needs a json tag.
+              - "nodurations" # No Duration types.
+              - "nofloats" # No float types.
+              - "nomaps" # No map types (string-to-string maps allowed), use lists with a unique key.
+              - "nonpointerstructs" # Non-pointer struct fields with no required fields must be optional.
+              - "nonullable" # No nullable marker.
+              - "nophase" # No phase fields, use conditions instead.
+              - "noreferences" # Field names should use Ref rather than Reference.
+              - "notimestamp" # No Timestamp fields, use Time.
+              - "optionalfields" # Optional fields must be pointers/omitempty where appropriate.
+              - "optionalorrequired" # Every field must be marked +optional or +required.
+              - "requiredfields" # Required fields must not be pointers or have omitempty.
+              - "ssatags" # Array fields need listType markers for Server-Side Apply.
+              - "uniquemarkers" # Single-definition markers must not repeat.
+            # Everything not listed above stays off until evaluated.
+            disable:
+              - "*"
+          lintersConfig:
+            conditions:
+              # CRD types are neither protobuf-serialized nor patched by
+              # strategic merge, the two settings the linter docs call out
+              # for CRD-based types.
+              useProtobuf: Ignore
+              usePatchStrategy: Ignore
+            defaults:
+              # CRDs are generated with controller-gen, which reads
+              # +kubebuilder:default.
+              preferredDefaultMarker: kubebuilder:default
+
+  exclusions:
+    rules:
+      # TEMPORARY: every current commentstart, conditions, defaultorrequired,
+      # optionalorrequired and defaults finding, excluded file-wide so this
+      # PR only introduces the tool with no content changes, per review on
+      # #416. A follow-up PR removes these and fixes the findings by class.
+      - path: 'pkg/api/v1alpha1/.*_types\.go'
+        text: '^commentstart:'
+      - path: 'pkg/api/v1alpha1/.*_types\.go'
+        text: '^conditions:'
+      - path: 'pkg/api/v1alpha1/.*_types\.go'
+        text: '^defaultorrequired:'
+      - path: 'pkg/api/v1alpha1/.*_types\.go'
+        text: '^optionalorrequired:'
+      - path: 'pkg/api/v1alpha1/.*_types\.go'
+        text: '^defaults:'
+
+      # Pre-existing findings from rules that require Go API changes
+      # (pointer fields, omitempty/omitzero tags, map-to-list refactors)
+      # on the existing v1alpha1 types. Each rule names the fields it
+      # excuses, so a field added to one of these types is still checked.
+      # Fixing these on the existing types is tracked in issue #207.
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(noreferences|requiredfields): .*\bImageVolumeSource\.Reference\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bActorMetadataItem\.(Field|Path)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(requiredfields|ssatags): .*\bActorMetadataDataSource\.Items\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bTrustBundleDataSource\.(Name|Path)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^ssatags: .*\bSystemInfoVolumeSource\.DataSources\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^nomaps: .*\bContainerResourceList\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^optionalfields: .*\bContainerReadyz\.TimeoutSeconds\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bEnvVar\.Value\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^optionalfields: .*\bOnResumeConfig\.FromData\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^optionalfields: .*\bSnapshotsConfig\.OnResume\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^ssatags: .*\bActorTemplateStatus\.Conditions\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bExternalVolumeTemplate\.(Capacity|StorageClassName)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bVolume\.Name\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bVolumeMount\.(MountPath|Name)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(requiredfields|ssatags): .*\bContainer\.(Env|Image|Name|VolumeMounts)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bContainerReadyz\.HTTPGet\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(optionalfields|requiredfields): .*\bHTTPGetAction\.(Path|Port)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bEnvVar\.Name\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^requiredfields: .*\bSecretKeySelector\.(Key|Name)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(optionalfields|requiredfields): .*\bSnapshotsConfig\.(Location|OnCommit|OnPause)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(optionalfields|requiredfields|ssatags): .*\bActorTemplateSpec\.(Containers|PauseImage|SandboxClass|SnapshotsConfig|Volumes)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(nophase|optionalfields): .*\bActorTemplateStatus\.(GoldenActorID|GoldenSnapshot|Phase|TakeGoldenSnapshotAt)\b'
+      - path: 'pkg/api/v1alpha1/actortemplate_types\.go'
+        text: '^(optionalfields|requiredfields): .*\bActorTemplate\.(Spec|Status)\b'
+      - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
+        text: '^requiredfields: .*\bAssetFile\.(SHA256|URL)\b'
+      - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
+        text: '^(nomaps|optionalfields|requiredfields): .*\bSandboxConfigSpec\.(Assets|Default|PauseImage|SandboxClass)\b'
+      - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
+        text: '^(nonpointerstructs|requiredfields): .*\bSandboxConfig\.Spec\b'
+      - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
+        text: '^requiredfields: .*\bCSIDriverConfigSpec\.(ControllerEndpoint|DriverName)\b'
+      - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
+        text: '^optionalfields: .*\bCSIDriverConfigSpec\.NodeSocketOverride\b'
+      - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
+        text: '^requiredfields: .*\bCSIDriverTLSConfig\.Enabled\b'
+      - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
+        text: '^optionalfields: .*\bCSIDriverTLSConfig\.(ServerName|UsePodIdentity)\b'
+      - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
+        text: '^nonpointerstructs: .*\bCSIDriverConfig\.Spec\b'
+      - path: 'pkg/api/v1alpha1/workerpool_types\.go'
+        text: '^optionalfields: .*\bWorkerPoolPodTemplate\.PriorityClassName\b'
+      - path: 'pkg/api/v1alpha1/workerpool_types\.go'
+        text: '^(optionalfields|requiredfields): .*\bWorkerPoolSpec\.(Replicas|SandboxClass|SandboxConfigName|WorkerImage)\b'
+      - path: 'pkg/api/v1alpha1/workerpool_types\.go'
+        text: '^optionalfields: .*\bWorkerPoolStatus\.(ReadyReplicas|Replicas|Selector)\b'
+      - path: 'pkg/api/v1alpha1/workerpool_types\.go'
+        text: '^(optionalfields|requiredfields): .*\bWorkerPool\.(Spec|Status)\b'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

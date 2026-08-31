@@ -39,6 +39,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"sync"
@@ -213,6 +214,29 @@ type CA struct {
 
 	// The root certificate for this CA pool.
 	RootCertificate *x509.Certificate
+}
+
+// TLSCertificateChainPEM returns the CA certificate in the PEM encoding used
+// by TLS servers.
+func (ca *CA) TLSCertificateChainPEM() ([]byte, error) {
+	if ca.RootCertificate == nil {
+		return nil, fmt.Errorf("ca certificate: is nil")
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.RootCertificate.Raw}), nil
+}
+
+// TLSPrivateKeyPEM returns the CA signing key in the PKCS#8 PEM encoding used
+// by TLS servers.
+func (ca *CA) TLSPrivateKeyPEM() ([]byte, error) {
+	if ca.SigningKey == nil {
+		return nil, fmt.Errorf("ca key: is nil")
+	}
+
+	key, err := x509.MarshalPKCS8PrivateKey(ca.SigningKey)
+	if err != nil {
+		return nil, fmt.Errorf("ca key: serializing PKCS#8: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), nil
 }
 
 type serializedPool struct {

@@ -97,7 +97,9 @@ tests:
   # cycle is measured against a realistically-sized actor. actorMemory =
   # target + headroom (glutton itself, the guest, and on microvm the 128Mi
   # VMM reserve). The golden snapshot and cold boot stay small: the working
-  # set exists from the first fill onward.
+  # set exists from the first fill onward. --mem-churn re-randomizes 64Mi in
+  # place each cycle, so repeated suspends snapshot changing memory rather
+  # than a static set.
   - name: glutton_mem_1gi_gvisor
     type: locust
     description: "Large-memory: 1Gi resident working set, gvisor"
@@ -110,6 +112,8 @@ tests:
     flags:
       - "--mem-target"
       - "1Gi"
+      - "--mem-churn"
+      - "64Mi"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -127,6 +131,8 @@ tests:
     flags:
       - "--mem-target"
       - "1Gi"
+      - "--mem-churn"
+      - "64Mi"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -143,6 +149,8 @@ tests:
     flags:
       - "--mem-target"
       - "2Gi"
+      - "--mem-churn"
+      - "64Mi"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"
@@ -160,6 +168,8 @@ tests:
     flags:
       - "--mem-target"
       - "2Gi"
+      - "--mem-churn"
+      - "64Mi"
       - "--min-wait-time"
       - "1.0"
       - "--max-wait-time"

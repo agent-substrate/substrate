@@ -42,8 +42,8 @@ func TestWorkerPoolValidation(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: WorkerPoolSpec{
-			Replicas:   1,
-			AteomImage: "ateom:latest",
+			Replicas:    1,
+			WorkerImage: "ateom:latest",
 		},
 	}
 
@@ -64,12 +64,11 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.replicas: Invalid value: -1: spec.replicas in body should be greater than or equal to 0",
 	}, {
-		name: "missing ateomImage",
+		name: "unset workerImage is allowed",
 		mutate: func(wp *WorkerPool) {
-			wp.Spec.AteomImage = ""
+			wp.Spec.WorkerImage = ""
 		},
-		wantErr: true,
-		errMsg:  "spec.ateomImage: Invalid value: \"\": spec.ateomImage in body should be at least 1 chars long",
+		wantErr: false,
 	}, {
 		name: "valid template",
 		mutate: func(wp *WorkerPool) {
@@ -268,8 +267,8 @@ func TestWorkerPoolReservedMetadataUpdate(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: WorkerPoolSpec{
-			Replicas:   1,
-			AteomImage: "example.com/ateom:latest",
+			Replicas:    1,
+			WorkerImage: "example.com/ateom:latest",
 		},
 	}
 	if err := k8sClient.Create(ctx, wp); err != nil {

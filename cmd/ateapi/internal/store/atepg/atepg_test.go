@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -64,6 +65,10 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
+		if err := dockerenv.Configure(ctx); err != nil {
+			containerErr = err
+			return
+		}
 		pgContainer, err := postgres.Run(ctx, "postgres:18-alpine",
 			postgres.WithDatabase("atepg"),
 			postgres.WithUsername("atepg"),

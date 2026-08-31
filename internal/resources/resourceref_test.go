@@ -118,8 +118,14 @@ func TestParseActorDNSName(t *testing.T) {
 		{"valid trailing dot", "act-1.team-a.actors.resources.substrate.ate.dev.", ActorRef{Atespace: "team-a", Name: "act-1"}, false},
 		{"wrong suffix", "act-1.team-a.example.com", ActorRef{}, true},
 		{"missing atespace", "act-1.actors.resources.substrate.ate.dev", ActorRef{}, true},
-		{"invalid actor name", "ACT-1.team-a.actors.resources.substrate.ate.dev", ActorRef{}, true},
-		{"invalid atespace", "act-1.TEAM.actors.resources.substrate.ate.dev", ActorRef{}, true},
+		{"mixed-case actor name", "ACT-1.team-a.actors.resources.substrate.ate.dev", ActorRef{Atespace: "team-a", Name: "act-1"}, false},
+		{"mixed-case atespace", "act-1.TEAM-A.actors.resources.substrate.ate.dev", ActorRef{Atespace: "team-a", Name: "act-1"}, false},
+		{"mixed-case suffix", "act-1.team-a.Actors.Resources.Substrate.Ate.Dev", ActorRef{Atespace: "team-a", Name: "act-1"}, false},
+		// strings.ToLower would fold the Kelvin sign onto "k" and hand "act-1k" a
+		// request addressed to a name no actor can have.
+		{"non-ASCII actor name", "act-1K.team-a.actors.resources.substrate.ate.dev", ActorRef{}, true},
+		{"invalid actor name", "act_1.team-a.actors.resources.substrate.ate.dev", ActorRef{}, true},
+		{"invalid atespace", "act-1.team_a.actors.resources.substrate.ate.dev", ActorRef{}, true},
 		{"host:port not accepted", "act-1.team-a.actors.resources.substrate.ate.dev:8080", ActorRef{}, true},
 		{"empty", "", ActorRef{}, true},
 	}

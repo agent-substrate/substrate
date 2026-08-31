@@ -24,7 +24,7 @@ if [ -f /proc/filesystems ] && ! grep -q "nfsd" /proc/filesystems; then
   exit 1
 fi
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(git rev-parse --show-toplevel)"
 
 # 1. Deploy NFS Server (In-Cluster)
 echo "Deploying sample NFS server..."

@@ -629,7 +629,7 @@ func TestGPUPoolMountsToolkit(t *testing.T) {
 	wp := &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			AteomImage: "img",
+			WorkerImage: "img",
 			Template: &atev1alpha1.WorkerPoolPodTemplate{
 				Resources: &corev1.ResourceRequirements{
 					Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
@@ -687,7 +687,7 @@ func TestGPUPoolDriverRootEnv(t *testing.T) {
 		return &atev1alpha1.WorkerPool{
 			ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
 			Spec: atev1alpha1.WorkerPoolSpec{
-				AteomImage: "img",
+				WorkerImage: "img",
 				Template: &atev1alpha1.WorkerPoolPodTemplate{
 					Resources: &corev1.ResourceRequirements{
 						Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
@@ -721,7 +721,7 @@ func TestGPUPoolDriverRootEnv(t *testing.T) {
 func TestNonGPUPoolHasNoToolkit(t *testing.T) {
 	wp := &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-		Spec:       atev1alpha1.WorkerPoolSpec{AteomImage: "img"},
+		Spec:       atev1alpha1.WorkerPoolSpec{WorkerImage: "img"},
 	}
 	dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
 	pod := dep.Spec.Template.Spec
@@ -760,7 +760,7 @@ func TestGPUMicroVMPoolHasNoGPUPodShape(t *testing.T) {
 	wp := &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			AteomImage:   "img",
+			WorkerImage:  "img",
 			SandboxClass: atev1alpha1.SandboxClassMicroVM,
 			Template: &atev1alpha1.WorkerPoolPodTemplate{
 				Resources: &corev1.ResourceRequirements{
@@ -794,9 +794,9 @@ func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1al
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default", UID: "uid"},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:   2,
-			AteomImage: "ateom:v1",
-			Template:   tmpl,
+			Replicas:    2,
+			WorkerImage: "ateom:v1",
+			Template:    tmpl,
 		},
 	}
 }
@@ -846,11 +846,11 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		).
 		WithContainers(corev1ac.Container().
 			WithName("ateom").
-			WithImage(wp.Spec.AteomImage).
+			WithImage(wp.Spec.WorkerImage).
 			WithArgs(
 				"--pod-uid=$(POD_UID)",
 				"--atunnel-listen-address=0.0.0.0:443",
-				"--atunnel-connect-listen-address=0.0.0.0:444",
+				"--atunnel-connect-listen-address=0.0.0.0:8443",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 				"--atunnel-egress-listen-address=0.0.0.0:15001",
@@ -862,7 +862,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithProtocol(corev1.ProtocolTCP),
 				corev1ac.ContainerPort().
 					WithName("connect").
-					WithContainerPort(444).
+					WithContainerPort(8443).
 					WithProtocol(corev1.ProtocolTCP),
 				corev1ac.ContainerPort().
 					WithName("readyz").

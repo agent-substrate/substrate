@@ -15,8 +15,11 @@
 package localca
 
 import (
+	"bytes"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,6 +75,51 @@ func TestGenerateED25519CA(t *testing.T) {
 	roots.AddCert(cert)
 	if _, err := cert.Verify(x509.VerifyOptions{Roots: roots}); err != nil {
 		t.Errorf("self-signed verification failed: %v", err)
+	}
+}
+
+func TestTLSMaterialPEM(t *testing.T) {
+	ca, err := GenerateCA("test-ca", KeyTypeED25519, 365*24*time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateED25519CA() error = %v", err)
+	}
+
+	chain, err := ca.TLSCertificateChainPEM()
+	if err != nil {
+		t.Fatalf("TLSCertificateChainPEM() error = %v", err)
+	}
+	block, rest := pem.Decode(chain)
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatalf("TLSCertificateChainPEM() first block = %#v, want CERTIFICATE", block)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("TLSCertificateChainPEM() has unexpected additional data: %q", rest)
+	}
+	if !bytes.Equal(block.Bytes, ca.RootCertificate.Raw) {
+		t.Error("TLSCertificateChainPEM() certificate differs from the issuing certificate")
+	}
+
+	keyPEM, err := ca.TLSPrivateKeyPEM()
+	if err != nil {
+		t.Fatalf("TLSPrivateKeyPEM() error = %v", err)
+	}
+	block, rest = pem.Decode(keyPEM)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		t.Fatalf("TLSPrivateKeyPEM() block = %#v, want PRIVATE KEY", block)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("TLSPrivateKeyPEM() has unexpected additional data: %q", rest)
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("TLSPrivateKeyPEM() did not contain PKCS#8: %v", err)
+	}
+	publicKey, err := x509.MarshalPKIXPublicKey(key.(crypto.Signer).Public())
+	if err != nil {
+		t.Fatalf("marshaling private key's public key: %v", err)
+	}
+	if !bytes.Equal(ca.RootCertificate.RawSubjectPublicKeyInfo, publicKey) {
+		t.Error("TLSPrivateKeyPEM() key does not match the issuing certificate")
 	}
 }
 

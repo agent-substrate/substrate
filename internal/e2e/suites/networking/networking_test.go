@@ -66,7 +66,7 @@ func egressFixture() e2e.Fixture {
 
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
-	actorName, actor := createAndResumeActor(t, ctx, "direct", e2e.CounterFixture())
+	actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -310,6 +310,20 @@ func accessLogField(line, key string) (string, bool) {
 
 func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture) (string, *ateapipb.Actor) {
 	t.Helper()
+	actor := &ateapipb.Actor{ActorTemplateNamespace: template.Namespace, ActorTemplateName: template.Name}
+	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith)
+}
+
+// createAndResumeSubstrateActor is createAndResumeActor for a substrate
+// ActorTemplate fixture, referenced by atespace/name instead of the CRD pair.
+func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, *ateapipb.Actor) {
+	t.Helper()
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
+	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith)
+}
+
+func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string) (string, *ateapipb.Actor) {
+	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 	actorRef := &ateapipb.ObjectRef{Atespace: networkingAtespace, Name: actorName}
@@ -318,12 +332,9 @@ func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, temp
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: networkingAtespace}},
 	})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName},
-		ActorTemplateNamespace: template.Namespace,
-		ActorTemplateName:      template.Name,
-	}}); err != nil {
-		t.Fatalf("CreateActor from %s/%s: %v (deploy the fixture with %s)", template.Namespace, template.Name, err, template.DeployWith)
+	actor.Metadata = &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: actor}); err != nil {
+		t.Fatalf("CreateActor from %s: %v (deploy the fixture with %s)", source, err, deployWith)
 	}
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})

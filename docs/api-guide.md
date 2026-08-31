@@ -11,7 +11,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
-| `ateomImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
+| `workerImage` | `string` | Optional. The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). When unset, the controller injects a versioned default image for the pool's `sandboxClass`. |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family for the pool: `gvisor` (default) or `microvm`. Drives the worker pod shape (e.g. KVM device mounts, node placement) and which `SandboxConfig`s are eligible. |
 | `sandboxConfigName` | `string` | Optional. Name of a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) providing the sandbox binaries and pause image. If empty, the cluster default `SandboxConfig` for the pool's `sandboxClass` is used. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
@@ -56,7 +56,7 @@ metadata:
     workload: secret-agent
 spec:
   replicas: 10
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
   template:
     labels:
       project: agent-platform
@@ -83,7 +83,7 @@ metadata:
 spec:
   replicas: 5
   # GPU pools need a glibc ateom-gvisor build — see Requirements below.
-  ateomImage: <your-registry>/ateom-gvisor-glibc@sha256:...
+  workerImage: <your-registry>/ateom-gvisor-glibc@sha256:...
   template:
     # (1) schedule onto GPU nodes
     nodeSelector:
@@ -124,7 +124,7 @@ it rather than replaced.
 
 **Requirements**
 
-- **A glibc `ateom-gvisor` image**, set as `spec.ateomImage`. The distroless default
+- **A glibc `ateom-gvisor` image**, set as `spec.workerImage`. The distroless default
   cannot exec `nvidia-ctk`. Build one with
   `KO_DEFAULTBASEIMAGE=debian:stable-slim ko build ./cmd/ateom-gvisor`.
 - **`nvidia-ctk` on the node**, at the path mounted into the worker — by default
@@ -427,12 +427,12 @@ spec:
   assets:
     amd64:
       gvisor:
-        url: "gs://gvisor/releases/release/20260803/x86_64/gvisor.tar.bz2"
-        sha256: "9e7a5fcc2cbd28c9cd4af910a9327abcf07a8efcce242c285b860d79010c2db5"
+        url: "gs://gvisor/releases/nightly/2026-08-28/x86_64/gvisor.tar.bz2"
+        sha256: "97f83fa5f352f2c6337d792b1c23c4e73a9c47529c08f6531029f8e0722cfe2c"
     arm64:
       gvisor:
-        url: "gs://gvisor/releases/release/20260803/aarch64/gvisor.tar.bz2"
-        sha256: "294d54dea2a18bcd2614a4b5072d6f32f0e8938f9e6e71c9e86b843c4a7b707b"
+        url: "gs://gvisor/releases/nightly/2026-08-28/aarch64/gvisor.tar.bz2"
+        sha256: "561e281b7f8af95205b1df140c453a795a7fbc0db348c63b305e6521350734ef"
 ```
 
 ### Micro-VM SandboxConfig

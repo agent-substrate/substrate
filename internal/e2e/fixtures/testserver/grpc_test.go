@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -190,5 +192,17 @@ func TestHealthServiceIsServing(t *testing.T) {
 	}
 	if response.GetStatus() != healthpb.HealthCheckResponse_SERVING {
 		t.Errorf("health Check status = %s, want SERVING", response.GetStatus())
+	}
+}
+
+// The ingress Actor's readyz is an HTTP GET, so this handler is the only thing
+// that gets it to PhaseReady — the gRPC port answers such a request with a
+// protocol error. A 404 from a mistyped path would look exactly like a template
+// that never boots.
+func TestReadyzAnswersHTTPGet(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	newHealthHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if recorder.Code != http.StatusOK {
+		t.Errorf("GET /readyz = %d, want %d", recorder.Code, http.StatusOK)
 	}
 }
