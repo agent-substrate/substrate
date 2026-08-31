@@ -36,6 +36,7 @@ import (
 type RPCService struct {
 	ateapipb.UnimplementedControlServer
 	impl                  serviceStore
+	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
 	workerPoolLister      listersv1alpha1.WorkerPoolLister
@@ -74,6 +75,7 @@ func NewRPCService(
 	impl := newServiceImpl(persistence, actorTemplateLister, storageClassLister)
 	s := &RPCService{
 		impl:                  impl,
+		persistence:           persistence,
 		workerCache:           workerCache,
 		workerPoolLister:      workerPoolLister,
 		csiDriverConfigLister: csiDriverConfigLister,
@@ -93,6 +95,10 @@ type serviceStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)
+	CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)
+	GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
+	UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error)
+	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
 	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
 	ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error)
 	CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)

@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -126,9 +127,9 @@ func TestFindUnknownFields(t *testing.T) {
 		{
 			name: "unknown field inside a map value message",
 			in: func() proto.Message {
-				return &ateapipb.SandboxAssets{
-					Assets: map[string]*ateapipb.ArchAssets{
-						"amd64": withUnknown(&ateapipb.ArchAssets{}, 9999),
+				return &ateletpb.SandboxAssets{
+					Assets: map[string]*ateletpb.ArchAssets{
+						"amd64": withUnknown(&ateletpb.ArchAssets{}, 9999),
 					},
 				}
 			},

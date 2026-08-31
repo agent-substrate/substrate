@@ -179,6 +179,10 @@ const (
 	OperationUnknown = "unknown"
 )
 
+// TemplateUnknown is the placeholder for the template labels when the Actor
+// record does not carry its template ref.
+const TemplateUnknown = "unknown"
+
 // AllOperations lists all registered bounded actor lifecycle operations.
 var AllOperations = []string{
 	OperationCreate,
@@ -363,10 +367,21 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 	}
 	operationName = NormalizeOperationName(operationName)
 
+	// TODO(zoez7): actors created via the ActorTemplate resource path do not carry
+	// the template ref yet, so report "unknown" rather than an empty label.
+	templateNamespace := a.GetActorTemplateNamespace()
+	if templateNamespace == "" {
+		templateNamespace = TemplateUnknown
+	}
+	templateName := a.GetActorTemplateName()
+	if templateName == "" {
+		templateName = TemplateUnknown
+	}
+
 	ass := a.GetStatus().GetWorkerAssignment()
 	attrs := []attribute.KeyValue{
-		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
-		TemplateNameKey.String(a.GetActorTemplateName()),
+		TemplateNamespaceKey.String(templateNamespace),
+		TemplateNameKey.String(templateName),
 		SandboxClassKey.String(sandboxClass),
 		ActorOperationNameKey.String(operationName),
 		FailureReasonKey.String(reason),

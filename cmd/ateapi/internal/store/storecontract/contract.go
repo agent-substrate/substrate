@@ -28,6 +28,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -151,6 +152,7 @@ func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
 // notifications is not covered here; see atepg's own test file for that.
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorContractTests(t, setup)
+	runEgressPolicyContractTests(t, setup)
 	runWorkerContractTests(t, setup)
 	runAtespaceContractTests(t, setup)
 	runActorTemplateContractTests(t, setup)
@@ -158,6 +160,110 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runDebugContractTests(t, setup)
+}
+
+func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("EgressPolicy_Lifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actor, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "session-1"},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actorRef := resources.ActorRefFromActor(actor)
+		policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{
+			Hostnames: &ateapipb.HostnameRule{Patterns: []string{"api.example.com"}},
+		}}}
+
+		created, err := s.CreateEgressPolicy(ctx, actorRef, policy)
+		if err != nil {
+			t.Fatalf("CreateEgressPolicy failed: %v", err)
+		}
+		if md := created.GetMetadata(); md.GetName() != "default" || md.GetAtespace() != testAtespace || md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
+			t.Fatalf("created metadata = %v", md)
+		}
+		if policy.GetMetadata() != nil {
+			t.Fatalf("input metadata = %v; want nil", policy.GetMetadata())
+		}
+		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("duplicate create error = %v, want ErrAlreadyExists", err)
+		}
+		got, err := s.GetEgressPolicy(ctx, actorRef)
+		if err != nil || !proto.Equal(got, created) {
+			t.Fatalf("GetEgressPolicy = %v, %v; want %v", got, err, created)
+		}
+		if _, err := s.UpdateEgressPolicy(ctx, actorRef, store.Precondition{}, func(*ateapipb.EgressPolicy) error { return nil }); !errors.Is(err, store.ErrPreconditionRequired) {
+			t.Fatalf("unguarded update error = %v, want ErrPreconditionRequired", err)
+		}
+		if _, err := s.UpdateEgressPolicy(ctx, actorRef, store.Precondition{UID: created.GetMetadata().GetUid(), Version: 99}, func(*ateapipb.EgressPolicy) error { return nil }); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("stale update error = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.UpdateEgressPolicy(ctx, actorRef, store.Precondition{UID: "replacement-uid", Version: 1}, func(*ateapipb.EgressPolicy) error { return nil }); !errors.Is(err, store.ErrUIDConflict) {
+			t.Fatalf("wrong UID update error = %v, want ErrUIDConflict", err)
+		}
+		updated, err := s.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(created), func(policy *ateapipb.EgressPolicy) error {
+			policy.Metadata.Atespace = "other"
+			policy.Metadata.Name = "other"
+			policy.Rules = []*ateapipb.EgressRule{{All: &emptypb.Empty{}}}
+			return nil
+		})
+		if err != nil || updated.GetMetadata().GetAtespace() != testAtespace || updated.GetMetadata().GetName() != "default" || updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
+			t.Fatalf("UpdateEgressPolicy = %v, %v; want version 2", updated, err)
+		}
+		deleted, err := s.DeleteEgressPolicy(ctx, actorRef)
+		if err != nil || !proto.Equal(deleted, updated) {
+			t.Fatalf("DeleteEgressPolicy = %v, %v; want %v", deleted, err, updated)
+		}
+		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetEgressPolicy after delete error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("EgressPolicy_ActorLifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		actorRef := resources.ActorRef{Atespace: testAtespace, Name: "session-1"}
+		policy := &ateapipb.EgressPolicy{}
+		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("policy without Actor error = %v, want ErrFailedPrecondition", err)
+		}
+		actor, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: actorRef.Name},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_DELETING},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateEgressPolicy(ctx, actorRef, policy); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DeleteActor(ctx, actorRef); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("policy after Actor deletion error = %v, want ErrNotFound", err)
+		}
+		replacement, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: actorRef.Name},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if replacement.GetMetadata().GetUid() == actor.GetMetadata().GetUid() {
+			t.Fatal("replacement Actor reused UID")
+		}
+		if _, err := s.GetEgressPolicy(ctx, actorRef); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("replacement Actor inherited policy: %v", err)
+		}
+	})
 }
 
 func runListOptionsContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {

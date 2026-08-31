@@ -33,34 +33,38 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName               = "/ateapi.Control/GetActor"
-	Control_CreateActor_FullMethodName            = "/ateapi.Control/CreateActor"
-	Control_UpdateActor_FullMethodName            = "/ateapi.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName           = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName             = "/ateapi.Control/PauseActor"
-	Control_ResumeActor_FullMethodName            = "/ateapi.Control/ResumeActor"
-	Control_DeleteActor_FullMethodName            = "/ateapi.Control/DeleteActor"
-	Control_GetActorSnapshot_FullMethodName       = "/ateapi.Control/GetActorSnapshot"
-	Control_GetActorSnapshotTag_FullMethodName    = "/ateapi.Control/GetActorSnapshotTag"
-	Control_ListActorSnapshots_FullMethodName     = "/ateapi.Control/ListActorSnapshots"
-	Control_CreateActorSnapshotTag_FullMethodName = "/ateapi.Control/CreateActorSnapshotTag"
-	Control_UpdateActorSnapshotTag_FullMethodName = "/ateapi.Control/UpdateActorSnapshotTag"
-	Control_DeleteActorSnapshotTag_FullMethodName = "/ateapi.Control/DeleteActorSnapshotTag"
-	Control_ListWorkers_FullMethodName            = "/ateapi.Control/ListWorkers"
-	Control_GetWorker_FullMethodName              = "/ateapi.Control/GetWorker"
-	Control_CreateWorker_FullMethodName           = "/ateapi.Control/CreateWorker"
-	Control_UpdateWorker_FullMethodName           = "/ateapi.Control/UpdateWorker"
-	Control_DeleteWorker_FullMethodName           = "/ateapi.Control/DeleteWorker"
-	Control_DrainWorker_FullMethodName            = "/ateapi.Control/DrainWorker"
-	Control_ListActors_FullMethodName             = "/ateapi.Control/ListActors"
-	Control_CreateAtespace_FullMethodName         = "/ateapi.Control/CreateAtespace"
-	Control_GetAtespace_FullMethodName            = "/ateapi.Control/GetAtespace"
-	Control_ListAtespaces_FullMethodName          = "/ateapi.Control/ListAtespaces"
-	Control_DeleteAtespace_FullMethodName         = "/ateapi.Control/DeleteAtespace"
-	Control_CreateActorTemplate_FullMethodName    = "/ateapi.Control/CreateActorTemplate"
-	Control_GetActorTemplate_FullMethodName       = "/ateapi.Control/GetActorTemplate"
-	Control_ListActorTemplates_FullMethodName     = "/ateapi.Control/ListActorTemplates"
-	Control_DeleteActorTemplate_FullMethodName    = "/ateapi.Control/DeleteActorTemplate"
+	Control_GetActor_FullMethodName                = "/ateapi.Control/GetActor"
+	Control_CreateActor_FullMethodName             = "/ateapi.Control/CreateActor"
+	Control_UpdateActor_FullMethodName             = "/ateapi.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName            = "/ateapi.Control/SuspendActor"
+	Control_PauseActor_FullMethodName              = "/ateapi.Control/PauseActor"
+	Control_ResumeActor_FullMethodName             = "/ateapi.Control/ResumeActor"
+	Control_DeleteActor_FullMethodName             = "/ateapi.Control/DeleteActor"
+	Control_GetActorEgressPolicy_FullMethodName    = "/ateapi.Control/GetActorEgressPolicy"
+	Control_CreateActorEgressPolicy_FullMethodName = "/ateapi.Control/CreateActorEgressPolicy"
+	Control_UpdateActorEgressPolicy_FullMethodName = "/ateapi.Control/UpdateActorEgressPolicy"
+	Control_DeleteActorEgressPolicy_FullMethodName = "/ateapi.Control/DeleteActorEgressPolicy"
+	Control_GetActorSnapshot_FullMethodName        = "/ateapi.Control/GetActorSnapshot"
+	Control_GetActorSnapshotTag_FullMethodName     = "/ateapi.Control/GetActorSnapshotTag"
+	Control_ListActorSnapshots_FullMethodName      = "/ateapi.Control/ListActorSnapshots"
+	Control_CreateActorSnapshotTag_FullMethodName  = "/ateapi.Control/CreateActorSnapshotTag"
+	Control_UpdateActorSnapshotTag_FullMethodName  = "/ateapi.Control/UpdateActorSnapshotTag"
+	Control_DeleteActorSnapshotTag_FullMethodName  = "/ateapi.Control/DeleteActorSnapshotTag"
+	Control_ListWorkers_FullMethodName             = "/ateapi.Control/ListWorkers"
+	Control_GetWorker_FullMethodName               = "/ateapi.Control/GetWorker"
+	Control_CreateWorker_FullMethodName            = "/ateapi.Control/CreateWorker"
+	Control_UpdateWorker_FullMethodName            = "/ateapi.Control/UpdateWorker"
+	Control_DeleteWorker_FullMethodName            = "/ateapi.Control/DeleteWorker"
+	Control_DrainWorker_FullMethodName             = "/ateapi.Control/DrainWorker"
+	Control_ListActors_FullMethodName              = "/ateapi.Control/ListActors"
+	Control_CreateAtespace_FullMethodName          = "/ateapi.Control/CreateAtespace"
+	Control_GetAtespace_FullMethodName             = "/ateapi.Control/GetAtespace"
+	Control_ListAtespaces_FullMethodName           = "/ateapi.Control/ListAtespaces"
+	Control_DeleteAtespace_FullMethodName          = "/ateapi.Control/DeleteAtespace"
+	Control_CreateActorTemplate_FullMethodName     = "/ateapi.Control/CreateActorTemplate"
+	Control_GetActorTemplate_FullMethodName        = "/ateapi.Control/GetActorTemplate"
+	Control_ListActorTemplates_FullMethodName      = "/ateapi.Control/ListActorTemplates"
+	Control_DeleteActorTemplate_FullMethodName     = "/ateapi.Control/DeleteActorTemplate"
 )
 
 // ControlClient is the client API for Control service.
@@ -85,6 +89,14 @@ type ControlClient interface {
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Get the egress policy resource nested under an Actor.
+	GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Create the egress policy resource nested under an Actor.
+	CreateActorEgressPolicy(ctx context.Context, in *CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Replace the egress policy resource nested under an Actor.
+	UpdateActorEgressPolicy(ctx context.Context, in *UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Delete the egress policy resource nested under an Actor.
+	DeleteActorEgressPolicy(ctx context.Context, in *DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
 	// Get an ActorSnapshot.
 	GetActorSnapshot(ctx context.Context, in *GetActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshot, error)
 	// Get an ActorSnapshot tag.
@@ -204,6 +216,46 @@ func (c *controlClient) DeleteActor(ctx context.Context, in *DeleteActorRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Actor)
 	err := c.cc.Invoke(ctx, Control_DeleteActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetActorEgressPolicy(ctx context.Context, in *GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EgressPolicy)
+	err := c.cc.Invoke(ctx, Control_GetActorEgressPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) CreateActorEgressPolicy(ctx context.Context, in *CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EgressPolicy)
+	err := c.cc.Invoke(ctx, Control_CreateActorEgressPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateActorEgressPolicy(ctx context.Context, in *UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EgressPolicy)
+	err := c.cc.Invoke(ctx, Control_UpdateActorEgressPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DeleteActorEgressPolicy(ctx context.Context, in *DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EgressPolicy)
+	err := c.cc.Invoke(ctx, Control_DeleteActorEgressPolicy_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -442,6 +494,14 @@ type ControlServer interface {
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
+	// Get the egress policy resource nested under an Actor.
+	GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Create the egress policy resource nested under an Actor.
+	CreateActorEgressPolicy(context.Context, *CreateActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Replace the egress policy resource nested under an Actor.
+	UpdateActorEgressPolicy(context.Context, *UpdateActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Delete the egress policy resource nested under an Actor.
+	DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error)
 	// Get an ActorSnapshot.
 	GetActorSnapshot(context.Context, *GetActorSnapshotRequest) (*ActorSnapshot, error)
 	// Get an ActorSnapshot tag.
@@ -517,6 +577,18 @@ func (UnimplementedControlServer) ResumeActor(context.Context, *ResumeActorReque
 }
 func (UnimplementedControlServer) DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActor not implemented")
+}
+func (UnimplementedControlServer) GetActorEgressPolicy(context.Context, *GetActorEgressPolicyRequest) (*EgressPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActorEgressPolicy not implemented")
+}
+func (UnimplementedControlServer) CreateActorEgressPolicy(context.Context, *CreateActorEgressPolicyRequest) (*EgressPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateActorEgressPolicy not implemented")
+}
+func (UnimplementedControlServer) UpdateActorEgressPolicy(context.Context, *UpdateActorEgressPolicyRequest) (*EgressPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateActorEgressPolicy not implemented")
+}
+func (UnimplementedControlServer) DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteActorEgressPolicy not implemented")
 }
 func (UnimplementedControlServer) GetActorSnapshot(context.Context, *GetActorSnapshotRequest) (*ActorSnapshot, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetActorSnapshot not implemented")
@@ -724,6 +796,78 @@ func _Control_DeleteActor_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).DeleteActor(ctx, req.(*DeleteActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetActorEgressPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActorEgressPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetActorEgressPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetActorEgressPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetActorEgressPolicy(ctx, req.(*GetActorEgressPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CreateActorEgressPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateActorEgressPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateActorEgressPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateActorEgressPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateActorEgressPolicy(ctx, req.(*CreateActorEgressPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateActorEgressPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateActorEgressPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateActorEgressPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateActorEgressPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateActorEgressPolicy(ctx, req.(*UpdateActorEgressPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteActorEgressPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteActorEgressPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteActorEgressPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteActorEgressPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteActorEgressPolicy(ctx, req.(*DeleteActorEgressPolicyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1140,6 +1284,22 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteActor",
 			Handler:    _Control_DeleteActor_Handler,
+		},
+		{
+			MethodName: "GetActorEgressPolicy",
+			Handler:    _Control_GetActorEgressPolicy_Handler,
+		},
+		{
+			MethodName: "CreateActorEgressPolicy",
+			Handler:    _Control_CreateActorEgressPolicy_Handler,
+		},
+		{
+			MethodName: "UpdateActorEgressPolicy",
+			Handler:    _Control_UpdateActorEgressPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteActorEgressPolicy",
+			Handler:    _Control_DeleteActorEgressPolicy_Handler,
 		},
 		{
 			MethodName: "GetActorSnapshot",

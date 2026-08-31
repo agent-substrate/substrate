@@ -408,8 +408,8 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 			Labels:    labels,
 		},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:   1,
-			AteomImage: "ateom@sha256:abc",
+			Replicas:    1,
+			WorkerImage: "ateom@sha256:abc",
 		},
 	}
 	_, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})

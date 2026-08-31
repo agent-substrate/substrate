@@ -391,6 +391,29 @@ func TestActorMetricAttributes(t *testing.T) {
 		assertAttrs(t, got, want)
 	})
 
+	t.Run("empty template ref reports unknown", func(t *testing.T) {
+		noTemplate := &ateapipb.Actor{
+			Status: &ateapipb.ActorStatus{
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "ate-workers",
+					WorkerPool:      "default-pool",
+				},
+			},
+		}
+		got := toMap(ActorMetricAttributes(noTemplate, "gvisor", OperationResume, ReasonUnknown))
+		want := map[attribute.Key]any{
+			TemplateNamespaceKey:   TemplateUnknown,
+			TemplateNameKey:        TemplateUnknown,
+			WorkerPoolNamespaceKey: "ate-workers",
+			WorkerPoolNameKey:      "default-pool",
+			SandboxClassKey:        "gvisor",
+			ActorOperationNameKey:  OperationResume,
+			FailureReasonKey:       ReasonUnknown,
+		}
+
+		assertAttrs(t, got, want)
+	})
+
 	// An actor that crashed before it reached a worker has no pool. Reporting
 	// one key of the pair, or an empty-string name, would put that crash in a
 	// series that looks like a real pool.

@@ -1,0 +1,57 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-e2e${FIXTURE_SUFFIX}
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: websocket
+  namespace: ate-e2e${FIXTURE_SUFFIX}
+  labels:
+    workload: websocket${FIXTURE_SUFFIX}
+spec:
+  replicas: 1
+  workerImage: ${ATEOM_IMAGE}
+${WORKERPOOL_RUNTIME}
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: websocket
+  namespace: ate-e2e${FIXTURE_SUFFIX}
+spec:
+${TEMPLATE_SANDBOX_CLASS}
+  containers:
+  - name: websocket
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
+    args: ["websocket"]
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+      timeoutSeconds: 30
+${TEMPLATE_RESOURCES}
+  workerSelector:
+    matchLabels:
+      workload: websocket${FIXTURE_SUFFIX}
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/ate-e2e-websocket${FIXTURE_SUFFIX}/
