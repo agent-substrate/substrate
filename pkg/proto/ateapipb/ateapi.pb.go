@@ -5690,9 +5690,18 @@ type Worker struct {
 	// +k8s:customValidation # until `format=k8s-ip` is supported
 	// +k8s:immutable
 	Ip string `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
-	// Mutable.
-	SandboxClass string            `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
-	Labels       map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
+	// CRD's own vocabulary, so it is not validated beyond that. Mutable.
+	//
+	// +k8s:optional
+	SandboxClass string `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
+	// labels mirror the WorkerPool object's Kubernetes labels, which selectors
+	// match against.
+	//
+	// +k8s:optional
+	// +k8s:eachKey=+k8s:format=k8s-label-key
+	// +k8s:eachVal=+k8s:format=k8s-label-value
+	Labels map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// The compute capacity this worker can give an actor sandbox. Immutable, set
 	// at creation: a worker pod's limits are fixed for its lifetime. An update
 	// replaces the worker rather than patching it, so a request that omits
@@ -5883,9 +5892,17 @@ func (x *WorkerStatus) GetAssignment() *ActorAssignment {
 // "unknown/unset" for that dimension: treated as unconstrained so placement is
 // not blocked (matching the pre-capacity behavior).
 type WorkerCapacity struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CpuMilli      int64                  `protobuf:"varint,1,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU capacity in millicores (1000 = one core).
-	MemoryBytes   int64                  `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory capacity in bytes.
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// CPU capacity in millicores (1000 = one core).
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	CpuMilli int64 `protobuf:"varint,1,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`
+	// Memory capacity in bytes.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	MemoryBytes   int64 `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

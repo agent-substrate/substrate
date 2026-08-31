@@ -1365,8 +1365,18 @@ message Worker {
   // +k8s:immutable
   string ip = 7;
 
-  // Mutable.
+  // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
+  // CRD's own vocabulary, so it is not validated beyond that. Mutable.
+  //
+  // +k8s:optional
   string sandbox_class = 8;
+
+  // labels mirror the WorkerPool object's Kubernetes labels, which selectors
+  // match against.
+  //
+  // +k8s:optional
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> labels = 9;
 
   // The compute capacity this worker can give an actor sandbox. Immutable, set
@@ -1414,8 +1424,17 @@ message WorkerStatus {
 // "unknown/unset" for that dimension: treated as unconstrained so placement is
 // not blocked (matching the pre-capacity behavior).
 message WorkerCapacity {
-  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
-  int64 memory_bytes = 2; // Memory capacity in bytes.
+  // CPU capacity in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 cpu_milli = 1;
+
+  // Memory capacity in bytes.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 memory_bytes = 2;
 }
 
 // ActorAssignment names the Actor currently bound to a Worker — the inverse of

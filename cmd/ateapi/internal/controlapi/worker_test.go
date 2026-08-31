@@ -788,6 +788,30 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		name:   "metadata.atespace set on a global-scoped Worker",
 		mutate: func(w *ateapipb.Worker) { w.Metadata.Atespace = "team-a" },
 		want:   field.ErrorList{field.Forbidden(field.NewPath("worker", "metadata", "atespace"), "")},
+	}, {
+		name: "valid labels",
+		mutate: func(w *ateapipb.Worker) {
+			w.Labels = map[string]string{"tier": "batch", "pool.ate.io/zone": "us-west1-c"}
+		},
+	}, {
+		name:   "invalid label key",
+		mutate: func(w *ateapipb.Worker) { w.Labels = map[string]string{"bad key!": "batch"} },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "labels"), "bad key!", "").WithOrigin("format=k8s-label-key")},
+	}, {
+		name:   "invalid label value",
+		mutate: func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "not valid!"} },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "labels").Key("tier"), "not valid!", "").WithOrigin("format=k8s-label-value")},
+	}, {
+		name:   "valid capacity",
+		mutate: func(w *ateapipb.Worker) { w.Capacity = &ateapipb.WorkerCapacity{CpuMilli: 2000, MemoryBytes: 4 << 30} },
+	}, {
+		name:   "negative capacity.cpu_milli",
+		mutate: func(w *ateapipb.Worker) { w.Capacity = &ateapipb.WorkerCapacity{CpuMilli: -1, MemoryBytes: 4 << 30} },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "capacity", "cpu_milli"), nil, "").WithOrigin("minimum")},
+	}, {
+		name:   "negative capacity.memory_bytes",
+		mutate: func(w *ateapipb.Worker) { w.Capacity = &ateapipb.WorkerCapacity{CpuMilli: 2000, MemoryBytes: -1} },
+		want:   field.ErrorList{field.Invalid(field.NewPath("worker", "capacity", "memory_bytes"), nil, "").WithOrigin("minimum")},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
