@@ -18,10 +18,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
@@ -336,9 +339,10 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 		return nil, fmt.Errorf("only pod identity TLS is supported in this configuration")
 	}
 
-	// Verify CA pool exists and is readable at construction time.
-	_, err := getCertPool(paths.caCert)
-	if err != nil {
+	caCache := newCAPoolCache(paths.caCert)
+
+	// Verify CA pool exists, is readable, and populate the initial cache.
+	if _, err := caCache.getCertPool(); err != nil {
 		return nil, fmt.Errorf("failed to load CA cert pool from %q: %w", paths.caCert, err)
 	}
 
@@ -358,15 +362,17 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 		// Standard tls.Config.RootCAs is a static cert pool evaluated at construction time.
 		// To automatically pick up CA trust bundle rotations on disk without restarting the process,
 		// we set InsecureSkipVerify=true and verify the server certificate chain dynamically
-		// against the latest CA bundle read from disk in VerifyConnection.
+		// against the CA bundle in VerifyConnection.
+		// caCache avoids re-reading and re-parsing the CA bundle from disk on every handshake
+		// unless the file is modified or its certificates have expired.
 		InsecureSkipVerify: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
 				return fmt.Errorf("server did not present certificates")
 			}
 
-			// Read CA trust bundle on each TLS connection handshake.
-			roots, err := getCertPool(paths.caCert)
+			// Retrieve CA cert pool (cached, reloaded on rotation or expiration).
+			roots, err := caCache.getCertPool()
 			if err != nil {
 				return fmt.Errorf("failed to load CA cert pool from %q: %w", paths.caCert, err)
 			}
@@ -391,14 +397,79 @@ func resolveTLSConfig(cfg *v1alpha1.CSIDriverConfig, paths tlsPaths) (*tls.Confi
 	}, nil
 }
 
-func getCertPool(path string) (*x509.CertPool, error) {
+// caPoolCache holds the parsed *x509.CertPool and file stat / expiration metadata
+// so that unchanged and unexpired CA trust bundles are not re-read from disk on every TLS handshake.
+type caPoolCache struct {
+	path string
+
+	mu     sync.Mutex
+	fi     os.FileInfo
+	expiry time.Time
+	pool   *x509.CertPool
+}
+
+func newCAPoolCache(path string) *caPoolCache {
+	return &caPoolCache{path: path}
+}
+
+// getCertPool returns the parsed CA cert pool, re-reading the file only when it has changed
+// on disk (identity, modification time, or size) or when the cached certificates have expired.
+func (c *caPoolCache) getCertPool() (*x509.CertPool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	fi, err := os.Stat(c.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat CA cert file %q: %w", c.path, err)
+	}
+
+	if c.pool != nil && os.SameFile(c.fi, fi) && fi.ModTime().Equal(c.fi.ModTime()) && fi.Size() == c.fi.Size() && time.Now().Before(c.expiry) {
+		return c.pool, nil
+	}
+
+	pool, expiry, err := parseCertPoolWithExpiry(c.path)
+	if err != nil {
+		return nil, err
+	}
+
+	c.fi, c.pool, c.expiry = fi, pool, expiry
+	return pool, nil
+}
+
+func parseCertPoolWithExpiry(path string) (*x509.CertPool, time.Time, error) {
 	certBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read cert file %q: %w", path, err)
+		return nil, time.Time{}, fmt.Errorf("failed to read cert file %q: %w", path, err)
 	}
-	certPool := x509.NewCertPool()
-	if !certPool.AppendCertsFromPEM(certBytes) {
-		return nil, fmt.Errorf("failed to parse certs from %q", path)
+
+	pool := x509.NewCertPool()
+	var earliestExpiry time.Time
+	var count int
+
+	rest := certBytes
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("failed to parse certificate from %q: %w", path, err)
+		}
+		pool.AddCert(cert)
+		count++
+		if earliestExpiry.IsZero() || cert.NotAfter.Before(earliestExpiry) {
+			earliestExpiry = cert.NotAfter
+		}
 	}
-	return certPool, nil
+
+	if count == 0 {
+		return nil, time.Time{}, fmt.Errorf("failed to parse certs from %q: no valid CERTIFICATE blocks found", path)
+	}
+
+	return pool, earliestExpiry, nil
 }
