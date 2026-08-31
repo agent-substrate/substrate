@@ -21,7 +21,13 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 KUBECTL_CONTEXT="kind-${KIND_CLUSTER_NAME}"
 reg_name="kind-registry"
 reg_port="${KIND_REGISTRY_PORT:-5001}"
-IPV6_DNS_UPSTREAM="${IPV6_DNS_UPSTREAM:-2001:4860:4860::8888 2001:4860:4860::8844}"
+IPV6_DNS_UPSTREAM="${IPV6_DNS_UPSTREAM:-}"
+IPV6_DNS64_PREFIX="${IPV6_DNS64_PREFIX:-}"
+NAT64_PROBE_URL="${NAT64_PROBE_URL:-http://connectivitycheck.gstatic.com/generate_204}"
+NAT64_IMAGE="${NAT64_IMAGE:-}"
+# curl, not the busybox in manifests/: busybox wget takes the first address the
+# resolver hands back, which here can be one no pod can reach.
+probe_image="curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69"
 
 if [[ $# -gt 0 ]]; then
   case "$1" in
@@ -33,8 +39,17 @@ if [[ $# -gt 0 ]]; then
       echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
       echo "  IP_FAMILY          Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
       echo "  IPV6_DNS_UPSTREAM  Space-separated IPv6 resolvers CoreDNS forwards to when IP_FAMILY=ipv6"
-      echo "                     (default: Google Public DNS). These replace the host's resolver, so any"
-      echo "                     split-horizon names it served stop resolving from pods."
+      echo "                     (default: Google Public DNS, reached through IPV6_DNS64_PREFIX when"
+      echo "                     that is set). These replace the host's resolver, so any split-horizon"
+      echo "                     names it served stop resolving from pods."
+      echo "  IPV6_DNS64_PREFIX  NAT64 prefix to route external traffic through when IP_FAMILY=ipv6."
+      echo "                     Must be 64:ff9b::/96, the only prefix the vendored agent translates"
+      echo "                     (default: empty, no NAT64). Needed where the host has no IPv6 egress"
+      echo "                     of its own; leave unset where it does. Setup, prerequisites and"
+      echo "                     caveats: docs/dev/ipv6-local.md."
+      echo "  NAT64_PROBE_URL    URL a pod fetches to prove translation works (default:"
+      echo "                     ${NAT64_PROBE_URL})."
+      echo "  NAT64_IMAGE        Override the NAT64 agent image; required on arm64."
       exit 0
       ;;
   esac
@@ -51,6 +66,37 @@ case "${IP_FAMILY}" in
     exit 1
     ;;
 esac
+
+if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+  if [[ "${IP_FAMILY}" != "ipv6" ]]; then
+    echo "error: IPV6_DNS64_PREFIX only applies to IP_FAMILY=ipv6 (got '${IP_FAMILY}')" >&2
+    exit 1
+  fi
+  # The vendored manifest leaves the agent's --nat-v6-cidr at its 64:ff9b::/96
+  # default, so any other prefix has DNS64 synthesizing addresses nothing
+  # translates.
+  if [[ "${IPV6_DNS64_PREFIX}" != "64:ff9b::/96" ]]; then
+    echo "error: IPV6_DNS64_PREFIX must be 64:ff9b::/96, the only prefix the deployed agent" >&2
+    echo "       translates (got '${IPV6_DNS64_PREFIX}')" >&2
+    exit 1
+  fi
+fi
+
+# The resolver cluster DNS forwards to. With NAT64 it has to be an IPv4 resolver
+# reached through the prefix, because a host that needs NAT64 has no reachable
+# IPv6 resolver to send pods at.
+derive_dns_upstream() {
+  if [[ -z "${IPV6_DNS64_PREFIX}" ]]; then
+    echo "2001:4860:4860::8888 2001:4860:4860::8844"
+    return
+  fi
+  local p="${IPV6_DNS64_PREFIX%/*}"
+  echo "${p}0808:0808 ${p}0808:0404"
+}
+
+if [[ -z "${IPV6_DNS_UPSTREAM}" ]]; then
+  IPV6_DNS_UPSTREAM="$(derive_dns_upstream)"
+fi
 
 mkdir -p "${ROOT}/bin"
 
@@ -116,6 +162,17 @@ runtimeConfig:
   "certificates.k8s.io/v1beta1": "true"
 networking:
   ipFamily: ${IP_FAMILY}
+EOF
+if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+  # The manifest leaves the agent's IPv4 pool (--nat-v4-cidr) at its /24
+  # default, so a node's Pod CIDR cannot be wider than /120. This /112 is
+  # what makes kube-controller-manager hand out /120s; kind's IPv6 default
+  # /56 does not.
+  cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
+  podSubnet: "fd00:10:244::/112"
+EOF
+fi
+cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
 # The install pulls ~570MB of third-party images (postgres, prometheus, the otel
 # collector, rustfs, envoy, jaeger) onto this one node. kubelet serializes image
 # pulls by default, so they queue behind one another and whichever workload draws
@@ -128,6 +185,18 @@ kubeadmConfigPatches:
   serializeImagePulls: false
   maxParallelImagePulls: 4
 EOF
+if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+  # Appends an item to the list above. A second kubeadmConfigPatches key makes
+  # the config unparseable and kind rejects it before creating anything.
+  cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
+- |
+  kind: ClusterConfiguration
+  controllerManager:
+    extraArgs:
+    - name: node-cidr-mask-size-ipv6
+      value: "120"
+EOF
+fi
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}" || true
@@ -213,6 +282,61 @@ if [ "$(docker inspect -f='{{json .NetworkSettings.Networks.kind}}' "${reg_name}
   docker network connect "kind" "${reg_name}"
 fi
 
+# 4.4. Deploy the NAT64 agent, before cluster DNS starts answering with the
+# prefix it translates.
+if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+  echo "Deploying the NAT64 agent for ${IPV6_DNS64_PREFIX}..."
+  kubectl --context="${KUBECTL_CONTEXT}" apply -f "${ROOT}/hack/third_party/nat64/install.yaml"
+  if [[ -n "${NAT64_IMAGE}" ]]; then
+    kubectl --context="${KUBECTL_CONTEXT}" -n kube-system set image ds/nat64 \
+      "nat64=${NAT64_IMAGE}"
+  fi
+
+  nat64_fail() {
+    echo "error: ${1}" >&2
+    kubectl --context="${KUBECTL_CONTEXT}" -n kube-system logs ds/nat64 --tail=50 >&2 || true
+    exit 1
+  }
+  kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout status ds/nat64 \
+    --timeout=180s || nat64_fail "the NAT64 agent did not roll out"
+
+  # ds/nat64 has no readiness probe, so the rollout above returns as soon as the
+  # container is created. Poll instead.
+  echo "Waiting for the NAT64 agent to stay up..."
+  clean=0
+  for attempt in $(seq 45); do
+    sleep 2
+    total=0
+    running=0
+    while read -r count started; do
+      if [[ -z "${count}" ]]; then
+        continue
+      fi
+      total=$((total + 1))
+      if [[ "${count}" != 0 ]]; then
+        nat64_fail "the NAT64 agent restarted ${count} time(s)"
+      fi
+      if [[ -n "${started}" ]]; then
+        running=$((running + 1))
+      fi
+    done <<< "$(kubectl --context="${KUBECTL_CONTEXT}" -n kube-system get pod -l app=nat64 \
+      -o jsonpath='{range .items[*].status.containerStatuses[*]}{.restartCount}{" "}{.state.running.startedAt}{"\n"}{end}')"
+
+    if [[ "${total}" -gt 0 && "${running}" -eq "${total}" ]]; then
+      clean=$((clean + 1))
+      if [[ "${clean}" -eq 5 ]]; then
+        break
+      fi
+    else
+      clean=0
+    fi
+
+    if [[ "${attempt}" -eq 45 ]]; then
+      nat64_fail "the NAT64 agent never ran for 10s without restarting"
+    fi
+  done
+fi
+
 # 4.5. Point CoreDNS at an IPv6 resolver and teach it the registry's name
 if [[ "${IP_FAMILY}" == "ipv6" ]]; then
   echo "Repointing CoreDNS at an IPv6 resolver and teaching it '${reg_name}'..."
@@ -247,6 +371,49 @@ ${reg_name}:53 {
     }
 }"
 
+  if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+    echo "Synthesizing external names into ${IPV6_DNS64_PREFIX}..."
+    # dns64 answers AAAA by synthesizing from A, so it cannot share a block with
+    # the cluster zones: an AAAA-only ClusterIP would synthesize to nothing. Narrow
+    # the block kind ships to those zones and lift its forwarder out.
+    rezoned="$(printf '%s\n' "${patched}" | awk '
+      NR == 1 && /^\.:53[[:space:]]*\{/ {
+        print "cluster.local:53 in-addr.arpa:53 ip6.arpa:53 {"; first = 1; next
+      }
+      first && /^    forward([[:space:]].*)?\{$/ { skip = 1; next }
+      first && skip && /^    \}$/                { skip = 0; next }
+      first && skip                              { next }
+      first && /^\}$/                            { first = 0 }
+      { print }
+    ')"
+    case "${rezoned}" in
+      "cluster.local:53"*) ;;
+      *) echo "error: the Corefile does not open with the '.:53' block kind ships" >&2
+         echo "       the Corefile layout changed upstream; update this block" >&2
+         exit 1 ;;
+    esac
+    if printf '%s' "${rezoned}" | grep -q 'forward'; then
+      echo "error: a forward block survived the re-zone" >&2
+      exit 1
+    fi
+    # The prefix goes inside the block: `dns64 PREFIX { ... }` parses and then
+    # silently drops the block.
+    patched="${rezoned}
+.:53 {
+    errors
+    dns64 {
+        prefix ${IPV6_DNS64_PREFIX}
+        translate_all
+    }
+    forward . ${IPV6_DNS_UPSTREAM} {
+        max_concurrent 1000
+    }
+    cache 30
+    loop
+    reload
+}"
+  fi
+
   # A YAML patch file avoids escaping the Corefile's newlines into JSON.
   { printf 'data:\n  Corefile: |\n'; printf '%s\n' "${patched}" | sed 's/^/    /'; } \
     > "${ROOT}/bin/coredns-patch.yaml"
@@ -255,6 +422,41 @@ ${reg_name}:53 {
   kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout restart deploy/coredns
   kubectl --context="${KUBECTL_CONTEXT}" -n kube-system rollout status deploy/coredns \
     --timeout=120s
+fi
+
+# 4.6. Prove the two halves meet.
+if [[ -n "${IPV6_DNS64_PREFIX}" ]]; then
+  echo "Probing ${NAT64_PROBE_URL} from a pod..."
+  for attempt in $(seq 30); do
+    kubectl --context="${KUBECTL_CONTEXT}" -n default get sa default >/dev/null 2>&1 && break
+    if [[ "${attempt}" == 30 ]]; then
+      echo "error: the 'default' ServiceAccount never appeared" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+
+  kubectl --context="${KUBECTL_CONTEXT}" -n default delete pod nat64-probe \
+    --ignore-not-found --wait >/dev/null
+  kubectl --context="${KUBECTL_CONTEXT}" -n default run nat64-probe \
+    --image="${probe_image}" --restart=Never --command -- \
+    sh -c "curl -6 -sS -m 25 -o /dev/null -w 'reached %{remote_ip}\n' '${NAT64_PROBE_URL}' \
+      && echo NAT64-OK" >/dev/null
+
+  # Read the log rather than attaching: attach races the container's exit.
+  kubectl --context="${KUBECTL_CONTEXT}" -n default wait --for=jsonpath='{.status.phase}'=Succeeded \
+    pod/nat64-probe --timeout=120s >/dev/null || true
+  probe_out="$(kubectl --context="${KUBECTL_CONTEXT}" -n default logs nat64-probe 2>&1 || true)"
+  kubectl --context="${KUBECTL_CONTEXT}" -n default delete pod nat64-probe \
+    --ignore-not-found --wait=false >/dev/null
+
+  if [[ "${probe_out}" != *NAT64-OK* ]]; then
+    echo "error: a pod could not reach ${NAT64_PROBE_URL} through ${IPV6_DNS64_PREFIX}" >&2
+    echo "       probe output: ${probe_out:-(none)}" >&2
+    kubectl --context="${KUBECTL_CONTEXT}" -n kube-system logs ds/nat64 --tail=50 >&2 || true
+    exit 1
+  fi
+  echo "NAT64 is translating."
 fi
 
 # 5. Document the local registry in kube-public ConfigMap
