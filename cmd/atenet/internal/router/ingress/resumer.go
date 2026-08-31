@@ -92,6 +92,11 @@ type ActorResumer struct {
 	apiClient ateapipb.ControlClient
 	flight    singleflight.Group
 
+	// tracer records the ResumeActor span. Defaults to the package-level
+	// router tracer; injectable for tests so they can assert span lineage
+	// without swapping the global TracerProvider.
+	tracer trace.Tracer
+
 	// parkEnabled makes transient worker-pool saturation (FailedPrecondition)
 	// retryable, so a request is parked and retried until budget rather than
 	// failing immediately.
@@ -125,9 +130,19 @@ func withParking(cfg ParkedRequestConfig) resumerOption {
 	}
 }
 
+// withTracer overrides the tracer used to record the ResumeActor span. Tests
+// use this to capture spans with a local TracerProvider instead of swapping
+// the process-global one.
+func withTracer(tracer trace.Tracer) resumerOption {
+	return func(r *ActorResumer) {
+		r.tracer = tracer
+	}
+}
+
 func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *ActorResumer {
 	r := &ActorResumer{
 		apiClient: apiClient,
+		tracer:    otel.Tracer(extproc.ServiceName),
 		budget:    failFastResumeBudget,
 		backoff: resumeBackoff(DefaultParkedRequestRetryInterval,
 			DefaultParkedRequestRetryFactor, DefaultParkedRequestRetryJitter),
@@ -164,7 +179,7 @@ func (r *ActorResumer) retryable(err error) bool {
 // requests within the process and, when parking is enabled, holds the request
 // while retrying transient failures until the budget elapses.
 func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, ResumeOutcome, error) {
-	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ResumeActor",
+	ctx, span := r.tracer.Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
 
@@ -182,6 +197,12 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		// one control-plane RPC per hot actor (see docs/request-parking.md).
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
 		defer bgCancel()
+		// Propagate the caller's span context into the background context so the
+		// gRPC spans created by the flight are children of ResumeActor rather
+		// than starting a fresh root trace. Without this, singleflight's
+		// context.Background() detaches the trace chain at the resumer.
+		bgCtx = trace.ContextWithSpanContext(bgCtx, trace.SpanContextFromContext(ctx))
+
 		// The budget bounds the RETRY LOOP only — it never cancels an
 		// in-flight ResumeActor. ateapi durably claims the worker and marks
 		// the actor RESUMING before the expensive snapshot restore begins,
