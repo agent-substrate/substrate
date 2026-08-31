@@ -13,13 +13,21 @@
 # limitations under the License.
 
 name: e2e-ipv6
-# Separate from pr-workflow.yaml so this can be gated independently -- and so a
-# 40-minute IPv6 run never delays that workflow's merge-gating jobs.
+# Separate from pr-workflow.yaml so this can be gated independently -- and so an
+# hour-long IPv6 run never delays that workflow's merge-gating jobs.
 #
 # Only the networking suite runs. Every test that can tell one address family
 # from another lives in it, and the demo suite is a large share of the wall
 # clock for coverage that is not family-specific. The demos still deploy,
 # because networking builds its actors from their templates.
+#
+# Both sandbox classes run, gVisor then micro-VM, off the one cluster and the
+# one E2E_SANDBOX_CLASS knob. The class is where address-family support
+# diverges: gVisor's runsc adopts the interior netns wholesale and picks the
+# actor's IPv6 up for free, while a micro-VM's eth0 is a tap cross-connected to
+# that netns at L2, so the guest has to be told over the kata-agent channel. A
+# lane that ran gVisor alone could not tell a working micro-VM guest from one
+# that never got an address.
 #
 # Two ways in. A pull request that edits this file runs it: the paths filter is
 # evaluated before the job, so no unrelated request pays for a v6 cluster, and
@@ -53,7 +61,10 @@ jobs:
     # Nothing else in this workflow sets a timeout, so jobs inherit GitHub's
     # 6-hour default. A broken IPv6 cluster does not crash, it misses
     # 10-minute ActorTemplate deadlines, so an uncapped job burns hours.
-    timeout-minutes: 40
+    # Raised from 40 for the second sandbox class: a micro-VM golden snapshot is
+    # a cloud-hypervisor cold boot plus a checkpoint on nested KVM, and the
+    # networking suite then runs twice.
+    timeout-minutes: 75
     env:
       # Non-default name so these steps can be replayed locally without
       # touching an existing cluster. install-ate-kind.sh does not derive
@@ -121,10 +132,30 @@ jobs:
         go-version-file: 'go.mod'
     - name: Free disk space
       # kind node image + control-plane images + snapshots are tight on the
-      # ~14GB runner disk even without the micro-VM assets.
+      # ~14GB runner disk, and the micro-VM assets -- a 1GB kata-static tarball
+      # unpacked to a 256MB rootfs, plus a kernel -- are on top of that.
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         df -h /
+    - name: Assert the micro-VM IPv6 staging fix is in this tree
+      # Named check for the same reason as the nat64 one below. On a v6-only
+      # cluster the rustfs ClusterIP is a bare IPv6 literal, which is not a URL,
+      # so asset staging fails outright without this -- ten minutes in, as an
+      # aws-cli error about an endpoint, naming nothing that would lead here.
+      run: |
+        grep -q 'RUSTFS_IP="\[' hack/microvm-assets/stage-to-rustfs.sh || {
+          echo "::error::hack/microvm-assets/stage-to-rustfs.sh does not bracket an IPv6 rustfs ClusterIP -- stack #1122 to run the micro-VM lane"
+          exit 1
+        }
+    - name: Cache micro-VM assets
+      # restore, not the composite cache action: pr-workflow.yaml's e2e-test
+      # writes this key on every push to main, and a second saver would race it
+      # for no gain -- the assets are identical and assemble.sh fully pins them.
+      # A miss just means run-microvm-demo-kind.sh assembles them itself.
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: bin/microvm-assets/amd64
+        key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
     - name: Enable IPv6 in the Docker daemon
       # ubuntu-latest ships dockerd with IPv6 off, so kind would create its
       # network v4-only and create-kind-cluster.sh would reject the cluster.
@@ -156,6 +187,18 @@ jobs:
       run: |
         sudo sysctl -w net.ipv4.ip_forward=1
         sudo sysctl -w net.ipv6.conf.all.forwarding=1
+    - name: Enable KVM
+      # Grant the runner access to /dev/kvm so create-kind-cluster.sh makes it
+      # usable inside the node. No node label follows from this: a micro-VM
+      # WorkerPool reaches the node through the ate.dev/kvm extended resource
+      # atelet's device plugin advertises, which is why the check that this
+      # worked has to wait until after the install. After the dockerd restart
+      # above, which is what the script's probe container runs under.
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
     - name: Create cluster
       # NAT64 is opt-in in the script and this is the case it exists for: the
       # names this job needs have real AAAA records pointing at addresses the
@@ -188,6 +231,18 @@ jobs:
           sleep 2
         done
         k wait --for=condition=Ready nodes --all --timeout=180s
+    - name: Assert the node has /dev/kvm
+      # create-kind-cluster.sh probes for KVM and degrades silently to
+      # gVisor-only when the probe fails, so without this a "micro-VM lane"
+      # could pass by never having been one. Only the device is checkable here;
+      # what the scheduler actually places on is asserted after the install,
+      # because atelet is what advertises it.
+      run: |
+        for node in $(hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
+          docker exec "${node}" test -c /dev/kvm \
+            || { echo "::error::${node} has no /dev/kvm -- the micro-VM lane would be gVisor in disguise"; exit 1; }
+          echo "  ${node}: /dev/kvm present"
+        done
     - name: Assert the cluster is single-stack IPv6
       # This job is worthless if the cluster is not actually v6-only, and a
       # green run leaves no evidence either way -- the diagnostics dump below
@@ -301,10 +356,43 @@ jobs:
           echo "::error::a pod in ate-system is in CrashLoopBackOff"
           exit 1
         fi
+    - name: Assert the node advertises ate.dev/kvm
+      # A micro-VM WorkerPool requests this extended resource, so an unschedulable
+      # worker pod is how its absence would otherwise surface -- as a demo deploy
+      # that hangs until its golden-snapshot deadline. atelet's device plugin
+      # registers a moment after the DaemonSet reports rolled out, hence the poll.
+      run: |
+        k() { kubectl --context="$KUBECTL_CONTEXT" "$@"; }
+        for node in $(hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
+          kvm=""
+          for _ in $(seq 30); do
+            n=$(k get node "${node}" -o jsonpath='{.status.allocatable.ate\.dev/kvm}')
+            case "${n}" in ''|0) sleep 2 ;; *) kvm="${n}"; break ;; esac
+          done
+          [ -n "${kvm}" ] || {
+            echo "::error::${node} does not advertise ate.dev/kvm -- atelet's device plugin never registered it, so no micro-VM worker can be scheduled"
+            k -n ate-system logs -l app=atelet --tail=50 --prefix || true
+            exit 1
+          }
+          echo "  ${node}: allocatable ate.dev/kvm=${kvm}"
+        done
+    - name: Deploy substrate micro-VM counter demo
+      # Stages the (cached) assets into the cluster's rustfs and applies the
+      # counter-substrate-microvm demo onto the control plane installed above.
+      # First of the demos: it is the step a v6-only cluster breaks, and its
+      # golden snapshot is the long pole, so failing here fails early. The
+      # substrate demo handler waits for that snapshot itself.
+      run: |
+        hack/run-microvm-demo-kind.sh --substrate
+        df -h /
     - name: Deploy substrate gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter-substrate
-    - name: Deploy egress demo
-      run: hack/install-ate-kind.sh --deploy-demo-egress
+    - name: Deploy egress demos
+      # One per class: networking builds its egress Actor from the fixture for
+      # the class under test, so both have to exist before either lane runs.
+      run: |
+        hack/install-ate-kind.sh --deploy-demo-egress
+        hack/install-ate-kind.sh --deploy-demo-egress-microvm
     - name: Assert the demo fixtures exist
       # A failed demo deploy exits 0: install-ate.sh dispatches demos through
       # `if "${demo}_cmdline" "$1"`, which suspends errexit, and _cmdline ends
@@ -315,17 +403,42 @@ jobs:
       # egress template is a CRD, while the substrate counter's is a store
       # object the CRD API never sees.
       run: |
-        kubectl --context="$KUBECTL_CONTEXT" -n ate-demo-egress get actortemplate egress \
-          || { echo "::error::ate-demo-egress/egress was not created -- the demo deploy failed silently"; exit 1; }
-        go run ./cmd/kubectl-ate --context="$KUBECTL_CONTEXT" \
-          get actor-template counter -a ate-demo-counter-substrate \
-          || { echo "::error::ate-demo-counter-substrate/counter was not created -- the demo deploy failed silently"; exit 1; }
+        for ns_tmpl in ate-demo-egress/egress ate-demo-egress-microvm/egress-microvm; do
+          ns=${ns_tmpl%/*}; tmpl=${ns_tmpl#*/}
+          kubectl --context="$KUBECTL_CONTEXT" -n "${ns}" get actortemplate "${tmpl}" \
+            || { echo "::error::${ns_tmpl} was not created -- the demo deploy failed silently"; exit 1; }
+        done
+        for as_tmpl in ate-demo-counter-substrate/counter \
+                       ate-demo-counter-substrate-microvm/counter-microvm; do
+          as=${as_tmpl%/*}; tmpl=${as_tmpl#*/}
+          go run ./cmd/kubectl-ate --context="$KUBECTL_CONTEXT" \
+            get actor-template "${tmpl}" -a "${as}" \
+            || { echo "::error::${as_tmpl} was not created -- the demo deploy failed silently"; exit 1; }
+        done
     - name: Run E2E tests (networking)
       id: e2e-networking
       run: |
         set -o pipefail
         hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color 2>&1 \
           | tee /tmp/e2e-networking.log
+    - name: Run E2E tests (networking, micro-VM)
+      # The same suite again, with every fixture repointed at its micro-VM
+      # variant by the single E2E_SANDBOX_CLASS knob (internal/e2e/sandbox.go).
+      # Sequential with the gVisor lane above, not concurrent: a suite releases
+      # its namespace -- and with it its worker pods -- as each test passes, so
+      # the two runs do not contend for the one kind node.
+      #
+      # always(), so a gVisor failure does not hide the micro-VM result. That is
+      # the whole point of the lane: the two classes reach an actor's addresses
+      # by different routes and can fail independently.
+      id: e2e-networking-microvm
+      if: always() && steps.e2e-networking.outcome != 'skipped'
+      env:
+        E2E_SANDBOX_CLASS: microvm
+      run: |
+        set -o pipefail
+        hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color 2>&1 \
+          | tee /tmp/e2e-networking-microvm.log
     - name: Guard against a vacuously green run
       # A test that gates on a dual-stack Service skips itself on v6-only and
       # exits 0, so a suite that only skipped would otherwise read as a pass.
@@ -335,8 +448,16 @@ jobs:
       # Skipped when the suite never ran: with no log to count, this step would
       # otherwise report a reassuring zero on a job that failed earlier.
       if: always() && steps.e2e-networking.outcome != 'skipped'
+      env:
+        MICROVM_RAN: ${{ steps.e2e-networking-microvm.outcome != 'skipped' }}
       run: |
-        for f in /tmp/e2e-networking.log; do
+        logs=/tmp/e2e-networking.log
+        if [ "${MICROVM_RAN}" = "true" ]; then
+          logs="${logs} /tmp/e2e-networking-microvm.log"
+        else
+          echo "::warning::the micro-VM lane did not run; only gVisor was checked"
+        fi
+        for f in ${logs}; do
           [ -s "$f" ] || { echo "::error::${f} is missing or empty"; exit 1; }
           passed=$(grep -c -- '--- PASS' "$f" || true)
           echo "${f}: ${passed} passed, $(grep -c -- '--- SKIP' "$f" || true) skipped"
@@ -359,6 +480,8 @@ jobs:
         done
         # Every worker pod in any namespace: the demo pools plus the e2e suites'
         # randomly-named per-test namespaces, which the suites keep on failure.
+        # The failing actor runs in one of these, so this is where its ateom logs
+        # -- and, for a micro-VM worker, the guest console tail -- live.
         kubectl --context="$KUBECTL_CONTEXT" get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
