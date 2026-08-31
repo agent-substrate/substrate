@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -44,12 +45,6 @@ const (
 	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
 	StaleAssignmentHeader = "X-Ate-Assignment-Stale"
-	// ActorNameHeader and AtespaceHeader identify the actor selected by the
-	// trusted ingress router for routing. HTTP field names are case-insensitive; use their
-	// HTTP/2 wire form so Envoy configuration and header mutations are native.
-	ActorNameHeader = "x-ate-actor-name"
-	AtespaceHeader  = "x-ate-atespace"
-
 	// TargetPortHeader carries the port to reach on the actor: the CONNECT
 	// :authority's port for arbitrary-port ingress, or the default 80
 	// otherwise (see atenet-router's HandleRequestHeaders). cfg.Upstream is
@@ -136,8 +131,8 @@ func NewServer(cfg Config) (*Server, error) {
 
 			port := pr.In.Header.Get(TargetPortHeader)
 			pr.Out.Header.Del(TargetPortHeader)
-			pr.Out.Header.Del(ActorNameHeader)
-			pr.Out.Header.Del(AtespaceHeader)
+			pr.Out.Header.Del(atenet.ActorNameHeader)
+			pr.Out.Header.Del(atenet.AtespaceHeader)
 			if p, ok := ParsePort(port); ok {
 				pr.Out.URL.Host = net.JoinHostPort(cfg.Upstream.Hostname(), strconv.Itoa(p))
 			}
@@ -481,8 +476,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) authorize(r *http.Request) (resources.ActorRef, context.Context, func(), bool) {
 	ref := resources.ActorRef{
-		Name:     r.Header.Get(ActorNameHeader),
-		Atespace: r.Header.Get(AtespaceHeader),
+		Name:     r.Header.Get(atenet.ActorNameHeader),
+		Atespace: r.Header.Get(atenet.AtespaceHeader),
 	}
 	if !resources.IsValidResourceName(ref.Name) || !resources.IsValidResourceName(ref.Atespace) {
 		return resources.ActorRef{}, nil, nil, false

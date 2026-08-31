@@ -34,6 +34,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/atenet"
 )
 
 func TestRelayIngressWithHalfClose(t *testing.T) {
@@ -174,8 +176,8 @@ func TestServeHTTP(t *testing.T) {
 				req.Header.Set("X-ATE-Actor-Name", tt.actorName)
 				req.Header.Set("x-ate-ATESPACE", tt.atespace)
 			} else {
-				req.Header.Set(ActorNameHeader, tt.actorName)
-				req.Header.Set(AtespaceHeader, tt.atespace)
+				req.Header.Set(atenet.ActorNameHeader, tt.actorName)
+				req.Header.Set(atenet.AtespaceHeader, tt.atespace)
 			}
 			rec := httptest.NewRecorder()
 			s.ServeHTTP(rec, req)
@@ -235,8 +237,8 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
 			req.Host = "client.example"
-			req.Header.Set(ActorNameHeader, "actor-1")
-			req.Header.Set(AtespaceHeader, "team-a")
+			req.Header.Set(atenet.ActorNameHeader, "actor-1")
+			req.Header.Set(atenet.AtespaceHeader, "team-a")
 			if tt.targetPort != "" {
 				req.Header.Set(TargetPortHeader, tt.targetPort)
 			}
@@ -251,7 +253,7 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 			if gotHost.Get("Host") != "client.example" {
 				t.Errorf("Host header changed to %q", gotHost.Get("Host"))
 			}
-			for _, header := range []string{TargetPortHeader, ActorNameHeader, AtespaceHeader} {
+			for _, header := range []string{TargetPortHeader, atenet.ActorNameHeader, atenet.AtespaceHeader} {
 				if got := gotHost.Get(header); got != "" {
 					t.Errorf("%s leaked to the actor upstream: %q", header, got)
 				}
@@ -285,10 +287,10 @@ func TestServeConnectHTTPValidatesMethodAndAuthority(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "https://worker/", nil)
 			req.Host = tt.host
-			req.Header.Set(ActorNameHeader, "actor-1")
-			req.Header.Set(AtespaceHeader, "team-a")
+			req.Header.Set(atenet.ActorNameHeader, "actor-1")
+			req.Header.Set(atenet.AtespaceHeader, "team-a")
 			if tt.name == "rejects inactive actor" {
-				req.Header.Set(ActorNameHeader, "actor-2")
+				req.Header.Set(atenet.ActorNameHeader, "actor-2")
 			}
 			rec := httptest.NewRecorder()
 			s.ServeConnectHTTP(rec, req)
@@ -335,8 +337,8 @@ func TestDeactivateClosesIdleUpstreamConnections(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://worker/", nil)
 	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
-	req.Header.Set(ActorNameHeader, "actor-1")
-	req.Header.Set(AtespaceHeader, "team-a")
+	req.Header.Set(atenet.ActorNameHeader, "actor-1")
+	req.Header.Set(atenet.AtespaceHeader, "team-a")
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -358,8 +360,8 @@ func TestInactive(t *testing.T) {
 	s := newTestServer(t, upstream)
 	req := httptest.NewRequest(http.MethodGet, "https://worker/", nil)
 	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
-	req.Header.Set(ActorNameHeader, "actor-1")
-	req.Header.Set(AtespaceHeader, "team-a")
+	req.Header.Set(atenet.ActorNameHeader, "actor-1")
+	req.Header.Set(atenet.AtespaceHeader, "team-a")
 
 	for _, phase := range []string{"before activation", "after deactivation"} {
 		t.Run(phase, func(t *testing.T) {
@@ -484,11 +486,9 @@ func TestServeNegotiatesH2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- s.Serve(ctx, lis) }()
+	go func() { served <- s.Serve(t.Context(), lis) }()
 	t.Cleanup(func() {
-		cancel()
 		select {
 		case err := <-served:
 			if err != nil {
@@ -521,8 +521,8 @@ func TestServeNegotiatesH2(t *testing.T) {
 			t.Fatal(err)
 		}
 		req.Host = "team-a-agent.example.com" // Use a custom Host header to prove that we no longer rely on Host to route to the actor
-		req.Header.Set(ActorNameHeader, "actor-1")
-		req.Header.Set(AtespaceHeader, "team-a")
+		req.Header.Set(atenet.ActorNameHeader, "actor-1")
+		req.Header.Set(atenet.AtespaceHeader, "team-a")
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
 		}
@@ -581,8 +581,8 @@ func TestDeactivateCancelsInflightRequest(t *testing.T) {
 		defer close(done)
 		req := httptest.NewRequest(http.MethodGet, "https://worker/", nil)
 		req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
-		req.Header.Set(ActorNameHeader, "actor-1")
-		req.Header.Set(AtespaceHeader, "team-a")
+		req.Header.Set(atenet.ActorNameHeader, "actor-1")
+		req.Header.Set(atenet.AtespaceHeader, "team-a")
 		s.ServeHTTP(httptest.NewRecorder(), req)
 	}()
 	receiveWithin(t, started, "in-flight request")

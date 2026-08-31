@@ -75,12 +75,6 @@ func ActorRefFromActor(a *ateapipb.Actor) ActorRef {
 	}
 }
 
-// ActorDNSName returns the conventional authority name for an actor.
-// Substrate does not resolve this name; routing uses explicit actor headers.
-func ActorDNSName(r ActorRef) string {
-	return r.Name + "." + r.Atespace + "." + ActorDNSSuffix
-}
-
 // ActorTemplateRef identifies an ActorTemplate by the (atespace, name).
 type ActorTemplateRef = ResourceRef[*ateapipb.ActorTemplate]
 

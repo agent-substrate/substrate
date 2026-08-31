@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package resources
+// Package atenet defines the shared contract for Substrate actor networking.
+package atenet
 
 const (
-	// ResourceNameRegexPattern is the regular expression pattern for a valid
-	// Substrate resource name.
-	ResourceNameRegexPattern = `[a-z0-9]([-a-z0-9]*[a-z0-9])?`
-	// GoldenActorAtespace is the reserved system atespace that per-template golden
-	// actors live in.
-	GoldenActorAtespace = "ate-golden"
+	// ActorNameHeader and AtespaceHeader identify the actor selected for ingress
+	// routing. HTTP field names are case-insensitive; these use their HTTP/2 wire
+	// form so dataplane configuration and header mutations are native.
+	ActorNameHeader = "x-ate-actor-name"
+	AtespaceHeader  = "x-ate-atespace"
 )

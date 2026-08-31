@@ -114,7 +114,6 @@ def _warm_actor(
     200 or the deadline expires. Resume errors are retried: ateapi
     returns FailedPrecondition/Unavailable until a worker frees up."""
     ref = ateapi_pb2.ObjectRef(atespace=atespace, name=name)
-    host = spec_mod.actor_host(name, atespace)
     session = requests.Session()
     last_err: str = "not attempted"
     while time.time() < deadline:
@@ -126,7 +125,6 @@ def _warm_actor(
             resp = session.post(
                 f"{router_url.rstrip('/')}/ping",
                 headers={
-                    "Host": host,
                     "X-Ate-Actor-Name": name,
                     "X-Ate-Atespace": atespace,
                 },

@@ -78,7 +78,6 @@ def test_identity_rotation_covers_all_actors():
     ]
     assert got == [
         {
-            "host": spec_mod.actor_host(actor_name, "benchmark"),
             "x-ate-actor-name": actor_name,
             "x-ate-atespace": "benchmark",
         }
@@ -123,13 +122,6 @@ def test_tail_latency_slo_threshold():
     assert "lower_threshold" not in latency
     # Disabled (None) => no latency threshold at all.
     assert len(build(tail_latency_slo_ms=None)["metric_thresholds"]) == 2
-
-
-def test_actor_host_format():
-    assert (
-        spec_mod.actor_host("sb-1", "benchmark")
-        == "sb-1.benchmark.actors.resources.substrate.ate.dev"
-    )
 
 
 def test_spec_round_trips_through_real_protos():

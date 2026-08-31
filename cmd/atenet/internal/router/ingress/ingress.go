@@ -36,6 +36,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -85,8 +86,8 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	defer span.End()
 
 	actorRef := resources.ActorRef{
-		Name:     routingValue(md, atunnel.ActorNameHeader, extproc.ActorNameFilterStateAttribute),
-		Atespace: routingValue(md, atunnel.AtespaceHeader, extproc.AtespaceFilterStateAttribute),
+		Name:     routingValue(md, atenet.ActorNameHeader, extproc.ActorNameFilterStateAttribute),
+		Atespace: routingValue(md, atenet.AtespaceHeader, extproc.AtespaceFilterStateAttribute),
 	}
 	if !resources.IsValidResourceName(actorRef.Name) || !resources.IsValidResourceName(actorRef.Atespace) {
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_NotFound, "invalid actor reference")
@@ -165,8 +166,8 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// different actor after this request has been resolved.
 	mutation := &extprocv3.HeaderMutation{}
 	for _, header := range []struct{ name, value string }{
-		{atunnel.ActorNameHeader, actorRef.Name},
-		{atunnel.AtespaceHeader, actorRef.Atespace},
+		{atenet.ActorNameHeader, actorRef.Name},
+		{atenet.AtespaceHeader, actorRef.Atespace},
 		{atunnel.TargetPortHeader, strconv.Itoa(targetPort)},
 	} {
 		mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{

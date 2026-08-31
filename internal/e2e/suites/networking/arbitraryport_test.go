@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -108,7 +108,7 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 
 		conn.SetDeadline(time.Now().Add(10 * time.Second))
 		if _, err := fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\n%s: %s\r\n%s: %s\r\nConnection: close\r\n\r\n",
-			resources.ActorDNSName(actorRef), atunnel.ActorNameHeader, actorRef.Name, atunnel.AtespaceHeader, actorRef.Atespace); err != nil {
+			actorRef.Name, atenet.ActorNameHeader, actorRef.Name, atenet.AtespaceHeader, actorRef.Atespace); err != nil {
 			t.Fatalf("writing tunneled request: %v", err)
 		}
 		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
@@ -142,7 +142,7 @@ func waitForTunneledRouteReady(t *testing.T, ctx context.Context, router *e2e.Ro
 	for {
 		conn, err := router.Connect(ctx, actorRef, port)
 		if err == nil {
-			resp, body, requestErr := requestTunneled(conn, resources.ActorDNSName(actorRef))
+			resp, body, requestErr := requestTunneled(conn, actorRef.Name)
 			_ = conn.Close()
 			if requestErr == nil && resp.StatusCode == http.StatusOK {
 				return body

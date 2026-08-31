@@ -54,7 +54,8 @@ ${K} -n ate-system port-forward service/atenet-router 18000:80 >/tmp/pf.log 2>&1
 PF=$!; trap 'kill ${PF} 2>/dev/null || true' EXIT
 sleep 3
 RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:18000/ \
-  -H "Host: ${ACTOR}.${ATESPACE}.actors.resources.substrate.ate.dev" \
+  -H "X-Ate-Actor-Name: ${ACTOR}" \
+  -H "X-Ate-Atespace: ${ATESPACE}" \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"${TARGET_URL}\"}") || true
 echo "actor round-trip HTTP ${RESP} (200 = the actor fetched ${TARGET_URL} through egress)"

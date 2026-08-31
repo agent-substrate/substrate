@@ -51,7 +51,6 @@ tracer = get_tracer(__name__)
 # Atenet router fronts all actor traffic. The actor routing headers select
 # the actor whose current worker pod the router resolves.
 ROUTER_URL = "http://atenet-router.ate-system.svc.cluster.local"
-ACTOR_DOMAIN = "actors.resources.substrate.ate.dev"
 
 
 class CounterUser(User):
@@ -101,7 +100,6 @@ class CounterUser(User):
         # One HTTP session per user, talking to the router.
         self.http_session = requests.Session()
         self.run_url = f"{ROUTER_URL}/"
-        self.host_header = f"{self.actor_name}.{ATESPACE}.{ACTOR_DOMAIN}"
 
     def on_stop(self) -> None:
         update_user_count(-1, self.__class__.__name__)
@@ -137,7 +135,6 @@ class CounterUser(User):
         start_time = time.time()
         with tracer.start_as_current_span("RunCounter") as span:
             headers = {
-                "Host": self.host_header,
                 "X-Ate-Actor-Name": self.actor_name,
                 "X-Ate-Atespace": ATESPACE,
             }

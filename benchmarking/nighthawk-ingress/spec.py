@@ -58,11 +58,6 @@ INFORMATIONAL_METRICS = (
 )
 
 
-def actor_host(actor: str, atespace: str) -> str:
-    """Return an actor's stable mesh DNS name."""
-    return f"{actor}.{atespace}.actors.resources.substrate.ate.dev"
-
-
 def _metric_spec(name: str) -> dict:
     return {"metric_name": name, "metrics_plugin_name": BUILTIN_METRICS_PLUGIN}
 
@@ -117,13 +112,6 @@ def build_spec_dict(
         {
             "request_method": "POST",
             "request_headers": [
-                {
-                    "header": {
-                        "key": "host",
-                        "value": actor_host(actor_name, atespace),
-                    },
-                    "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
-                },
                 {
                     "header": {"key": "x-ate-actor-name", "value": actor_name},
                     "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",

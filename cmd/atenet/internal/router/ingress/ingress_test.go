@@ -32,6 +32,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -47,8 +48,8 @@ func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRe
 
 func requestMetadata(actorName, atespace string, headers ...*corev3.HeaderValue) *extproc.RequestMetadata {
 	headers = append(headers,
-		&corev3.HeaderValue{Key: atunnel.ActorNameHeader, Value: actorName},
-		&corev3.HeaderValue{Key: atunnel.AtespaceHeader, Value: atespace},
+		&corev3.HeaderValue{Key: atenet.ActorNameHeader, Value: actorName},
+		&corev3.HeaderValue{Key: atenet.AtespaceHeader, Value: atespace},
 	)
 	return extproc.NewRequestMetadata(headers, nil)
 }
@@ -306,10 +307,10 @@ func TestHandleRequestHeaders(t *testing.T) {
 			if got := gotMutations[strings.ToLower(atunnel.TargetPortHeader)]; got != tc.expectedTargetPort {
 				t.Errorf("target port mutation = %q, want %q", got, tc.expectedTargetPort)
 			}
-			if got := gotMutations[strings.ToLower(atunnel.ActorNameHeader)]; got != testUUID {
+			if got := gotMutations[strings.ToLower(atenet.ActorNameHeader)]; got != testUUID {
 				t.Errorf("actor name mutation = %q, want %q", got, testUUID)
 			}
-			if got := gotMutations[strings.ToLower(atunnel.AtespaceHeader)]; got != "team-a" {
+			if got := gotMutations[strings.ToLower(atenet.AtespaceHeader)]; got != "team-a" {
 				t.Errorf("atespace mutation = %q, want %q", got, "team-a")
 			}
 			if got := dynamicMetadataTarget(res.DynamicMetadata); got != tc.expectedTarget {
@@ -381,8 +382,8 @@ func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
 		},
 	}
 	md := extproc.NewRequestMetadata([]*corev3.HeaderValue{
-		{Key: atunnel.ActorNameHeader, Value: testUUID},
-		{Key: atunnel.AtespaceHeader, Value: "team-a"},
+		{Key: atenet.ActorNameHeader, Value: testUUID},
+		{Key: atenet.AtespaceHeader, Value: "team-a"},
 		{Key: ":authority", Value: "inner.example"},
 	}, attrs)
 

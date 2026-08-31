@@ -101,7 +101,6 @@ BEFORE=$(egress_log_count)
 ${K} -n ate-system port-forward service/atenet-router 18099:80 >/tmp/egress-pf.log 2>&1 &
 PF=$!; sleep 4
 CODE=$(curl -s -o /tmp/egress-body.txt -w '%{http_code}' -X POST http://localhost:18099/ \
-  -H "Host: ${ACTOR}.${ATESPACE}.actors.resources.substrate.ate.dev" \
   -H "X-Ate-Actor-Name: ${ACTOR}" \
   -H "X-Ate-Atespace: ${ATESPACE}" \
   -H 'Content-Type: application/json' \

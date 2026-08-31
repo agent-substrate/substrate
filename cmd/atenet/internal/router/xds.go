@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 
 	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
@@ -899,8 +900,8 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 func actorRoutingFilterStateFilter() *hcmv3.HttpFilter {
 	values := make([]*setfilterstatecommonv3.FilterStateValue, 0, 3)
 	for _, routingField := range []struct{ key, header string }{
-		{extproc.ActorNameFilterStateKey, atunnel.ActorNameHeader},
-		{extproc.AtespaceFilterStateKey, atunnel.AtespaceHeader},
+		{extproc.ActorNameFilterStateKey, atenet.ActorNameHeader},
+		{extproc.AtespaceFilterStateKey, atenet.AtespaceHeader},
 		{extproc.ConnectAuthorityFilterStateKey, extproc.AuthorityHeader},
 	} {
 		values = append(values, &setfilterstatecommonv3.FilterStateValue{

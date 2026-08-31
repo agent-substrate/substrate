@@ -123,7 +123,7 @@ proxy behavior wouldn't do:
 curl -p -x http://localhost:8001 \
   -H "X-Ate-Actor-Name: my-counter-1" \
   -H "X-Ate-Atespace: ate-demo-counter" \
-  http://my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev:9090/
+  http://my-counter-1:9090/
 ```
 
 This reaches the same actor's second listener and resumes it exactly like any
