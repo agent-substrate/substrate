@@ -1136,6 +1136,8 @@ message ResumeActorRequest {
   ObjectRef actor = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
+  //
+  // +k8s:optional
   bool boot = 2;
 }
 
@@ -1151,6 +1153,10 @@ message DeleteActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // If true, delete the actor regardless of its state.
+  //
+  // +k8s:optional
   bool any_state = 2;
 }
 

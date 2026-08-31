@@ -4406,6 +4406,8 @@ type ResumeActorRequest struct {
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// If true, skip golden snapshot and boot the workload from scratch.
+	//
+	// +k8s:optional
 	Boot          bool `protobuf:"varint,2,opt,name=boot,proto3" json:"boot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4513,8 +4515,11 @@ type DeleteActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
-	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
-	AnyState      bool       `protobuf:"varint,2,opt,name=any_state,json=anyState,proto3" json:"any_state,omitempty"`
+	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	// If true, delete the actor regardless of its state.
+	//
+	// +k8s:optional
+	AnyState      bool `protobuf:"varint,2,opt,name=any_state,json=anyState,proto3" json:"any_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
