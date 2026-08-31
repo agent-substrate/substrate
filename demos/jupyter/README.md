@@ -75,7 +75,7 @@ print("hello world")
 
 ### 4. Suspending and Resuming the Notebook
 
-When you're not using the notebook, instead of leaving the container running, Substrate can checkpoint and suspend it to disk. 
+When you're not using the notebook, instead of leaving the container running, Substrate can checkpoint and suspend it to disk.
 
 ```bash
 kubectl ate suspend actor jupyter-notebook -a ate-demo-jupyter
@@ -93,7 +93,7 @@ To **resume** the notebook, you can either explicitly resume it via CLI:
 kubectl ate resume actor jupyter-notebook -a ate-demo-jupyter
 ```
 
-Or, even easier, you can rely on "transparent resume" — just refresh the page in your browser or make another request to the URL while it's suspended. Substrate will automatically restore its state and serve your request without any downtime. 
+Or, even easier, you can rely on "transparent resume" — just refresh the page in your browser or make another request to the URL while it's suspended. Substrate will automatically restore its state and serve your request without any downtime.
 
 ### Clean up
 

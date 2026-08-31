@@ -53,6 +53,31 @@ func requestMetadata(actorName, atespace string, headers ...*corev3.HeaderValue)
 	return extproc.NewRequestMetadata(headers, nil)
 }
 
+func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
+	clientMock := &mockClient{
+		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			if got, want := in.GetActor().GetName(), "actor-1"; got != want {
+				t.Errorf("actor name = %q, want %q", got, want)
+			}
+			if got, want := in.GetActor().GetAtespace(), "team-a"; got != want {
+				t.Errorf("atespace = %q, want %q", got, want)
+			}
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
+			}}, nil
+		},
+	}
+	h := New(clientMock, ParkedRequestConfig{}, nil)
+	md := extproc.NewRequestMetadata([]*corev3.HeaderValue{
+		{Key: "X-ATE-Actor-Name", Value: "actor-1"},
+		{Key: "x-ate-ATESPACE", Value: "team-a"},
+	}, nil)
+
+	if _, err := h.HandleRequestHeaders(context.Background(), md); err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v", err)
+	}
+}
+
 // dynamicMetadataTarget extracts the resolved worker address
 // HandleRequestHeaders reports via OriginalDstMetadataKey/OriginalDstAddressKey.
 func dynamicMetadataTarget(dynamicMetadata *structpb.Struct) string {
@@ -138,7 +163,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			atespace:       "team-a",
 			authority:      "invalid-host.com",
 			expectErr:      true,
-			expectedErrStr: `invalid actor identity`,
+			expectedErrStr: `invalid actor reference`,
 			expectedStatus: envoy_type.StatusCode_NotFound,
 		},
 		{
@@ -194,7 +219,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
-			name:      "successful resume ignores host for actor identity",
+			name:      "successful resume ignores host for actor routing",
 			authority: "application.example",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
@@ -271,7 +296,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 
 			mutation := res.Response.GetResponse().GetHeaderMutation()
 			if len(mutation.GetSetHeaders()) != 3 {
-				t.Fatalf("expected actor identity and target port headers, found: %v", mutation.GetSetHeaders())
+				t.Fatalf("expected actor routing and target port headers, found: %v", mutation.GetSetHeaders())
 			}
 
 			gotMutations := map[string]string{}

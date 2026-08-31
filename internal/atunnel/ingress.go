@@ -45,9 +45,10 @@ const (
 	// 421 returned by the actor application itself.
 	StaleAssignmentHeader = "X-Ate-Assignment-Stale"
 	// ActorNameHeader and AtespaceHeader identify the actor selected by the
-	// trusted ingress router.
-	ActorNameHeader = "X-Ate-Actor-Name"
-	AtespaceHeader  = "X-Ate-Atespace"
+	// trusted ingress router for routing. HTTP field names are case-insensitive; use their
+	// HTTP/2 wire form so Envoy configuration and header mutations are native.
+	ActorNameHeader = "x-ate-actor-name"
+	AtespaceHeader  = "x-ate-atespace"
 
 	// TargetPortHeader carries the port to reach on the actor: the CONNECT
 	// :authority's port for arbitrary-port ingress, or the default 80
@@ -104,7 +105,7 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle path is required")
 	}
 	if cfg.AllowedClientID == "" {
-		return nil, fmt.Errorf("atunnel: allowed client identity is required")
+		return nil, fmt.Errorf("atunnel: allowed client ID is required")
 	}
 	if cfg.Upstream == nil || cfg.Upstream.Scheme == "" || cfg.Upstream.Host == "" {
 		return nil, fmt.Errorf("atunnel: upstream URL is required")
@@ -414,7 +415,7 @@ func (w flushingWriter) Write(p []byte) (int, error) {
 // active actor per worker.
 func (s *Server) Activate(atespace, actorName string) error {
 	if !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(actorName) {
-		return fmt.Errorf("atunnel: invalid actor identity %q/%q", atespace, actorName)
+		return fmt.Errorf("atunnel: invalid actor reference %q/%q", atespace, actorName)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -465,7 +466,7 @@ func (s *Server) closeIdleUpstreamConnections() {
 	}
 }
 
-// ServeHTTP validates the actor identity headers on every request before proxying it.
+// ServeHTTP validates the actor routing headers on every request before proxying it.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, requestCtx, release, ok := s.authorize(r)
 	if !ok {

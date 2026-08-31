@@ -141,3 +141,21 @@ func TestRequestMetadataAttribute(t *testing.T) {
 		t.Errorf("Attribute() for a missing key = %q, want \"\"", got)
 	}
 }
+
+func TestRequestMetadataHeaderIsCaseInsensitive(t *testing.T) {
+	md := NewRequestMetadata([]*corev3.HeaderValue{
+		{Key: "X-ATE-Actor-Name", Value: "actor-1"},
+		{Key: "x-ate-ATESPACE", Value: "team-a"},
+	}, nil)
+
+	for name, want := range map[string]string{
+		"x-ate-actor-name": "actor-1",
+		"X-Ate-Actor-Name": "actor-1",
+		"x-ate-atespace":   "team-a",
+		"X-ATE-ATESPACE":   "team-a",
+	} {
+		if got := md.Header(name); got != want {
+			t.Errorf("Header(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

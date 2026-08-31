@@ -84,9 +84,9 @@ One Kubernetes Job per `type: nighthawk-ingress` tests.yaml entry, driven by
    down afterwards, so nothing leaks.
 2. **Create + warm actors.** The runner creates one glutton actor per
    WorkerPool worker (the entry's `workerCount`) via ateapi and POSTs
-   `/ping` through the router with each actor's identity headers until it
+   `/ping` through the router with each actor's routing headers until it
    answers 200.
-3. **Adaptive search.** Open-loop traffic with the actor identity headers rotated
+3. **Adaptive search.** Open-loop traffic with the actor routing headers rotated
    across all actors; `clientConcurrency` event loops (default 16,
    decoupled from `envoyCpu`) and large per-loop pools so the harness is
    never the bottleneck. Exponential ramp → binary search → a 60s

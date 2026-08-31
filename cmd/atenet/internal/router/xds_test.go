@@ -52,16 +52,16 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
 
-func TestActorIdentityFilterStateFilter(t *testing.T) {
-	filter := actorIdentityFilterStateFilter()
+func TestActorRoutingFilterStateFilter(t *testing.T) {
+	filter := actorRoutingFilterStateFilter()
 	config := &setfilterstatev3.Config{}
 	if err := filter.GetTypedConfig().UnmarshalTo(config); err != nil {
 		t.Fatalf("unmarshal set_filter_state config: %v", err)
 	}
 
 	want := map[string]string{
-		extproc.ActorNameFilterStateKey: "%REQ(" + atunnel.ActorNameHeader + ")%",
-		extproc.AtespaceFilterStateKey:  "%REQ(" + atunnel.AtespaceHeader + ")%",
+		extproc.ActorNameFilterStateKey: "%REQ(x-ate-actor-name)%",
+		extproc.AtespaceFilterStateKey:  "%REQ(x-ate-atespace)%",
 	}
 	if len(config.GetOnRequestHeaders()) != len(want) {
 		t.Fatalf("captured values = %d, want %d", len(config.GetOnRequestHeaders()), len(want))
@@ -73,7 +73,7 @@ func TestActorIdentityFilterStateFilter(t *testing.T) {
 			t.Errorf("capture %q = %q, want %q", key, format, want[key])
 		}
 		if strings.Contains(format, ":AUTHORITY") {
-			t.Errorf("capture %q still derives actor identity from authority", key)
+			t.Errorf("capture %q still derives actor routing from authority", key)
 		}
 	}
 }

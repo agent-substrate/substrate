@@ -27,7 +27,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
   │      (forwards the peer chain    │  verify chain + ActorIdentity extension
   │       as x-forwarded-client-cert)│  GetActor → UID must match, must be RUNNING
   │    • dynamic_forward_proxy       │  allow / deny 403
-  │           │                              
+  │           │
   └───────────┼───────────────────────────────────────┘
               ▼
      real destination (the CONNECT authority, an IP:port)
@@ -40,7 +40,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 3. **Guide 3 — HTTP-only actors, identity carried by the certificate.** The Actor only dials plain
    HTTP. atunnel presents the actor's own certificate — minted per actor by ateapi off the
    actor-identity CA, carrying an `ActorIdentity` X.509 extension — and sends a bare `CONNECT`
-   with no identity headers at all.
+  with no actor routing headers at all.
 4. **Identity authentication.** Envoy requires a client certificate signed by the actor-identity
    CA, so a non-actor client is refused at the handshake. It then forwards the verified chain to
    `ext_proc` as `x-forwarded-client-cert`, and the **atenet router** (co-located in the gateway

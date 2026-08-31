@@ -341,7 +341,7 @@ Handles actor-aware routing and automatic re-animation.
     reads the Actor name from `X-Ate-Actor-Name` and the Atespace from
     `X-Ate-Atespace`, then calls the Control Plane to resume the Actor and
     resolve its current worker assignment. `Host` remains application authority
-    and is not used as actor identity.
+    and does not select the Actor.
 
   * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
     authenticated TLS tunnel to the worker's `atunnel` listener on port 443.

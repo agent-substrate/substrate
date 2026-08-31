@@ -894,17 +894,17 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 	}
 }
 
-// actorIdentityFilterStateFilter captures the actor identity headers so
+// actorRoutingFilterStateFilter captures the actor routing headers so
 // main_internal can read them across the CONNECT internal-listener hop.
-func actorIdentityFilterStateFilter() *hcmv3.HttpFilter {
+func actorRoutingFilterStateFilter() *hcmv3.HttpFilter {
 	values := make([]*setfilterstatecommonv3.FilterStateValue, 0, 2)
-	for _, identity := range []struct{ key, header string }{
+	for _, routingField := range []struct{ key, header string }{
 		{extproc.ActorNameFilterStateKey, atunnel.ActorNameHeader},
 		{extproc.AtespaceFilterStateKey, atunnel.AtespaceHeader},
 	} {
 		values = append(values, &setfilterstatecommonv3.FilterStateValue{
 			Key: &setfilterstatecommonv3.FilterStateValue_ObjectKey{
-				ObjectKey: identity.key,
+				ObjectKey: routingField.key,
 			},
 			FactoryKey: "envoy.string",
 			Value: &setfilterstatecommonv3.FilterStateValue_FormatString{
@@ -912,7 +912,7 @@ func actorIdentityFilterStateFilter() *hcmv3.HttpFilter {
 					Format: &corev3.SubstitutionFormatString_TextFormatSource{
 						TextFormatSource: &corev3.DataSource{
 							Specifier: &corev3.DataSource_InlineString{
-								InlineString: "%REQ(" + identity.header + ")%",
+								InlineString: "%REQ(" + routingField.header + ")%",
 							},
 						},
 					},
@@ -960,7 +960,7 @@ func (x *XdsServer) buildConnectTerminateHCM(statPrefix string) *anypb.Any {
 		},
 		CodecType: hcmv3.HttpConnectionManager_AUTO,
 		HttpFilters: []*hcmv3.HttpFilter{
-			actorIdentityFilterStateFilter(),
+			actorRoutingFilterStateFilter(),
 			{
 				Name: "envoy.filters.http.router",
 				ConfigType: &hcmv3.HttpFilter_TypedConfig{
@@ -1015,9 +1015,9 @@ func buildConnectRoutes() *routev3.RouteConfiguration {
 }
 
 // buildHcm builds the HTTP ext_proc-fronted HCM shared by the ingress_http,
-// ingress_https, and main_internal listeners. captureActorIdentity preserves
-// the two actor identity headers across CONNECT re-entry.
-func (x *XdsServer) buildHcm(statPrefix string, captureActorIdentity bool) *anypb.Any {
+// ingress_https, and main_internal listeners. captureActorRouting preserves
+// the two actor routing headers across CONNECT re-entry.
+func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb.Any {
 	extProcConfig := newAny(&extprocv3filter.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
 			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
@@ -1061,8 +1061,8 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorIdentity bool) *anyp
 	accessLogConfig := newAny(&streamaccesslogv3.StdoutAccessLog{})
 
 	httpFilters := []*hcmv3.HttpFilter{}
-	if captureActorIdentity {
-		httpFilters = append(httpFilters, actorIdentityFilterStateFilter())
+	if captureActorRouting {
+		httpFilters = append(httpFilters, actorRoutingFilterStateFilter())
 	}
 	httpFilters = append(httpFilters,
 		&hcmv3.HttpFilter{

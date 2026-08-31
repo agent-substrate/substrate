@@ -18,9 +18,8 @@
 // saturated), and points the dataplane at the worker that ends up hosting it.
 //
 // Everything reaching this handler is unauthenticated client input. The
-// opposite trust model — an actor identity carried by a CA-signed client
-// certificate — belongs to the sibling egress package, and the two are kept
-// apart deliberately.
+// certificate authentication used for egress belongs to the sibling egress
+// package, and the two are kept apart deliberately.
 package ingress
 
 import (
@@ -86,11 +85,11 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	defer span.End()
 
 	actorRef := resources.ActorRef{
-		Name:     identityValue(md, atunnel.ActorNameHeader, extproc.ActorNameFilterStateAttribute),
-		Atespace: identityValue(md, atunnel.AtespaceHeader, extproc.AtespaceFilterStateAttribute),
+		Name:     routingValue(md, atunnel.ActorNameHeader, extproc.ActorNameFilterStateAttribute),
+		Atespace: routingValue(md, atunnel.AtespaceHeader, extproc.AtespaceFilterStateAttribute),
 	}
 	if !resources.IsValidResourceName(actorRef.Name) || !resources.IsValidResourceName(actorRef.Atespace) {
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_NotFound, "invalid actor identity")
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_NotFound, "invalid actor reference")
 	}
 
 	// CONNECT traffic can name a port other than defaultActorPort in the
@@ -119,7 +118,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		return extproc.Result{Resume: string(resumeOutcome)}, mapResumeError(actorRef, err)
 	}
 
-	// Actor template identity, used as low-cardinality route-latency metric
+	// Actor template coordinates, used as low-cardinality route-latency metric
 	// attributes.
 	res := extproc.Result{
 		TemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -184,7 +183,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	return res, nil
 }
 
-func identityValue(md *extproc.RequestMetadata, header, attribute string) string {
+func routingValue(md *extproc.RequestMetadata, header, attribute string) string {
 	if value := md.Header(header); value != "" {
 		return value
 	}

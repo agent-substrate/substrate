@@ -48,7 +48,7 @@ init_wait_time()
 tracer = get_tracer(__name__)
 
 
-# Atenet router fronts all actor traffic. The actor identity headers select
+# Atenet router fronts all actor traffic. The actor routing headers select
 # the actor whose current worker pod the router resolves.
 ROUTER_URL = "http://atenet-router.ate-system.svc.cluster.local"
 ACTOR_DOMAIN = "actors.resources.substrate.ate.dev"

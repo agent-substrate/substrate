@@ -153,9 +153,11 @@ func TestServeHTTP(t *testing.T) {
 		host       string
 		actorName  string
 		atespace   string
+		mixedCase  bool
 		wantStatus int
 	}{
 		{name: "active actor", host: "client.example", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
+		{name: "mixed-case routing headers", actorName: "actor-1", atespace: "team-a", mixedCase: true, wantStatus: http.StatusNoContent},
 		{name: "host does not identify actor", host: "actor-2.team-b.example", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
 		{name: "empty host", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
 		{name: "wrong actor", actorName: "actor-2", atespace: "team-a", wantStatus: http.StatusMisdirectedRequest},
@@ -168,8 +170,13 @@ func TestServeHTTP(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
 			req.Host = tt.host
-			req.Header.Set(ActorNameHeader, tt.actorName)
-			req.Header.Set(AtespaceHeader, tt.atespace)
+			if tt.mixedCase {
+				req.Header.Set("X-ATE-Actor-Name", tt.actorName)
+				req.Header.Set("x-ate-ATESPACE", tt.atespace)
+			} else {
+				req.Header.Set(ActorNameHeader, tt.actorName)
+				req.Header.Set(AtespaceHeader, tt.atespace)
+			}
 			rec := httptest.NewRecorder()
 			s.ServeHTTP(rec, req)
 			if rec.Code != tt.wantStatus {
@@ -181,7 +188,7 @@ func TestServeHTTP(t *testing.T) {
 		})
 	}
 
-	for _, want := range []string{"client.example", "actor-2.team-b.example", ""} {
+	for _, want := range []string{"client.example", "", "actor-2.team-b.example", ""} {
 		if got := <-upstreamHost; got != want {
 			t.Errorf("upstream Host = %q, want %q", got, want)
 		}
@@ -369,7 +376,7 @@ func TestInactive(t *testing.T) {
 	}
 }
 
-func TestMutualTLSClientIdentity(t *testing.T) {
+func TestMutualTLSClientAuthentication(t *testing.T) {
 	dir := t.TempDir()
 	ca := newTestCA(t)
 	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
@@ -403,16 +410,16 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "allowed identity",
+			name: "allowed client",
 			cert: ca.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}),
 		},
 		{
-			name:    "wrong identity",
+			name:    "wrong client ID",
 			cert:    ca.issue(t, "spiffe://cluster.local/ns/ate-system/sa/not-the-gateway", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}),
 			wantErr: true,
 		},
 		{
-			name:    "untrusted identity",
+			name:    "untrusted client",
 			cert:    untrustedCA.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}),
 			wantErr: true,
 		},
@@ -487,7 +494,7 @@ func TestServeNegotiatesH2(t *testing.T) {
 		transport := &http.Transport{
 			TLSClientConfig: &tls.Config{
 				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: true, // The handshake identity checks live in TestMutualTLSClientIdentity.
+				InsecureSkipVerify: true, // The handshake checks live in TestMutualTLSClientAuthentication.
 				Certificates:       []tls.Certificate{clientCert},
 			},
 			// With h2, the transport offers "h2" via ALPN like Envoy's
