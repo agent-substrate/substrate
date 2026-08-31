@@ -51,58 +51,29 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// streamBufSize buffers the tar stream against the underlying file. A tar is a
-// sequence of 512-byte blocks, so an unbuffered stream turns every header,
-// every short file, and every padding tail into its own write(2): archiving
-// 30k small files issued 120904 of them, against one per 64 KiB of archive
-// once buffered.
-//
-// 64 KiB rather than something larger: the win is in getting the syscall count
-// off the critical path, and that is spent well before this size. Sweeping
-// 16 KiB..4 MiB over a 30k-file tree is flat to within run-to-run noise, so a
-// bigger buffer buys nothing measurable and only adds memory — which is held
-// per archive in flight, and a worker may checkpoint several actors at once.
-//
-// Staying under copyBufPool's buffer is deliberate, not incidental. bufio hands
-// a write straight to the file when it is larger than the whole buffer, so file
-// contents — which arrive in copyBufPool-sized chunks — bypass this buffer
-// instead of being copied through it, and only the headers and padding it
-// exists for are batched. Raising this above 128 KiB, or shrinking copyBufPool
-// below it, silently puts every content byte back through a memcpy.
+// streamBufSize batches tar headers and padding into fewer file operations.
+// It must be smaller than copyBufSize so file contents bypass the buffer.
 const streamBufSize = 64 << 10
 
-// tarWriterPool and tarReaderPool hold the stream buffers above. These are one
-// per archive rather than one per file, so on their own they save far less
-// garbage than copyBufPool does; pooling them keeps a worker that checkpoints
-// several actors at once reusing a handful of buffers instead of allocating a
-// fresh one per suspend. A buffer must be Reset(nil) before it goes back, or
-// the pooled entry pins the closed *os.File it was last bound to.
+// copyBufSize is the scratch buffer io.CopyBuffer streams file contents
+// through, in place of the fresh buffer io.Copy allocates per call.
+const copyBufSize = 128 << 10
+
+// File contents must bypass the stream buffer.
+const _ = uint(copyBufSize - streamBufSize - 1)
+
+// Stream buffers must be Reset(nil) before pooling to avoid retaining files.
 var (
 	tarWriterPool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, streamBufSize) }}
 	tarReaderPool = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, streamBufSize) }}
 )
 
-// copyBufPool holds the scratch buffers used to stream file contents. io.Copy
-// allocates a fresh 32 KiB buffer per call (see copyPooled), and a durable dir
-// holds tens of thousands of files, so the garbage — 965 MiB for a 30k-file
-// tree — and the collections it forces are paid inside the VM's pause window.
-//
-// The size is not free to change: it must stay above streamBufSize, or content
-// stops bypassing the stream buffer (see the note there).
 var copyBufPool = sync.Pool{New: func() any {
-	b := make([]byte, 128<<10)
+	b := make([]byte, copyBufSize)
 	return &b
 }}
 
-// copyPooled is io.Copy with a reused buffer.
-//
-// The interface masking is load-bearing, not decoration. io.CopyBuffer honors
-// a WriterTo on src or a ReaderFrom on dst before it ever looks at the supplied
-// buffer, and *os.File implements both. Neither fast path can complete here —
-// the other end is a tar stream rather than a file, so sendfile/copy_file_range
-// do not apply — and the generic fallback each one drops into allocates a
-// buffer of its own. Hiding the two methods keeps the copy on the path that
-// actually uses the pooled buffer.
+// copyPooled masks the fast-path interfaces so io.CopyBuffer uses the pooled buffer.
 func copyPooled(dst io.Writer, src io.Reader) (int64, error) {
 	bp := copyBufPool.Get().(*[]byte)
 	defer copyBufPool.Put(bp)
@@ -317,9 +288,8 @@ func Extract(tarPath, dstDir string) error {
 	// are applied after every child exists (see restoreDirMeta).
 	dirs := map[string]*tar.Header{}
 
-	// Buffered for the same reason the writer is: an archive of many small
-	// entries is mostly 512-byte headers, and each one would otherwise be a
-	// read(2) of its own.
+	// Buffered like the writer: most of an archive is 512-byte headers, each
+	// of which would otherwise be a read(2) of its own.
 	br := tarReaderPool.Get().(*bufio.Reader)
 	br.Reset(f)
 	defer func() {
