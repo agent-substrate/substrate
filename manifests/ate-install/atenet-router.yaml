@@ -143,6 +143,9 @@ spec:
       containers:
       - name: atenet-router
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        resources:
+          requests:
+            cpu: "4"
         args:
         - "router"
         # Serve the ingress direction only: the ingress ext_proc handler, plus
