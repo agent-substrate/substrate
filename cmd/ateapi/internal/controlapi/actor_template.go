@@ -280,3 +280,14 @@ func ValidateCustom_ActorTemplate_SnapshotsConfig(_ context.Context, _ operation
 	}
 	return nil
 }
+
+// envVarNameRE mirrors the ActorTemplate CRD's pattern for env var names:
+// any printable ASCII character except '='.
+var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)
+
+func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if !envVarNameRE.MatchString(*value) {
+		return field.ErrorList{field.Invalid(fldPath, *value, "may contain any printable ASCII character except '='")}
+	}
+	return nil
+}

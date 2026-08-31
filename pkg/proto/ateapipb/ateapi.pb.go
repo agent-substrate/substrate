@@ -2046,9 +2046,11 @@ type ActorTemplate struct {
 	// +k8s:optional
 	WorkerSelector *Selector `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
 	// +k8s:required # at least one container
+	// +k8s:maxItems=10 # matches the CRD's containers bound
 	// +k8s:listType=atomic
 	Containers []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
 	// +k8s:optional
+	// +k8s:maxItems=32 # matches the CRD's volumes bound
 	// +k8s:listType=atomic
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	// +k8s:required
@@ -2061,7 +2063,8 @@ type ActorTemplate struct {
 	// Resource usage configuration.
 	//
 	// +k8s:optional
-	Resources     *Resources           `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *Resources `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
+	// +k8s:optional
 	Status        *ActorTemplateStatus `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2210,11 +2213,13 @@ func (x *Resources) GetLimits() []*Limits {
 type Limits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
+	// +k8s:maxLength=16 # the hook on Resources.limits restricts values to cpu/memory
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
 	// "2Gi").
 	//
 	// +k8s:required
+	// +k8s:maxLength=32 # the hook on Resources.limits requires a parseable quantity
 	Quantity      string `protobuf:"bytes,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2473,6 +2478,7 @@ type SnapshotsConfig struct {
 	// this version are stored under. Required.
 	//
 	// +k8s:required
+	// +k8s:maxLength=1024 # bound only; object-storage URI formats vary
 	// TODO: validate that this is a well-formed object-storage URI
 	StorageLocation string `protobuf:"bytes,4,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
 	unknownFields   protoimpl.UnknownFields
@@ -2598,6 +2604,7 @@ type Container struct {
 	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// +k8s:required
+	// +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
 	// TODO: validate that this is a well-formed image reference
 	Image string `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	// Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
@@ -2605,15 +2612,20 @@ type Container struct {
 	// $(VAR_NAME) references are NOT expanded.
 	//
 	// +k8s:optional
+	// +k8s:maxItems=64 # matches the CRD's command bound
 	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	// Arguments to the entrypoint; the image's CMD is used if unset (unless
 	// command is set, which discards the image's CMD).
 	//
 	// +k8s:optional
+	// +k8s:maxItems=64 # matches the CRD's args bound
 	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Args []string `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`
 	// +k8s:optional
+	// +k8s:maxItems=32 # matches the CRD's env bound
 	// +k8s:listType=atomic
 	Env []*EnvVar `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
 	// readyz is an optional HTTP readiness probe; when set the actor is not
@@ -2844,11 +2856,13 @@ type EnvVar struct {
 	// name may be any printable ASCII character except '='.
 	//
 	// +k8s:required
-	// TODO: validate the printable-ASCII-except-'=' rule
+	// +k8s:maxLength=256 # guardrail; the CRD does not bound env names
+	// +k8s:customValidation # printable ASCII except '='
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// value is the literal value.
 	//
 	// +k8s:optional
+	// +k8s:maxLength=32768 # guardrail; the CRD does not bound env values
 	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3050,6 +3064,7 @@ type Volume struct {
 	// "ExternalVolumeTemplate", "Image" or "SystemInfo".
 	//
 	// +k8s:optional
+	// +k8s:maxLength=63
 	// TODO: enforce that type matches the populated source, either with a
 	// unionDiscriminator tag or in the service layer.
 	Type          string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`

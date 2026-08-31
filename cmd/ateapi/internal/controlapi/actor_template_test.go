@@ -16,6 +16,8 @@ package controlapi
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -402,6 +404,12 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotsConfig = nil },
 		want:   field.ErrorList{field.Required(field.NewPath("snapshots_config"), "")},
 	}, {
+		name: "storage_location too long",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.StorageLocation = "gs://" + strings.Repeat("x", 1020)
+		},
+		want: field.ErrorList{field.TooLong(field.NewPath("snapshots_config", "storage_location"), nil, 1024).WithOrigin("maxLength")},
+	}, {
 		name:   "missing storage_location",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotsConfig.StorageLocation = "" },
 		want:   field.ErrorList{field.Required(field.NewPath("snapshots_config", "storage_location"), "")},
@@ -434,6 +442,40 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers = nil },
 		want:   field.ErrorList{field.Required(field.NewPath("containers"), "")},
 	}, {
+		name: "too many containers",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			for i := 0; i < 10; i++ {
+				tmpl.Containers = append(tmpl.Containers, &ateapipb.Container{Name: fmt.Sprintf("c-%d", i), Image: "example.com/app:v1"})
+			}
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("containers"), 11, 10).WithOrigin("maxItems")},
+	}, {
+		name: "too many command entries",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Command = make([]string, 65)
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("containers").Index(0).Child("command"), 65, 64).WithOrigin("maxItems")},
+	}, {
+		name: "command entry too long",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Command = []string{strings.Repeat("x", 4097)}
+		},
+		want: field.ErrorList{field.TooLong(field.NewPath("containers").Index(0).Child("command").Index(0), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "too many env entries",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			for i := 0; i < 33; i++ {
+				tmpl.Containers[0].Env = append(tmpl.Containers[0].Env, &ateapipb.EnvVar{Name: fmt.Sprintf("VAR_%d", i)})
+			}
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("containers").Index(0).Child("env"), 33, 32).WithOrigin("maxItems")},
+	}, {
+		name: "image too long",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Image = strings.Repeat("x", 513)
+		},
+		want: field.ErrorList{field.TooLong(field.NewPath("containers").Index(0).Child("image"), nil, 512).WithOrigin("maxLength")},
+	}, {
 		name:   "container missing name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers[0].Name = "" },
 		want:   field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("name"), "")},
@@ -450,6 +492,23 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "PORT", Value: "8080"}, {Name: "DEBUG"}}
 		},
+	}, {
+		name: "env name with unusual printable characters is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "my.var-2 (test)!", Value: "v"}}
+		},
+	}, {
+		name: "env name with an equals sign",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "FOO=BAR"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "")},
+	}, {
+		name: "env name with a control character",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "FOO	BAR"}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "")},
 	}, {
 		name: "env missing name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -564,6 +623,14 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
 		},
+	}, {
+		name: "too many volumes",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			for i := 0; i < 33; i++ {
+				tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{Name: fmt.Sprintf("vol-%d", i), DurableDir: &ateapipb.DurableDirVolumeSource{}})
+			}
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("volumes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "volume missing name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

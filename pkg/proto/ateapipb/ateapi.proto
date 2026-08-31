@@ -635,10 +635,12 @@ message ActorTemplate {
   Selector worker_selector = 2;
 
   // +k8s:required # at least one container
+  // +k8s:maxItems=10 # matches the CRD's containers bound
   // +k8s:listType=atomic
   repeated Container containers = 3;
 
   // +k8s:optional
+  // +k8s:maxItems=32 # matches the CRD's volumes bound
   // +k8s:listType=atomic
   repeated Volume volumes = 4;
 
@@ -656,6 +658,7 @@ message ActorTemplate {
   // +k8s:optional
   Resources resources = 7;
 
+  // +k8s:optional
   ActorTemplateStatus status = 8;
 }
 
@@ -675,12 +678,14 @@ message Resources {
 
 message Limits {
   // +k8s:required
+  // +k8s:maxLength=16 # the hook on Resources.limits restricts values to cpu/memory
   string name = 1;
 
   // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
   // "2Gi").
   //
   // +k8s:required
+  // +k8s:maxLength=32 # the hook on Resources.limits requires a parseable quantity
   string quantity = 2;
 }
 
@@ -751,6 +756,7 @@ message SnapshotsConfig {
   // this version are stored under. Required.
   //
   // +k8s:required
+  // +k8s:maxLength=1024 # bound only; object-storage URI formats vary
   // TODO: validate that this is a well-formed object-storage URI
   string storage_location = 4;
 }
@@ -789,6 +795,7 @@ message Container {
   string name = 1;
 
   // +k8s:required
+  // +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
   // TODO: validate that this is a well-formed image reference
   string image = 2;
 
@@ -797,17 +804,22 @@ message Container {
   // $(VAR_NAME) references are NOT expanded.
   //
   // +k8s:optional
+  // +k8s:maxItems=64 # matches the CRD's command bound
   // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string command = 3;
 
   // Arguments to the entrypoint; the image's CMD is used if unset (unless
   // command is set, which discards the image's CMD).
   //
   // +k8s:optional
+  // +k8s:maxItems=64 # matches the CRD's args bound
   // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string args = 4;
 
   // +k8s:optional
+  // +k8s:maxItems=32 # matches the CRD's env bound
   // +k8s:listType=atomic
   repeated EnvVar env = 5;
 
@@ -860,12 +872,14 @@ message EnvVar {
   // name may be any printable ASCII character except '='.
   //
   // +k8s:required
-  // TODO: validate the printable-ASCII-except-'=' rule
+  // +k8s:maxLength=256 # guardrail; the CRD does not bound env names
+  // +k8s:customValidation # printable ASCII except '='
   string name = 1;
 
   // value is the literal value.
   //
   // +k8s:optional
+  // +k8s:maxLength=32768 # guardrail; the CRD does not bound env values
   string value = 2;
 }
 
@@ -933,6 +947,7 @@ message Volume {
   // "ExternalVolumeTemplate", "Image" or "SystemInfo".
   //
   // +k8s:optional
+  // +k8s:maxLength=63
   // TODO: enforce that type matches the populated source, either with a
   // unionDiscriminator tag or in the service layer.
   string type = 4;
