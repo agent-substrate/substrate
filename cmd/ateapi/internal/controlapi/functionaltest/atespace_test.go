@@ -65,8 +65,7 @@ func TestCreateAtespace_Success(t *testing.T) {
 			Metadata: &ateapipb.ResourceMetadata{
 				Atespace: "team-a",
 				Name:     "id1"},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		}}); err != nil {
 		t.Errorf("CreateActor into freshly created atespace failed: %v", err)
 	}
@@ -168,9 +167,8 @@ func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
 	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
@@ -195,9 +193,8 @@ func TestDeleteAtespace_ScopedToTargetAtespace(t *testing.T) {
 
 	// Actor only in team-b.
 	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-b", Name: "id1"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-b", Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}

@@ -1,5 +1,3 @@
-//go:build linux
-
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,16 +15,15 @@
 package reaper
 
 import (
+	"context"
 	"sync"
-
-	"github.com/hashicorp/go-reap"
 )
 
 var startOnce sync.Once
 
-// Start launches the SIGCHLD child reaper once; it reaps the detached VMM and virtiofsd.
+// Start launches the SIGCHLD child reaper once.
 func Start() {
 	startOnce.Do(func() {
-		go reap.ReapChildren(nil, nil, nil, &lock)
+		go shared.Run(context.Background())
 	})
 }

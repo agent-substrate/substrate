@@ -18,8 +18,8 @@
 export PROJECT_ID=${USER}-gke-dev
 export PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format="value(projectNumber)")
 
-export GCE_REGION=us-central1
-export CLUSTER_LOCATION=us-central1-c
+export GCE_REGION=us-west1
+export CLUSTER_LOCATION=us-west1-c
 
 export NETWORK=default
 export SUBNETWORK=default

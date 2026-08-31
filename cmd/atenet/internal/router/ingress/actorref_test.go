@@ -52,6 +52,12 @@ func TestParseActorRef(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "mixed-case host",
+			host:    "My-Actor.Team-A.actors.resources.substrate.ate.dev",
+			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
+			wantErr: false,
+		},
+		{
 			name:    "missing atespace label",
 			host:    "my-actor.actors.resources.substrate.ate.dev",
 			wantErr: true,

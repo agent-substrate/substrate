@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/localca"
@@ -29,7 +30,6 @@ var caID string
 var targetSecretNamespace string
 var targetSecretName string
 var caKeyType string
-var caCommonName string
 
 var makeCaPoolCmd = &cobra.Command{
 	Use:   "make-ca-pool",
@@ -47,22 +47,41 @@ var makeCaPoolCmd = &cobra.Command{
 			return fmt.Errorf("while creating Kubernetes client: %w", err)
 		}
 
-		ca, err := localca.GenerateCA(localca.GenerateOptions{
-			ID:         caID,
-			CommonName: caCommonName,
-			KeyType:    localca.KeyType(caKeyType),
-		})
+		var keyType localca.KeyType
+		switch caKeyType {
+		case "ED25519":
+			keyType = localca.KeyTypeED25519
+		case "ECDSAP256":
+			keyType = localca.KeyTypeECDSAP256
+		default:
+			return fmt.Errorf("unknown key type %q", caKeyType)
+		}
+
+		ca, err := localca.GenerateCA(
+			caID,
+			keyType,
+			365*24*time.Hour,
+		)
 		if err != nil {
 			return fmt.Errorf("while generating CA: %w", err)
 		}
 
-		pool := &localca.Pool{
-			CAs: []*localca.CA{ca},
+		pool := &localca.ConcretePool{
+			CAs:              []*localca.CA{ca},
+			ActiveForSigning: caID,
 		}
 
 		poolBytes, err := localca.Marshal(pool)
 		if err != nil {
 			return fmt.Errorf("while marshaling pool: %w", err)
+		}
+		certificateChain, err := ca.TLSCertificateChainPEM()
+		if err != nil {
+			return fmt.Errorf("while encoding CA certificate chain: %w", err)
+		}
+		privateKey, err := ca.TLSPrivateKeyPEM()
+		if err != nil {
+			return fmt.Errorf("while encoding CA private key: %w", err)
 		}
 
 		secret := &corev1.Secret{
@@ -70,8 +89,11 @@ var makeCaPoolCmd = &cobra.Command{
 				Namespace: targetSecretNamespace,
 				Name:      targetSecretName,
 			},
+			Type: corev1.SecretTypeTLS,
 			Data: map[string][]byte{
-				"pool": poolBytes,
+				"pool":                  poolBytes,
+				corev1.TLSCertKey:       certificateChain,
+				corev1.TLSPrivateKeyKey: privateKey,
 			},
 		}
 
@@ -90,9 +112,6 @@ func init() {
 	makeCaPoolCmd.Flags().StringVar(&caID, "ca-id", "", "The ID of the initial CA in the Pool")
 	makeCaPoolCmd.Flags().StringVar(&targetSecretNamespace, "secret-namespace", "default", "Create the secret in this namespace")
 	makeCaPoolCmd.Flags().StringVar(&targetSecretName, "name", "", "Create the secret with this name")
-	makeCaPoolCmd.Flags().StringVar(&caKeyType, "key-type", string(localca.KeyTypeED25519),
-		fmt.Sprintf("Signing key algorithm, %q or %q. Prefer %s for a CA whose certificates are validated by clients outside substrate, where Ed25519 support cannot be assumed.",
-			localca.KeyTypeED25519, localca.KeyTypeECDSAP256, localca.KeyTypeECDSAP256))
-	makeCaPoolCmd.Flags().StringVar(&caCommonName, "common-name", "", "Subject common name of the CA certificate. Cosmetic; nothing authenticates on it.")
+	makeCaPoolCmd.Flags().StringVar(&caKeyType, "key-type", "ED25519", "CA key type.  One of [ED25519, ECDSAP256]")
 	makeCaPoolCmd.MarkFlagRequired("name")
 }

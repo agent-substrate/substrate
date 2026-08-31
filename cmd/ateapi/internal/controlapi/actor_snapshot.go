@@ -188,8 +188,6 @@ func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagR
 		return errs
 	}
 
-	errs = append(errs, validateNoUnknownFields(tag, tagPath)...)
-
 	errs = append(errs, resources.ValidateObjectRef(&ateapipb.ObjectRef{Atespace: tag.GetMetadata().GetAtespace(), Name: tag.GetMetadata().GetName()}, tagPath.Child("metadata"))...)
 
 	if val, p := tag.Snapshot, tagPath.Child("snapshot"); val == nil {
@@ -258,8 +256,6 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 	if tag == nil {
 		return field.ErrorList{field.Required(tagPath, "")}
 	}
-
-	errs = append(errs, validateNoUnknownFields(tag, tagPath)...)
 
 	errs = append(errs, resources.ValidateUpdateMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
 

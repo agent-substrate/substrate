@@ -202,12 +202,15 @@ spec:
           mountPath: /var/run/postgresql
         - name: data
           mountPath: /var/lib/postgresql/data
+        # The whole control plane shares this one database; under activation
+        # load it sustains several cores. The kind overlay shrinks this back
+        # down to fit a CI runner.
         resources:
           requests:
-            cpu: "1"
+            cpu: "2"
             memory: "1Gi"
           limits:
-            cpu: "2"
+            cpu: "16"
             memory: "2Gi"
       volumes:
       - name: config
@@ -243,4 +246,8 @@ spec:
       accessModes: [ "ReadWriteOnce" ]
       resources:
         requests:
-          storage: 1Gi
+          # Headroom so WAL churn cannot fill the volume: a full pg_wal is a
+          # PANIC that drops every connection. Size also scales provisioned
+          # IOPS/throughput on PD-backed storage classes. The kind overlay
+          # shrinks this claim back down.
+          storage: 500Gi

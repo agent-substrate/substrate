@@ -442,8 +442,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 			Name:     "counter-actor",
 			Uid:      "actor-uid-1",
 		},
-		ActorTemplateNamespace: "demo-ns",
-		ActorTemplateName:      "counter-template",
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			WorkerAssignment: &ateapipb.WorkerAssignment{
@@ -483,7 +482,7 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 			for _, dp := range sum.DataPoints {
 				op, _ := dp.Attributes.Value(ateattr.ActorOperationNameKey)
 				r, _ := dp.Attributes.Value(ateattr.FailureReasonKey)
-				tNS, _ := dp.Attributes.Value(ateattr.TemplateNamespaceKey)
+				tNS, _ := dp.Attributes.Value(ateattr.TemplateAtespaceKey)
 				tName, _ := dp.Attributes.Value(ateattr.TemplateNameKey)
 				wp, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
 				sc, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
@@ -504,6 +503,32 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 	}
 	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
 		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
+}
+
+// assertNoCrashMetricDatapoint fails if anything counted a crash. It is the
+// assertion for a path that transitions an actor without that being a fresh
+// crash — an actor already counted as crashed, or one that never crashed at all.
+func assertNoCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "ate.actor.crashes" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				t.Errorf("counted %d crash(es) with attrs %v, want none", dp.Value, dp.Attributes)
+			}
+		}
+	}
 }
 
 // failingUpdateWorkerStore wraps a store and fails every UpdateWorker call,

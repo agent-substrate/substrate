@@ -331,20 +331,26 @@ func StartMetricsServer(ctx context.Context, opts MetricsServerOptions) {
 	}
 }
 
+// StartReadinessServer runs an HTTP server exposing only /readyz. Blocks until
+// http.ListenAndServe returns; designed to be `go`-launched. A serve failure
+// exits the process: a worker whose readiness endpoint cannot come up never
+// turns Ready and never registers, so dying loudly lets the kubelet restart it
+// instead of leaving a pod that looks alive but can never receive work.
+func StartReadinessServer(ctx context.Context, addr string, readiness *Readiness) {
+	slog.InfoContext(ctx, "Starting readiness HTTP server", slog.String("addr", addr))
+	if err := http.ListenAndServe(addr, readinessMux(readiness)); err != nil {
+		slog.Error("Readiness HTTP server failed", slog.Any("err", err))
+		os.Exit(1)
+	}
+}
+
 // metricsMux builds the handler for StartMetricsServer; split out so
 // tests can exercise the endpoints without binding a port.
 func metricsMux(opts MetricsServerOptions) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	if opts.Readiness != nil {
-		mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-			if !opts.Readiness.Ready() {
-				http.Error(w, "draining", http.StatusServiceUnavailable)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		})
+		mux.Handle("/readyz", readinessHandler(opts.Readiness))
 	}
 	if opts.EnableHealthz {
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -353,4 +359,22 @@ func metricsMux(opts MetricsServerOptions) *http.ServeMux {
 		})
 	}
 	return mux
+}
+
+// readinessMux builds the handler for StartReadinessServer.
+func readinessMux(readiness *Readiness) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/readyz", readinessHandler(readiness))
+	return mux
+}
+
+func readinessHandler(readiness *Readiness) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !readiness.Ready() {
+			http.Error(w, "draining", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 }

@@ -63,6 +63,13 @@ type Client struct {
 }
 
 // Close closes the underlying gRPC connection and stops the port-forwarder.
+
+// roundRobinServiceConfig spreads RPCs over every address the resolver returns.
+// ateapi is a headless Service, so that is one address per replica, and gRPC's
+// default of pick_first would send an entire client's traffic to whichever one
+// it connected to first. internal/ateapiauth dials with the same policy.
+const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
+
 func (c *Client) Close() {
 	if c.tracerProvider != nil {
 		// Best practice to ensure clean provider shutdown, even though we skip exporters for clients.
@@ -118,6 +125,7 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	opts = append(opts, grpc.WithDefaultServiceConfig(roundRobinServiceConfig))
 	tokenOpt, err := bearerTokenDialOption(ctx, clientset, tokenFile)
 	if err != nil {
 		return nil, err

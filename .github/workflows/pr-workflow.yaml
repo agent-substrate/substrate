@@ -37,6 +37,10 @@ jobs:
       with:
         go-version-file: 'go.mod'
     - run: go test -race -v ./...
+    # tools/apitool has its own module so we need to run it explicitly.
+    - name: apitool tests
+      working-directory: tools/apitool
+      run: go test -race -v ./...
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
@@ -79,12 +83,12 @@ jobs:
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
       run: hack/install-ate-kind.sh --deploy-ate-system
-    - name: Deploy micro-VM counter demo
+    - name: Deploy substrate micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh
-    - name: Deploy gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter
+      run: hack/run-microvm-demo-kind.sh --substrate
+    - name: Deploy substrate gVisor counter demo
+      run: hack/install-ate-kind.sh --deploy-demo-counter-substrate
     - name: Deploy egress demos
       # TestActorEgress in the networking suite builds its Actor from the egress
       # ActorTemplate for the class under test, so both fixtures have to exist
@@ -92,10 +96,6 @@ jobs:
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
-    - name: Wait for micro-VM golden snapshot
-      run: |
-        kubectl --context kind-kind wait --for=condition=Ready \
-          actortemplate/counter-microvm -n ate-demo-counter-microvm --timeout=600s
     - name: Run E2E tests (gVisor)
       run: hack/run-e2e-kind.sh -v -args --no-color
     - name: Run E2E tests (micro-VM)
@@ -142,12 +142,12 @@ jobs:
     - name: Run E2E tests (networking, MITM egress)
       env:
         E2E_EGRESS_MITM: "1"
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
     - name: Run E2E tests (networking, MITM egress, micro-VM)
       env:
         E2E_EGRESS_MITM: "1"
         E2E_SANDBOX_CLASS: microvm
-      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
       run: |

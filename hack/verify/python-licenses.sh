@@ -27,6 +27,8 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+source hack/util/venv.sh
+
 # Python projects with a requirements.txt to check. Each entry is a directory
 # that contains requirements.txt; its venv lives at <dir>/venv. Discovered
 # dynamically from tracked/untracked (but not ignored) requirements.txt files,
@@ -62,28 +64,17 @@ check_project() {
   # Run inside a subshell so `activate` doesn't leak VIRTUAL_ENV/PATH back
   # to the caller; the subshell inherits errexit/nounset/pipefail.
   (
-    if [[ ! -d "${venv}" ]]; then
-      echo "  Creating venv at ${venv}..."
-      python3 -m venv "${venv}" || {
-        echo "ERROR: failed to create venv at ${venv}" >&2
-        exit 1
-      }
-      echo "  Activating ${venv}..."
-      source "${venv}/bin/activate"
-      echo "  Upgrading pip in ${venv}..."
-      pip install --quiet --upgrade pip || {
-        echo "ERROR: failed to upgrade pip in ${venv}" >&2
-        exit 1
-      }
-      echo "  Installing ${dir}/requirements.txt into ${venv}..."
-      pip install --quiet -r "${dir}/requirements.txt" || {
-        echo "ERROR: failed to install ${dir}/requirements.txt into ${venv}" >&2
-        exit 1
-      }
-    else
-      echo "  Activating ${venv}..."
-      source "${venv}/bin/activate"
-    fi
+    ensure_venv "${venv}" || {
+      echo "ERROR: failed to create venv at ${venv}" >&2
+      exit 1
+    }
+    echo "  Installing ${dir}/requirements.txt into ${venv}..."
+    venv_sync_requirements "${venv}" "${dir}/requirements.txt" || {
+      echo "ERROR: failed to install ${dir}/requirements.txt into ${venv}" >&2
+      exit 1
+    }
+    echo "  Activating ${venv}..."
+    source "${venv}/bin/activate"
     if ! command -v pip-licenses >/dev/null 2>&1; then
       echo "  Installing pip-licenses into ${venv}..."
       pip install --quiet pip-licenses || {

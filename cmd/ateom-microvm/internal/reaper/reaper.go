@@ -12,46 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package reaper centralizes ateom-microvm's child-process reaping.
-//
-// ateom-microvm spawns long-lived, detached helpers (the cloud-hypervisor VMM,
-// virtiofsd) that get reparented to it, so it runs a SIGCHLD reaper (Start) to
-// collect them. That reaper calls wait4(-1), which will collect ANY child of the
-// process — including one an exec.Cmd is about to wait for itself. When that
-// happens the caller's own wait fails with "waitid: no child processes".
-//
-// Run and RunCombined are for the other kind of subprocess: short, synchronous
-// helpers (mount, umount, cp, ...) whose exit status the caller needs. They hold a
-// shared lock that is mutually exclusive with the reaper's collection pass, so the
-// reaper cannot collect the child before the caller's wait completes. Every
-// synchronous subprocess in ateom-microvm MUST go through Run/RunCombined.
-//
-// Detached daemons that must outlive the call (the VMM, virtiofsd) are deliberately
-// NOT run through here: they are started with Cmd.Start and left for the reaper.
-//
-// gVisor's ateom (cmd/ateom-gvisor) holds the same kind of lock in shared mode around
-// every runsc invocation; this package is the micro-VM equivalent, shared across the
-// ateom-microvm subpackages that exec (internal/kata, internal/ch).
+// Package reaper collects detached child processes in ateom-microvm.
+// Synchronous commands must use Run or RunCombined so the reaper cannot consume
+// their exit status. Detached commands must use exec.Cmd.Start directly.
 package reaper
 
 import (
 	"os/exec"
-	"sync"
+
+	"github.com/agent-substrate/substrate/internal/childreap"
 )
 
-// lock serializes deliberate fork+exec+wait against the child reaper.
-var lock sync.RWMutex
+var shared = childreap.New()
 
-// Run runs cmd with the reap lock held shared so the child reaper can't reap it first.
+// Run runs cmd without allowing the child reaper to consume its exit status.
 func Run(cmd *exec.Cmd) error {
-	lock.RLock()
-	defer lock.RUnlock()
-	return cmd.Run()
+	return shared.RunCommand(cmd)
 }
 
 // RunCombined is Run for callers that need cmd.CombinedOutput.
 func RunCombined(cmd *exec.Cmd) ([]byte, error) {
-	lock.RLock()
-	defer lock.RUnlock()
-	return cmd.CombinedOutput()
+	return shared.CombinedOutput(cmd)
 }

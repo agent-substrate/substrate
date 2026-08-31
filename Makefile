@@ -25,6 +25,7 @@ KO := hack/run-tool.sh ko
 # Binaries
 BINDIR := bin/
 ATECTL := $(BINDIR)/kubectl-ate
+ATESETUP := $(BINDIR)/ate-setup
 
 # Version stamping. Override on the make command line to pin
 # (e.g. `make VERSION=v0.5.0 build`).
@@ -36,7 +37,7 @@ LDFLAGS := -X=$(VERSION_PKG).Version=$(VERSION)
 all: build
 
 .PHONY: build
-build: build-images build-atectl
+build: build-images build-atectl build-ate-setup
 
 .PHONY: build-images
 build-images:
@@ -50,6 +51,12 @@ build-images:
 .PHONY: build-atectl
 build-atectl:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate
+
+# The cluster installer, a Go port of hack/install-ate.sh. Both work today; see
+# cmd/ate-setup/commands.md for the flag-by-flag mapping between them.
+.PHONY: build-ate-setup
+build-ate-setup:
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATESETUP) ./cmd/ate-setup
 
 .PHONY: build-atenet
 build-atenet:

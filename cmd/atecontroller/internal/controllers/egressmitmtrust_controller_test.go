@@ -16,10 +16,10 @@ package controllers
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/pem"
 	"strings"
 	"testing"
+	"time"
 
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -47,11 +47,11 @@ func egressMITMScheme(t *testing.T) *runtime.Scheme {
 // caPoolSecret marshals ids into a pool Secret shaped the way
 // `kubectl-ate admin make-ca-pool` writes it, and returns the roots in pool
 // order so a test can assert on exactly what should have been published.
-func caPoolSecret(t *testing.T, ids ...string) (*corev1.Secret, *localca.Pool) {
+func caPoolSecret(t *testing.T, ids ...string) (*corev1.Secret, *localca.ConcretePool) {
 	t.Helper()
-	pool := &localca.Pool{}
+	pool := &localca.ConcretePool{}
 	for _, id := range ids {
-		ca, err := localca.GenerateED25519CA(id)
+		ca, err := localca.GenerateCA(id, localca.KeyTypeED25519, 24*time.Hour)
 		if err != nil {
 			t.Fatalf("generate CA %q: %v", id, err)
 		}
@@ -60,7 +60,7 @@ func caPoolSecret(t *testing.T, ids ...string) (*corev1.Secret, *localca.Pool) {
 	return secretForPool(t, pool), pool
 }
 
-func secretForPool(t *testing.T, pool *localca.Pool) *corev1.Secret {
+func secretForPool(t *testing.T, pool *localca.ConcretePool) *corev1.Secret {
 	t.Helper()
 	wire, err := localca.Marshal(pool)
 	if err != nil {
@@ -73,7 +73,7 @@ func secretForPool(t *testing.T, pool *localca.Pool) *corev1.Secret {
 	}
 }
 
-func rootPEM(t *testing.T, pool *localca.Pool) string {
+func rootPEM(t *testing.T, pool *localca.ConcretePool) string {
 	t.Helper()
 	var b strings.Builder
 	for _, ca := range pool.CAs {
@@ -156,32 +156,6 @@ func TestEgressMITMTrustPublishesNoPrivateKey(t *testing.T) {
 		if block.Type != "CERTIFICATE" {
 			t.Errorf("trustBundle contains a %q block; only CERTIFICATE belongs there", block.Type)
 		}
-	}
-}
-
-// An intermediate in a trust bundle is an anchor, not a link in a chain:
-// publishing one would make everything it ever signed directly trusted.
-func TestEgressMITMTrustOmitsIntermediates(t *testing.T) {
-	t.Parallel()
-	scheme := egressMITMScheme(t)
-	_, pool := caPoolSecret(t, "mitm")
-	_, other := caPoolSecret(t, "not-an-anchor")
-	pool.CAs[0].IntermediateCertificates = []*x509.Certificate{other.CAs[0].RootCertificate}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secretForPool(t, pool)).Build()
-
-	if err := reconcilePool(t, c); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-
-	ctb, ok := getTrustBundle(t, c)
-	if !ok {
-		t.Fatal("no ClusterTrustBundle was created")
-	}
-	if got, want := ctb.Spec.TrustBundle, rootPEM(t, pool); got != want {
-		t.Errorf("trustBundle =\n%s\nwant only the root\n%s", got, want)
-	}
-	if strings.Contains(ctb.Spec.TrustBundle, rootPEM(t, other)) {
-		t.Error("trustBundle contains the intermediate; only roots belong there")
 	}
 }
 

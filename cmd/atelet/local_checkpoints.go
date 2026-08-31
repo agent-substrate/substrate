@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -23,27 +25,36 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
-// pruneLocalCheckpoints removes every local snapshot of the actor.
-// Best-effort: failures are logged, never fatal.
-func pruneLocalCheckpoints(ctx context.Context, actorUID string) {
-	pruneLocalCheckpointDir(ctx, ateompath.LocalCheckpointsDir(actorUID))
+// pruneLocalCheckpoints removes every local snapshot of the actor. A missing
+// directory is not an error, so retries are safe.
+func pruneLocalCheckpoints(ctx context.Context, actorUID string) error {
+	return pruneLocalCheckpointDir(ctx, ateompath.LocalCheckpointsDir(actorUID))
 }
 
-func pruneLocalCheckpointDir(ctx context.Context, dir string) {
+func pruneLocalCheckpointDir(ctx context.Context, dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.WarnContext(ctx, "failed to list local checkpoints for pruning", slog.String("dir", dir), slog.Any("err", err))
+		if os.IsNotExist(err) {
+			return nil
 		}
-		return
+		return fmt.Errorf("while listing local checkpoints in %s: %w", dir, err)
 	}
+	// Every entry is attempted: one undeletable snapshot must not strand the
+	// others on disk.
+	var errs []error
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
 		if err := os.RemoveAll(path); err != nil {
-			slog.WarnContext(ctx, "failed to prune local checkpoint", slog.String("path", path), slog.Any("err", err))
+			errs = append(errs, fmt.Errorf("while pruning local checkpoint %s: %w", path, err))
 			continue
 		}
 		slog.InfoContext(ctx, "pruned local checkpoint", slog.String("path", path))
 	}
-	_ = os.Remove(dir)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("while removing local checkpoints dir %s: %w", dir, err)
+	}
+	return nil
 }

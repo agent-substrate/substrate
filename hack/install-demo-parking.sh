@@ -38,7 +38,7 @@ demo-parking_deploy() {
   # Wait for the demo to be fully ready before returning: the small WorkerPool
   # must be rolled out and the ActorTemplate's golden snapshot built.
   log_step "Waiting for parking demo to be ready..."
-  run_kubectl rollout status deployment/parking -n ate-demo-parking --timeout=300s
+  wait_for_pool_rollout parking ate-demo-parking
   run_kubectl wait --for=condition=Ready actortemplate/parking -n ate-demo-parking --timeout=300s
 }
 

@@ -58,13 +58,15 @@ data:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
               require_client_certificate: true
               common_tls_context:
-                tls_certificates:
-                # Gateway server identity (servicedns signer). credential-bundle.pem
-                # holds the leaf cert and key concatenated. watched_directory picks
-                # up kubelet's projected certificate rotation without a restart.
-                - certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
-                  private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
-                  watched_directory: { path: /run/servicedns.podcert.ate.dev }
+                # Gateway server identity (servicedns signer), via filesystem
+                # SDS: watched_directory only works on SDS-delivered secrets,
+                # so an inline cert would never pick up kubelet's rotation.
+                tls_certificate_sds_secret_configs:
+                - name: servicedns_serving_cert
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-servicedns-cert.yaml
                 validation_context:
                   # Actors authenticate with an actor-identity client cert.
                   # Envoy enforces chain, signature, and validity period here, so
@@ -105,6 +107,9 @@ data:
                   - match: { connect_matcher: {} }
                     route:
                       cluster: egress_forward_proxy
+                      # Set request timeout to disabled (0) as CONNECT is a long-running stream.
+                      # There will still be a stream_idle_timeout (5 minutes by default).
+                      timeout: 0s
                       upgrade_configs:
                       - upgrade_type: CONNECT
                         connect_config: {}
@@ -148,7 +153,10 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    # V4_ONLY resolves nothing on an IPv6-only cluster. ALL
+                    # returns both families and enables Happy Eyeballs, so
+                    # neither family is stranded.
+                    dns_lookup_family: ALL
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -185,7 +193,18 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: ALL
+  # SDS resource for the gateway serving cert. kubelet rotates the projected
+  # volume by swapping its ..data symlink, which fires the watch and makes
+  # Envoy re-read the bundle (leaf cert and key concatenated in one file).
+  sds-servicedns-cert.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: servicedns_serving_cert
+      tls_certificate:
+        certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+        private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+        watched_directory: { path: /run/servicedns.podcert.ate.dev }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -213,7 +232,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: envoy
-        image: envoyproxy/envoy:v1.34-latest
+        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

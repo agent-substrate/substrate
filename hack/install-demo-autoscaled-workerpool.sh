@@ -59,7 +59,7 @@ demo-autoscaled-workerpool_deploy() {
   run_kubectl apply -f demos/autoscaled-workerpool/hpa-kind.yaml
 
   log_step "Waiting for autoscaled-workerpool demo to be ready..."
-  run_kubectl rollout status deployment/counter -n ate-demo-autoscaled-workerpool --timeout=300s
+  wait_for_pool_rollout counter ate-demo-autoscaled-workerpool
   run_kubectl wait --for=condition=Ready actortemplate/counter -n ate-demo-autoscaled-workerpool --timeout=300s
 }
 

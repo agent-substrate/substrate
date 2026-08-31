@@ -1,6 +1,6 @@
 module github.com/agent-substrate/substrate/hack/tools/setup-envtest
 
-go 1.26.1
+go 1.27.0
 
 require (
 	github.com/go-logr/logr v1.4.3 // indirect

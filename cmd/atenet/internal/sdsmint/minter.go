@@ -15,7 +15,14 @@
 package sdsmint
 
 import (
+	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,7 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/sdsmint/certauth"
+	"github.com/agent-substrate/substrate/internal/localca"
 )
 
 // errHostNotAllowed is returned when a requested hostname will not be minted.
@@ -31,44 +38,61 @@ var errHostNotAllowed = errors.New("host not allowed")
 
 // minter returns a leaf certificate for a hostname.
 type minter struct {
-	signer *certauth.Signer
-	ttl    time.Duration
-	log    *slog.Logger
+	ttl time.Duration
+
+	pool localca.Pool
+
+	leafKey    crypto.Signer
+	leafKeyPEM []byte
 }
 
 // minterOptions configures newMinter.
 type minterOptions struct {
 	// TTL is the leaf lifetime.
-	TTL    time.Duration
-	Logger *slog.Logger
+	TTL time.Duration
 }
 
 // defaultTTL for leaf cert lifetime.
 const defaultTTL = 15 * time.Minute
 
 // newMinter builds a minter over signer.
-func newMinter(signer *certauth.Signer, opts minterOptions) (*minter, error) {
-	if signer == nil {
-		return nil, errors.New("nil signer")
-	}
+func newMinter(pool localca.Pool, opts minterOptions) (*minter, error) {
 	if opts.TTL <= 0 {
 		opts.TTL = defaultTTL
 	}
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating leaf key: %w", err)
 	}
+	leafKeyDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshalling leaf key: %w", err)
+	}
+	leafKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: leafKeyDER})
+
 	return &minter{
-		signer: signer,
-		ttl:    opts.TTL,
-		log:    opts.Logger,
+		ttl:        opts.TTL,
+		pool:       pool,
+		leafKey:    leafKey,
+		leafKeyPEM: leafKeyPEM,
 	}, nil
+}
+
+// MintedCert is a freshly issued leaf plus its private key, in the PEM form
+// Envoy's Secret proto expects.
+type MintedCert struct {
+	CertChainPEM  []byte // leaf, followed by any intermediates in leaf-to-root order.
+	PrivateKeyPEM []byte // leaf private key
+	NotAfter      time.Time
+	Serial        string // hex, for the issuance audit log
 }
 
 // certificate mints a leaf for host. It returns an error wrapping
 // errHostNotAllowed if host is not a name this will mint for.
-func (m *minter) certificate(ctx context.Context, host string) (*certauth.MintedCert, error) {
+func (m *minter) certificate(ctx context.Context, host string) (*MintedCert, error) {
 	if err := checkHostSyntax(host); err != nil {
-		m.log.WarnContext(ctx, "certificate request denied",
+		slog.WarnContext(ctx, "certificate request denied",
 			slog.String("host", host),
 			slog.String("reason", err.Error()),
 		)
@@ -76,19 +100,57 @@ func (m *minter) certificate(ctx context.Context, host string) (*certauth.Minted
 		return nil, fmt.Errorf("%w: %w", errHostNotAllowed, err)
 	}
 
-	cert, err := m.signer.Sign(host, m.ttl)
-	if err != nil {
-		return nil, err
+	now := time.Now()
+
+	tmpl := &x509.Certificate{
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(m.ttl),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
 	}
 
-	if m.log.Enabled(ctx, slog.LevelInfo) {
-		m.log.InfoContext(ctx, "certificate issued",
-			slog.String("host", host),
-			slog.String("serial", cert.Serial),
-			slog.Time("not_after", cert.NotAfter),
-		)
+	// A literal IP in the SNI position has to land in IPAddresses, not
+	// DNSNames, or clients will reject the leaf.
+	// Envoy will hand us whatever was in the SNI, and although SNI is
+	// not supposed to carry IP literals, some clients send them anyway.
+	if ip := net.ParseIP(host); ip != nil {
+		tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+	} else {
+		tmpl.DNSNames = []string{host}
 	}
-	return cert, nil
+
+	derChain, err := m.pool.CreateCertificate(tmpl, m.leafKey.Public())
+	if err != nil {
+		return nil, fmt.Errorf("while signing certificate: %w", err)
+	}
+
+	var pemChain bytes.Buffer
+	for _, der := range derChain {
+		pemChain.Write(pem.EncodeToMemory(&pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: der,
+		}))
+	}
+
+	leafCert, err := x509.ParseCertificate(derChain[0])
+	if err != nil {
+		return nil, fmt.Errorf("while parsing issued leaf: %w", err)
+	}
+
+	slog.InfoContext(ctx, "certificate issued",
+		slog.String("host", host),
+		slog.String("serial", leafCert.SerialNumber.Text(16)),
+		slog.Time("not_after", leafCert.NotAfter),
+	)
+
+	return &MintedCert{
+		CertChainPEM:  pemChain.Bytes(),
+		PrivateKeyPEM: m.leafKeyPEM,
+		NotAfter:      leafCert.NotAfter,
+		Serial:        leafCert.SerialNumber.Text(16),
+	}, nil
 }
 
 // checkHostSyntax checks whether host is a valid DNS name or IP address.

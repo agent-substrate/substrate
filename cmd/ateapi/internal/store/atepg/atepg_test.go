@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -64,6 +65,10 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
+		if err := dockerenv.Configure(ctx); err != nil {
+			containerErr = err
+			return
+		}
 		pgContainer, err := postgres.Run(ctx, "postgres:18-alpine",
 			postgres.WithDatabase("atepg"),
 			postgres.WithUsername("atepg"),
@@ -216,7 +221,9 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 		}); err != nil {
 			return fmt.Errorf("concurrent actor template update: %w", err)
 		}
-		toUpdate.Status = &ateapipb.ActorTemplateStatus{Message: "ready"}
+		toUpdate.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+			ErrorMessage: "LosingUpdate",
+		}}
 		return nil
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
@@ -232,8 +239,8 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
 		t.Errorf("worker selector tier = %q, want paid", got)
 	}
-	if got := stored.GetStatus().GetMessage(); got != "" {
-		t.Errorf("status message = %q, want empty: losing update was persisted", got)
+	if got := stored.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage(); got != "" {
+		t.Errorf("status error message = %q, want empty: losing update was persisted", got)
 	}
 }
 
