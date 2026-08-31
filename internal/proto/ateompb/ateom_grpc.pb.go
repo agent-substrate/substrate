@@ -85,12 +85,12 @@ type AteomClient interface {
 	// Two ways it declines to give a sample, and they ask different things of the
 	// caller:
 	//
-	//   - NOT_FOUND -- this ateom is not executing the actor in the request. It
+	//   * NOT_FOUND -- this ateom is not executing the actor in the request. It
 	//     may be "available", or a recycled worker may have moved on to a
 	//     different actor. Retrying on the same timer will not change the answer:
 	//     the caller's worker-to-actor mapping is stale and wants re-resolving.
 	//
-	//   - FAILED_PRECONDITION -- this ateom is executing the requested actor but
+	//   * FAILED_PRECONDITION -- this ateom is executing the requested actor but
 	//     has no sample to give yet. It accepts an actor before the sandbox it
 	//     will measure exists, so a poll landing in the boot lands here. Read it
 	//     as "no numbers right now", not as "the actor is gone": it is transient,
@@ -238,12 +238,12 @@ type AteomServer interface {
 	// Two ways it declines to give a sample, and they ask different things of the
 	// caller:
 	//
-	//   - NOT_FOUND -- this ateom is not executing the actor in the request. It
+	//   * NOT_FOUND -- this ateom is not executing the actor in the request. It
 	//     may be "available", or a recycled worker may have moved on to a
 	//     different actor. Retrying on the same timer will not change the answer:
 	//     the caller's worker-to-actor mapping is stale and wants re-resolving.
 	//
-	//   - FAILED_PRECONDITION -- this ateom is executing the requested actor but
+	//   * FAILED_PRECONDITION -- this ateom is executing the requested actor but
 	//     has no sample to give yet. It accepts an actor before the sandbox it
 	//     will measure exists, so a poll landing in the boot lands here. Read it
 	//     as "no numbers right now", not as "the actor is gone": it is transient,

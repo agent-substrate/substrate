@@ -12,28 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package reaper
+package controlapi
 
 import (
-	"os/exec"
 	"testing"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 )
 
-func TestRunReturnsCommandResult(t *testing.T) {
-	if err := Run(exec.Command("true")); err != nil {
-		t.Fatalf("Run(true) = %v, want nil", err)
-	}
-	if err := Run(exec.Command("false")); err == nil {
-		t.Fatal("Run(false) = nil, want a non-nil exit error")
-	}
-}
-
-func TestRunCombinedReturnsOutput(t *testing.T) {
-	out, err := RunCombined(exec.Command("sh", "-c", "echo hello"))
-	if err != nil {
-		t.Fatalf("RunCombined = %v, want nil", err)
-	}
-	if string(out) != "hello\n" {
-		t.Fatalf("RunCombined output = %q, want %q", out, "hello\n")
-	}
+func TestMain(m *testing.M) {
+	storetest.RunTests(m)
 }

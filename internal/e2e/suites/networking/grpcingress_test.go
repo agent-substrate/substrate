@@ -54,7 +54,7 @@ const grpcEchoFixtureManifest = "internal/e2e/fixtures/testserver/grpcecho.yaml.
 // actor that really does speak gRPC.
 func TestIngressProtocolDowngrade(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "protodowngrade", e2e.CounterFixture())
+	actorName, _ := createAndResumeSubstrateActor(t, ctx, "protodowngrade", e2e.SubstrateCounterFixture())
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 
 	base := "http://" + routerAddress(t, ctx)

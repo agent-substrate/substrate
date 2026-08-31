@@ -16,8 +16,8 @@
 // the platform metrics in e2e.PlatformMetricPrefixes reach the kind stack's OTel
 // Collector. It closes the "silent regression" gap: a renamed or dropped
 // instrument fails here rather than surfacing as an empty dashboard. The prefix
-// set grows as each metric slice lands. Requires the demo counter template for
-// the sandbox class under test to be installed (see e2e.CounterFixture).
+// set grows as each metric slice lands. Requires the substrate counter demo for
+// the sandbox class under test to be installed (see e2e.SubstrateCounterFixture).
 package metrics
 
 import (
@@ -40,7 +40,7 @@ const metricsAtespace = "ate-metrics-e2e"
 func TestPlatformMetricsEmitted(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
-	tmpl := e2e.CounterFixture()
+	tmpl := e2e.SubstrateCounterFixture()
 	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
@@ -49,9 +49,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	})
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
-		ActorTemplateNamespace: tmpl.Namespace,
-		ActorTemplateName:      tmpl.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: tmpl.Atespace, Name: tmpl.Name},
 	}}); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}

@@ -45,7 +45,7 @@ demo-counter-substrate_cmdline() {
       demo-counter-substrate_deploy_variant \
         demos/counter/counter-substrate.yaml.tmpl \
         demos/counter/counter-substrate-template.yaml.tmpl \
-        ate-demo-counter-substrate counter-substrate counter
+        ate-demo-counter-substrate counter-substrate counter 300
       ;;
     --delete-demo-counter-substrate)
       demo-counter-substrate_delete_variant \
@@ -53,10 +53,13 @@ demo-counter-substrate_cmdline() {
         ate-demo-counter-substrate counter
       ;;
     --deploy-demo-counter-substrate-microvm)
+      # 600s golden budget: a micro-VM golden is a cloud-hypervisor cold boot
+      # plus checkpoint, on nested KVM in CI — the same budget the CRD demo's
+      # `kubectl wait` gets there.
       demo-counter-substrate_deploy_variant \
         demos/counter/counter-substrate-microvm.yaml.tmpl \
         demos/counter/counter-substrate-microvm-template.yaml.tmpl \
-        ate-demo-counter-substrate-microvm counter-substrate-microvm counter-microvm
+        ate-demo-counter-substrate-microvm counter-substrate-microvm counter-microvm 600
       ;;
     --delete-demo-counter-substrate-microvm)
       demo-counter-substrate_delete_variant \
@@ -79,6 +82,7 @@ demo-counter-substrate_deploy_variant() {
   local atespace="$3" # also the pool's k8s namespace
   local pool="$4"
   local template="$5"
+  local golden_timeout="${6:-300}"
   log_step "demo-counter-substrate_deploy (${atespace}/${template})"
   ensure_crds
 
@@ -114,7 +118,7 @@ demo-counter-substrate_deploy_variant() {
   # `kubectl wait --for=condition=Ready actortemplate/...` (there is no
   # kubectl wait for substrate resources).
   log_step "Waiting for the ${atespace}/${template} golden snapshot..."
-  if ! wait_actortemplate_ready "${atespace}" "${template}" 300; then
+  if ! wait_actortemplate_ready "${atespace}" "${template}" "${golden_timeout}"; then
     exit 1
   fi
 }

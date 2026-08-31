@@ -30,11 +30,8 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -54,14 +51,10 @@ func TestRequestParking(t *testing.T) {
 	// One worker, two actors: the minimal deterministic oversubscription.
 	at := createParkingFixture(ctx, t, clients, nsObj)
 
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: parkingAtespace}},
-	})
-
 	actorA := "parked-a-" + nsObj.Name
 	actorB := "parked-b-" + nsObj.Name
 	for _, name := range []string{actorA, actorB} {
-		createActor(ctx, t, clients, nsObj, at, name)
+		createActor(ctx, t, clients, at, name)
 	}
 
 	router, err := e2e.NewRouterClient(ctx)
@@ -192,100 +185,36 @@ func TestRequestParking(t *testing.T) {
 	})
 }
 
-// createParkingFixture provisions a 1-worker pool and an ActorTemplate in the
-// test namespace, copying the resolved runtime (sandbox class, ateom image,
-// container images) from the installed counter demo — the same source and
-// isolation pattern as the demo suite: the unique pool label keeps this pool's
-// worker invisible to other namespaces' actors.
-func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace) *v1alpha1.ActorTemplate {
+// createParkingFixture provisions a 1-worker pool and a substrate
+// ActorTemplate, copying the resolved runtime (sandbox config, ateom image,
+// container images) from the installed substrate counter demo — the same
+// source and isolation pattern as the demo suite: the unique pool label keeps
+// this pool's worker invisible to other namespaces' actors.
+func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace) *ateapipb.ActorTemplate {
 	t.Helper()
 	env, err := e2e.CheckEnv("BUCKET_NAME")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
-	src := e2e.CounterFixture()
-	srcNS, srcName := src.Namespace, src.Name
-	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(srcNS).Get(ctx, srcName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get source WorkerPool %s/%s: %v", srcNS, srcName, err)
-	}
-	existingAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(srcNS).Get(ctx, srcName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get source ActorTemplate %s/%s: %v", srcNS, srcName, err)
-	}
-
-	wp := &v1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "parking",
-			Namespace: nsObj.Name,
-			Labels:    map[string]string{"demo": nsObj.Name},
+	return e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateCounterTemplateOptions{
+		Atespace: parkingAtespace,
+		// Unique within the suite-shared atespace.
+		Name:         "parking-" + nsObj.Name,
+		PoolName:     "parking",
+		PoolReplicas: 1, // deliberately undersized: 2 actors will contend for it
+		Labels:       map[string]string{"demo": nsObj.Name},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/e2e-parking-" + nsObj.Name,
 		},
-		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:          1, // deliberately undersized: 2 actors will contend for it
-			WorkerImage:       existingWp.Spec.WorkerImage,
-			SandboxClass:      existingWp.Spec.SandboxClass,
-			SandboxConfigName: existingWp.Spec.SandboxConfigName,
-		},
-	}
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("failed to create WorkerPool: %v", err)
-	}
-
-	at := &v1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "parking",
-			Namespace: nsObj.Name,
-		},
-		Spec: v1alpha1.ActorTemplateSpec{
-			WorkerSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"demo": nsObj.Name},
-			},
-			SandboxClass: existingAt.Spec.SandboxClass,
-			Containers:   existingAt.Spec.Containers,
-			// The source's limits size the sandbox. Copying them matters most on
-			// micro-VM, where an ActorTemplate that declares none boots the guest
-			// at the kata config default (2GiB) instead of the demo's 512Mi.
-			Resources: existingAt.Spec.Resources,
-			SnapshotsConfig: v1alpha1.SnapshotsConfig{
-				Location: "gs://" + env["BUCKET_NAME"] + "/e2e-parking-" + nsObj.Name,
-			},
-			Volumes: existingAt.Spec.Volumes,
-		},
-	}
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(nsObj.Name).Create(ctx, at, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("failed to create ActorTemplate: %v", err)
-	}
-
-	t.Logf("Waiting for ActorTemplate %s to be Ready...", at.Name)
-	tmplCtx, tmplCancel := context.WithTimeout(ctx, e2e.TemplateReadyTimeout(t))
-	defer tmplCancel()
-	var lastPhase v1alpha1.PhaseType
-	for {
-		curAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(nsObj.Name).Get(tmplCtx, at.Name, metav1.GetOptions{})
-		if err == nil {
-			lastPhase = curAt.Status.Phase
-			if lastPhase == v1alpha1.PhaseReady {
-				return at
-			}
-			if lastPhase == v1alpha1.PhaseFailed {
-				t.Fatalf("ActorTemplate %s transitioned to PhaseFailed", at.Name)
-			}
-		}
-		select {
-		case <-tmplCtx.Done():
-			t.Fatalf("timed out waiting for ActorTemplate %q to be Ready (last phase: %s, err: %v)", at.Name, lastPhase, err)
-		case <-time.After(1 * time.Second):
-		}
-	}
+	})
 }
 
-func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *v1alpha1.ActorTemplate, name string) {
+func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, at *ateapipb.ActorTemplate, name string) {
 	t.Helper()
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: parkingAtespace, Name: name},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: parkingAtespace, Name: name},
+		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create actor %q: %v", name, err)
 	}

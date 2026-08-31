@@ -152,30 +152,64 @@ func TestRenderFixtureManifest_MicroVM(t *testing.T) {
 	}
 }
 
-// TestCounterFixture covers the knob every suite reads: the class picks the
-// fixture, and the explicit environment overrides still win.
-func TestCounterFixture(t *testing.T) {
+// TestEgressFixture covers the knob the networking suite reads: the class
+// picks the fixture.
+func TestEgressFixture(t *testing.T) {
 	t.Run("gvisor", func(t *testing.T) {
 		t.Setenv(sandboxClassEnv, "")
-		if got := CounterFixture(); got.Namespace != "ate-demo-counter" || got.Name != "counter" {
-			t.Errorf("CounterFixture() = %+v, want the gVisor counter demo", got)
+		if got := EgressFixture(); got.Namespace != "ate-demo-egress" || got.Name != "egress" {
+			t.Errorf("EgressFixture() = %+v, want the gVisor egress demo", got)
 		}
 	})
 	t.Run("microvm", func(t *testing.T) {
 		t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
-		if got := CounterFixture(); got.Namespace != "ate-demo-counter-microvm" || got.Name != "counter-microvm" {
-			t.Errorf("CounterFixture() = %+v, want the micro-VM counter demo", got)
-		}
 		if got := EgressFixture(); got.Namespace != "ate-demo-egress-microvm" || got.Name != "egress-microvm" {
 			t.Errorf("EgressFixture() = %+v, want the micro-VM egress demo", got)
 		}
 	})
+}
+
+// TestSubstrateCounterFixture covers the knob every counter-based suite reads:
+// the class picks the fixture, and the explicit environment overrides still
+// win.
+func TestSubstrateCounterFixture(t *testing.T) {
+	t.Run("gvisor", func(t *testing.T) {
+		t.Setenv(sandboxClassEnv, "")
+		got := SubstrateCounterFixture()
+		want := SubstrateFixture{
+			Atespace:      "ate-demo-counter-substrate",
+			Name:          "counter",
+			PoolNamespace: "ate-demo-counter-substrate",
+			PoolName:      "counter-substrate",
+			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-substrate",
+		}
+		if got != want {
+			t.Errorf("SubstrateCounterFixture() = %+v, want %+v", got, want)
+		}
+	})
+	t.Run("microvm", func(t *testing.T) {
+		t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
+		got := SubstrateCounterFixture()
+		want := SubstrateFixture{
+			Atespace:      "ate-demo-counter-substrate-microvm",
+			Name:          "counter-microvm",
+			PoolNamespace: "ate-demo-counter-substrate-microvm",
+			PoolName:      "counter-substrate-microvm",
+			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-substrate-microvm",
+		}
+		if got != want {
+			t.Errorf("SubstrateCounterFixture() = %+v, want %+v", got, want)
+		}
+	})
 	t.Run("explicit override wins", func(t *testing.T) {
 		t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
-		t.Setenv("E2E_TEMPLATE_NAMESPACE", "elsewhere")
-		t.Setenv("E2E_TEMPLATE_NAME", "other")
-		if got := CounterFixture(); got.Namespace != "elsewhere" || got.Name != "other" {
-			t.Errorf("CounterFixture() = %+v, want the environment override", got)
+		t.Setenv("E2E_SUBSTRATE_TEMPLATE_ATESPACE", "elsewhere")
+		t.Setenv("E2E_SUBSTRATE_TEMPLATE_NAME", "other")
+		t.Setenv("E2E_SUBSTRATE_POOL_NAMESPACE", "pool-ns")
+		t.Setenv("E2E_SUBSTRATE_POOL_NAME", "pool")
+		got := SubstrateCounterFixture()
+		if got.Atespace != "elsewhere" || got.Name != "other" || got.PoolNamespace != "pool-ns" || got.PoolName != "pool" {
+			t.Errorf("SubstrateCounterFixture() = %+v, want the environment overrides", got)
 		}
 	})
 }

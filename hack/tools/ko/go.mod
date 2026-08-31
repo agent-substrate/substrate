@@ -1,6 +1,6 @@
 module github.com/agent-substrate/substrate/hack/tools/ko
 
-go 1.26.3
+go 1.27.0
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0 // indirect
