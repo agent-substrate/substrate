@@ -820,7 +820,6 @@ deploy_atenet() {
   apply_atenet_egress
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status deployment/dns -n ate-system --timeout="$(rollout_timeout)"
 }
 
 # get_actor_state echoes the actor's state enum (e.g. ACTOR_STATE_SUSPENDED).
