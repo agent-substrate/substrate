@@ -21,9 +21,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"net/url"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -783,7 +785,7 @@ func TestMintCertActorUID(t *testing.T) {
 		wantCode   codes.Code
 	}{
 		"Matching": {requestUID: func(actorUID string) string { return actorUID }, wantCode: codes.OK},
-		"Stale": {requestUID: func(string) string { return "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63" }, wantCode: codes.FailedPrecondition},
+		"Stale":    {requestUID: func(string) string { return "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63" }, wantCode: codes.FailedPrecondition},
 	} {
 		t.Run(name, func(t *testing.T) {
 			leaf, actorUID, err := mintCertFor(t, func(actorUID string) *ateapipb.MintCertRequest {
@@ -959,6 +961,25 @@ func TestValidateMintJWTRequest(t *testing.T) {
 		validReq(func(r *ateapipb.MintJWTRequest) { r.Audience = nil }),
 		field.ErrorList{field.Required(field.NewPath("audience"), "")},
 	}, {
+		"too many audiences",
+		validReq(func(r *ateapipb.MintJWTRequest) {
+			r.Audience = make([]string, 17)
+			for i := range r.Audience {
+				r.Audience[i] = fmt.Sprintf("https://svc-%d.example.com", i)
+			}
+		}),
+		field.ErrorList{field.TooMany(field.NewPath("audience"), 17, 16).WithOrigin("maxItems")},
+	}, {
+		"duplicate audience entry",
+		validReq(func(r *ateapipb.MintJWTRequest) {
+			r.Audience = []string{"https://a.example.com", "https://a.example.com"}
+		}),
+		field.ErrorList{field.Duplicate(field.NewPath("audience").Index(1), nil)},
+	}, {
+		"audience entry too long",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.Audience = []string{strings.Repeat("a", 513)} }),
+		field.ErrorList{field.TooLong(field.NewPath("audience").Index(0), nil, 512).WithOrigin("maxLength")},
+	}, {
 		"missing atespace",
 		validReq(func(r *ateapipb.MintJWTRequest) { r.Atespace = "" }),
 		field.ErrorList{field.Required(field.NewPath("atespace"), "")},
@@ -1013,6 +1034,10 @@ func TestValidateMintCertRequest(t *testing.T) {
 		"valid",
 		validReq(),
 		nil,
+	}, {
+		"oversized certificate_signing_request",
+		validReq(func(r *ateapipb.MintCertRequest) { r.CertificateSigningRequest = make([]byte, 16385) }),
+		field.ErrorList{field.TooLong(field.NewPath("certificate_signing_request"), nil, 16384)},
 	}, {
 		"missing worker",
 		validReq(func(r *ateapipb.MintCertRequest) { r.Worker = nil }),

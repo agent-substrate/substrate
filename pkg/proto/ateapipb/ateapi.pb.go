@@ -6080,7 +6080,9 @@ type MintJWTRequest struct {
 	// audience bindings, so at least one is required.
 	//
 	// +k8s:required
-	// +k8s:listType=atomic
+	// +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
+	// +k8s:listType=set
+	// +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
 	Audience []string `protobuf:"bytes,1,rep,name=audience,proto3" json:"audience,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
@@ -6235,6 +6237,7 @@ type MintCertRequest struct {
 	// subject public key.
 	//
 	// +k8s:required
+	// +k8s:customValidation # size bound; maxLength is string-only
 	CertificateSigningRequest []byte `protobuf:"bytes,2,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	// Actor incarnation expected by the activation. This is only a stale-request
 	// guard: ateapi derives the actor and its identity from the worker assignment.

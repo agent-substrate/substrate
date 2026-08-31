@@ -1420,7 +1420,9 @@ message MintJWTRequest {
   // audience bindings, so at least one is required.
   //
   // +k8s:required
-  // +k8s:listType=atomic
+  // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
   repeated string audience = 1;
 
   // +k8s:required
@@ -1478,6 +1480,7 @@ message MintCertRequest {
   // subject public key.
   //
   // +k8s:required
+  // +k8s:customValidation # size bound; maxLength is string-only
   bytes certificate_signing_request = 2;
 
   // Actor incarnation expected by the activation. This is only a stale-request
