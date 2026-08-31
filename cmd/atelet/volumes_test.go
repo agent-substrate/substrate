@@ -47,7 +47,6 @@ func TestUnmountExternalVolumes(t *testing.T) {
 
 	extVol1 := &ateletpb.Volume{
 		Name: "vol-1",
-		Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 		Source: &ateletpb.Volume_External{
 			External: &ateletpb.ExternalVolumeSource{
 				StorageVolumeId: "mock-vol-1",
@@ -57,7 +56,6 @@ func TestUnmountExternalVolumes(t *testing.T) {
 	}
 	extVol2 := &ateletpb.Volume{
 		Name: "vol-2",
-		Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 		Source: &ateletpb.Volume_External{
 			External: &ateletpb.ExternalVolumeSource{
 				StorageVolumeId: "mock-vol-2",
@@ -67,7 +65,9 @@ func TestUnmountExternalVolumes(t *testing.T) {
 	}
 	durableVol := &ateletpb.Volume{
 		Name: "durable-1",
-		Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
+		Source: &ateletpb.Volume_DurableDir{
+			DurableDir: &ateletpb.DurableDirVolume{},
+		},
 	}
 
 	t.Run("success", func(t *testing.T) {

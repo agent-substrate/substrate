@@ -32,8 +32,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
@@ -54,35 +54,25 @@ const (
 	templateNS   = "benchmark-workloads"
 	actorDomain  = "actors.resources.substrate.ate.dev"
 	pingPath     = "/ping"
+	writeRAMPath = "/writeram"
 
 	sourceClient = "client"
 	sourceServer = "server"
 )
 
-// Config holds the dependencies a glutton task needs. Built once at startup
-// and passed to Register.
-type Config struct {
-	// APIStub is the shared gRPC client to ateapi (one connection, all goroutines).
-	APIStub ateapipb.ControlClient
-	// HTTPClient is the shared HTTP client for atenet pings.
-	HTTPClient *http.Client
-	// RouterURL is the base URL of the atenet router (no trailing slash).
-	RouterURL string
-	// Atespace every actor this worker creates lives in. Required; caller
-	// is responsible for having ensured it exists (see EnsureAtespace).
-	Atespace string
-	// Dyn is the runtime-mutable config (wait-time bounds, trace
-	// probability). Required — every per-iteration read goes through it,
-	// so tests can mutate it without touching glutton internals.
-	Dyn *dynconfig.Holder
-	// Tracer anchors sampled spans; falls back to the otel global if nil.
-	Tracer trace.Tracer
+func init() {
+	userclass.Add(userclass.Entry{
+		Name:       "glutton",
+		LocustFile: "glutton.py",
+		UserClass:  userClass,
+		Init:       initPing,
+	})
 }
 
-// Register creates a runtime tied to cfg and returns a boomer-compatible task
+// initPing creates a runtime tied to cfg and returns a boomer-compatible task
 // function plus a Shutdown hook the caller should run before exit (it
 // suspend+deletes every actor this worker created).
-func Register(cfg *Config) (taskFn func(), shutdown func(context.Context)) {
+func initPing(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
 	if cfg.Tracer == nil {
 		cfg.Tracer = otel.Tracer("substrate-boomer/glutton")
 	}
@@ -91,7 +81,7 @@ func Register(cfg *Config) (taskFn func(), shutdown func(context.Context)) {
 }
 
 type taskRuntime struct {
-	cfg   *Config
+	cfg   *userclass.Config
 	users sync.Map // goroutineID → *gluttonUser
 }
 
@@ -117,6 +107,13 @@ func (r *taskRuntime) iterate() {
 	if !user.resume(ctx) {
 		return
 	}
+	// Fill before the first suspend so every snapshot from cycle one on
+	// carries the full working set; glutton keeps the allocations across
+	// suspend/resume, so this runs once per actor (retried if it fails).
+	user.ensureRAMFilled(ctx)
+	// Re-dirty part of the working set each cycle so repeated suspends
+	// snapshot an actor whose memory is changing, like a live application's.
+	user.churnRAM(ctx)
 	user.ping(ctx)
 	user.suspend(ctx)
 
@@ -168,11 +165,12 @@ func (r *taskRuntime) dynamicWait() time.Duration {
 }
 
 type gluttonUser struct {
-	cfg          *Config
+	cfg          *userclass.Config
 	actorName    string
 	hostHeader   string
 	firstResume  bool
 	actorRunning bool
+	ramFilled    bool
 }
 
 func (u *gluttonUser) ref() *ateapipb.ObjectRef {
@@ -336,6 +334,100 @@ func (u *gluttonUser) ping(ctx context.Context) {
 	}
 	logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, nil)
 	bmetrics.RecordSuccess("http", "GluttonPing", userClass, clientLatency, int64(len(respBody)))
+}
+
+// ensureRAMFilled grows the actor's resident working set to the configured
+// mem_target through the glutton WriteRAM API. Runs once per actor:
+// glutton holds the allocation for its lifetime, so it persists across
+// suspend/resume and every snapshot from the first suspend onward is at
+// size. A failure leaves ramFilled unset so the next iteration retries.
+// The fill reports as its own GluttonFillRAM stats row so it never
+// pollutes ping or resume numbers.
+func (u *gluttonUser) ensureRAMFilled(ctx context.Context) {
+	if u.ramFilled {
+		return
+	}
+	target := u.cfg.Dyn.Load().MemTarget
+	if target == "" {
+		u.ramFilled = true
+		return
+	}
+
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonFillRAM")
+	defer span.End()
+	start := time.Now()
+
+	err := u.writeRAM(ctx, "memload", target, gluttonpb.WriteMode_WRITE_MODE_TRUNCATE)
+	clientLatency := time.Since(start)
+	logSampledTrace(span, "GluttonFillRAM", clientLatency, sourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonFillRAM", userClass, clientLatency, err.Error())
+		return
+	}
+	u.ramFilled = true
+	bmetrics.RecordSuccess("http", "GluttonFillRAM", userClass, clientLatency, 0)
+}
+
+// churnRAM re-randomizes the first mem_churn bytes of the working set in
+// place (WriteRAM overwrite on the fill's key), so pages arrive dirty at
+// every suspend instead of only the first: a fill-once set is static, and
+// any future incremental snapshotting would make cycles two onward
+// unrepresentative of a live application. Runs once per iteration, only
+// after the fill has succeeded, and reports as its own GluttonChurnRAM
+// stats row.
+func (u *gluttonUser) churnRAM(ctx context.Context) {
+	churn := u.cfg.Dyn.Load().MemChurn
+	if churn == "" || !u.ramFilled {
+		return
+	}
+
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonChurnRAM")
+	defer span.End()
+	start := time.Now()
+
+	err := u.writeRAM(ctx, "memload", churn, gluttonpb.WriteMode_WRITE_MODE_OVERWRITE)
+	clientLatency := time.Since(start)
+	logSampledTrace(span, "GluttonChurnRAM", clientLatency, sourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonChurnRAM", userClass, clientLatency, err.Error())
+		return
+	}
+	bmetrics.RecordSuccess("http", "GluttonChurnRAM", userClass, clientLatency, 0)
+}
+
+// writeRAM POSTs one WriteRAM request to the actor through the router,
+// mirroring ping's wire format (protobuf over HTTP). size is a suffixed
+// string (e.g. "2Gi") passed through verbatim; glutton parses it.
+func (u *gluttonUser) writeRAM(ctx context.Context, key, size string, mode gluttonpb.WriteMode) error {
+	body, err := proto.Marshal(&gluttonpb.WriteRAMRequest{
+		Key:       key,
+		Size:      size,
+		WriteMode: mode,
+	})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.RouterURL+writeRAMPath, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Host = u.hostHeader
+	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
+
+	resp, err := u.cfg.HTTPClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("WriteRAM %s (%s): HTTP %d: %s", key, size, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
 }
 
 // logSampledTrace emits a single structured line per sampled span. Operators

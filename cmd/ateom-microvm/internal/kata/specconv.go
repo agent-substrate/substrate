@@ -21,6 +21,11 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
+// DefaultCPUPeriodUS is the CFS period assumed when a spec carries a quota but
+// no period. It matches the kernel default and the period atelet encodes
+// against.
+const DefaultCPUPeriodUS = 100000
+
 // SpecToAgentPB converts an OCI runtime spec into the kata-agent's protobuf Spec
 // (agentpb.Spec) for a CreateContainer ttrpc call. A blind json round-trip does NOT
 // work: agentpb's Spec JSON tags are PascalCase (from oci.proto), while OCI
@@ -118,10 +123,29 @@ func SpecToAgentPB(s *specs.Spec) *agentpb.Spec {
 				}
 				res.Devices = append(res.Devices, dc)
 			}
+			// The agent applies cgroup limits from this spec, so anything not
+			// carried here is silently unenforced in the guest.
+			if r.Memory != nil && r.Memory.Limit != nil {
+				res.Memory = &agentpb.LinuxMemory{Limit: *r.Memory.Limit}
+			}
 			if r.CPU != nil {
 				cpu := &agentpb.LinuxCPU{}
 				if r.CPU.Shares != nil {
 					cpu.Shares = *r.CPU.Shares
+				}
+				// A non-positive quota means "unlimited" in the OCI spec, so it is
+				// left unset rather than sent as a literal zero, which the guest
+				// would apply as no CPU at all. cpuLimitMillis reads it the same way.
+				if r.CPU.Quota != nil && *r.CPU.Quota > 0 {
+					cpu.Quota = *r.CPU.Quota
+					// period is optional in OCI but not on the wire, where it is a
+					// plain uint64 and an unset one is indistinguishable from zero.
+					// A quota against a zero period is an unsatisfiable cgroup write,
+					// so fall back to the CFS default the quota is expressed against.
+					cpu.Period = DefaultCPUPeriodUS
+				}
+				if r.CPU.Period != nil && *r.CPU.Period > 0 {
+					cpu.Period = *r.CPU.Period
 				}
 				res.CPU = cpu
 			}

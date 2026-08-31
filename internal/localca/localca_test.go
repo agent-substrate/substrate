@@ -16,22 +16,22 @@ package localca
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
-	"math/big"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestGenerateED25519CA(t *testing.T) {
 	before := time.Now().UTC().Truncate(time.Second)
-	ca, err := GenerateED25519CA("test-ca")
+	ca, err := GenerateCA("test-ca", KeyTypeED25519, 365*24*time.Hour)
 	after := time.Now().UTC().Truncate(time.Second).Add(time.Second)
 	if err != nil {
 		t.Fatalf("GenerateED25519CA() error = %v", err)
@@ -76,23 +76,64 @@ func TestGenerateED25519CA(t *testing.T) {
 	if _, err := cert.Verify(x509.VerifyOptions{Roots: roots}); err != nil {
 		t.Errorf("self-signed verification failed: %v", err)
 	}
+}
 
-	if len(ca.IntermediateCertificates) != 0 {
-		t.Errorf("IntermediateCertificates length = %d, want 0", len(ca.IntermediateCertificates))
+func TestTLSMaterialPEM(t *testing.T) {
+	ca, err := GenerateCA("test-ca", KeyTypeED25519, 365*24*time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateED25519CA() error = %v", err)
+	}
+
+	chain, err := ca.TLSCertificateChainPEM()
+	if err != nil {
+		t.Fatalf("TLSCertificateChainPEM() error = %v", err)
+	}
+	block, rest := pem.Decode(chain)
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatalf("TLSCertificateChainPEM() first block = %#v, want CERTIFICATE", block)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("TLSCertificateChainPEM() has unexpected additional data: %q", rest)
+	}
+	if !bytes.Equal(block.Bytes, ca.RootCertificate.Raw) {
+		t.Error("TLSCertificateChainPEM() certificate differs from the issuing certificate")
+	}
+
+	keyPEM, err := ca.TLSPrivateKeyPEM()
+	if err != nil {
+		t.Fatalf("TLSPrivateKeyPEM() error = %v", err)
+	}
+	block, rest = pem.Decode(keyPEM)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		t.Fatalf("TLSPrivateKeyPEM() block = %#v, want PRIVATE KEY", block)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("TLSPrivateKeyPEM() has unexpected additional data: %q", rest)
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("TLSPrivateKeyPEM() did not contain PKCS#8: %v", err)
+	}
+	publicKey, err := x509.MarshalPKIXPublicKey(key.(crypto.Signer).Public())
+	if err != nil {
+		t.Fatalf("marshaling private key's public key: %v", err)
+	}
+	if !bytes.Equal(ca.RootCertificate.RawSubjectPublicKeyInfo, publicKey) {
+		t.Error("TLSPrivateKeyPEM() key does not match the issuing certificate")
 	}
 }
 
 func TestMarshalUnmarshalRoundTrip(t *testing.T) {
-	ca1, err := GenerateED25519CA("ca-1")
+	ca1, err := GenerateCA("1", KeyTypeED25519, 365*24*time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateED25519CA(ca-1): %v", err)
 	}
-	ca2, err := GenerateED25519CA("ca-2")
+	ca2, err := GenerateCA("2", KeyTypeED25519, 365*24*time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateED25519CA(ca-2): %v", err)
 	}
 
-	pool := &Pool{CAs: []*CA{ca1, ca2}}
+	pool := &ConcretePool{CAs: []*CA{ca1, ca2}}
 
 	data, err := Marshal(pool)
 	if err != nil {
@@ -104,197 +145,79 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 
-	if len(restored.CAs) != 2 {
-		t.Fatalf("restored pool has %d CAs, want 2", len(restored.CAs))
-	}
-
-	for i, orig := range pool.CAs {
-		got := restored.CAs[i]
-		if got.ID != orig.ID {
-			t.Errorf("CA[%d].ID = %q, want %q", i, got.ID, orig.ID)
-		}
-
-		origKey := orig.SigningKey.(ed25519.PrivateKey)
-		gotKey, ok := got.SigningKey.(ed25519.PrivateKey)
-		if !ok {
-			t.Fatalf("CA[%d].SigningKey type = %T, want ed25519.PrivateKey", i, got.SigningKey)
-		}
-		if !bytes.Equal(origKey, gotKey) {
-			t.Errorf("CA[%d].SigningKey bytes differ", i)
-		}
-
-		if !bytes.Equal(got.RootCertificate.Raw, orig.RootCertificate.Raw) {
-			t.Errorf("CA[%d].RootCertificate.Raw differs", i)
-		}
-
-		// Verify the deserialized key can actually sign and the cert can verify.
-		msg := []byte("round-trip-check")
-		sig := ed25519.Sign(gotKey, msg)
-		pubKey := got.RootCertificate.PublicKey.(ed25519.PublicKey)
-		if !ed25519.Verify(pubKey, msg, sig) {
-			t.Errorf("CA[%d]: sign/verify with deserialized key failed", i)
-		}
+	if diff := cmp.Diff(restored, pool); diff != "" {
+		t.Fatalf("Pool didn't round-trip; diff (-got +want)")
 	}
 }
 
-func TestMarshalUnmarshalWithIntermediates(t *testing.T) {
-	root, err := GenerateED25519CA("root")
+func TestRefreshingPool(t *testing.T) {
+	ca1, err := GenerateCA("1", KeyTypeED25519, 365*24*time.Hour)
 	if err != nil {
-		t.Fatalf("GenerateED25519CA(): %v", err)
+		t.Fatalf("Unexpected error generating CA 1: %v", err)
 	}
-
-	intermPub, _, err := ed25519.GenerateKey(rand.Reader)
+	pool1 := &ConcretePool{
+		CAs:              []*CA{ca1},
+		ActiveForSigning: "1",
+	}
+	pool1Bytes, err := Marshal(pool1)
 	if err != nil {
-		t.Fatalf("ed25519.GenerateKey(): %v", err)
+		t.Fatalf("Unexpected error marshaling pool 1: %v", err)
 	}
 
-	intermTemplate := &x509.Certificate{
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-	}
-
-	intermDER, err := x509.CreateCertificate(rand.Reader, intermTemplate, root.RootCertificate, intermPub, root.SigningKey)
+	ca2, err := GenerateCA("1", KeyTypeED25519, 365*24*time.Hour)
 	if err != nil {
-		t.Fatalf("CreateCertificate(): %v", err)
+		t.Fatalf("Unexpected error generating CA 2: %v", err)
 	}
-	intermCert, err := x509.ParseCertificate(intermDER)
+	pool2 := &ConcretePool{
+		CAs:              []*CA{ca2},
+		ActiveForSigning: "2",
+	}
+	pool2Bytes, err := Marshal(pool2)
 	if err != nil {
-		t.Fatalf("ParseCertificate(): %v", err)
+		t.Fatalf("Unexpected error marshaling pool 2: %v", err)
 	}
 
-	root.IntermediateCertificates = []*x509.Certificate{intermCert}
+	synctest.Test(t, func(t *testing.T) {
+		tempDir := t.TempDir()
+		poolFile := filepath.Join(tempDir, "pool.json")
 
-	pool := &Pool{CAs: []*CA{root}}
+		if err := os.WriteFile(poolFile, pool1Bytes, 0o600); err != nil {
+			t.Fatalf("Unexpected error writing pool 1: %v", err)
+		}
 
-	data, err := Marshal(pool)
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
+		refreshingPool, err := NewRefreshingPool(poolFile)
+		if err != nil {
+			t.Fatalf("Unexpected error creating refreshing pool: %v", err)
+		}
 
-	restored, err := Unmarshal(data)
-	if err != nil {
-		t.Fatalf("Unmarshal() error = %v", err)
-	}
+		gotAnchors, err := refreshingPool.TrustAnchors()
+		if err != nil {
+			t.Fatalf("Unexpected errors getting anchors from refreshing pool: %v", err)
+		}
+		wantAnchors, err := pool1.TrustAnchors()
+		if err != nil {
+			t.Fatalf("Unexpected errors getting anchors from pool 1: %v", err)
+		}
+		if diff := cmp.Diff(gotAnchors, wantAnchors); diff != "" {
+			t.Fatalf("Refreshing pool returned wrong trust anchors; diff (-got +want)\n%s", diff)
+		}
 
-	if len(restored.CAs[0].IntermediateCertificates) != 1 {
-		t.Fatalf("IntermediateCertificates length = %d, want 1", len(restored.CAs[0].IntermediateCertificates))
-	}
+		// Write pool2 and advance past the cache threshold.
+		if err := os.WriteFile(poolFile, pool2Bytes, 0o600); err != nil {
+			t.Fatalf("Unexpected error writing pool 2: %v", err)
+		}
+		time.Sleep(61 * time.Second)
 
-	if !bytes.Equal(restored.CAs[0].IntermediateCertificates[0].Raw, intermCert.Raw) {
-		t.Error("intermediate certificate Raw bytes differ after round-trip")
-	}
-
-	// Verify intermediate chains to root.
-	roots := x509.NewCertPool()
-	roots.AddCert(restored.CAs[0].RootCertificate)
-	restoredInterm := restored.CAs[0].IntermediateCertificates[0]
-	if err := restoredInterm.CheckSignatureFrom(restored.CAs[0].RootCertificate); err != nil {
-		t.Errorf("intermediate cert signature verification against root failed: %v", err)
-	}
-
-	// Verify the intermediate's public key matches the generated key pair.
-	intermPubFromCert := restoredInterm.PublicKey.(ed25519.PublicKey)
-	if !bytes.Equal(intermPubFromCert, intermPub) {
-		t.Error("intermediate cert public key does not match generated key pair")
-	}
-}
-
-func TestUnmarshalPEMPool(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("GenerateKey(): %v", err)
-	}
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "actor-id-ca"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("CreateCertificate(): %v", err)
-	}
-	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
-	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
-
-	data, err := json.Marshal(&serializedPool{
-		CAs: []*serializedCA{{
-			ID:                 "1",
-			SigningKeyPEM:      keyPEM,
-			RootCertificatePEM: certPEM,
-		}},
+		gotAnchors, err = refreshingPool.TrustAnchors()
+		if err != nil {
+			t.Fatalf("Unexpected errors getting anchors from refreshing pool: %v", err)
+		}
+		wantAnchors, err = pool2.TrustAnchors()
+		if err != nil {
+			t.Fatalf("Unexpected errors getting anchors from pool 2: %v", err)
+		}
+		if diff := cmp.Diff(gotAnchors, wantAnchors); diff != "" {
+			t.Fatalf("Refreshing pool returned wrong trust anchors after file update; diff (-got +want)\n%s", diff)
+		}
 	})
-	if err != nil {
-		t.Fatalf("Marshal(): %v", err)
-	}
-
-	pool, err := Unmarshal(data)
-	if err != nil {
-		t.Fatalf("Unmarshal(): %v", err)
-	}
-	if len(pool.CAs) != 1 {
-		t.Fatalf("CAs length = %d, want 1", len(pool.CAs))
-	}
-	if _, ok := pool.CAs[0].SigningKey.(*rsa.PrivateKey); !ok {
-		t.Fatalf("SigningKey type = %T, want *rsa.PrivateKey", pool.CAs[0].SigningKey)
-	}
-	if pool.CAs[0].RootCertificate.Subject.CommonName != "actor-id-ca" {
-		t.Fatalf("RootCertificate CN = %q, want actor-id-ca", pool.CAs[0].RootCertificate.Subject.CommonName)
-	}
-}
-
-func TestUnmarshalErrors(t *testing.T) {
-	ca, err := GenerateED25519CA("err-test")
-	if err != nil {
-		t.Fatalf("GenerateED25519CA(): %v", err)
-	}
-	validData, err := Marshal(&Pool{CAs: []*CA{ca}})
-	if err != nil {
-		t.Fatalf("Marshal(): %v", err)
-	}
-
-	corruptField := func(field string, value any) []byte {
-		var raw map[string]json.RawMessage
-		json.Unmarshal(validData, &raw)
-
-		var cas []map[string]json.RawMessage
-		json.Unmarshal(raw["CAs"], &cas)
-
-		b, _ := json.Marshal(value)
-		cas[0][field] = b
-
-		casBytes, _ := json.Marshal(cas)
-		raw["CAs"] = casBytes
-		out, _ := json.Marshal(raw)
-		return out
-	}
-
-	tests := []struct {
-		name      string
-		input     []byte
-		wantInErr string
-	}{
-		{"invalid JSON", []byte("{bad"), "unmarshaling JSON"},
-		{"corrupted signing key", corruptField("SigningKeyPKCS8", []byte{0xDE, 0xAD}), "signing key"},
-		{"corrupted root cert", corruptField("RootCertificateDER", []byte{0xDE, 0xAD}), "root certificate"},
-		{"corrupted intermediate cert", corruptField("IntermediateCertificatesDER", [][]byte{{0xDE, 0xAD}}), "intermediate certificate"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := Unmarshal(tt.input)
-			if err == nil {
-				t.Fatal("Unmarshal() error = nil, want error")
-			}
-			if !strings.Contains(err.Error(), tt.wantInErr) {
-				t.Errorf("error = %q, want substring %q", err.Error(), tt.wantInErr)
-			}
-		})
-	}
 }

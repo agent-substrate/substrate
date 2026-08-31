@@ -81,6 +81,26 @@ rules:
   - patch
   - update
 - apiGroups:
+  - certificates.k8s.io
+  resources:
+  - clustertrustbundles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - certificates.k8s.io
+  resourceNames:
+  - egress-mitm.ate.dev/*
+  resources:
+  - signers
+  verbs:
+  - attest
+- apiGroups:
   - networking.k8s.io
   resources:
   - networkpolicies

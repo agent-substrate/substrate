@@ -14,6 +14,14 @@
 
 package controlapi
 
+import (
+	"errors"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
 const maxPageSize = 1000
 
 // effectivePageSize applies the server-chosen default for an unset page_size
@@ -23,4 +31,14 @@ func effectivePageSize(requested int32) int32 {
 		return maxPageSize
 	}
 	return requested
+}
+
+func mapListError(err error) error {
+	if errors.Is(err, store.ErrInvalidPageToken) {
+		return status.Error(codes.InvalidArgument, "invalid page_token")
+	}
+	if errors.Is(err, store.ErrInvalidPageSize) {
+		return status.Error(codes.InvalidArgument, "invalid page_size")
+	}
+	return err
 }

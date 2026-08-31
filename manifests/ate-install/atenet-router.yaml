@@ -86,7 +86,10 @@ data:
     admin:
       address:
         socket_address:
-          address: 0.0.0.0
+          # ipv4_compat keeps `kubectl port-forward` to the admin port working;
+          # in-pod callers dial localhost and need no help.
+          address: "::"
+          ipv4_compat: true
           port_value: 9901
 
     node:
@@ -264,7 +267,7 @@ spec:
         - name: "drain-signal"
           mountPath: "/var/run/atenet"
       - name: envoy
-        image: envoyproxy/envoy:v1.39-latest
+        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
         command:
         - "/usr/local/bin/envoy"
         - "-c"
@@ -354,6 +357,7 @@ metadata:
   namespace: ate-system
 spec:
   type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: atenet-router
   ports:

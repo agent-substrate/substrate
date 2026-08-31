@@ -37,7 +37,7 @@ import (
 
 type SignerImpl interface {
 	SignerName() string
-	DesiredClusterTrustBundles() []*certsv1beta1.ClusterTrustBundle
+	DesiredClusterTrustBundles() ([]*certsv1beta1.ClusterTrustBundle, error)
 	MakeCert(context.Context, *certsv1beta1.PodCertificateRequest) error
 }
 
@@ -101,14 +101,19 @@ func New(clock clock.PassiveClock, handler SignerImpl, kc kubernetes.Interface, 
 	return sc
 }
 
-func (c *Controller) Run(ctx context.Context) {
+func (c *Controller) Run(ctx context.Context, workers int) {
 	defer c.pcrQueue.ShutDown()
 	go c.pcrInformer.Run(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), c.pcrInformer.HasSynced) {
 		return
 	}
 
-	go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+	if workers < 1 {
+		workers = 1
+	}
+	for i := 0; i < workers; i++ {
+		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+	}
 	go wait.JitterUntilWithContext(ctx, c.ensureBundles, 5*time.Second, 1.0, true)
 	<-ctx.Done()
 }
@@ -206,7 +211,14 @@ func (c *Controller) ensureBundles(ctx context.Context) {
 		return
 	}
 
-	wantCTBs := c.handler.DesiredClusterTrustBundles()
+	wantCTBs, err := c.handler.DesiredClusterTrustBundles()
+	if err != nil {
+		slog.ErrorContext(ctx, "Error while retrieving CA trust anchors",
+			slog.String("err", err.Error()),
+			slog.String("signer", c.handler.SignerName()),
+		)
+		return
+	}
 
 	for _, wantCTB := range wantCTBs {
 		ctb, err := c.kc.CertificatesV1beta1().ClusterTrustBundles().Get(ctx, wantCTB.ObjectMeta.Name, metav1.GetOptions{})

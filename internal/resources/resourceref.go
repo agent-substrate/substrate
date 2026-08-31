@@ -17,6 +17,7 @@ package resources
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -44,6 +45,7 @@ func (r ResourceRef[R]) String() string {
 // than flattening them into one opaque string.
 func (r ResourceRef[R]) LogValue() slog.Value {
 	return slog.GroupValue(
+		slog.String("type", reflect.TypeFor[R]().String()),
 		slog.String("atespace", r.Atespace),
 		slog.String("name", r.Name),
 	)
@@ -81,9 +83,31 @@ func ActorDNSName(r ActorRef) string {
 	return r.Name + "." + r.Atespace + "." + ActorDNSSuffix
 }
 
+// lowerASCII folds A-Z and leaves every other byte alone. Resource names are
+// DNS-1123 labels, so ASCII is the whole alphabet here, and strings.ToLower
+// would additionally fold characters outside it onto ASCII letters (the Kelvin
+// sign U+212A onto "k", U+017F onto "s"), letting a non-ASCII host reach an
+// actor under a spelling that is not its name.
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
 // ParseActorDNSName parses a DNS name for a given actor.
+//
+// The name is folded to lower case first. DNS lookups are case-insensitive
+// (RFC 4343), so a client that resolved "MyActor.MySpace.<suffix>" reaches us
+// with that spelling preserved in the Host header, while actor and atespace
+// names are always lower case. Folding keeps the request addressed to the same
+// actor its DNS lookup resolved to instead of failing to parse.
 func ParseActorDNSName(name string) (ActorRef, error) {
-	rest, found := strings.CutSuffix(strings.TrimSuffix(name, "."), "."+ActorDNSSuffix)
+	normalized := lowerASCII(strings.TrimSuffix(name, "."))
+	rest, found := strings.CutSuffix(normalized, "."+ActorDNSSuffix)
 	if !found {
 		return ActorRef{}, fmt.Errorf("invalid actor DNS name: must end with %s, got %q", ActorDNSSuffix, name)
 	}
@@ -117,21 +141,36 @@ func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateR
 	}
 }
 
-// ActorTemplateVersionRef identifies an ActorTemplateVersion by the
-// (atespace, name).
-type ActorTemplateVersionRef = ResourceRef[*ateapipb.ActorTemplateVersion]
+// ActorSnapshotRef identifies an ActorSnapshot by the (atespace, name).
+type ActorSnapshotRef = ResourceRef[*ateapipb.ActorSnapshot]
 
-// ActorTemplateVersionRefFromObjectRef converts a wire reference to an
-// ActorTemplateVersionRef.
-func ActorTemplateVersionRefFromObjectRef(ref *ateapipb.ObjectRef) ActorTemplateVersionRef {
-	return resourceRefFromObjectRef[*ateapipb.ActorTemplateVersion](ref)
+// ActorSnapshotRefFromObjectRef converts an ObjectRef to an ActorSnapshotRef.
+func ActorSnapshotRefFromObjectRef(ref *ateapipb.ObjectRef) ActorSnapshotRef {
+	return resourceRefFromObjectRef[*ateapipb.ActorSnapshot](ref)
 }
 
-// ActorTemplateVersionRefFromActorTemplateVersion returns the reference
-// addressing the given version.
-func ActorTemplateVersionRefFromActorTemplateVersion(v *ateapipb.ActorTemplateVersion) ActorTemplateVersionRef {
-	return ActorTemplateVersionRef{
-		Atespace: v.GetMetadata().GetAtespace(),
-		Name:     v.GetMetadata().GetName(),
+// ActorSnapshotRefFromActorSnapshot returns the reference addressing the given
+// snapshot.
+func ActorSnapshotRefFromActorSnapshot(s *ateapipb.ActorSnapshot) ActorSnapshotRef {
+	return ActorSnapshotRef{
+		Atespace: s.GetMetadata().GetAtespace(),
+		Name:     s.GetMetadata().GetName(),
+	}
+}
+
+// ActorSnapshotTagRef identifies an ActorSnapshotTag by the (atespace, name).
+type ActorSnapshotTagRef = ResourceRef[*ateapipb.ActorSnapshotTag]
+
+// ActorSnapshotTagRefFromObjectRef converts an Ibjectref to an ActorSnapshotTagRef.
+func ActorSnapshotTagRefFromObjectRef(ref *ateapipb.ObjectRef) ActorSnapshotTagRef {
+	return resourceRefFromObjectRef[*ateapipb.ActorSnapshotTag](ref)
+}
+
+// ActorSnapshotTagRefFromActorSnapshotTag returns the reference addressing the
+// given tag.
+func ActorSnapshotTagRefFromActorSnapshotTag(t *ateapipb.ActorSnapshotTag) ActorSnapshotTagRef {
+	return ActorSnapshotTagRef{
+		Atespace: t.GetMetadata().GetAtespace(),
+		Name:     t.GetMetadata().GetName(),
 	}
 }

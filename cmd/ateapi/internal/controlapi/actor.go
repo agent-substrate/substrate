@@ -22,64 +22,72 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/validate/content"
+	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
-	if errs := validateCreateActorRequest(req); len(errs) > 0 {
+func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
+	// First scrub any fields that users are not allowed to set.
+	inActor := req.Actor
+	if inActor != nil { // otherwise validation will flag it
+		scrubResourceMetadataForCreate(inActor.Metadata)
+		inActor.Status = nil
+	}
+
+	// Validate the request, including the object within it.
+	if errs := validateCreateActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
+
 	start := time.Now()
-	in := req.GetActor()
 	// Recorded only after validation, so every operation uniformly measures a
 	// validated request; malformed ones stay visible in rpc.server.call.duration.
 	defer func() {
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
-			ateattr.TemplateNameKey.String(in.GetActorTemplateName()),
-			ateattr.TemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
+			ateattr.TemplateNameKey.String(inActor.GetActorTemplateName()),
+			ateattr.TemplateNamespaceKey.String(inActor.GetActorTemplateNamespace()),
 		)
 	}()
-	templateNamespace := in.GetActorTemplateNamespace()
-	templateName := in.GetActorTemplateName()
 
-	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(in))
+	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
 
-	template, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
+	// Handle the creation, including validation of the final stored object.
+	stored, err := s.impl.CreateActor(ctx, inActor)
+	setSpanActorAttributes(ctx, stored)
+
+	return stored, err
+}
+
+func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	// Check that the referenced ActorTemplate exists.
+	// FIXME: This is not atomic and it is not a guarantee that the template
+	// will still exist later.  Checking it here produces a nice error UX, but
+	// we still have to handle the template not existing later, which makes the
+	// UX inconsistent, at best.  Is it actually worth checking at all?
+	template, err := resolveActorTemplate(ctx, s.store, s.actorTemplateLister, inActor)
 	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
-		}
-		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+		return nil, err
 	}
 
-	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
-	if src := in.GetSourceSnapshot(); src != nil {
-		sourceSnapshotInfo, err = s.resolveSnapshotSource(ctx, in.GetMetadata().GetAtespace(), src, template)
+	// If a source snapshot tag is requested, resolve it to a concrete
+	// snapshot.
+	var sourceSnapshotStatus *ateapipb.ActorSourceSnapshotStatus
+	if tag := inActor.GetSourceSnapshotTag(); tag != nil {
+		sourceSnapshotStatus, err = s.resolveSnapshotSource(ctx, inActor.GetMetadata().GetAtespace(), tag, template)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	atespace := in.GetMetadata().GetAtespace()
-	name := in.GetMetadata().GetName()
-
-	// The atespace must already exist.
-	exists, err := s.persistence.AtespaceExists(ctx, atespace)
-	if err != nil {
-		return nil, fmt.Errorf("while checking atespace: %w", err)
-	}
-	if !exists {
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
-	}
+	atespace := inActor.GetMetadata().GetAtespace()
+	name := inActor.GetMetadata().GetName()
 
 	// Volume creation is completed asynchronously after the actor is recorded.
 	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
@@ -87,45 +95,45 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, err
 	}
 
-	actor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: atespace,
-			Name:     name,
-		},
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		ActorTemplateNamespace: templateNamespace,
-		ActorTemplateName:      templateName,
-		WorkerSelector:         in.GetWorkerSelector(),
-		ActorVolumes:           initVols,
-		LatestSnapshot:         sourceSnapshotInfo.GetSnapshot(),
-		SourceSnapshot:         sourceSnapshotInfo,
+	// Verify that the result is properly valid before storing it.
+	outActor := proto.CloneOf(inActor)
+	outActor.Status = &ateapipb.ActorStatus{
+		State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		ActorVolumes:   initVols,
+		LatestSnapshot: sourceSnapshotStatus.GetSnapshot(),
+		SourceSnapshot: sourceSnapshotStatus,
 	}
-	stored, err := s.persistence.CreateActor(ctx, actor)
+	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
+		return nil, toGRPCInternalError(errs)
+	}
+
+	// Save the data in the storage layer.
+	stored, err := s.store.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}
+		if errors.Is(err, store.ErrFailedPrecondition) {
+			return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
+		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
-	setSpanActorAttributes(ctx, stored)
 	return stored, nil
 }
 
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
 // and checks that its scope and ActorSnapshot are compatible with creating
 // an Actor in actorAtespace from template.
-func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace string, src *ateapipb.ActorSnapshotSource, template *atev1alpha1.ActorTemplate) (*ateapipb.ActorSnapshotSource, error) {
-	tagRef := src.GetTag()
-	tag, err := s.persistence.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
+func (s *ServiceImpl) resolveSnapshotSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.ActorSourceSnapshotStatus, error) {
+	tag, err := s.store.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
 	}
-	snapshotRef := tag.GetSnapshot()
-	snapshot, err := s.persistence.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
+	snapshot, err := s.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(tag.GetSnapshot()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
@@ -142,17 +150,16 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 		return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
-	if snapshot.GetActorTemplateUid() != string(template.GetUID()) {
+	if snapshot.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
 	}
-	for _, volume := range template.Spec.Volumes {
-		if volume.ExternalVolumeTemplate != nil {
+	for _, volume := range template.GetVolumes() {
+		if volume.GetExternalVolumeTemplate() != nil {
 			// TODO: Permit cloning after CSI volume snapshots are supported.
 			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot cloning does not support external volumes")
 		}
 	}
-	return &ateapipb.ActorSnapshotSource{
-		Tag: tagRef,
+	return &ateapipb.ActorSourceSnapshotStatus{
 		Snapshot: &ateapipb.ObjectRef{
 			Atespace: snapshot.GetMetadata().GetAtespace(),
 			Name:     snapshot.GetMetadata().GetName(),
@@ -161,66 +168,29 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 	}, nil
 }
 
-func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	actor := req.GetActor()
-	actorPath := fldPath.Child("actor")
-	if actor == nil {
-		errs = append(errs, field.Required(actorPath, ""))
-		return errs
-	}
-
-	metaPath := actorPath.Child("metadata")
-	if val, p := actor.GetMetadata().GetAtespace(), metaPath.Child("atespace"); val == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		errs = append(errs, resources.ValidateResourceName(val, p)...)
-	}
-	if val, p := actor.GetMetadata().GetName(), metaPath.Child("name"); val == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		errs = append(errs, resources.ValidateResourceName(val, p)...)
-	}
-
-	if val, p := actor.GetActorTemplateNamespace(), actorPath.Child("actor_template_namespace"); val == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Label(val) {
-			errs = append(errs, field.Invalid(p, val, msg))
-		}
-	}
-	if val, p := actor.GetActorTemplateName(), actorPath.Child("actor_template_name"); val == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(p, val, msg))
-		}
-	}
-
-	if val := actor.GetWorkerSelector(); val != nil {
-		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
-	}
-	if src := actor.GetSourceSnapshot(); src != nil {
-		errs = append(errs, resources.ValidateObjectRef(src.GetTag(), actorPath.Child("source_snapshot").Child("tag"))...)
-	}
-
-	return errs
+func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_CreateActorRequest(ctx, op, nil, req, nil)
 }
 
-func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
+func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
 	if errs := validateGetActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	actor, err := s.persistence.GetActor(ctx, actorRef)
+	actor, err := s.impl.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 	} else if err != nil {
 		return nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
 	return actor, nil
+}
+
+func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	// TODO: implement this
+	return s.store.GetActor(ctx, actorRef)
 }
 
 func validateGetActorRequest(req *ateapipb.GetActorRequest) field.ErrorList {
@@ -236,19 +206,24 @@ func validateGetActorRequest(req *ateapipb.GetActorRequest) field.ErrorList {
 	return errs
 }
 
-func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
+func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	if errs := validateListActorsRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
-	page, err := s.persistence.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
-		return nil, fmt.Errorf("while listing actors in db: %w", err)
+		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
 	return &ateapipb.ListActorsResponse{
 		Actors:        page.Items,
 		NextPageToken: page.NextPageToken,
 	}, nil
+}
+
+func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+	// TODO: implement this
+	return s.store.ListActors(ctx, atespace, opts)
 }
 
 func validateListActorsRequest(req *ateapipb.ListActorsRequest) field.ErrorList {
@@ -267,70 +242,103 @@ func validateListActorsRequest(req *ateapipb.ListActorsRequest) field.ErrorList 
 	return errs
 }
 
-// actorMutableFields lists the Actor field paths a client may name in an
-// UpdateActor update_mask.
-var actorMutableFields = fieldmask.NewMutableFields(
-	"worker_selector",
-	"worker_selector.match_labels",
-)
+func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
+	// First scrub any fields that users are not allowed to set.
+	inActor := req.Actor
+	if inActor != nil { // otherwise validation will flag it
+		scrubResourceMetadataForUpdate(inActor.Metadata)
+		inActor.Status = nil
+	}
 
-func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
-	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
+	// Validate the request.
+	if errs := validateUpdateActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	in := req.GetActor()
-	actorRef := resources.ActorRefFromActor(in)
+
+	actorRef := resources.ActorRefFromActor(inActor)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(in, func(toUpdate *ateapipb.Actor) error {
-		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
+	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapipb.Actor) error {
+		// Status and Metadata are server-owned fields.
+		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
+		// Whole-object replace: clear first, so a field the client left unset is
+		// cleared rather than kept from the stored actor.
+		// Merge cannot smuggle in unknown fields because validation already rejected them.
+		proto.Reset(toUpdate)
+		proto.Merge(toUpdate, inActor)
+		// Restore status and metadata from the server.
+		toUpdate.Status = status
+		toUpdate.Metadata = metadata
 		return nil
-	}))
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	setSpanActorAttributes(ctx, storedActor)
+
+	return storedActor, err
+}
+
+func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
+		// Apply the mutation function to the stored value.
+		oldVal := proto.CloneOf(toUpdate)
+		if err := mutate(toUpdate); err != nil {
+			return err
+		}
+		newVal := toUpdate
+
+		// Validate the user's input before doing any further work.
+		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, false); len(errs) > 0 {
+			return toGRPCStatusError(errs)
+		}
+
+		// Do any further work on the resource.
+
+		// Validate the final value before storing it.
+		if errs := validateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
+			return toGRPCInternalError(errs)
+		}
+
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "actor %s/%s not found with uid %s", in.GetMetadata().GetAtespace(), in.GetMetadata().GetName(), in.GetMetadata().GetUid())
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "actor %s not found", actorRef)
 		}
+		if errors.Is(err, store.ErrPreconditionRequired) {
+			return nil, status.Errorf(codes.InvalidArgument, "while updating actor %s: %v", actorRef, err)
+		}
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
-
-	setSpanActorAttributes(ctx, storedActor)
 	return storedActor, nil
 }
 
-func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	actor := req.GetActor()
-	actorPath := fldPath.Child("actor")
-	if actor == nil {
-		return field.ErrorList{field.Required(actorPath, "")}
-	}
-
-	errs = append(errs, resources.ValidateResourceMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
-
-	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorMutableFields, fldPath.Child("update_mask"))...)
-
-	if selector := actor.GetWorkerSelector(); selector != nil {
-		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)
-	}
-
-	return errs
+func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRequest) field.ErrorList {
+	// Call the generated validation.
+	// We model this as a create rather than an update because updates assume
+	// the existence of a "current" value, which we do not have yet.  This is
+	// validating the request itself. The result will be validated later, after
+	// we have a current value to compare against.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_UpdateActorRequest(ctx, op, nil, req, nil)
 }
 
-func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
+func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
 	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
-	// actor, so failures before the load carry none.
+	// actor, so failures before the load carry none. No pool pair: delete only
+	// runs from SUSPENDED or CRASHED, which already released the worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {
@@ -344,12 +352,17 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef)
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef, req.GetAnyState())
 	if err != nil {
 		return nil, err
 	}
 
 	return deleted, nil
+}
+
+func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	// TODO: implement this
+	return s.store.DeleteActor(ctx, actorRef)
 }
 
 func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) field.ErrorList {
@@ -365,7 +378,7 @@ func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
+func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
 	if errs := validatePauseActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -400,7 +413,7 @@ func validatePauseActorRequest(req *ateapipb.PauseActorRequest) field.ErrorList 
 	return errs
 }
 
-func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
+func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
 	if errs := validateResumeActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -435,7 +448,7 @@ func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) field.ErrorLis
 	return errs
 }
 
-func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
+func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
 	if errs := validateSuspendActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
@@ -468,24 +481,15 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorL
 	return errs
 }
 
-func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorList {
-	var errs field.ErrorList
-
-	if sel.MatchLabels != nil {
-		const maxSelectorMatchLabels = 10
-		if n := len(sel.MatchLabels); n > maxSelectorMatchLabels {
-			return field.ErrorList{field.TooMany(fldPath.Child("match_labels"), n, maxSelectorMatchLabels)}
-		}
-
-		for k, v := range sel.MatchLabels {
-			for _, msg := range content.IsLabelKey(k) {
-				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), k, msg))
-			}
-			for _, msg := range content.IsLabelValue(v) {
-				errs = append(errs, field.Invalid(fldPath.Child("match_labels").Key(k), v, msg))
-			}
-		}
+func validateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Update}
+	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
+	if requireStatus {
+		// Status is optional in the schema, but is actually required to be set
+		// by the server.  If it was specified, it was already validated above,
+		// but if it was not specified we need to flag that as an error.
+		errs = append(errs, validate.RequiredPointer(ctx, op, fldPath.Child("status"), newVal.GetStatus(), nil)...)
 	}
-
 	return errs
 }

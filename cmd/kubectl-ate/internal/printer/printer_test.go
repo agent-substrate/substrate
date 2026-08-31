@@ -68,11 +68,13 @@ func TestPrintActorsTo_Table(t *testing.T) {
 			},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
-			Status:                 ateapipb.Actor_STATUS_RUNNING,
-			WorkerAssignment: &ateapipb.WorkerAssignment{
-				WorkerNamespace: "worker-ns",
-				WorkerPod:       "pod-1",
-				WorkerPodIp:     "1.2.3.4",
+			Status: &ateapipb.ActorStatus{
+				State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPod:       "pod-1",
+					WorkerPodIp:     "1.2.3.4",
+				},
 			},
 		},
 	}
@@ -82,8 +84,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `ATESPACE   NAME   TEMPLATE             STATUS           ATEOM POD         ATEOM IP   VERSION   AGE
-team-a     id-1   default/template-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2         5m
+	expected := `ATESPACE   NAME   TEMPLATE             STATE                 ATEOM POD         ATEOM IP   VERSION   AGE
+team-a     id-1   default/template-1   ACTOR_STATE_RUNNING   worker-ns/pod-1   1.2.3.4    2         5m
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -156,7 +158,7 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 			},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 		{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -166,7 +168,7 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 			},
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
-			Status:                 ateapipb.Actor_STATUS_RUNNING,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 		},
 		{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -176,7 +178,7 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 			},
 			ActorTemplateNamespace: "other",
 			ActorTemplateName:      "template-2",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 	}
 
@@ -185,10 +187,42 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	}
 
 	// Sorted by atespace first, then template namespace, template name, name.
-	expected := `ATESPACE   NAME    TEMPLATE             STATUS             ATEOM POD   ATEOM IP   VERSION   AGE
-team-a     alpha   default/template-1   STATUS_RUNNING     <none>                 0         5m
-team-a     beta    other/template-2     STATUS_SUSPENDED   <none>                 0         5h
-team-b     zebra   default/template-1   STATUS_SUSPENDED   <none>                 0         3d
+	expected := `ATESPACE   NAME    TEMPLATE             STATE                   ATEOM POD   ATEOM IP   VERSION   AGE
+team-a     alpha   default/template-1   ACTOR_STATE_RUNNING     <none>                 0         5m
+team-a     beta    other/template-2     ACTOR_STATE_SUSPENDED   <none>                 0         5h
+team-b     zebra   default/template-1   ACTOR_STATE_SUSPENDED   <none>                 0         3d
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintActorsTo_Table_TemplateRef(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	actors := []*ateapipb.Actor{
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Name:       "id-1",
+				Atespace:   "team-a",
+				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
+			},
+			ActorTemplate: &ateapipb.ObjectRef{
+				Atespace: "ate-demo-counter-substrate",
+				Name:     "counter",
+			},
+			Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		},
+	}
+
+	if err := PrintActorsTo(&buf, actors, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `ATESPACE   NAME   TEMPLATE                             STATE                   ATEOM POD   ATEOM IP   VERSION   AGE
+team-a     id-1   ate-demo-counter-substrate/counter   ACTOR_STATE_SUSPENDED   <none>                 0         5m
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -211,14 +245,16 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "gvisor",
-			Assignment: &ateapipb.Assignment{
-				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-					Namespace: "default",
-					Name:      "template-1",
-				},
-				Actor: &ateapipb.ObjectRef{
-					Atespace: "space-1",
-					Name:     "id-1",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+						Namespace: "default",
+						Name:      "template-1",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "space-1",
+						Name:     "id-1",
+					},
 				},
 			},
 		},
@@ -233,6 +269,44 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 default     pool-1   gvisor   pod-1   ASSIGNED   default/template-1/space-1/id-1
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// A worker assigned to an actor created from a substrate ActorTemplate
+// carries only ActorTemplateRef; the printer must not dereference the legacy
+// CRD ref (regression test for a nil-pointer panic).
+func TestPrintWorkersTo_Table_TemplateRef(t *testing.T) {
+	var buf bytes.Buffer
+	workers := []*ateapipb.Worker{
+		{
+			WorkerNamespace: "default",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			SandboxClass:    "gvisor",
+			Status: &ateapipb.WorkerStatus{
+				Assignment: &ateapipb.ActorAssignment{
+					ActorTemplateRef: &ateapipb.ObjectRef{
+						Atespace: "ate-demo-counter-substrate",
+						Name:     "counter",
+					},
+					Actor: &ateapipb.ObjectRef{
+						Atespace: "space-1",
+						Name:     "id-1",
+					},
+				},
+			},
+		},
+	}
+
+	if err := PrintWorkersTo(&buf, workers, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `NAMESPACE   POOL     CLASS    POD     STATUS     ASSIGNED ACTOR
+default     pool-1   gvisor   pod-1   ASSIGNED   ate-demo-counter-substrate/counter/space-1/id-1
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -298,6 +372,130 @@ func TestPrintWorkersTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
 	err := PrintWorkersTo(&buf, nil, "xml")
 	if err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintActorTemplatesTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	templates := []*ateapipb.ActorTemplate{
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "ate-demo-counter-substrate",
+				Name:       "counter",
+				Version:    1,
+				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{
+				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				ConfigName:   "gvisor-default",
+			},
+			Status: &ateapipb.ActorTemplateStatus{
+				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "snap-1"},
+				},
+			},
+		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "ate-demo-counter-substrate-microvm",
+				Name:       "counter-microvm",
+				Version:    1,
+				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{
+				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
+				ConfigName:   "microvm",
+			},
+			Status: &ateapipb.ActorTemplateStatus{
+				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					ErrorMessage: "golden actor failed to start",
+				},
+			},
+		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "ate-demo-counter-substrate",
+				Name:       "counter-2",
+				Version:    1,
+				CreateTime: timestamppb.New(now.Add(-72 * time.Hour)),
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{
+				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				ConfigName:   "gvisor-default",
+			},
+		},
+	}
+
+	if err := PrintActorTemplatesTo(&buf, templates, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Sorted by atespace, then name.
+	expected := `ATESPACE                             NAME              SANDBOX CLASS           STATUS   AGE
+ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    Ready    5m
+ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR    Failed   3d
+ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM   Failed   5h
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintActorTemplatesTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	templates := []*ateapipb.ActorTemplate{
+		{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}},
+	}
+
+	if err := PrintActorTemplatesTo(&buf, templates, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "actorTemplates": [
+    {
+      "metadata": {
+        "atespace": "team-a",
+        "name": "counter",
+        "version": "1"
+      }
+    }
+  ]
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintActorTemplatesTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	templates := []*ateapipb.ActorTemplate{
+		{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "counter", Version: 1}},
+	}
+
+	if err := PrintActorTemplatesTo(&buf, templates, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `actorTemplates:
+- metadata:
+    atespace: team-a
+    name: counter
+    version: "1"
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintActorTemplatesTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintActorTemplatesTo(&buf, nil, "xml"); err == nil {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }

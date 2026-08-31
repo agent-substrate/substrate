@@ -142,6 +142,7 @@ Rules:
 - Request message name **must** match the RPC name with a `Request` suffix.
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
 - Request **must** identify the resource with a single `ObjectRef` field (for both atespace-scoped and global-scoped resources).
+- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot` for `ActorSnapshot`), not a generic name like `name` or `ref`.
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List
@@ -201,6 +202,7 @@ message CreateActorRequest {
 Rules:
 - RPC name **must** begin with `Create` followed by the singular resource name.
 - Response **must** be the resource itself — not a `CreateActorResponse` wrapper.
+- The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
 - `actor.metadata.atespace` and `actor.metadata.name` are **required** and caller-specified. The server does not generate them.
 - Other meta fields such as `uid`, timestamps, `version`, etc, are server side generated, and ignored when specified.
 - If a resource already exists with the same `(atespace, name)`: return `ALREADY_EXISTS`.
@@ -211,9 +213,10 @@ Rules:
 
 ### 3.4 Update
 
-*Follows [AIP-134](https://google.aip.dev/134). Diverges on `update_mask` requirement and `*` support.*
+*Follows [AIP-134](https://google.aip.dev/134). Diverges by replacing the resource instead of patching it.*
 
-Updates use a **partial-update model** (equivalent to HTTP PATCH). The mask is always required.
+Updates use a **full-replacement model** (equivalent to HTTP PUT). The resource carried in the request *is* the resource the client wants to exist. Server-managed
+fields are ignored.
 
 ```proto
 rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
@@ -221,29 +224,28 @@ rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
 message UpdateActorRequest {
   // The actor to update.
   // actor.metadata.atespace and actor.metadata.name identify which resource to update.
-  Actor actor = 1;
-
-  // The set of fields to update. Required.
+  // actor.metadata.uid and actor.metadata.version are the preconditions the
+  // update is written against, and are required.
   //
-  // Field paths are relative to the Actor message (e.g., "worker_selector").
-  google.protobuf.FieldMask update_mask = 2;
+  // Every other field of the actor is replaced with what the request carries.
+  // A field the request leaves unset is cleared, so a field that is immutable
+  // and unset is rejected rather than silently dropped.
+  Actor actor = 1;
 }
 ```
+
+Clients update by read-modify-write: `Get` the resource, change the fields they mean to change, and send the whole thing back. The `uid` and `version` guards they echo back make that round trip safe against concurrent writers.
 
 Rules:
 - RPC name **must** begin with `Update` followed by the singular resource name.
 - Response **must** be the resource itself — not an `UpdateActorResponse` wrapper.
-- `update_mask` **must** be of type `google.protobuf.FieldMask` and **must** be named `update_mask`.
-- `update_mask` is **required**. An absent or empty mask **must** return `INVALID_ARGUMENT`.
-- `update_mask` may only enumerate **client-mutable** fields. Naming any non-mutable field **must** return `INVALID_ARGUMENT`. Two distinct cases qualify:
-  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`). These are excluded even though some of them (`version`, `update_time`) *do* change — being server-owned, not immutable, is what disqualifies them.
-  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`).
-- The special value `*` is **not supported**. Clients must enumerate the exact fields to update.
+  - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
+  - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `actor_template_name`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
+- The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
+- Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
-- The `version` and `uid` fields in the embedded resource's `metadata` are honored as optional preconditions (see section #7). They are control fields, not updatable fields, and **must not** be listed in `update_mask`.
-
-**Divergence from AIP-134:** AIP-134 makes `update_mask` optional (omission implies updating all populated fields) and requires support for `*`. Substrate requires an explicit mask.
+- The `version` and `uid` fields in the embedded resource's `metadata` are **required** preconditions (see section #7). A request that leaves either unset is a blind write and **must** return `INVALID_ARGUMENT`. They are control fields the client echoes back as guards, not fields it edits.
 
 ### 3.5 Delete
 
@@ -276,6 +278,7 @@ Rules:
 - RPC name **must** begin with `Delete` followed by the singular resource name.
 - Response **must** be the deleted resource.
 - Request **must** identify the resource with an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
+- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot_tag` for `ActorSnapshotTag`), not a generic name like `name` or `ref`.
 - If the resource does not exist: return `NOT_FOUND`.
 - `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
 - Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.
@@ -342,7 +345,7 @@ enum ActorState {
 
 ### 5.2 Field presence (`optional`)
 
-Use the `optional` keyword on a scalar field **only** when null and the zero value (`false`, `0`, `""`) are semantically distinct for that field's meaning. Do not use `optional` universally or as a workaround for update semantics — the required `update_mask` handles that.
+Use the `optional` keyword on a scalar field **only** when null and the zero value (`false`, `0`, `""`) are semantically distinct for that field's meaning. Do not use `optional` universally or as a workaround for update semantics — updates replace the whole resource (section #3.4), so an unset field already has an unambiguous meaning.
 
 ```proto
 // Only if "no priority" is meaningfully different from "priority 0":
@@ -352,7 +355,7 @@ optional int32 priority = 5;
 bool cordoned = 6;
 ```
 
-Because `update_mask` is required, the server always knows which fields the client intends to change. `optional` is reserved for cases where the resource itself has a three-state semantic (set-to-zero, set-to-nonzero, not-set).
+Because an update carries the whole resource, the server always knows what the client intends the resource to look like. `optional` is reserved for cases where the resource itself has a three-state semantic (set-to-zero, set-to-nonzero, not-set).
 
 ---
 
@@ -409,12 +412,14 @@ message ResourceMetadata {
 - A server-assigned [UUID4](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)).
 - Useful for correlation across logs, events, and audit trails where the resource `name` may not be available. Also useful
 for controllers that need to do bookkeeping and track state associated with a resource.
+- Required on Update requests, where it guards the lifecycle the write is for. See section #7.
 
 ### 6.4 `version`
 
 - Type: `int64`.
 - Increased on every mutation; the increment amount is not part of the contract. Allows clients to do optimistic locking
 on resource updates. Also establishes a total order on "snapshots" of a given resource. See section #7.
+- Required on Update requests, where it guards the revision the write is against.
 
 ### 6.5 `create_time`
 
@@ -461,35 +466,43 @@ message ResourceMetadata {
 
 ### 7.2 Using `version` and `uid` to guard writes
 
-A client that wants to guard a mutation against acting on unexpected state echoes back the `version` and/or `uid` it last observed. The server rejects the request if either value no longer matches.
+A client guards a mutation against acting on unexpected state by echoing back the `version` and `uid` it last observed. The server rejects the request if either value no longer matches.
 
-The two guards protect against different things:
+The two guards protect against different things, and neither substitutes for the other:
 
 - **`version`** guards against *concurrent modification*. It changes on every write, so echoing it back detects that someone else wrote in between (the lost-update problem). A `version` guard can legitimately reject an otherwise-valid read-modify-write — that is the point.
-- **`uid`** guards against *name reuse across lifecycles*. `(atespace, name)` is unique only at a point in time; `uid` is unique across time. Because `uid` is immutable within a lifecycle, it never causes a spurious rejection within that lifecycle — it only fires when the name has been deleted and recreated as a different resource. This catches the ABA case that `version` alone cannot: a stale write whose `version` happens to match the *new* resource.
+- **`uid`** guards against *name reuse across lifecycles*. `(atespace, name)` is unique only at a point in time; `uid` is unique across time. Because `uid` is immutable within a lifecycle, it never causes a spurious rejection within that lifecycle — it only fires when the name has been deleted and recreated as a different resource. This catches the ABA case that `version` alone cannot: `version` restarts at `1` for each new lifecycle, so a stale write's `version` can happen to match the *new* resource.
 
-**Update:** both guards are specified in the embedded resource's `metadata`:
+**Update: both guards are required.** They are specified in the embedded resource's `metadata`:
 
-```proto
-// Client read actor at version 5 (uid "a1b2..."), now updating:
-UpdateActorRequest {
-  actor: Actor {
-    metadata: ResourceMetadata {
-      atespace: "my-space"
-      name:     "my-actor"
-      version:  5            // guard: fail unless server is at version 5
-      uid:      "a1b2..."    // guard: fail unless server uid matches
-    }
-    worker_selector: ...
-  }
-  update_mask: "worker_selector"
-}
+Because only a prior read supplies the guards, **every update is a read-modify-write**:
+
+```go
+// 1. Read.
+actor, err := client.GetActor(ctx, &GetActorRequest{
+    Actor: &ObjectRef{Atespace: "my-space", Name: "my-actor"},
+})
+
+// 2. Modify the message you just read, in place (or clone it). 
+// But, do not build a fresh Actor.
+actor.WorkerSelector = &Selector{MatchLabels: map[string]string{"tier": "paid"}}
+
+// 3. Write it back. actor.metadata already carries the required fields.
+updated, err := client.UpdateActor(ctx, &UpdateActorRequest{
+    Actor: actor,
+})
 ```
 
-- `version` and `uid` are control fields managed by the server, not mutable fields. They **must not** be listed in `update_mask`.
-- A client that wants a blind by-name update must leave both `version` (0) and `uid` ("") unset.
+- `version` and `uid` are control fields managed by the server, not mutable fields. A client echoes them back as guards, it never edits them.
+- Both are **required**: an update that leaves `version` (0) or `uid` ("") unset is rejected with `INVALID_ARGUMENT`. There is no blind by-name update. A client that has not read the resource cannot update it; a client that has read it already holds both values.
+- The requirement is on Update only. Delete's guards stay optional (below), and Create assigns both fields rather than checking them.
 
-**Delete:** the guards are specified in a `DeleteOptions` message, reused across every `Delete<Type>Request`:
+- Modify what you read, do not reconstruct it: step 2 above mutates the message the server returned rather than assembling a new `Actor`. 
+   - This matters when the server is newer than the client: a reconstructed message does not carry the fields the client does not recognize, and an update that omits an immutable field is rejected rather than silently rewriting it.
+- Do not round-trip a resource through JSON between read and write. `protojson` cannot represent unknown fields. Marshalling silently drops them.    
+- Do not retry `ABORTED` updates at the server side. `ABORTED` means someone else wrote something you have not seen. A blind retry reapplies your change on top of a concurrent change nobody reviewed. Surface the conflict instead.
+
+**Delete:** the guards are specified in a `DeleteOptions` message, reused across every `Delete<Type>Request`.:
 
 ```proto
 message DeleteActorRequest {
@@ -504,7 +517,50 @@ message DeleteOptions {
 ```
 
 **Server behavior (applies to `version` and `uid` alike):**
-- If the client provides a non-zero `version` or a non-empty `uid` that does not match the server's current value: return `ABORTED`.
-- If the client omits a guard (the proto3 zero value): skip that check.
+- If the client provides a `version` or `uid` that does not match the server's current value: return `ABORTED`.
+- On Update, if the client omits either guard: return `INVALID_ARGUMENT`. The request is malformed, so this is decided before the resource is read.
+- On Delete, if the client omits a guard: skip that check.
 
-Both guards are always **optional** from the client's perspective: a client that omits `version` and `uid` gets last-writer-wins, and the server does not require either.
+So Update never gives last-writer-wins, while Delete still does by default.
+
+---
+
+## 8. Resource Status: Output-Only Fields
+
+Every resource separates **user-controlled** fields from **server-managed (output-only)** fields at the top level. User-controlled fields are set by the caller at `Create` and/or `Update` time and stay directly on the resource message, alongside `metadata`.
+Output-only fields **must** be grouped into a single nested message field named `status`.
+
+```proto
+message Actor {
+  // Common resource metadata: atespace, name, and other standard fields (see section #6).
+  ResourceMetadata metadata = 1;
+
+  // worker_selector is caller-specified: user-controlled, stays top-level.
+  Selector worker_selector = 5;
+
+  // Server-managed state. Absent from Create/Update request payloads.
+  ActorStatus status = 7;
+}
+
+enum ActorState {
+  ACTOR_STATE_UNSPECIFIED = 0;
+  ACTOR_STATE_RUNNING = 1;
+  ACTOR_STATE_SUSPENDED = 2;
+  // ...
+}
+
+message ActorStatus {
+  ActorState state = 1;
+
+  // worker_assignment points at the worker currently hosting this Actor.
+  WorkerAssignment worker_assignment = 2;
+
+  // ... other server-managed fields
+}
+```
+
+Rules:
+- Output-only fields **must not** appear as top-level fields on the resource. They **must** be grouped under a single `status` field of type `{Resource}Status`.
+- A resource with no output-only fields needs no `status` field.
+- Fields inside `status` follow the same naming rules as any other field (section #5).
+- `ResourceMetadata` (section #6) is exempt from this split. It mixes caller-specified identity (`atespace`, `name`) with server-managed fields (`uid`, `version`, timestamps).

@@ -86,7 +86,7 @@ func init() {
 	// Register bootstrap-specific flags that map to Config fields.
 	// We use distinct names to avoid confusion and match the desired design.
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterName, "cluster-name", getEnv("CLUSTER_NAME", "substrate-poc"), "Name of the GKE cluster [env: CLUSTER_NAME]")
-	bootstrapCmd.Flags().StringVar(&cfg.ClusterLocation, "cluster-location", getEnv("CLUSTER_LOCATION", "us-central1-c"), "Zone or region for the cluster [env: CLUSTER_LOCATION]")
+	bootstrapCmd.Flags().StringVar(&cfg.ClusterLocation, "cluster-location", getEnv("CLUSTER_LOCATION", "us-west1-c"), "Zone or region for the cluster [env: CLUSTER_LOCATION]")
 	bootstrapCmd.Flags().StringVar(&cfg.ClusterVersion, "cluster-version", getEnv("CLUSTER_VERSION", ""), "Kubernetes version [env: CLUSTER_VERSION]")
 	bootstrapCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	bootstrapCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")

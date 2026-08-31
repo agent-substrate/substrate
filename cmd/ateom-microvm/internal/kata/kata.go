@@ -15,8 +15,8 @@
 // Package kata holds the helpers ateom uses to boot and drive a kata guest in a
 // cloud-hypervisor micro-VM without the kata shim: ateom boots cloud-hypervisor
 // itself (see internal/ch), then drives the stock kata-agent over its hybrid-vsock
-// ttrpc API (DialAgent / AgentClient) to create the sandbox and assemble each
-// container's overlay rootfs (overlay_linux.go).
+// ttrpc API (DialAgent / AgentClient) to create the sandbox and run each container
+// on its host-merged rootfs (overlay_linux.go).
 //
 // It also renders the kata configuration.toml (for the agent kernel_params + guest
 // sizing) from runtime-fetched assets (config.go) and sweeps leftover per-sandbox

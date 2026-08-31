@@ -136,7 +136,7 @@ func inactiveFileBytes(cs *agentpb.CgroupStats) (uint64, bool) {
 // it is exact.
 //
 // The guest kernel does track the true figure: every container cgroup sits
-// under the shared /ateomchv parent (see StartOverlayWorkload and the
+// under the shared /ateomchv parent (see StartRootfsContainer and the
 // CgroupsPath defaults in internal/kata), so with hierarchical accounting the
 // parent's memory.peak is the actor-level maximum this sum approximates. The
 // kata-agent just has no RPC that reads a cgroup by path — StatsContainer is

@@ -26,12 +26,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -67,11 +66,11 @@ type restoreTelemetry struct {
 func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool) (_ *ateapipb.Actor, resumed bool, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
-	var actorTemplate *atev1alpha1.ActorTemplate
+	var actorTemplate *ateapipb.ActorTemplate
 	var tele restoreTelemetry
 	var wasRunning bool
 
-	// Recorded before the lock so lock contention still counts as an attempt.
+	// Recorded before the lease so lease contention still counts as an attempt.
 	// Clean already-running no-ops are skipped: the router resumes per routed
 	// request, and recording those would sample at router QPS and bury
 	// cold-resume latency.
@@ -83,39 +82,51 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireSnapshotScope)...)
 	}()
 
-	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
+	// Routed requests call ResumeActor even when the actor is already running.
+	// Read before taking the distributed lease so that hot-path checks do not
+	// upsert and delete a PostgreSQL lease row. Any state that needs work is read
+	// again under the lease below.
+	actor, err = w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, false, err
 	}
-	defer lock.Close()
+	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
+		return actor, false, nil
+	}
+
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
+	if err != nil {
+		return nil, false, err
+	}
+	defer lease.Close()
 
 	var src resumeSnapshotSource
-	actor, actorTemplate, src, err = w.loadActorForResume(lockCtx, actorRef, boot)
+	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef, boot)
 	if err != nil {
 		return nil, false, err
 	}
-	if wasRunning = actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING; wasRunning {
+	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
 		return actor, false, nil
 	}
 	var created *ateapipb.Actor
-	if created, err = w.ensureVolumesCreated(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = created
 	var worker *ateapipb.Worker
 	var assigned *ateapipb.Actor
-	if assigned, worker, err = w.ensureWorkerAssigned(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = assigned
-	if err = w.ensureVolumesAttached(lockCtx, actor, worker, actorTemplate); err != nil {
+	if err = w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate); err != nil {
 		return nil, false, err
 	}
-	if tele, err = w.ensureAteletRestored(lockCtx, actorRef, actor, actorTemplate, src); err != nil {
+	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
-	if running, err = w.finalizeRunning(lockCtx, actorRef); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -128,20 +139,20 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 // taken before that rule existed — surface a clear error instead of shipping
 // a restore request atelet would reject (or that would boot an empty guest).
 func validateGoldenSnapshotScope(snapshot *ateapipb.ActorSnapshot) error {
-	switch snapshot.GetContentScope() {
+	switch snapshot.GetStatus().GetContentScope() {
 	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
 		ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL:
 		return nil
 	default:
 		return status.Errorf(codes.FailedPrecondition,
 			"ActorTemplate golden snapshot %q was taken with scope %s, not Full; regenerate the golden snapshot",
-			snapshot.GetMetadata().GetName(), snapshot.GetContentScope())
+			snapshot.GetMetadata().GetName(), snapshot.GetStatus().GetContentScope())
 	}
 }
 
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
-func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef, boot bool) (_ *ateapipb.Actor, _ *atev1alpha1.ActorTemplate, _ resumeSnapshotSource, err error) {
+func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef, boot bool) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForResume")
 	defer func() { err = done(err) }()
 
@@ -157,28 +168,28 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	// If the actor is already running, there is no pending restore to prepare
 	// for. Short-circuit immediately to avoid unnecessary store reads for snapshots
 	// and template resolution on the hot resume path.
-	if actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return actor, nil, src, nil
 	}
 
-	actorTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
 	if err != nil {
-		return nil, nil, src, fmt.Errorf("while getting ActorTemplate: %w", err)
+		return nil, nil, src, err
 	}
-	if ref := actor.GetLatestSnapshot(); ref != nil {
-		snapshot, err := w.store.GetActorSnapshot(ctx, ref.GetAtespace(), ref.GetName())
+	if ref := actor.GetStatus().GetLatestSnapshot(); ref != nil {
+		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(ref))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, src, status.Error(codes.DataLoss, "ActorSnapshot data is missing")
 		}
 		if err != nil {
 			return nil, nil, src, fmt.Errorf("while getting ActorSnapshot: %w", err)
 		}
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetSnapshotUri()); err != nil {
+		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetStatus().GetSnapshotUri()); err != nil {
 			return nil, nil, src, status.Errorf(codes.DataLoss, "ActorSnapshot %s/%s: %v", ref.GetAtespace(), ref.GetName(), err)
 		}
-		src.Scope = snapshot.GetContentScope()
-	} else if actorTemplate.Status.GoldenSnapshot != "" && !boot {
-		snapshot, err := w.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+		src.Scope = snapshot.GetStatus().GetContentScope()
+	} else if goldenRef := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot(); goldenRef != nil && !boot {
+		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(goldenRef))
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, src, status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 		}
@@ -188,10 +199,10 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		if err := validateGoldenSnapshotScope(snapshot); err != nil {
 			return nil, nil, src, err
 		}
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetSnapshotUri()); err != nil {
-			return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", actorTemplate.Status.GoldenSnapshot, err)
+		if src.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetStatus().GetSnapshotUri()); err != nil {
+			return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", goldenRef.GetName(), err)
 		}
-		src.Scope = snapshot.GetContentScope()
+		src.Scope = snapshot.GetStatus().GetContentScope()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -202,18 +213,19 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	// (the local snapshot takes precedence at restore), or when its durable
 	// snapshot holds Data. Valid Full snapshots restore from their own
 	// content and ignore the policy.
-	if actorTemplate.Spec.SnapshotsConfig.OnResume.FromData == atev1alpha1.ResumeSourceGolden {
+	if actorTemplate.GetSnapshotsConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
 		dataOnly := false
-		if actor.GetLocalSnapshotInfo() != nil {
-			dataOnly = actorTemplate.Spec.SnapshotsConfig.OnPause == atev1alpha1.SnapshotScopeData
-		} else if actor.GetLatestSnapshot() != nil {
+		if actor.GetStatus().GetLocalSnapshotInfo() != nil {
+			dataOnly = effectiveContentScope(actorTemplate.GetSnapshotsConfig().GetOnPause()) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+		} else if actor.GetStatus().GetLatestSnapshot() != nil {
 			dataOnly = src.Scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		}
 		if dataOnly {
-			if actorTemplate.Status.GoldenSnapshot == "" {
+			goldenRef := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot()
+			if goldenRef == nil {
 				return nil, nil, src, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
 			}
-			goldenSnapshot, err := w.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+			goldenSnapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(goldenRef))
 			if errors.Is(err, store.ErrNotFound) {
 				return nil, nil, src, status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 			}
@@ -223,8 +235,8 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			if err := validateGoldenSnapshotScope(goldenSnapshot); err != nil {
 				return nil, nil, src, err
 			}
-			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenSnapshot.GetSnapshotUri()); err != nil {
-				return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", actorTemplate.Status.GoldenSnapshot, err)
+			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenSnapshot.GetStatus().GetSnapshotUri()); err != nil {
+				return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", goldenRef.GetName(), err)
 			}
 		}
 	}
@@ -235,12 +247,12 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 // ensureVolumesCreated provisions any initial actor volumes that are in
 // PENDING state, persisting the resulting volume state (even when creation
 // partially failed, so progress is not lost) and returning the stored copy.
-func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
 
 	pending := false
-	for _, vol := range actor.GetActorVolumes() {
+	for _, vol := range actor.GetStatus().GetActorVolumes() {
 		if vol.GetStatus() == ateapipb.ExternalVolume_STATUS_PENDING {
 			pending = true
 			break
@@ -251,21 +263,22 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return actor, nil
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetActorVolumes())
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetActorVolumes())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
-	persistVolumes := store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.ActorVolumes = volumes
+	updatePrecondition := store.PreconditionFrom(actor)
+	persistVolumes := func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.ActorVolumes = volumes
 		return nil
-	})
+	}
 	if createErr != nil {
 		// Even if volume creation failed, we still want to persist any updated volume state.
-		if _, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes); updateErr != nil {
+		if _, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes); updateErr != nil {
 			slog.ErrorContext(ctx, "failed to update actor volumes on volume creation failure in resume", slog.Any("error", updateErr))
 		}
 		return nil, createErr
 	}
-	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes)
+	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes)
 	if updateErr != nil {
 		if errors.Is(updateErr, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -286,21 +299,21 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 // assignment. A version conflict there is retried under a bounded backoff
 // only after re-reading the actor and revalidating it can still be resumed —
 // the conflicting writer may have crashed, drained, or deleted it.
-func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
+func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
 	ctx, done := stepSpan(ctx, "AssignWorker")
 	defer func() { err = done(err) }()
 
-	switch actor.GetStatus() {
-	case ateapipb.Actor_STATUS_RESUMING:
+	switch actor.GetStatus().GetState() {
+	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
 		worker, err := w.validateAssignedWorker(ctx, actorRef, actor, actorTemplate)
 		if err != nil {
 			return nil, nil, err
 		}
 		markSkipped(ctx, "actor already RESUMING with a valid worker assignment")
 		return actor, worker, nil
-	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED:
 	default:
-		return nil, nil, status.Errorf(codes.FailedPrecondition, "AssignWorker prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED)
+		return nil, nil, status.Errorf(codes.FailedPrecondition, "AssignWorker prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 	}
 
 	backoff := wait.Backoff{
@@ -329,6 +342,9 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return false, attemptErr
 	})
 	if err != nil {
+		if wait.Interrupted(err) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil, store.ErrVersionConflict
+		}
 		return nil, nil, err
 	}
 	return assignedActor, assignedWorker, nil
@@ -338,8 +354,8 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 // against the current worker record. Every invalid outcome crashes the actor:
 // a RESUMING actor whose worker vanished, drained, was reassigned, or is no
 // longer eligible can never make progress on its own.
-func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (*ateapipb.Worker, error) {
-	assignment := actor.GetWorkerAssignment()
+func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (*ateapipb.Worker, error) {
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
 
@@ -350,7 +366,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
 	}
 
-	worker, err := w.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
+	worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
 	if err != nil {
 		// Crash the actor if it was assigned to a deleted pod.
 		if errors.Is(err, store.ErrNotFound) {
@@ -361,7 +377,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		}
 		return nil, fmt.Errorf("failed to get already assigned worker for actor %w", err)
 	}
-	if worker.GetState() == ateapipb.Worker_STATE_DRAINING {
+	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 			slog.String("actor", actorRef.String()),
 			slog.String("worker", worker.GetWorkerNamespace()+"/"+worker.GetWorkerPod()))
@@ -371,10 +387,10 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef.String())
 	}
 	// Verify the worker is still assigned to the same Actor.
-	if worker.GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
+	if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
 			slog.String("worker", worker.GetWorkerPod()),
-			slog.Any("assignment", worker.GetAssignment()))
+			slog.Any("assignment", worker.GetStatus().GetAssignment()))
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
@@ -386,13 +402,14 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	}
 	if !w.scheduler.Applies(worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
-		release := proto.Clone(worker).(*ateapipb.Worker)
-		release.Assignment = nil
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
 		// to the free pool instead of leaving it claimed forever — nothing else
 		// reclaims a healthy worker whose actor moved on to a different pool.
-		if err := w.store.UpdateWorker(ctx, release, release.Version); err != nil {
+		if _, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Status.Assignment = nil
+			return nil
+		}); err != nil {
 			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
@@ -416,17 +433,18 @@ func schedulerRecordable(err error) bool {
 // re-reads the actor: if the fresh copy can still be resumed the refreshed
 // actor is returned along with the conflict so the caller retries with clean
 // inputs; any other status aborts the resume.
-func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
+func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
 	start := time.Now()
 	outcome := ateattr.SchedulerOutcomeError
+	poolNamespace := ""
 	pool := ""
 	class := ""
 	if actorTemplate != nil {
-		class = string(actorTemplate.Spec.SandboxClass)
+		class = sandboxClassString(actorTemplate.GetSandboxConfig().GetSandboxClass())
 	}
 	defer func() {
 		if schedulerRecordable(err) {
-			w.instruments.recordSchedulerAssignment(ctx, start, outcome, pool, class, err)
+			w.instruments.recordSchedulerAssignment(ctx, start, outcome, poolNamespace, pool, class, err)
 		}
 	}()
 
@@ -446,20 +464,20 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// This can happen if ateapi crashed after updating worker with actor assignment,
 	// but has not yet updated the actor.
 	for _, worker := range workers {
-		if worker.Assignment == nil {
+		if worker.GetStatus().GetAssignment() == nil {
 			continue
 		}
-		if worker.Assignment.GetActorUid() != actor.GetMetadata().GetUid() {
+		if worker.GetStatus().GetAssignment().GetActorUid() != actor.GetMetadata().GetUid() {
 			continue
 		}
 		if w.scheduler.Applies(worker, constraints) {
 			assignedWorker = worker
 			break
 		}
-		// Workers() returns pointers directly from the cache so we need to clone before
-		// mutating so that the cache is not corrupted if UpdateWorker fails.
+		// Workers() returns pointers directly from the cache, so clone before
+		// handing the worker to the goroutine: the mutation runs against the
+		// store's own copy, but the precondition and the log below read this one.
 		releaseWorker := proto.Clone(worker).(*ateapipb.Worker)
-		releaseWorker.Assignment = nil
 		// The claimed worker is no longer eligible (e.g. the actor's
 		// worker_selector changed after the failed attempt); release it back
 		// to the free pool — nothing else reclaims a healthy worker whose
@@ -467,7 +485,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		go func(release *ateapipb.Worker) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := w.store.UpdateWorker(bgCtx, release, release.Version); err != nil {
+			if _, err := w.store.UpdateWorker(bgCtx, release.GetMetadata().GetName(), store.PreconditionFrom(release), func(toUpdate *ateapipb.Worker) error {
+				toUpdate.Status.Assignment = nil
+				return nil
+			}); err != nil {
 				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",
 					slog.String("worker", release.GetWorkerNamespace()+"/"+release.GetWorkerPod()),
 					slog.Any("err", err))
@@ -479,7 +500,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoFreeWorker
-				return nil, nil, status.Errorf(codes.FailedPrecondition, "no free workers available")
+				return nil, nil, status.Errorf(codes.ResourceExhausted, "no free workers available")
 			}
 			return nil, nil, err
 		}
@@ -488,31 +509,44 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
-	// Workers() returns pointers directly from the cache so we need to clone before
-	// mutating so that the cache is not corrupted if UpdateWorker fails.
-	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.Assignment = &ateapipb.Assignment{
-		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-			Namespace: actor.GetActorTemplateNamespace(),
-			Name:      actor.GetActorTemplateName(),
-		},
+	assignment := &ateapipb.ActorAssignment{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: actor.GetMetadata().GetAtespace(),
 			Name:     actor.GetMetadata().GetName(),
 		},
 		ActorUid: actor.GetMetadata().GetUid(),
 	}
-
-	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
-		return nil, nil, err
+	if ref := actorTemplateObjectRef(actor); ref != nil {
+		assignment.ActorTemplateRef = ref
+	} else {
+		assignment.ActorTemplate = &ateapipb.KubeNamespacedObjectRef{
+			Namespace: actor.GetActorTemplateNamespace(),
+			Name:      actor.GetActorTemplateName(),
+		}
 	}
 
-	newAssignment := workerAssignmentFrom(assignedWorker)
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_RESUMING
-		toUpdate.WorkerAssignment = newAssignment
+	// Workers() returns pointers directly from the cache, so the claim is written
+	// by mutating the store's own copy; the cached one is only read, for the
+	// version this claim is conditioned on.
+	stored, err := w.store.UpdateWorker(ctx, assignedWorker.GetMetadata().GetName(), store.PreconditionFrom(assignedWorker), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Status.Assignment = assignment
 		return nil
-	}))
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			w.workerCache.Forget(assignedWorker.GetMetadata().GetName())
+			return nil, nil, fmt.Errorf("selected worker disappeared before claim: %w", store.ErrVersionConflict)
+		}
+		return nil, nil, err
+	}
+	assignedWorker = stored
+
+	newAssignment := workerAssignmentFrom(assignedWorker)
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
+		toUpdate.Status.WorkerAssignment = newAssignment
+		return nil
+	})
 	if err != nil {
 		if !errors.Is(err, store.ErrVersionConflict) {
 			return nil, nil, err
@@ -523,14 +557,15 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			slog.WarnContext(ctx, "Failed to refresh actor after assignment conflict", slog.Any("err", gerr))
 			return nil, nil, err
 		}
-		switch fresh.GetStatus() {
-		case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
+		switch fresh.GetStatus().GetState() {
+		case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED:
 			slog.InfoContext(ctx, "Retrying assignment due to actor version conflict", slog.Any("actor", actorRef))
 			return fresh, nil, err
 		default:
-			return nil, nil, status.Errorf(codes.Aborted, "actor %s is %s and can no longer be resumed", actorRef, fresh.GetStatus())
+			return nil, nil, status.Errorf(codes.Aborted, "actor %s is %s and can no longer be resumed", actorRef, fresh.GetStatus().GetState())
 		}
 	}
+	poolNamespace = assignedWorker.GetWorkerNamespace()
 	pool = assignedWorker.GetWorkerPool()
 	outcome = ateattr.SchedulerOutcomeAssigned
 	return storedActor, assignedWorker, nil
@@ -538,6 +573,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 	return &ateapipb.WorkerAssignment{
+		Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
 		WorkerNamespace: w.GetWorkerNamespace(),
 		WorkerPool:      w.GetWorkerPool(),
 		WorkerPod:       w.GetWorkerPod(),
@@ -550,35 +586,36 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 // (bytes) limits from its ActorTemplate, or 0 for a dimension the template did
 // not set. These size the sandbox (supplied over the actor RPCs) and gate
 // scheduling (a worker must have >= capacity).
-func actorResourceLimits(tmpl *atev1alpha1.ActorTemplate) (cpuMilli, memBytes int64) {
-	res := tmpl.Spec.Resources
-	if res == nil {
-		return 0, 0
+func actorResourceLimits(tmpl *ateapipb.ActorTemplate) (cpuMilli, memBytes int64, err error) {
+	for _, limit := range tmpl.GetResources().GetLimits() {
+		q, perr := resource.ParseQuantity(limit.GetQuantity())
+		if perr != nil {
+			return 0, 0, fmt.Errorf("invalid template resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), perr)
+		}
+		switch limit.GetName() {
+		case "cpu":
+			cpuMilli = q.MilliValue()
+		case "memory":
+			memBytes = q.Value()
+		}
 	}
-	if c := res.Limits.Cpu(); c != nil {
-		cpuMilli = c.MilliValue()
-	}
-	if m := res.Limits.Memory(); m != nil {
-		memBytes = m.Value()
-	}
-	return cpuMilli, memBytes
+	return cpuMilli, memBytes, nil
 }
 
-func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplate) (scheduling.Constraints, error) {
-	cpuMilli, memBytes := actorResourceLimits(tmpl)
+func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) (scheduling.Constraints, error) {
+	cpuMilli, memBytes, err := actorResourceLimits(tmpl)
+	if err != nil {
+		return scheduling.Constraints{}, err
+	}
 	c := scheduling.Constraints{
-		SandboxClass:  string(tmpl.Spec.SandboxClass),
+		SandboxClass:  sandboxClassString(tmpl.GetSandboxConfig().GetSandboxClass()),
 		ActorSelector: labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
-		RequiredNodes: actor.GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(),
+		RequiredNodes: actor.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(),
 		CPUMilli:      cpuMilli,
 		MemoryBytes:   memBytes,
 	}
-	if tmpl.Spec.WorkerSelector != nil {
-		sel, err := metav1.LabelSelectorAsSelector(tmpl.Spec.WorkerSelector)
-		if err != nil {
-			return scheduling.Constraints{}, fmt.Errorf("invalid template worker selector: %w", err)
-		}
-		c.TemplateSelector = sel
+	if sel := tmpl.GetWorkerSelector(); sel != nil {
+		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
 	}
 	return c, nil
 }
@@ -587,7 +624,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplat
 // assigned worker's node. Attachment is idempotent, so a re-entered workflow
 // safely runs it again.
 // TODO replace re-execution with a proper check on the volumes' attach state.
-func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *atev1alpha1.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
 
@@ -597,7 +634,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	}
 
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetActorVolumes(), actorTemplate) {
+	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), actorTemplate) {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
@@ -617,11 +654,11 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
+func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
-	assignment := actor.GetWorkerAssignment()
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		return tele, err
@@ -636,9 +673,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 
 	// The actor's declared limits ride the RPC down to the sandbox so it is sized
 	// to the actor (replacing the worker-pod downward-API approach).
-	cpuMilli, memBytes := actorResourceLimits(actorTemplate)
+	cpuMilli, memBytes, err := actorResourceLimits(actorTemplate)
+	if err != nil {
+		return tele, err
+	}
 
-	if local := actor.GetLocalSnapshotInfo(); local != nil {
+	if local := actor.GetStatus().GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
@@ -664,7 +704,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		// pause snapshot restores as DATA_ON_GOLDEN — atelet combines the
 		// golden snapshot's guest state with the actor's data. Otherwise the
 		// scope mirrors what the pause captured.
-		req.Scope = toAteletSnapshotScope(actorTemplate.Spec.SnapshotsConfig.OnPause)
+		req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
 		if !src.GoldenSnapshotURI.IsZero() {
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
@@ -678,7 +718,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		// Mirrors loadActorForResume's source resolution: the durable URI is
 		// the actor's own snapshot when one exists, the golden otherwise.
 		tele.SnapshotKind = ateattr.SnapshotKindGolden
-		if actor.GetLatestSnapshot() != nil {
+		if actor.GetStatus().GetLatestSnapshot() != nil {
 			tele.SnapshotKind = ateattr.SnapshotKindLatest
 		}
 
@@ -760,10 +800,10 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil, err
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

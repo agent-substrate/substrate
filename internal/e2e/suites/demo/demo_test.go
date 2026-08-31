@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -27,10 +26,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/portforward"
@@ -46,18 +44,15 @@ func TestActorLifecycle(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	// CreateActor requires the atespace to exist first.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
-
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
 	tests := []struct {
 		name string
-		f    func(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, at *v1alpha1.ActorTemplate) error
+		f    func(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, at *ateapipb.ActorTemplate) error
 	}{
 		{
 			name: "CreateActor",
@@ -70,6 +65,14 @@ func TestActorLifecycle(t *testing.T) {
 		{
 			name: "SuspendResumeActor",
 			f:    suspendActor,
+		},
+		{
+			name: "DeleteActorAnyState",
+			f:    deleteActorAnyState,
+		},
+		{
+			name: "DeletePausedActorAnyState",
+			f:    deletePausedActorAnyState,
 		},
 	}
 
@@ -88,10 +91,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
 
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}},
-	})
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -99,7 +99,6 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	sourceName := "snapshot-source-" + nsObj.Name
 	cloneName := "snapshot-clone-" + nsObj.Name
 	for _, name := range []string{sourceName, cloneName} {
-		name := name
 		t.Cleanup(func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
@@ -109,16 +108,15 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: sourceName},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: sourceName},
+		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create source Actor: %v", err)
 	}
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
 		t.Fatalf("failed to resume source Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, sourceName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, sourceName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
 	if err != nil {
 		t.Fatalf("failed to call source Actor: %v", err)
@@ -129,12 +127,12 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to suspend source Actor: %v", err)
 	}
-	snapshot := suspended.GetActor().GetLatestSnapshot()
+	snapshot := suspended.GetActor().GetStatus().GetLatestSnapshot()
 	if snapshot.GetName() == "" {
 		t.Fatal("suspended Actor has no latest snapshot")
 	}
 	snapshotRef := snapshot
-	if _, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: snapshotRef}); err != nil {
+	if _, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{ActorSnapshot: snapshotRef}); err != nil {
 		t.Fatalf("failed to get ActorSnapshot: %v", err)
 	}
 	listed, err := clients.SubstrateAPI.ListActorSnapshots(ctx, &ateapipb.ListActorSnapshotsRequest{Atespace: demoAtespace})
@@ -142,7 +140,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to list ActorSnapshots: %v", err)
 	}
 	found := false
-	for _, candidate := range listed.GetSnapshots() {
+	for _, candidate := range listed.GetActorSnapshots() {
 		if candidate.GetMetadata().GetName() == snapshot.GetName() {
 			found = true
 			break
@@ -154,48 +152,45 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 
 	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef})
+		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef})
 	})
-	if _, err := clients.SubstrateAPI.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
+	tagToUpdate, err := clients.SubstrateAPI.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
 			Snapshot: snapshotRef,
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to tag ActorSnapshot: %v", err)
 	}
+	tagToUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+		ActorSnapshotTag: tagToUpdate,
 	}); err != nil {
 		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)
 	}
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
-			ActorTemplateNamespace: nsObj.Name,
-			ActorTemplateName:      at.Name,
-			SourceSnapshot:         &ateapipb.ActorSnapshotSource{Tag: tagRef},
+			Metadata:          &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
+			ActorTemplate:     e2e.TemplateRef(at),
+			SourceSnapshotTag: tagRef,
 		},
 	}); err != nil {
 		t.Fatalf("failed to create Actor from snapshot tag: %v", err)
 	}
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
 		t.Fatalf("failed to resume cloned Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, cloneName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, cloneName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
 	if err != nil {
 		t.Fatalf("failed to call cloned Actor: %v", err)
 	}
 	validateCounterResponse(t, response, "clone", 2, 2)
 
-	if _, err := clients.SubstrateAPI.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef}); err != nil {
+	if _, err := clients.SubstrateAPI.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef}); err != nil {
 		t.Fatalf("failed to delete ActorSnapshot tag: %v", err)
 	}
 }
@@ -208,8 +203,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 		{
 			name: "onCommit:Full, onPause:Full",
 			tc: actorLifecycleTestCase{
-				onCommit:               v1alpha1.SnapshotScopeFull,
-				onPause:                v1alpha1.SnapshotScopeFull,
+				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 3,
@@ -219,8 +214,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 		{
 			name: "onCommit:Data, onPause:Full",
 			tc: actorLifecycleTestCase{
-				onCommit:               v1alpha1.SnapshotScopeData,
-				onPause:                v1alpha1.SnapshotScopeFull,
+				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -230,8 +225,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 		{
 			name: "onCommit:Data, onPause:Data",
 			tc: actorLifecycleTestCase{
-				onCommit:               v1alpha1.SnapshotScopeData,
-				onPause:                v1alpha1.SnapshotScopeData,
+				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -248,9 +243,9 @@ func TestDurableDirLifecycle(t *testing.T) {
 			// (the golden's own durable tar would read 0).
 			name: "onCommit:Data, onPause:Full, onResume.fromData:Golden",
 			tc: actorLifecycleTestCase{
-				onCommit:                 v1alpha1.SnapshotScopeData,
-				onPause:                  v1alpha1.SnapshotScopeFull,
-				fromData:                 v1alpha1.ResumeSourceGolden,
+				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				fromData:                 ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
 				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -265,9 +260,9 @@ func TestDurableDirLifecycle(t *testing.T) {
 			// snapshot (local checkpoint + external golden).
 			name: "onCommit:Data, onPause:Data, onResume.fromData:Golden",
 			tc: actorLifecycleTestCase{
-				onCommit:                 v1alpha1.SnapshotScopeData,
-				onPause:                  v1alpha1.SnapshotScopeData,
-				fromData:                 v1alpha1.ResumeSourceGolden,
+				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				fromData:                 ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
 				wantMemoryAfterPause:     1,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -280,8 +275,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			// Suspend from PAUSED with matching Full scopes.
 			name: "onCommit:Full, onPause:Full, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
-				onCommit:                 v1alpha1.SnapshotScopeFull,
-				onPause:                  v1alpha1.SnapshotScopeFull,
+				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   3,
@@ -294,8 +289,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			// Suspend from PAUSED with matching Data scopes.
 			name: "onCommit:Data, onPause:Data, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
-				onCommit:                 v1alpha1.SnapshotScopeData,
-				onPause:                  v1alpha1.SnapshotScopeData,
+				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:     1,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -309,8 +304,8 @@ func TestDurableDirLifecycle(t *testing.T) {
 			// mircoVM already implemnted, while gVisor is blocked by #790:
 			name: "onCommit:Data, onPause:Full, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
-				onCommit:                 v1alpha1.SnapshotScopeData,
-				onPause:                  v1alpha1.SnapshotScopeFull,
+				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -324,7 +319,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.tc.microVMOnly && !isMicroVMEnvironment() {
+			if test.tc.microVMOnly && !e2e.IsMicroVM() {
 				t.Skipf("Skipping %s: micro-VM-only case (Golden resume source, or durable-data extraction from a Full capture)", test.name)
 			}
 			t.Parallel()
@@ -345,8 +340,8 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 		{
 			name: "onCommit:Full, onPause:Full",
 			tc: actorLifecycleTestCase{
-				onCommit:               v1alpha1.SnapshotScopeFull,
-				onPause:                v1alpha1.SnapshotScopeFull,
+				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 3,
@@ -357,8 +352,8 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 		{
 			name: "onCommit:Data, onPause:Data",
 			tc: actorLifecycleTestCase{
-				onCommit:               v1alpha1.SnapshotScopeData,
-				onPause:                v1alpha1.SnapshotScopeData,
+				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -373,9 +368,9 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 			// (or read 0 — the golden guest was never called).
 			name: "onCommit:Data, onPause:Full, onResume.fromData:Golden",
 			tc: actorLifecycleTestCase{
-				onCommit:                 v1alpha1.SnapshotScopeData,
-				onPause:                  v1alpha1.SnapshotScopeFull,
-				fromData:                 v1alpha1.ResumeSourceGolden,
+				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				fromData:                 ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
 				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -389,7 +384,7 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.tc.microVMOnly && !isMicroVMEnvironment() {
+			if test.tc.microVMOnly && !e2e.IsMicroVM() {
 				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
 			}
 			t.Parallel()
@@ -399,9 +394,6 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 }
 
 func TestExternalVolumeLifecycle(t *testing.T) {
-	if isMicroVMEnvironment() {
-		t.Skip("Skipping TestExternalVolumeLifecycle for microVM environment")
-	}
 
 	tests := []struct {
 		name string
@@ -410,8 +402,8 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 		{
 			name: "onCommit:Data, onPause:Data",
 			tc: actorLifecycleTestCase{
-				onCommit:               v1alpha1.SnapshotScopeData,
-				onPause:                v1alpha1.SnapshotScopeData,
+				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -428,6 +420,72 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 	}
 }
 
+func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
+	if e2e.IsMicroVM() {
+		t.Skip("Skipping TestDeleteActorAnyStateWithExternalVolume for microVM environment")
+	}
+
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	nsObj := e2e.CreateNamespace(t)
+
+	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+
+	actorName := "anystate-delete-extvol-" + nsObj.Name
+
+	t.Logf("Creating Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}}); err != nil {
+		t.Fatalf("failed to create Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	t.Logf("Resuming Actor %q...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	// Verify volume exists in actor (status should be CREATED)
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("failed to get actor: %v", err)
+	}
+	if len(actor.GetStatus().GetActorVolumes()) == 0 {
+		t.Fatalf("expected actor to have volumes, got 0")
+	}
+	for _, vol := range actor.GetStatus().GetActorVolumes() {
+		if vol.Status != ateapipb.ExternalVolume_STATUS_CREATED {
+			t.Fatalf("expected volume %q to be CREATED, got %s", vol.VolumeName, vol.Status)
+		}
+	}
+
+	// Delete the running actor with any-state
+	t.Logf("Deleting running Actor %q with any-state...", actorName)
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		AnyState: true,
+	}); err != nil {
+		t.Fatalf("failed to delete Actor with any-state: %v", err)
+	}
+
+	// Verify deletion in store
+	if _, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("expected actor %q to be NotFound after delete, got err: %v", actorName, err)
+	}
+}
+
 // Verify that file and memory counters behavior after pause and suspend, for different snapshot scopes.
 // Test case:
 //  1. Create actor.
@@ -437,9 +495,9 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 //  5. Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
 type actorLifecycleTestCase struct {
-	onCommit               v1alpha1.SnapshotScope
-	onPause                v1alpha1.SnapshotScope
-	fromData               v1alpha1.ResumeSource
+	onCommit               ateapipb.SnapshotContentScope
+	onPause                ateapipb.SnapshotContentScope
+	fromData               ateapipb.ResumeSource
 	wantMemoryAfterPause   int
 	wantFileAfterPause     int
 	wantMemoryAfterSuspend int
@@ -469,15 +527,12 @@ type actorLifecycleTestCase struct {
 	suspendWhilePaused bool
 }
 
-func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, v1alpha1.SnapshotScope, v1alpha1.SnapshotScope, v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error), tc actorLifecycleTestCase) {
+func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapipb.SnapshotContentScope, ateapipb.SnapshotContentScope, ateapipb.ResumeSource) (*ateapipb.ActorTemplate, error), tc actorLifecycleTestCase) {
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
 	ctx := context.Background()
 	clients := e2e.GetClients()
-
-	// CreateActor requires the atespace to exist first.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
 
 	// Create actor template.
 	at, err := createTemplate(ctx, t, clients, nsObj, tc.onCommit, tc.onPause, tc.fromData)
@@ -492,9 +547,8 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	t.Logf("Creating Actor %q using Substrate API...", actorID)
 	createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
+		ActorTemplate: e2e.TemplateRef(at),
 	}})
 	if err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
@@ -508,12 +562,12 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorID)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -533,16 +587,16 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_PAUSED)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -563,7 +617,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		}); err != nil {
 			t.Fatalf("failed to pause Actor before suspend: %v", err)
 		}
-		waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_PAUSED)
+		waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 	}
 	t.Logf("Suspending Actor %q...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
@@ -571,7 +625,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	if tc.suspendWhilePaused {
 		// The suspend must end the node pinning: a suspended actor's snapshot
@@ -582,8 +636,8 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		if err != nil {
 			t.Fatalf("failed to get suspended Actor: %v", err)
 		}
-		if suspendedActor.GetLocalSnapshotInfo() != nil {
-			t.Errorf("suspended Actor still carries LocalSnapshotInfo: %v", suspendedActor.GetLocalSnapshotInfo())
+		if suspendedActor.GetStatus().GetLocalSnapshotInfo() != nil {
+			t.Errorf("suspended Actor still carries LocalSnapshotInfo: %v", suspendedActor.GetStatus().GetLocalSnapshotInfo())
 		}
 	}
 
@@ -593,12 +647,12 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
@@ -620,17 +674,17 @@ func validateSnapshotContentScope(ctx context.Context, t *testing.T, clients *e2
 	if err != nil {
 		t.Fatalf("failed to get suspended Actor: %v", err)
 	}
-	snapRef := actor.GetLatestSnapshot()
+	snapRef := actor.GetStatus().GetLatestSnapshot()
 	if snapRef.GetName() == "" {
 		t.Fatal("suspended Actor has no latest snapshot")
 	}
 	snapshot, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{
-		Snapshot: snapRef,
+		ActorSnapshot: snapRef,
 	})
 	if err != nil {
 		t.Fatalf("failed to get ActorSnapshot %q: %v", snapRef.GetName(), err)
 	}
-	if got := snapshot.GetContentScope(); got != want {
+	if got := snapshot.GetStatus().GetContentScope(); got != want {
 		t.Errorf("snapshot %q content scope = %v, want %v", snapRef.GetName(), got, want)
 	}
 }
@@ -657,15 +711,14 @@ func validateCounterResponse(t *testing.T, resp string, stage string, wantMemory
 	}
 }
 
-func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *v1alpha1.ActorTemplate) error {
+func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
 	// Create an Actor using the ATE API.
 	actorName := "demo-actor-1-" + nsObj.Name
 
 	t.Logf("Creating Actor %q using Substrate API...", actorName)
 	createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
 	}})
 	if err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
@@ -684,55 +737,54 @@ func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 
 	var myActors []*ateapipb.Actor
 	for _, actor := range listResp.GetActors() {
-		if actor.GetActorTemplateNamespace() == nsObj.Name && actor.GetMetadata().GetName() == actorName {
+		if actor.GetActorTemplate().GetName() == at.GetMetadata().GetName() && actor.GetMetadata().GetName() == actorName {
 			myActors = append(myActors, actor)
 		}
 	}
 
 	// Check that we have our Actor created.
 	if len(myActors) != 1 {
-		t.Fatalf("expected actor %s in namespace %s, got %d actors: %v", actorName, nsObj.Name, len(myActors), myActors)
+		t.Fatalf("expected actor %s from template %s, got %d actors: %v", actorName, at.GetMetadata().GetName(), len(myActors), myActors)
 	}
 
 	actor := myActors[0]
 	if actor.GetMetadata().GetName() != actorName {
 		t.Errorf("expected actor name %s, got %s", actorName, actor.GetMetadata().GetName())
 	}
-	if actor.GetActorTemplateName() != at.Name {
-		t.Errorf("expected actor template name %s, got %s", at.Name, actor.GetActorTemplateName())
+	if actor.GetActorTemplate().GetName() != at.GetMetadata().GetName() {
+		t.Errorf("expected actor template name %s, got %s", at.GetMetadata().GetName(), actor.GetActorTemplate().GetName())
 	}
-	if actor.Status != ateapipb.Actor_STATUS_SUSPENDED {
-		t.Errorf("expected actor status to be SUSPENDED, got %v", actor.Status)
+	if actor.Status.State != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("expected actor state to be SUSPENDED, got %v", actor.Status.State)
 	}
 
-	t.Logf("Successfully queried Substrate API. Found %d active actors total, %d in our namespace %s.",
-		len(listResp.GetActors()), len(myActors), nsObj.Name)
+	t.Logf("Successfully queried Substrate API. Found %d active actors total, %d from our template %s.",
+		len(listResp.GetActors()), len(myActors), at.GetMetadata().GetName())
 
 	return nil
 }
 
-func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *v1alpha1.ActorTemplate) error {
+func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
 	actorName := "pause-actor-" + nsObj.Name
 
 	// Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -748,16 +800,16 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_PAUSED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -772,7 +824,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Deleting the actor
 	t.Logf("Deleting Actor %q...", actorName)
@@ -791,28 +843,27 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	return nil
 }
 
-func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *v1alpha1.ActorTemplate) error {
+func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
 	actorName := "suspend-actor-" + nsObj.Name
 
 	// Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -827,16 +878,16 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor again
 	t.Logf("Resuming Actor %q again...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor again: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
@@ -851,7 +902,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}); err != nil {
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Deleting the actor
 	t.Logf("Deleting Actor %q...", actorName)
@@ -870,131 +921,177 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	return nil
 }
 
-func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name string, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource, modifyTemplate func(*v1alpha1.ActorTemplate)) (*v1alpha1.ActorTemplate, error) {
-	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
+func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
+	actorName := "anystate-delete-actor-" + nsObj.Name
+
+	// 1. Creating an actor
+	t.Logf("Creating Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}}); err != nil {
+		t.Fatalf("failed to create Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	// Verify that any-state delete on a SUSPENDED actor succeeds
+	t.Logf("Attempting any-state delete on suspended Actor %q (should succeed)...", actorName)
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		AnyState: true,
+	}); err != nil {
+		t.Fatalf("expected any-state delete on suspended actor to succeed, got %v", err)
+	}
+
+	// 2. Re-creating and Resuming the actor
+	t.Logf("Re-creating Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}}); err != nil {
+		t.Fatalf("failed to create Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	t.Logf("Resuming Actor %q...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	// 3. Call the actor to ensure workload is actively serving on worker
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
+	if err != nil {
+		t.Fatalf("failed to call actor: %v", err)
+	}
+	validateCounterResponse(t, resp, "after creation", 1, 1)
+
+	// 4. Attempt standard DeleteActor without any-state on running actor (should fail with FailedPrecondition)
+	t.Logf("Attempting standard delete on running Actor %q (should fail)...", actorName)
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		AnyState: false,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition when standard deleting running actor, got %v", err)
+	}
+
+	// 5. Delete the running actor with any-state
+	t.Logf("Deleting running Actor %q with any-state...", actorName)
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		AnyState: true,
+	}); err != nil {
+		t.Fatalf("failed to delete Actor with any-state: %v", err)
+	}
+
+	// 6. Verify deletion in store
+	if _, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("expected actor %q to be NotFound after delete, got err: %v", actorName, err)
+	}
+
+	// 7. Verify actor name can be immediately reused
+	t.Logf("Re-creating Actor %q to verify name reuse...", actorName)
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}}); err != nil {
+		t.Fatalf("failed to recreate Actor: %v", err)
+	}
+	defer func() {
+		clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		})
+	}()
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	return nil
+}
+
+func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
+	actorName := "anystate-delete-paused-actor-" + nsObj.Name
+
+	// 1. Creating an actor
+	t.Logf("Creating Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
+	}}); err != nil {
+		t.Fatalf("failed to create Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	// 2. Resuming the actor
+	t.Logf("Resuming Actor %q...", actorName)
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+
+	// 3. Pausing the actor
+	t.Logf("Pausing Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to pause Actor: %v", err)
+	}
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+
+	// 4. Delete the paused actor with any-state
+	t.Logf("Deleting paused Actor %q with any-state...", actorName)
+	if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor:    &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		AnyState: true,
+	}); err != nil {
+		t.Fatalf("failed to delete Actor with any-state: %v", err)
+	}
+
+	// 5. Verify deletion in store
+	if _, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("expected actor %q to be NotFound after delete, got err: %v", actorName, err)
+	}
+
+	return nil
+}
+
+func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, base string, onCommit, onPause ateapipb.SnapshotContentScope, fromData ateapipb.ResumeSource, modifyTemplate func(*ateapipb.ActorTemplate)) (*ateapipb.ActorTemplate, error) {
+	env, err := e2e.CheckEnv("BUCKET_NAME")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
-	// The source WorkerPool+ActorTemplate to copy the resolved runtime (sandbox class,
-	// ateom image, container images) from. Defaults to the gVisor counter demo; CI
-	// overrides these to point this same lifecycle test at the micro-VM counter.
-	srcNS := "ate-demo-counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
-		srcNS = v
-	}
-	srcName := "counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
-		srcName = v
-	}
-
-	// Query existing WorkerPool and ActorTemplate to get the resolved container images
-	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(srcNS).Get(ctx, srcName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get existing WorkerPool %s/%s: %v", srcNS, srcName, err)
-	}
-
-	existingAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(srcNS).Get(ctx, srcName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get existing ActorTemplate %s/%s: %v", srcNS, srcName, err)
-	}
-
-	// Create WorkerPool. Labeled uniquely to this test's namespace so the
-	// cluster-wide scheduler doesn't make this pool's workers eligible for
-	// (or eligible to receive) any other namespace's actors.
-	wp := &v1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: nsObj.Name,
-			Labels:    map[string]string{"demo": nsObj.Name},
+	// The whole suite shares demoAtespace, so the per-test suffix keeps
+	// template names unique.
+	name := base + "-" + nsObj.Name
+	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateCounterTemplateOptions{
+		Atespace:     demoAtespace,
+		Name:         name,
+		PoolName:     base,
+		PoolReplicas: 5,
+		Labels:       map[string]string{"demo": nsObj.Name},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
+			OnPause:         onPause,
+			OnCommit:        onCommit,
+			OnResume:        &ateapipb.OnResumeConfig{FromData: fromData},
 		},
-		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:          5,
-			AteomImage:        existingWp.Spec.AteomImage,
-			SandboxClass:      existingWp.Spec.SandboxClass,
-			SandboxConfigName: existingWp.Spec.SandboxConfigName,
-		},
-	}
-	_, err = clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("failed to create WorkerPool: %v", err)
-	}
-
-	// Create ActorTemplate
-	at := &v1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: nsObj.Name,
-		},
-		Spec: v1alpha1.ActorTemplateSpec{
-			WorkerSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"demo": nsObj.Name},
-			},
-			// SandboxClass must match the per-test WorkerPool's (copied above) so the
-			// ActorTemplate↔WorkerPool match succeeds. The micro-VM source sets
-			// "microvm"; the gVisor source leaves it "" — copying keeps both correct.
-			SandboxClass: existingAt.Spec.SandboxClass,
-			Containers:   existingAt.Spec.Containers,
-			SnapshotsConfig: v1alpha1.SnapshotsConfig{
-				Location: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
-				OnPause:  onPause,
-				OnCommit: onCommit,
-				OnResume: v1alpha1.OnResumeConfig{FromData: fromData},
-			},
-			Volumes: existingAt.Spec.Volumes,
-		},
-	}
-	if modifyTemplate != nil {
-		modifyTemplate(at)
-	}
-	_, err = clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(nsObj.Name).Create(ctx, at, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("failed to create ActorTemplate: %v", err)
-	}
-
-	// Wait for ActorTemplate to be Ready (golden snapshot created) before creating an actor.
-	// The micro-VM golden (CH boot + checkpoint on nested KVM) is slower than gVisor, so
-	// CI raises this via E2E_TEMPLATE_READY_TIMEOUT.
-	t.Logf("Waiting for ActorTemplate %s to be Ready...", at.Name)
-	tmplTimeout := 90 * time.Second
-	if v := os.Getenv("E2E_TEMPLATE_READY_TIMEOUT"); v != "" {
-		d, perr := time.ParseDuration(v)
-		if perr != nil {
-			t.Fatalf("invalid E2E_TEMPLATE_READY_TIMEOUT %q: %v", v, perr)
-		}
-		tmplTimeout = d
-	}
-	tmplCtx, tmplCancel := context.WithTimeout(ctx, tmplTimeout)
-	defer tmplCancel()
-	var lastPhase v1alpha1.PhaseType
-	for {
-		curAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(nsObj.Name).Get(tmplCtx, at.Name, metav1.GetOptions{})
-		if err == nil {
-			lastPhase = curAt.Status.Phase
-			if lastPhase == v1alpha1.PhaseReady {
-				t.Logf("ActorTemplate %s is Ready with golden snapshot %q", at.Name, curAt.Status.GoldenSnapshot)
-				break
-			}
-			if lastPhase == v1alpha1.PhaseFailed {
-				t.Fatalf("ActorTemplate %s transitioned to PhaseFailed!", at.Name)
-			}
-		}
-		select {
-		case <-tmplCtx.Done():
-			t.Fatalf("Timed out waiting for ActorTemplate %q to be Ready after %v (last phase: %s, err: %v)", at.Name, tmplTimeout, lastPhase, err)
-		case <-time.After(1 * time.Second):
-			// Keep polling.
-		}
-	}
-
+		Modify: modifyTemplate,
+	})
 	return at, nil
 }
 
-func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
+func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause ateapipb.SnapshotContentScope, fromData ateapipb.ResumeSource) (*ateapipb.ActorTemplate, error) {
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter", onCommit, onPause, fromData, nil)
 }
 
-func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
+func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause ateapipb.SnapshotContentScope, fromData ateapipb.ResumeSource) (*ateapipb.ActorTemplate, error) {
 	var scName string
 	switch {
 	// TODO: add support for other storage classes in e2e environment (e.g. csi-nfs-sc)
@@ -1004,45 +1101,42 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 		t.Skip("Skipping TestExternalVolumeLifecycle: neither csi-hostpath-sc nor csi-nfs-sc StorageClass found")
 	}
 
-	modify := func(at *v1alpha1.ActorTemplate) {
-		var res []v1alpha1.Container
-		for _, c := range at.Spec.Containers {
-			if c.Name == "counter" {
-				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data"}
+	modify := func(at *ateapipb.ActorTemplate) {
+		for _, c := range at.GetContainers() {
+			if c.GetName() != "counter" {
+				continue
+			}
+			c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data"}
 
-				hasExtMount := false
-				for _, vm := range c.VolumeMounts {
-					if vm.Name == "external-data" {
-						hasExtMount = true
-						break
-					}
-				}
-				if !hasExtMount {
-					c.VolumeMounts = append(c.VolumeMounts, v1alpha1.VolumeMount{
-						Name:      "external-data",
-						MountPath: "/external-data",
-					})
+			hasExtMount := false
+			for _, vm := range c.GetVolumeMounts() {
+				if vm.GetName() == "external-data" {
+					hasExtMount = true
+					break
 				}
 			}
-			res = append(res, c)
+			if !hasExtMount {
+				c.VolumeMounts = append(c.VolumeMounts, &ateapipb.VolumeMount{
+					Name:      "external-data",
+					MountPath: "/external-data",
+				})
+			}
 		}
-		at.Spec.Containers = res
 
 		hasExtVol := false
-		for _, v := range at.Spec.Volumes {
-			if v.Name == "external-data" {
+		for _, v := range at.GetVolumes() {
+			if v.GetName() == "external-data" {
 				hasExtVol = true
 				break
 			}
 		}
 		if !hasExtVol {
-			at.Spec.Volumes = append(at.Spec.Volumes, v1alpha1.Volume{
+			at.Volumes = append(at.Volumes, &ateapipb.Volume{
 				Name: "external-data",
-				VolumeSource: v1alpha1.VolumeSource{
-					ExternalVolumeTemplate: &v1alpha1.ExternalVolumeTemplate{
-						Capacity:         resource.MustParse("1Gi"),
-						StorageClassName: scName,
-					},
+				Type: "ExternalVolumeTemplate",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					Capacity:         "1Gi",
+					StorageClassName: scName,
 				},
 			})
 		}
@@ -1062,22 +1156,22 @@ const (
 // counter's second file counter at it, so both volumes are written on every
 // request. Only the micro-VM runtime accepts this: gVisor templates are still
 // capped at one durable-dir volume by the ActorTemplate CEL rules.
-func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
-	modify := func(at *v1alpha1.ActorTemplate) {
-		for i, c := range at.Spec.Containers {
-			if c.Name != "counter" {
+func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause ateapipb.SnapshotContentScope, fromData ateapipb.ResumeSource) (*ateapipb.ActorTemplate, error) {
+	modify := func(at *ateapipb.ActorTemplate) {
+		for _, c := range at.GetContainers() {
+			if c.GetName() != "counter" {
 				continue
 			}
 			c.Command = []string{"/ko-app/counter", "--second-file-counter-directory=" + secondDurableDirMountPath}
-			c.VolumeMounts = append(c.VolumeMounts, v1alpha1.VolumeMount{
+			c.VolumeMounts = append(c.VolumeMounts, &ateapipb.VolumeMount{
 				Name:      secondDurableDirVolume,
 				MountPath: secondDurableDirMountPath,
 			})
-			at.Spec.Containers[i] = c
 		}
-		at.Spec.Volumes = append(at.Spec.Volumes, v1alpha1.Volume{
-			Name:         secondDurableDirVolume,
-			VolumeSource: v1alpha1.VolumeSource{DurableDir: &v1alpha1.DurableDirVolumeSource{}},
+		at.Volumes = append(at.Volumes, &ateapipb.Volume{
+			Name:       secondDurableDirVolume,
+			Type:       "DurableDir",
+			DurableDir: &ateapipb.DurableDirVolumeSource{},
 		})
 	}
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, fromData, modify)
@@ -1088,27 +1182,27 @@ func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) boo
 	return err == nil
 }
 
-func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status) {
-	waitForActorStatusWithTimeout(ctx, t, clients, actorName, expectedStatus, 60*time.Second)
+func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState) {
+	waitForActorStateWithTimeout(ctx, t, clients, actorName, expectedState, 60*time.Second)
 }
 
-func waitForActorStatusWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status, timeout time.Duration) {
+func waitForActorStateWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState, timeout time.Duration) {
 	t.Helper()
-	t.Logf("Waiting for Actor %q to be %v...", actorName, expectedStatus)
+	t.Logf("Waiting for Actor %q to be %v...", actorName, expectedState)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 		})
 		if err == nil {
-			if resp.GetStatus() == expectedStatus {
-				t.Logf("Actor %q reached status %v", actorName, expectedStatus)
+			if resp.GetStatus().GetState() == expectedState {
+				t.Logf("Actor %q reached state %v", actorName, expectedState)
 				return
 			}
 		}
 		time.Sleep(1 * time.Second)
 	}
-	t.Fatalf("timed out waiting for actor %q to reach status %v", actorName, expectedStatus)
+	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, expectedState)
 }
 
 func callActor(t *testing.T, actorRef resources.ActorRef) (string, error) {
@@ -1224,13 +1318,6 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 	return string(body), nil
 }
 
-// isMicroVMEnvironment reports whether the suite is running against the
-// micro-VM demo template, which does not support every volume type yet (see
-// TestExternalVolumeLifecycle).
-func isMicroVMEnvironment() bool {
-	return os.Getenv("E2E_TEMPLATE_NAMESPACE") == "ate-demo-counter-microvm"
-}
-
 func TestWorkerPodDeletion(t *testing.T) {
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
@@ -1238,11 +1325,8 @@ func TestWorkerPodDeletion(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	// CreateActor requires the atespace to exist first.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
-
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -1252,9 +1336,8 @@ func TestWorkerPodDeletion(t *testing.T) {
 	// Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
@@ -1264,16 +1347,16 @@ func TestWorkerPodDeletion(t *testing.T) {
 		})
 	}()
 
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
 	// Get actor to find the pod details
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
@@ -1283,8 +1366,8 @@ func TestWorkerPodDeletion(t *testing.T) {
 		t.Fatalf("failed to get Actor: %v", err)
 	}
 
-	podName := actor.GetWorkerAssignment().GetWorkerPod()
-	podNamespace := actor.GetWorkerAssignment().GetWorkerNamespace()
+	podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
+	podNamespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
 	if podName == "" || podNamespace == "" {
 		t.Fatalf("actor is running but pod details are missing: podName=%q, podNamespace=%q", podName, podNamespace)
 	}
@@ -1315,7 +1398,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 
 	// Wait for the actor to be marked as CRASHED
 	t.Logf("Waiting for actor %q to transition to CRASHED...", actorName)
-	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_CRASHED)
+	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_CRASHED)
 
 	// Verify the worker is cleaned up (deleted) from store
 	t.Logf("Verifying worker for pod %s/%s is removed from store...", podNamespace, podName)

@@ -1,0 +1,28 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The OpenTelemetry Weaver manifest of this registry. Weaver reads it when you
+# run `weaver registry check -r docs/metrics/registry`.
+#
+# schema_url holds the version of this registry, and not the version of the
+# upstream semantic conventions. docs/metrics/substrate.yaml records the
+# upstream version, because Substrate borrows attributes from it.
+#
+# The URL is an identifier. Nothing is published there at this time. ate.dev is
+# the domain of the API group of Substrate, thus it is the correct place if the
+# project publishes this registry later.
+
+name: substrate
+description: The metric semantic conventions of Agent Substrate.
+schema_url: https://ate.dev/schemas/substrate/1.0.0

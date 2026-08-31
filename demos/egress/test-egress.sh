@@ -81,11 +81,11 @@ ${KATE} create atespace "${ATESPACE}" >/dev/null 2>&1 || true
 ${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 ${KATE} resume actor "${ACTOR}" -a "${ATESPACE}" >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do
-  ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "STATUS_RUNNING" && break
+  ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "ACTOR_STATE_RUNNING" && break
   sleep 3
 done
 ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep "${ACTOR}" || true
-${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "STATUS_RUNNING" || { echo "actor did not reach RUNNING"; exit 1; }
+${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "ACTOR_STATE_RUNNING" || { echo "actor did not reach RUNNING"; exit 1; }
 
 egress_log_since() { ${K} -n ate-system logs deployment/atenet-egress --tail=-1 2>/dev/null | grep '\[egress\]' | tail -n +"$(( $1 + 1 ))"; }
 egress_log_count() { ${K} -n ate-system logs deployment/atenet-egress --tail=-1 2>/dev/null | grep -c '\[egress\]' || true; }

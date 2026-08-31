@@ -41,7 +41,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 	tests := []struct {
 		name string
 		p    actorBootParams
-		want ateomstats.ActorAttribution
+		want resources.ActorAttribution
 	}{
 		{
 			name: "fully populated",
@@ -51,7 +51,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 				templateNS:   "template-ns-d",
 				templateName: "template-name-e",
 			},
-			want: ateomstats.ActorAttribution{
+			want: resources.ActorAttribution{
 				Ref:               resources.ActorRef{Atespace: "atespace-a", Name: "actor-b"},
 				UID:               "uid-c",
 				TemplateNamespace: "template-ns-d",
@@ -61,7 +61,7 @@ func TestActorBootParamsAttribution(t *testing.T) {
 		{
 			name: "zero params",
 			p:    actorBootParams{},
-			want: ateomstats.ActorAttribution{},
+			want: resources.ActorAttribution{},
 		},
 	}
 
@@ -110,7 +110,7 @@ func TestActorBootParamsAttributionMatchesRequest(t *testing.T) {
 // here is everything GetWorkloadStats does with the result, which is where the
 // polling loop will actually live.
 
-var testActor = ateomstats.ActorAttribution{
+var testActor = resources.ActorAttribution{
 	Ref:               resources.ActorRef{Atespace: "space-a", Name: "actor-a"},
 	UID:               "uid-a",
 	TemplateNamespace: "ns-a",
@@ -163,9 +163,11 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 }
 
 // newStatsService builds a service executing testActor with the given guest
-// containers published to GetWorkloadStats.
+// containers published to GetWorkloadStats. lock is constructed like NewService
+// does, since it is a pointer with no usable zero value and
+// TestGetWorkloadStatsDoesNotTakeLock holds it.
 func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
-	s := &AteomService{}
+	s := &AteomService{lock: newCancelableMutex()}
 	s.activeActor.Store(&testActor)
 	s.guestStats.Store(&guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})
 	return s
@@ -216,7 +218,7 @@ func TestGetWorkloadStats(t *testing.T) {
 }
 
 // TestGetWorkloadStatsSumsContainers covers the multi-container actor: the
-// guest gives one cgroup per container (see StartOverlayWorkload), and the
+// guest gives one cgroup per container (see StartRootfsContainer), and the
 // proto reports one figure for the actor.
 func TestGetWorkloadStatsSumsContainers(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
@@ -495,7 +497,7 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 
 	tests := []struct {
 		name string
-		to   *ateomstats.ActorAttribution
+		to   *resources.ActorAttribution
 		want ateompb.NoSampleReason
 	}{
 		// A new actor took the slot: there is a workload, its numbers are just

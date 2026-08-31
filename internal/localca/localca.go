@@ -14,60 +14,264 @@
 
 // Package localca implements a CA whose state can be stored in a local file or
 // Kubernetes secret.
+//
+// In substrate's default setup, the CA pool state is kept in a Kubernetes
+// secret, and administered with admin CLI commands.
+//
+// If you are writing an online signing component, use a projected volume to put
+// the secret's content into your container's filesystem, and then point a
+// RefreshingPool at the file.  Even if an administrator rotates the pool, your
+// component will continue to work correctly with no restarts.
+//
+// If you are writing an admin command, read the secret from the Kubernetes API,
+// use Unmarshal to parse it to a Pool, manipulate the Pool, and then use
+// Marshal to serialize the state and write it back to the secret.
+//
+// For tests, generate an ephemeral ConcretePool.
 package localca
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"os"
+	"sync"
 	"time"
+
+	"k8s.io/utils/clock"
 )
 
-type Pool struct {
-	CAs []*CA
+// Pool is the interface for a CA pool.
+//
+// Logically, a Pool is a collection of multiple CAs.  One or more are
+// designated as active for signing.  The rest are inactive, but are still
+// trusted for verifying certificates.
+//
+// The active/inactive designation allows a Pool to be seamlessly rotated.
+//
+//  1. (Steady State) The Pool has one CA, active for signing.
+//  2. (Publish New Root) Add a new CA, inactive.
+//  3. (Age In) Wait for trust in the new root to propagate throughout the system.
+//  3. (Switch) Switch the new CA to be active, and the old CA to be inactive.
+//  4. (Age Out) Wait for all certificates issued by the old CA to expire.
+//  5. (Cleanup) Remove the old CA from the Pool.
+//
+// Normally, we let callers define their own compatibility interfaces.  But in
+// most cases you'll want to either use a RefreshingPool (for controllers and
+// servers), or a ConcretePool (for CLIs and tests).
+type Pool interface {
+	// CreateCertificate signs the given template certificate using one of the
+	// Pool's currently-active CAs.
+	CreateCertificate(template *x509.Certificate, subjectPublicKey crypto.PublicKey) ([][]byte, error)
+
+	// TrustAnchors returns the root certificates for all of the pool's CAs.
+	TrustAnchors() ([]*x509.Certificate, error)
 }
 
+// RefreshingPool is a wrapper around Pool that periodically reloads the CA
+// state from disk.  This allows our various pieces that sign certificates
+// (Actor identity broker, egress gateway) to properly continue signing even as
+// an administrator rotates one of the CA pools, without requiring any
+// components to restart.
+type RefreshingPool struct {
+	stateFile string
+	clock     clock.PassiveClock
+
+	// lock covers nextLoad and pool
+	lock     sync.Mutex
+	nextLoad time.Time
+	pool     *ConcretePool
+}
+
+var _ Pool = (*RefreshingPool)(nil)
+
+func NewRefreshingPool(stateFile string) (*RefreshingPool, error) {
+	rp := &RefreshingPool{
+		stateFile: stateFile,
+		clock:     clock.RealClock{},
+	}
+	if err := rp.refreshIfNecessary(); err != nil {
+		return nil, fmt.Errorf("while loading pool: %w", err)
+	}
+	return rp, nil
+}
+
+// refreshIfNecessary must be called while p.lock is held.
+func (p *RefreshingPool) refreshIfNecessary() error {
+	if p.pool != nil && p.clock.Now().Before(p.nextLoad) {
+		return nil
+	}
+
+	poolBytes, err := os.ReadFile(p.stateFile)
+	if err != nil {
+		return fmt.Errorf("while reading pool state: %w", err)
+	}
+
+	pool, err := Unmarshal(poolBytes)
+	if err != nil {
+		return fmt.Errorf("while unmarshaling pool: %w", err)
+	}
+
+	p.pool = pool
+	p.nextLoad = p.clock.Now().Add(time.Minute)
+
+	return nil
+}
+
+func (p *RefreshingPool) CreateCertificate(template *x509.Certificate, subjectPublicKey crypto.PublicKey) ([][]byte, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if err := p.refreshIfNecessary(); err != nil {
+		return nil, fmt.Errorf("while refreshing pool: %w", err)
+	}
+	return p.pool.CreateCertificate(template, subjectPublicKey)
+}
+
+func (p *RefreshingPool) TrustAnchors() ([]*x509.Certificate, error) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if err := p.refreshIfNecessary(); err != nil {
+		return nil, fmt.Errorf("while refreshing pool: %w", err)
+	}
+	return p.pool.TrustAnchors()
+}
+
+type ConcretePool struct {
+	CAs []*CA
+
+	// Which CA is active for signing operations?
+	ActiveForSigning string
+}
+
+var _ Pool = (*ConcretePool)(nil)
+
+func (p *ConcretePool) CreateCertificate(template *x509.Certificate, subjectPublicKey crypto.PublicKey) ([][]byte, error) {
+	if len(p.CAs) == 0 {
+		return nil, fmt.Errorf("pool has no CAs")
+	}
+
+	// For backwards compatibility, pick the first CA if none is designated.
+	//
+	// TODO(ahmedtd): Remove the fallback after a few weeks.  This is intended
+	// to keep people from having to mess with the CAs in their existing dev
+	// clusters.
+	var selectedCA *CA
+	if p.ActiveForSigning != "" {
+		for _, ca := range p.CAs {
+			if ca.ID == p.ActiveForSigning {
+				selectedCA = ca
+			}
+		}
+		if selectedCA == nil {
+			return nil, fmt.Errorf("selected CA %q not in CA list", p.ActiveForSigning)
+		}
+	} else {
+		selectedCA = p.CAs[0]
+	}
+
+	// TODO: Trim notAfter of the template so it doesn't outlast the selected
+	// signing root.  I am not sure if this is necessary, and it may preclude
+	// some operational patterns.  (Technically, the trust is established in the
+	// CA's *key*, and nothing prevents a CA from rolling over to a new root
+	// certificate that uses the same private key.)
+
+	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, selectedCA.RootCertificate, subjectPublicKey, selectedCA.SigningKey)
+	if err != nil {
+		return nil, fmt.Errorf("while creating certificate: %w", err)
+	}
+
+	chain := [][]byte{subjectCertDER}
+
+	return chain, nil
+}
+
+func (p *ConcretePool) TrustAnchors() ([]*x509.Certificate, error) {
+	var anchors []*x509.Certificate
+	for _, ca := range p.CAs {
+		anchors = append(anchors, ca.RootCertificate)
+	}
+	return anchors, nil
+}
+
+// CA is a concrete certificate authority signing from a single root
+// certificate.
+//
+// In most uses, you want to use a pool of CAs, in order to seamlessly handle CA
+// rotation.
 type CA struct {
-	ID                       string
-	SigningKey               crypto.PrivateKey
-	RootCertificate          *x509.Certificate
-	IntermediateCertificates []*x509.Certificate
+	ID string
+
+	// The private key to use for signing certificates.  Corresponds to
+	// RootCertificate.
+	SigningKey crypto.PrivateKey
+
+	// The root certificate for this CA pool.
+	RootCertificate *x509.Certificate
+}
+
+// TLSCertificateChainPEM returns the CA certificate in the PEM encoding used
+// by TLS servers.
+func (ca *CA) TLSCertificateChainPEM() ([]byte, error) {
+	if ca.RootCertificate == nil {
+		return nil, fmt.Errorf("ca certificate: is nil")
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.RootCertificate.Raw}), nil
+}
+
+// TLSPrivateKeyPEM returns the CA signing key in the PKCS#8 PEM encoding used
+// by TLS servers.
+func (ca *CA) TLSPrivateKeyPEM() ([]byte, error) {
+	if ca.SigningKey == nil {
+		return nil, fmt.Errorf("ca key: is nil")
+	}
+
+	key, err := x509.MarshalPKCS8PrivateKey(ca.SigningKey)
+	if err != nil {
+		return nil, fmt.Errorf("ca key: serializing PKCS#8: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), nil
 }
 
 type serializedPool struct {
-	CAs []*serializedCA
+	CAs              []*serializedCA
+	ActiveForSigning string
 }
 type serializedCA struct {
-	ID                          string
-	SigningKeyPKCS8             []byte
-	SigningKeyPEM               string
-	RootCertificateDER          []byte
-	RootCertificatePEM          string
-	IntermediateCertificatesDER [][]byte
+	ID                 string
+	SigningKeyPKCS8    []byte
+	RootCertificateDER []byte
 }
 
-func Marshal(ca *Pool) ([]byte, error) {
-	wire := &serializedPool{}
+func Marshal(pool *ConcretePool) ([]byte, error) {
+	wire := &serializedPool{
+		ActiveForSigning: pool.ActiveForSigning,
+	}
 
-	for _, ca := range ca.CAs {
+	for _, ca := range pool.CAs {
 		caWire := &serializedCA{}
 
 		caWire.ID = ca.ID
 
+		// An external signer has no exportable key material, so this is the
+		// point where "the key lives in a KMS" stops being marshalable. Name
+		// that case, because x509's own error ("unknown key type") reads like a
+		// bug in this code rather than a deliberate property of the signer.
 		signingKeyPKCS8, err := x509.MarshalPKCS8PrivateKey(ca.SigningKey)
 		if err != nil {
-			return nil, fmt.Errorf("while serializing signing key to PKCS#8: %w", err)
+			return nil, fmt.Errorf("while serializing signing key for CA %q to PKCS#8: %w "+
+				"(a signer that holds no exportable key material, such as a KMS or HSM signer, "+
+				"cannot be written to a pool file; keep it in its own store)", ca.ID, err)
 		}
 
 		caWire.SigningKeyPKCS8 = signingKeyPKCS8
 		caWire.RootCertificateDER = ca.RootCertificate.Raw
-		for _, intermediate := range ca.IntermediateCertificates {
-			caWire.IntermediateCertificatesDER = append(caWire.IntermediateCertificatesDER, intermediate.Raw)
-		}
 
 		wire.CAs = append(wire.CAs, caWire)
 	}
@@ -80,7 +284,7 @@ func Marshal(ca *Pool) ([]byte, error) {
 	return wireBytes, nil
 }
 
-func Unmarshal(wireBytes []byte) (*Pool, error) {
+func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 	var err error
 	wire := &serializedPool{}
 
@@ -88,84 +292,76 @@ func Unmarshal(wireBytes []byte) (*Pool, error) {
 		return nil, fmt.Errorf("while unmarshaling JSON: %w", err)
 	}
 
-	pool := &Pool{}
+	pool := &ConcretePool{}
 
 	for _, wireCA := range wire.CAs {
 		ca := &CA{
 			ID: wireCA.ID,
 		}
 
-		ca.SigningKey, err = parsePrivateKey(wireCA.SigningKeyPKCS8, wireCA.SigningKeyPEM)
+		ca.SigningKey, err = x509.ParsePKCS8PrivateKey(wireCA.SigningKeyPKCS8)
 		if err != nil {
 			return nil, fmt.Errorf("while parsing signing key: %w", err)
 		}
 
-		ca.RootCertificate, err = parseCertificate(wireCA.RootCertificateDER, wireCA.RootCertificatePEM)
+		ca.RootCertificate, err = x509.ParseCertificate(wireCA.RootCertificateDER)
 		if err != nil {
 			return nil, fmt.Errorf("while parsing root certificate: %w", err)
-		}
-
-		for _, intermediateDER := range wireCA.IntermediateCertificatesDER {
-			intermediateCert, err := x509.ParseCertificate(intermediateDER)
-			if err != nil {
-				return nil, fmt.Errorf("while parsing intermediate certificate: %w", err)
-			}
-			ca.IntermediateCertificates = append(ca.IntermediateCertificates, intermediateCert)
 		}
 
 		pool.CAs = append(pool.CAs, ca)
 	}
 
+	pool.ActiveForSigning = wire.ActiveForSigning
+
 	return pool, nil
 }
 
-func parsePrivateKey(pkcs8 []byte, pemData string) (crypto.PrivateKey, error) {
-	if len(pkcs8) != 0 {
-		return x509.ParsePKCS8PrivateKey(pkcs8)
-	}
+type KeyType int
 
-	block, _ := pem.Decode([]byte(pemData))
-	if block == nil {
-		return nil, fmt.Errorf("missing PEM block")
-	}
+const (
+	KeyTypeED25519 KeyType = iota
+	KeyTypeECDSAP256
+)
 
-	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	return nil, fmt.Errorf("unsupported private key PEM type %q", block.Type)
-}
-
-func parseCertificate(der []byte, pemData string) (*x509.Certificate, error) {
-	if len(der) != 0 {
-		return x509.ParseCertificate(der)
-	}
-
-	block, _ := pem.Decode([]byte(pemData))
-	if block == nil {
-		return nil, fmt.Errorf("missing PEM block")
-	}
-	if block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("unsupported certificate PEM type %q", block.Type)
-	}
-	return x509.ParseCertificate(block.Bytes)
-}
-
-func GenerateED25519CA(id string) (*CA, error) {
-	rootPubKey, rootPrivKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("while generating root key: %w", err)
+// GenerateCA creates a self-signed CA with its own freshly generated key.
+func GenerateCA(id string, keyType KeyType, validity time.Duration) (*CA, error) {
+	var rootPrivKey crypto.PrivateKey
+	var rootPubKey crypto.PublicKey
+	switch keyType {
+	case KeyTypeED25519:
+		pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("while generating root key: %w", err)
+		}
+		rootPrivKey = privKey
+		rootPubKey = pubKey
+	case KeyTypeECDSAP256:
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("while generating root key: %w", err)
+		}
+		rootPrivKey = key
+		rootPubKey = &key.PublicKey
+	default:
+		return nil, fmt.Errorf("unsupported key type")
 	}
 
 	notBefore := time.Now()
-	notAfter := notBefore.Add(365 * 24 * time.Hour)
+	notAfter := notBefore.Add(validity)
 
 	rootTemplate := &x509.Certificate{
+		// Some golang certificate handling code assumes that if the parent and
+		// template Subject fields compare equal, we are doing a self-signing
+		// operation [1].
+		//
+		// I'm not sure if this is correct, but for defense in depth include
+		// some random content in the subject.
+		//
+		// [1] https://cs.opensource.google/go/go/+/refs/tags/go1.27.0:src/crypto/x509/x509.go;l=1871
+		Subject: pkix.Name{
+			CommonName: rand.Text(),
+		},
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		IsCA:                  true,

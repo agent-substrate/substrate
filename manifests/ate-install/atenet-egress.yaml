@@ -37,12 +37,16 @@ data:
   envoy.yaml: |
     admin:
       address:
-        socket_address: { address: 0.0.0.0, port_value: 15000 }
+        # ipv4_compat is load-bearing: the probes below are the kubelet
+        # dialling the pod IP, which is IPv4 on an IPv4 cluster.
+        socket_address: { address: "::", ipv4_compat: true, port_value: 15000 }
     static_resources:
       listeners:
       - name: egress
         address:
-          socket_address: { address: 0.0.0.0, port_value: 443 }
+          # ipv4_compat rather than a second socket: IPv4 peers arrive as
+          # ::ffff: and nothing here reads the peer -- identity is the cert.
+          socket_address: { address: "::", ipv4_compat: true, port_value: 443 }
         filter_chains:
         # Named so ext_proc can read it back as xds.filter_chain_name. Must
         # match EgressFilterChainName in
@@ -54,13 +58,15 @@ data:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
               require_client_certificate: true
               common_tls_context:
-                tls_certificates:
-                # Gateway server identity (servicedns signer). credential-bundle.pem
-                # holds the leaf cert and key concatenated. watched_directory picks
-                # up kubelet's projected certificate rotation without a restart.
-                - certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
-                  private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
-                  watched_directory: { path: /run/servicedns.podcert.ate.dev }
+                # Gateway server identity (servicedns signer), via filesystem
+                # SDS: watched_directory only works on SDS-delivered secrets,
+                # so an inline cert would never pick up kubelet's rotation.
+                tls_certificate_sds_secret_configs:
+                - name: servicedns_serving_cert
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-servicedns-cert.yaml
                 validation_context:
                   # Actors authenticate with an actor-identity client cert.
                   # Envoy enforces chain, signature, and validity period here, so
@@ -119,6 +125,8 @@ data:
                       cluster_name: ext_proc_server
                     timeout: 2s
                   failure_mode_allow: false
+                  # Set ext_proc timeout to 5s (from default 200ms) to handle slower ext_proc transactions.
+                  message_timeout: 5s
                   # How the ext_proc server tells egress from ingress. It applies
                   # opposite trust models to the two directions, and dispatches on
                   # this Envoy-asserted filter chain name so that no client can
@@ -142,7 +150,10 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    # V4_ONLY resolves nothing on an IPv6-only cluster. ALL
+                    # returns both families and enables Happy Eyeballs, so
+                    # neither family is stranded.
+                    dns_lookup_family: ALL
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -179,7 +190,18 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: ALL
+  # SDS resource for the gateway serving cert. kubelet rotates the projected
+  # volume by swapping its ..data symlink, which fires the watch and makes
+  # Envoy re-read the bundle (leaf cert and key concatenated in one file).
+  sds-servicedns-cert.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: servicedns_serving_cert
+      tls_certificate:
+        certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+        private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+        watched_directory: { path: /run/servicedns.podcert.ate.dev }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -207,7 +229,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
       - name: envoy
-        image: envoyproxy/envoy:v1.34-latest
+        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -304,7 +326,7 @@ spec:
         # defaults to (that is the ingress gateway's port). Without this the
         # drain sequence dials a closed port, reads the connection refusal as
         # "Envoy already exited", and reports a drain it never performed.
-        - --envoy-admin-address=127.0.0.1:15000
+        - --envoy-admin-address=localhost:15000
         env:
         - name: POD_NAME
           valueFrom:
@@ -379,6 +401,7 @@ metadata:
   namespace: ate-system
 spec:
   type: ClusterIP
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: atenet-egress
   ports:

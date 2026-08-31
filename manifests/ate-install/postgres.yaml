@@ -21,17 +21,55 @@ data:
   postgresql.conf: |
     listen_addresses = '*'
     ssl = on
-    ssl_cert_file = '/run/tls/credential-bundle.pem'
-    ssl_key_file = '/run/tls/credential-bundle.pem'
+    ssl_cert_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
+    ssl_key_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
     ssl_ca_file = '/run/podidentity.podcert.ate.dev/trust-bundle.pem'
     hba_file = '/etc/postgresql/pg_hba.conf'
   pg_hba.conf: |
     # Local socket access is limited to processes in this pod and is used by
-    # health checks and the workload's idempotent database bootstrap.
+    # health checks, the workload's idempotent database bootstrap, and the
+    # tls-reloader sidecar's configuration reloads.
     local all all trust
-    # Auth mirrors valkey.yaml's model. PostgreSQL does not need its own serving
-    # CA here because it never verifies its own server certificate.
+    # PostgreSQL verifies client certificates against the pod-identity CA. It
+    # does not need its own serving CA because it never verifies its server certificate.
     hostssl all all all trust clientcert=verify-ca
+  reload-tls.sh: |
+    # PostgreSQL opens ssl_cert_file, ssl_key_file and ssl_ca_file at startup
+    # and on SIGHUP, and nowhere else. The kubelet replaces the projected pod
+    # certificate in place about 30 minutes before it expires, so without this
+    # loop the server keeps presenting the certificate it booted with until it
+    # expires about a day later and every client stops trusting it.
+    set -eu
+
+    # As PID 1 this shell only sees SIGTERM if a handler is installed, and only
+    # acts on it between commands, so the sleep below runs in the background
+    # and is waited on. Without both halves the pod takes the full termination
+    # grace period to go away.
+    trap 'exit 0' TERM INT
+
+    CERT=/run/servicedns.podcert.ate.dev/credential-bundle.pem
+    CA=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+
+    # Comfortably inside the 30m headroom (notAfter - beginRefreshAt) that
+    # cmd/podcertcontroller/internal/servicednssigner/servicednssigner.go
+    # leaves; hashing two small files costs nothing.
+    INTERVAL=60
+
+    reloaded=""
+    while true; do
+      current="$(sha256sum "${CERT}" "${CA}")"
+      # Reloading fails until the server is accepting connections, which is
+      # where every pod starts out, so only record a hash once it has worked.
+      # Starting empty also means a restart of this container costs one
+      # redundant reload rather than a missed one.
+      if [ "${current}" != "${reloaded}" ] \
+        && psql -U postgres -d postgres -Atc 'SELECT pg_reload_conf()' >/dev/null 2>&1; then
+        reloaded="${current}"
+        echo "$(date -u +%FT%TZ) reloaded TLS configuration"
+      fi
+      sleep "${INTERVAL}" &
+      wait $!
+    done
 ---
 apiVersion: v1
 kind: Service
@@ -63,28 +101,46 @@ spec:
       labels:
         app: postgres
     spec:
-      # The official postgres image requires ssl_key_file to contain only a
-      # private key with restrictive (0600) permissions. The projected
-      # podCertificate source is world-readable, so copy it into a writable
-      # emptyDir and fix permissions/ownership before postgres starts
+      securityContext:
+        # Group ownership of the projected certificate below, and of the data
+        # volume so that a freshly provisioned one is writable. OnRootMismatch
+        # keeps the kubelet from walking the data directory on every start,
+        # which would leave PGDATA group-writable and postgres refusing to run.
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+      # PostgreSQL re-reads its TLS files only on SIGHUP, so this sidecar
+      # reloads the server whenever the kubelet rotates the projected pod
+      # certificate. fsGroup is also what makes that projection readable: the
+      # kubelet writes it root-owned for as long as the pod's containers do not
+      # all agree on one non-root user, and grants the fsGroup group access,
+      # landing the key at root:postgres 0640, the only shared mode PostgreSQL
+      # accepts. Pinning runAsUser on the postgres container would make the key
+      # postgres-owned and group-readable, which it rejects.
       # See https://www.postgresql.org/docs/current/ssl-tcp.html#SSL-SETUP
       initContainers:
-      - name: fix-tls-perms
+      - name: tls-reloader
+        restartPolicy: Always
         image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
         securityContext:
           runAsUser: 70
         command:
         - /bin/sh
-        - -c
-        - |
-          set -e
-          cp /run/servicedns.podcert.ate.dev/credential-bundle.pem /run/tls/credential-bundle.pem
-          chmod 600 /run/tls/credential-bundle.pem
+        - /etc/postgresql/reload-tls.sh
         volumeMounts:
+        - name: config
+          mountPath: /etc/postgresql
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
-        - name: tls
-          mountPath: /run/tls
+          readOnly: true
+        - name: podidentity-ca
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: socket
+          mountPath: /var/run/postgresql
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
       containers:
       - name: postgres
         image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
@@ -136,19 +192,25 @@ spec:
         volumeMounts:
         - name: config
           mountPath: /etc/postgresql
-        - name: tls
-          mountPath: /run/tls
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
         - name: podidentity-ca
           mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true
+        - name: socket
+          mountPath: /var/run/postgresql
         - name: data
           mountPath: /var/lib/postgresql/data
+        # The whole control plane shares this one database; under activation
+        # load it sustains several cores. The kind overlay shrinks this back
+        # down to fit a CI runner.
         resources:
           requests:
-            cpu: "1"
+            cpu: "2"
             memory: "1Gi"
           limits:
-            cpu: "2"
+            cpu: "16"
             memory: "2Gi"
       volumes:
       - name: config
@@ -156,12 +218,17 @@ spec:
           name: postgres-config
       - name: servicedns
         projected:
+          # 0600 plus the group read that fsGroup adds is the 0640 above.
+          defaultMode: 0600
           sources:
           - podCertificate:
               signerName: servicedns.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
-      - name: tls
+      # The unix socket directory, shared so the sidecar can ask the running
+      # server to reload. The image defaults both the server and its clients to
+      # this path, so nothing else has to know about it.
+      - name: socket
         emptyDir: {}
       - name: podidentity-ca
         projected:
@@ -179,4 +246,8 @@ spec:
       accessModes: [ "ReadWriteOnce" ]
       resources:
         requests:
-          storage: 1Gi
+          # Headroom so WAL churn cannot fill the volume: a full pg_wal is a
+          # PANIC that drops every connection. Size also scales provisioned
+          # IOPS/throughput on PD-backed storage classes. The kind overlay
+          # shrinks this claim back down.
+          storage: 500Gi

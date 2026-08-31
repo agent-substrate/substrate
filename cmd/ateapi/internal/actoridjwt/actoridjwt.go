@@ -44,7 +44,7 @@ type Claims struct {
 type SubstrateClaims struct {
 	Atespace  string
 	ActorName string
-	ActorUid  string
+	ActorUID  string
 }
 
 type wireHeader struct {
@@ -70,7 +70,7 @@ type WireClaims struct {
 type WireSubstrateClaims struct {
 	Atespace  string `json:"atespace,omitempty"`
 	ActorName string `json:"actorName,omitempty"`
-	ActorUid  string `json:"actorUid,omitempty"`
+	ActorUID  string `json:"actorUID,omitempty"`
 }
 
 func ClaimsToWire(claims *Claims) (*WireClaims, error) {
@@ -90,7 +90,7 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 		Substrate: WireSubstrateClaims{
 			Atespace:  claims.Substrate.Atespace,
 			ActorName: claims.Substrate.ActorName,
-			ActorUid:  claims.Substrate.ActorUid,
+			ActorUID:  claims.Substrate.ActorUID,
 		},
 	}
 

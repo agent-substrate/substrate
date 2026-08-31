@@ -37,7 +37,7 @@ const relistPageSize = 1000
 // Cache maintains an in-memory snapshot of all workers.
 //
 // TODO: add metrics — at minimum a gauge for worker count, a counter for
-// resync events, and a counter for failed PUBLISH operations (in ateredis).
+// resync events, and a counter for failed worker-watch notifications.
 type Cache struct {
 	store          workerListWatcher
 	relistInterval time.Duration
@@ -96,18 +96,28 @@ func (c *Cache) Workers() ([]*ateapipb.Worker, error) {
 	return out, nil
 }
 
-// Worker returns the worker for a Kubernetes namespace and Pod name.
-func (c *Cache) Worker(namespace, pod string) (*ateapipb.Worker, error) {
+// Worker returns the worker with the given name.
+func (c *Cache) Worker(name string) (*ateapipb.Worker, error) {
 	if !c.ready.Load() {
 		return nil, fmt.Errorf("worker cache not ready")
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	worker, ok := c.workers[namespace+":"+pod]
+	worker, ok := c.workers[name]
 	if !ok {
 		return nil, store.ErrNotFound
 	}
 	return worker, nil
+}
+
+// Forget removes a worker that a store write proved no longer exists. The
+// normal delete watch remains authoritative, but this closes the short race in
+// which scheduling selected a worker just after its row was deleted and before
+// the watch event reached the cache.
+func (c *Cache) Forget(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.workers, name)
 }
 
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
@@ -209,12 +219,12 @@ func (c *Cache) applyEvent(event store.WorkerEvent) {
 		delete(c.workers, key)
 	case store.WorkerEventCreated, store.WorkerEventUpdated:
 		existing, ok := c.workers[key]
-		if !ok || event.Worker.GetVersion() >= existing.GetVersion() {
+		if !ok || event.Worker.GetMetadata().GetVersion() >= existing.GetMetadata().GetVersion() {
 			c.workers[key] = event.Worker
 		}
 	}
 }
 
 func workerKey(w *ateapipb.Worker) string {
-	return w.GetWorkerNamespace() + ":" + w.GetWorkerPod()
+	return w.GetMetadata().GetName()
 }

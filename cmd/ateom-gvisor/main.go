@@ -41,6 +41,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/childreap"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
@@ -50,7 +51,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/hashicorp/go-reap"
 	"github.com/spf13/pflag"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -65,12 +65,14 @@ var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
 	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
-	atunnelListenAddress       = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
-	workerCredentialBundle     = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
-	podIdentityTrustBundle     = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
-	atunnelClientIdentity      = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
-	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
-	egressGatewayTrustBundle   = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+	atunnelListenAddress        = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	atunnelConnectListenAddress = pflag.String("atunnel-connect-listen-address", "0.0.0.0:8443", "Address for actor ingress mTLS CONNECT")
+	workerCredentialBundle      = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
+	podIdentityTrustBundle      = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
+	atunnelClientIdentity       = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelEgressListenAddress  = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	egressGatewayTrustBundle    = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+	readinessListenAddress      = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -78,7 +80,8 @@ var (
 	otlpRelaySocket = pflag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	reapLock sync.RWMutex
+	// reaper collects children orphaned in the pod PID namespace.
+	reaper = childreap.New()
 )
 
 // actorHTTPUpstream is the in-sandbox HTTP endpoint atunnel proxies actor
@@ -172,11 +175,7 @@ func do(ctx context.Context) error {
 		slog.InfoContext(ctx, "GPU detected; enabling runsc nvproxy for all sandboxes")
 	}
 
-	// TODO: Consider whether we want to fork, so that we have an "init" process
-	// as PID 1 that does nothing but reap processes that get reparented to it.
-	// Then we won't have to mess about with locking the reaper while we do our
-	// own exec.Cmd calls.
-	go reap.ReapChildren(nil, nil, nil, &reapLock)
+	go reaper.Run(ctx)
 	slog.InfoContext(ctx, "Child process reaper launched")
 
 	// Clean up any old socket.
@@ -217,6 +216,7 @@ func do(ctx context.Context) error {
 	)
 	ateompb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
+	readiness := &serverboot.Readiness{}
 
 	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination
 	// grace period) and propagate it into the sandbox so the actor can save its
@@ -226,12 +226,15 @@ func do(ctx context.Context) error {
 	go func() {
 		sig := <-sigCh
 		slog.InfoContext(ctx, "Received signal; beginning graceful shutdown", slog.String("signal", sig.String()))
+		readiness.MarkNotReady()
 		// Use a fresh context: the do() context is torn down on return, but the
 		// shutdown must outlive it until the sandbox has stopped.
 		ateomService.gracefulShutdown(context.Background())
 		// Stop the server gracefully. This blocks until all in-flight RPCs have completed.
 		svr.GracefulStop()
 	}()
+
+	go serverboot.StartReadinessServer(ctx, *readinessListenAddress, readiness)
 
 	if err := svr.Serve(lis); err != nil {
 		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
@@ -261,6 +264,16 @@ func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunn
 		}
 	}()
 	slog.InfoContext(ctx, "atunnel serving", slog.String("address", *atunnelListenAddress))
+	atunnelConnectListener, err := net.Listen("tcp", *atunnelConnectListenAddress)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while opening atunnel CONNECT listener: %w", err)
+	}
+	go func() {
+		if err := atunnelIngress.ServeConnect(ctx, atunnelConnectListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor CONNECT ingress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel CONNECT serving", slog.String("address", *atunnelConnectListenAddress))
 
 	atunnelEgress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
 	if err != nil {
@@ -377,7 +390,7 @@ type AteomService struct {
 	// The type makes a lock-free read possible; it does not make one happen.
 	// GetWorkloadStats must not take lock at all, including around the cgroup
 	// read it does with the value. TestGetWorkloadStatsDoesNotTakeLock pins that.
-	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+	activeActor atomic.Pointer[resources.ActorAttribution]
 
 	// shuttingDown is set once SIGTERM has been received. While true, new
 	// workload RPCs are rejected with codes.Unavailable.
@@ -594,13 +607,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
-	s.actorLogger.EmitLifecycleLog("Actor starting", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
 	// Retain the attribution before the boot rather than after it, so a sample
 	// taken against a workload that dies mid-boot is still attributable. The
 	// cleanup below drops it again if the boot fails outright.
-	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.activeActor.Store(&attribution)
 
 	// Contract with atelet:
@@ -623,9 +635,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -667,9 +680,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	// Create and start each application container, each with its own log pipe so
-	// every line is tagged with the originating container (ate.dev/container_name).
+	// every line is tagged with the originating container (ate.actor.container.name).
 	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName(), ac.GetName())
+		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
@@ -697,7 +710,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, err
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor started", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor started", attribution)
 	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 
 	return &ateompb.RunWorkloadResponse{}, nil
@@ -718,8 +731,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	}
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
-	s.actorLogger.EmitLifecycleLog("Actor checkpointing", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 
 	// Contract with atelet:
 	//
@@ -775,29 +788,13 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// reporting its usage is then the honest answer.
 	s.activeActor.Store(nil)
 
-	// After checkpointing the sandbox root, runsc may no longer have a usable
-	// control server for state/delete calls. Keep this as best-effort cleanup:
-	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
-	// directories after uploading the snapshot.
-	if err := rcmd.cleanupContainersAfterCheckpoint(ctx, req.GetSpec().GetContainers()); err != nil {
-		slog.WarnContext(ctx, "Failed to clean up runsc containers after checkpoint",
-			"actor", actorRef,
-			"actorUID", req.GetActorUid(),
-			"err", err)
-	}
-
-	// Detach the overlay rootfs mounts before atelet wipes the bundle dirs
-	// (deleting a bundle out from under a live mount in this namespace would
-	// leave the mount orphaned until the pod restarts). Best-effort, same as
-	// the container cleanup above.
-	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
-		slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after checkpoint",
-			"actorUID", req.GetActorUid(),
-			"err", err)
-	}
-
-	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
-		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
+	// Cleanup the containers after checkpointing.
+	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
+	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
+			slog.String("actor", attribution.Ref.String()),
+			slog.String("actorUID", attribution.UID),
+			slog.Any("err", err))
 	}
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
@@ -807,7 +804,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointed", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 	s.activeSession = nil
 
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
@@ -830,7 +827,16 @@ func listSnapshotFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers []*ateompb.Container) error {
+func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Container) {
+	for _, ctr := range containers {
+		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
+		_ = r.cmdWait(ctx, ctr.GetName())
+	}
+	_ = r.cmdKill(ctx, "pause", "SIGKILL")
+	_ = r.cmdWait(ctx, "pause")
+}
+
+func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
 	// Check state of all containers to mimic containerd.
 	//
 	// Without this, `runsc delete` occasionally throws an error.
@@ -872,11 +878,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 
-	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
-	s.actorLogger.EmitLifecycleLog("Actor restoring", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
 	// Same as RunWorkload: retain before the boot, drop again if it fails.
-	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.activeActor.Store(&attribution)
 
 	// Contract with atelet:
@@ -899,9 +904,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		path:           req.GetRunscPath(),
+		actorUID:       req.GetActorUid(),
+		size:           sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		durableVolumes: durableVolumeNames(req.GetSpec()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -956,9 +962,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	// Create and restore each application container, each with its own log pipe so
-	// every line is tagged with the originating container (ate.dev/container_name).
+	// every line is tagged with the originating container (ate.actor.container.name).
 	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName(), ac.GetName())
+		pw, err := s.actorLogger.StartJSONLogPipe(attribution, ac.GetName())
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
@@ -999,7 +1005,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor restored", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 
 	return &ateompb.RestoreWorkloadResponse{}, nil
@@ -1049,6 +1055,59 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 		return nil, fmt.Errorf("while configuring actor egress client: %w", err)
 	}
 	return &actorEgress{client: gatewayClient, certificateSource: certificateSource, expiresAt: expiresAt}, nil
+}
+
+func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	s.activeActor.Store(nil)
+
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+
+	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetSpec().GetContainers()); err != nil {
+		return nil, fmt.Errorf("failed to terminate workload: %w", err)
+	}
+
+	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
+	s.activeSession = nil
+
+	return &ateompb.TerminateWorkloadResponse{}, nil
+}
+
+func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, containers []*ateompb.Container) error {
+	var errs []error
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
+	}
+
+	rcmd := &runsc{
+		path:     runscPath,
+		actorUID: actorUID,
+	}
+
+	// Stop the containers before deleting them, to avoid leaving a live container with no bundle on disk. Best-effort: if the containers are already stopped, the delete will succeed anyway.
+	rcmd.stopContainers(ctx, containers)
+	// Keep this as best-effort cleanup:
+	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
+	// directories after uploading the snapshot.
+	if err := rcmd.cleanupContainers(ctx, containers); err != nil {
+		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
+	}
+
+	// Detach the overlay rootfs mounts before atelet wipes the bundle dirs
+	// (deleting a bundle out from under a live mount in this namespace would
+	// leave the mount orphaned until the pod restarts). Best-effort, same as
+	// the container cleanup above.
+	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+		errs = append(errs, fmt.Errorf("while unmounting bundle rootfs overlays: %w", err))
+	}
+
+	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
+		errs = append(errs, fmt.Errorf("while cleaning up actor network: %w", err))
+	}
+
+	return errors.Join(errs...)
 }
 
 func (s *AteomService) activateActorNetworking(atespace, actorName string, egress *actorEgress) error {

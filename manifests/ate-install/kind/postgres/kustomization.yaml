@@ -1,0 +1,48 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../postgres.yaml
+
+# The base sizes the database for a real install under activation load. On a
+# kind node -- 4 vCPU and a small disk on a GitHub runner -- that would crowd
+# out everything else, so restore the small test-database footprint.
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: postgres
+              resources:
+                requests:
+                  cpu: 250m
+                limits:
+                  cpu: "2"
+  - target:
+      kind: StatefulSet
+      name: postgres
+      namespace: ate-system
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 1Gi

@@ -12,30 +12,74 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Each test runs `runner.py -f <file> -t <duration> -u <users> --name <name>`
-# with --tag set to the build commit hash and --dest set from the orchestrator's
-# --dest flag. The orchestrator deploys + tears down substrate + workloads
-# around each test so runs don't pollute each other.
+# The orchestrator deploys + tears down substrate + workloads around each
+# test so runs don't pollute each other.
 #
+# Fields shared by every entry:
+#
+#   type           Required. Selects the runner: "locust" | "nighthawk-ingress".
+#                  Each type's own fields are described in its section.
+#   targetCluster  Required. Names a config file under
+#                  /etc/orchestrator/target-clusters/ (e.g. `targetCluster:
+#                  dev` -> /etc/orchestrator/target-clusters/dev.sh). The
+#                  orchestrator copies that file into the cloned repo as
+#                  .ate-dev-env.sh before the test runs and deletes it
+#                  after, so different tests can target different clusters
+#                  / projects from one CronJob run.
+#   sandboxClass   Optional (default "gvisor"). Sandbox runtime for the
+#                  benchmark WorkerPool: "gvisor" | "microvm".
+#   workerCount    Optional (default 1). WorkerPool replica count for the
+#                  deploy that runs before this test. The orchestrator
+#                  redeploys workloads between tests, so each test can
+#                  pick its own scale.
+#   actorMemory    Optional (default "256Mi", the smallest size microvm
+#                  admits). Memory limit on the benchmark ActorTemplates;
+#                  raise it for suites that exercise glutton's WriteRAM path.
+#   workerWaitTimeout
+#                  Optional (default "300s", set by workloads/deploy.sh).
+#                  Go duration for the wait after the WorkerPool deploy for
+#                  the ateom worker pods to become ready. Raise it for
+#                  large workerCount fleets whose image pulls or scheduling
+#                  outrun the default.
+#   ateArgs        Optional. List of strings appended verbatim to
+#                  `hack/install-ate.sh --deploy-ate-system` when this
+#                  test's substrate is deployed (e.g. ["--atenet-router=agentgateway"]
+#                  or ["--experimental-use-sdsmint"]).
+#
+# ---- type: locust -----------------------------------------------------------
+#
+# Runs `runner.py -f <file> -t <duration> -u <users> --name <name>` in a
+# Job, with --tag set to the build commit hash and --dest from the
+# orchestrator's --dest flag. `file`, `duration` and `users` are required.
 # Optional `flags` is a list of arbitrary strings appended to runner.py's
 # argv; runner.py forwards them to locust verbatim.
 #
-# Optional `workerCount` (default 1) sets the WorkerPool replica count for
-# the deploy that runs before this test. The orchestrator redeploys
-# workloads between tests, so each test can pick its own scale.
+# `file` is one path, or a comma-separated list of paths that locust reads as
+# one test. Give the test first, then each load shape. A shape changes the
+# load while the run continues; the shapes are in benchmarking/locust/shapes/.
 #
-# Optional `sandboxClass` (default "gvisor") picks the sandbox runtime for
-# the benchmark WorkerPool. Allowed values: "gvisor" | "microvm".
+# `--ladder users:duration[:trace_probability],...` with
+# shapes/ladder_shape.py in `file` makes a sweep one run. The shape owns the
+# load and the end of the run, thus locust ignores `-t` and `users` is the
+# count before the first tick only. Keep `duration` at the total of the steps:
+# the orchestrator sizes the Job timeout from it.
 #
-# Required `targetCluster` names a config file under
-# /etc/orchestrator/target-clusters/ (e.g. `targetCluster: dev` ->
-# /etc/orchestrator/target-clusters/dev.sh). The orchestrator copies that
-# file into the cloned repo as .ate-dev-env.sh before the test runs and
-# deletes it after, so different tests can target different clusters /
-# projects from one CronJob run.
+# A step of the ladder that gives a trace probability changes the sample rate
+# when the step starts, and the new rate stays until another step changes it.
+# `--trace-probability` in `flags` is the rate before the first such step.
+# Thus a ladder with no probability in any step keeps the rate of the flag.
+#
+# ---- type: nighthawk-ingress --------------------------------------------------------
+#
+# Runs the Nighthawk adaptive router-capacity benchmark. `duration` is the
+# job-wait budget only; the test knobs live in a `nighthawk-ingress:` block — see
+# the "Configuration knobs" table in benchmarking/nighthawk-ingress/README.md.
+# `workerCount` is required: the benchmark warms one actor per worker, so
+# it is also the actor fleet size.
 
 tests:
   - name: glutton_baseline_1_user
+    type: locust
     description: "Glutton baseline: 1 concurrent user for 1 minute"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -47,7 +91,91 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  # Large-memory variants: same load shape as the 1-user baseline, but the
+  # GluttonUser fills the actor's RAM to --mem-target through the
+  # glutton WriteRAM API before the first suspend, so every suspend/resume
+  # cycle is measured against a realistically-sized actor. actorMemory =
+  # target + headroom (glutton itself, the guest, and on microvm the 128Mi
+  # VMM reserve). The golden snapshot and cold boot stay small: the working
+  # set exists from the first fill onward. --mem-churn re-randomizes 64Mi in
+  # place each cycle, so repeated suspends snapshot changing memory rather
+  # than a static set.
+  - name: glutton_mem_1gi_gvisor
+    type: locust
+    description: "Large-memory: 1Gi resident working set, gvisor"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    actorMemory: "1536Mi"
+    flags:
+      - "--mem-target"
+      - "1Gi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_mem_1gi_microvm
+    type: locust
+    description: "Large-memory: 1Gi resident working set, microvm"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    sandboxClass: microvm
+    actorMemory: "1536Mi"
+    flags:
+      - "--mem-target"
+      - "1Gi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_mem_2gi_gvisor
+    type: locust
+    description: "Large-memory: 2Gi resident working set, gvisor"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    actorMemory: "2560Mi"
+    flags:
+      - "--mem-target"
+      - "2Gi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_mem_2gi_microvm
+    type: locust
+    description: "Large-memory: 2Gi resident working set, microvm"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    sandboxClass: microvm
+    actorMemory: "2560Mi"
+    flags:
+      - "--mem-target"
+      - "2Gi"
+      - "--mem-churn"
+      - "64Mi"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
   - name: glutton_baseline_5_users
+    type: locust
     description: "Glutton baseline: 5 concurrent users for 1 minute"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -60,6 +188,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: glutton_baseline_10_users
+    type: locust
     description: "Glutton baseline: 10 concurrent users for 1 minute (doubles the number of workers/node)"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -72,6 +201,7 @@ tests:
       - "--max-wait-time"
       - "1.0"
   - name: glutton_oversubscribe_15_users
+    type: locust
     description: "Glutton baseline: 15 concurrent users for 2 minutes (50% oversubscribed)"
     targetCluster: dev
     file: /app/tests/glutton.py
@@ -83,3 +213,228 @@ tests:
       - "0.5"
       - "--max-wait-time"
       - "1.0"
+  # The observability ladder of benchmarking/observability.md. Each entry
+  # runs on glutton, and thus on boomer: Python and gRPC hold each other at
+  # a high number of users, which would make the latency of the load
+  # generator part of the measurement.
+  - name: observability_s0_idle_floor
+    type: locust
+    description: "Observability S0: the telemetry of an idle control plane, 5 minutes"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 5m
+    users: 0
+    workerCount: 10
+    flags:
+      # The floor sends no request, thus locust writes no measurement row and
+      # the result of the run is in the telemetry counts only.
+      - "--allow-empty-stats"
+      - "--ladder"
+      - "0:5m"
+      - "--trace-probability"
+      - "0.1"
+  - name: observability_s1_user_sweep
+    type: locust
+    description: "Observability S1: user sweep 5 -> 10 -> 15, 3 minutes for each step"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 9m
+    users: 5
+    workerCount: 10
+    flags:
+      - "--ladder"
+      - "5:3m,10:3m,15:3m"
+      - "--trace-probability"
+      - "0.1"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: observability_s2_sample_rate_sweep
+    type: locust
+    description: "Observability S2: sample rate 0 -> 0.1 -> 1.0 at 10 users, 3 minutes for each step"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 9m
+    users: 10
+    workerCount: 10
+    flags:
+      - "--ladder"
+      - "10:3m:0,10:3m:0.1,10:3m:1.0"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: observability_s3_soak
+    type: locust
+    description: "Observability S3: 12 users for 10 minutes, 80% of the S1 maximum"
+    targetCluster: dev
+    file: /app/tests/glutton.py,/app/shapes/ladder_shape.py
+    duration: 10m
+    users: 12
+    workerCount: 10
+    flags:
+      - "--ladder"
+      - "12:10m"
+      - "--trace-probability"
+      - "0.1"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_data_baseline
+    type: locust
+    description: "DurDir data baseline: 1 concurrent user, 8 MiB file, explicit resume"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_full_baseline
+    type: locust
+    description: "DurDir full baseline: 1 concurrent user, 8 MiB file, full memory restore comparison"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-full"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_implicit_resume
+    type: locust
+    description: "DurDir implicit resume: 1 concurrent user, 8 MiB file, traffic-triggered resume"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "implicit"
+      - "--durdir-file-size-bytes"
+      - "8388608"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_size_5mb
+    type: locust
+    description: "DurDir file size sweep (5 MiB): 1 concurrent user, digest read mode"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-read-mode"
+      - "digest"
+      - "--durdir-file-size-bytes"
+      - "5242880"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_size_10mb
+    type: locust
+    description: "DurDir file size sweep (10 MiB): 1 concurrent user, digest read mode"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-read-mode"
+      - "digest"
+      - "--durdir-file-size-bytes"
+      - "10485760"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: durdir_size_64mb
+    type: locust
+    description: "DurDir file size sweep (64 MiB): 1 concurrent user, digest read mode"
+    targetCluster: dev
+    file: /app/tests/durdir.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--durdir-template"
+      - "glutton-durdir-data"
+      - "--resume-mode"
+      - "explicit"
+      - "--durdir-read-mode"
+      - "digest"
+      - "--durdir-file-size-bytes"
+      - "67108864"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: ingress_routercap_envoy_2cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 2 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 2
+      tailLatencySloMs: 25
+  - name: ingress_routercap_envoy_4cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 4 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 4
+      tailLatencySloMs: 25
+  - name: ingress_routercap_envoy_8cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 8 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 8
+      tailLatencySloMs: 25
+  - name: ingress_routercap_envoy_16cpu
+    description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 16 CPUs"
+    type: nighthawk-ingress
+    targetCluster: dev
+    duration: 30m
+    workerCount: 50
+    nighthawk-ingress:
+      envoyCpu: 16
+      tailLatencySloMs: 25

@@ -21,10 +21,12 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/sizing"
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -138,39 +140,67 @@ func TestResolveGuestMemMiB(t *testing.T) {
 	}
 }
 
-// guestSize translates an actor's declared limits to effective in-guest limits:
-// CPU is preserved while memory is reduced by the VMM reserve.
-func TestGuestSize(t *testing.T) {
-	const (
-		mib     = 1024 * 1024
-		reserve = 256
-	)
-	s := &AteomService{memReserveMiB: reserve}
+func TestInitParams(t *testing.T) {
+	// The agent path must be the one the kata guest image actually ships, since the
+	// kernel silently panics on an init= that does not exist.
+	if got := initParams(true); got != "init=/usr/bin/kata-agent" {
+		t.Errorf("initParams(true) = %q", got)
+	}
+	// Without the agent as PID 1, systemd needs kata's target — it powers the guest
+	// off within seconds otherwise — and networkd must stay masked, the agent owns eth0.
+	systemd := initParams(false)
+	for _, want := range []string{
+		"systemd.unit=kata-containers.target",
+		"systemd.mask=systemd-networkd.service",
+		"systemd.mask=systemd-networkd.socket",
+	} {
+		if !strings.Contains(systemd, want) {
+			t.Errorf("initParams(false) = %q, missing %q", systemd, want)
+		}
+	}
+	if strings.Contains(systemd, "init=") {
+		t.Errorf("initParams(false) = %q, must not override init", systemd)
+	}
+}
 
-	// Declared memory limit is reduced by reserve.
-	got, err := s.guestSize(sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: 1024 * mib})
-	want := sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: (1024 - reserve) * mib}
-	if err != nil {
-		t.Fatalf("guestSize(1024MiB) unexpected error: %v", err)
+// The guest must log over virtio-console, not the emulated UART: the UART traps to
+// the VMM per byte, which costs ~800ms of cold boot on the kata guest's boot log.
+// Debug mode adds the UART back (with earlycon) to capture the early messages hvc0
+// is too late to see.
+func TestBuildVMConfigConsole(t *testing.T) {
+	const id = "actor-1"
+	consoleLog := kata.ConsoleLogPath(id)
+
+	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, false)
+	if cfg.Console == nil || cfg.Console.Mode != "File" || cfg.Console.File != consoleLog {
+		t.Errorf("Console = %+v, want File %q", cfg.Console, consoleLog)
 	}
-	if got != want {
-		t.Errorf("guestSize(1024MiB) = %+v, want %+v", got, want)
+	if cfg.Serial == nil || cfg.Serial.Mode != "Off" {
+		t.Errorf("Serial = %+v, want mode Off", cfg.Serial)
+	}
+	if !strings.Contains(cfg.Payload.Cmdline, "console=hvc0") {
+		t.Errorf("cmdline = %q, want console=hvc0", cfg.Payload.Cmdline)
+	}
+	if strings.Contains(cfg.Payload.Cmdline, "earlycon") {
+		t.Errorf("cmdline = %q, must not pay for earlycon outside debug mode", cfg.Payload.Cmdline)
 	}
 
-	// Unset memory (0) is left unset.
-	gotUnset, err := s.guestSize(sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0})
-	wantUnset := sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0}
-	if err != nil {
-		t.Fatalf("guestSize(unset) unexpected error: %v", err)
+	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, true)
+	if dbg.Serial == nil || dbg.Serial.Mode != "File" || dbg.Serial.File != kata.SerialLogPath(id) {
+		t.Errorf("debug Serial = %+v, want File %q", dbg.Serial, kata.SerialLogPath(id))
 	}
-	if gotUnset != wantUnset {
-		t.Errorf("guestSize(unset) = %+v, want %+v", gotUnset, wantUnset)
+	if !strings.Contains(dbg.Payload.Cmdline, "earlycon=") {
+		t.Errorf("debug cmdline = %q, want an earlycon", dbg.Payload.Cmdline)
 	}
+}
 
-	// A limit the reserve leaves too small to boot errors rather than returning
-	// the unreduced size, which would leave the cgroup limit above the VM's RAM.
-	tooSmall := sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: (reserve + 1) * mib}
-	if gotErr, err := s.guestSize(tooSmall); err == nil {
-		t.Errorf("guestSize(%dMiB) = %+v, nil; want an error", reserve+1, gotErr)
+// The SIGTERM path signals these ids over ttrpc, and the agent rejects an id it
+// does not know with InvalidContainerId — which aborts the whole graceful
+// shutdown, so a stale id here silently costs the guest its clean exit.
+func TestWorkloadIDs(t *testing.T) {
+	ctrs := []actorContainer{{name: "counter"}, {name: "sidecar"}}
+	got := workloadIDs(ctrs)
+	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
+		t.Errorf("workloadIDs() = %v, want %v", got, want)
 	}
 }

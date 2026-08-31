@@ -1,0 +1,79 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The gRPC Actor the ingress suite reaches through atenet-router, running the
+# same `testserver grpc` echo origin the egress suite deploys as a plain pod.
+# One binary for both directions, so what counts as a working RPC cannot differ
+# between them.
+#
+# Rendered by e2e.RenderFixtureManifest, which fills the ${...} placeholders for
+# the sandbox class under test: one manifest serves both runtimes so the gVisor
+# and micro-VM variants cannot drift apart. A placeholder that has no value for
+# the selected class takes its whole line with it.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-e2e-grpcecho${FIXTURE_SUFFIX}
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: grpcecho
+  namespace: ate-e2e-grpcecho${FIXTURE_SUFFIX}
+  labels:
+    workload: grpcecho${FIXTURE_SUFFIX}
+spec:
+  # One worker for the template's golden snapshot, plus headroom for the actors
+  # the suite resumes.
+  replicas: 2
+  workerImage: ${ATEOM_IMAGE}
+${WORKERPOOL_RUNTIME}
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: grpcecho
+  namespace: ate-e2e-grpcecho${FIXTURE_SUFFIX}
+spec:
+${TEMPLATE_SANDBOX_CLASS}
+  containers:
+  - name: grpcecho
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
+    command: ["/ko-app/testserver"]
+    # gRPC on the Actor's primary port, so the ingress test reaches it at the
+    # Actor's DNS name with no CONNECT and no port juggling -- the plain path
+    # every other ingress assertion in the suite uses.
+    args:
+    - "grpc"
+    - "--listen=:80"
+    - "--health-listen=:8080"
+    # readyz is an HTTP GET and nothing else, and a gRPC server answers one with
+    # a protocol error -- hence the fixture's second, HTTP-only port. Probing :80
+    # here would leave the Actor stuck out of PhaseReady forever.
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 8080
+      timeoutSeconds: 60
+${TEMPLATE_RESOURCES}
+  workerSelector:
+    matchLabels:
+      workload: grpcecho${FIXTURE_SUFFIX}
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/ate-e2e-grpcecho${FIXTURE_SUFFIX}/

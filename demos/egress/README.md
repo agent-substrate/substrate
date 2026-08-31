@@ -53,7 +53,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 ## Components
 
 - **Egress app (`main.go`)** — the Actor: `POST /` with `{"url":"..."}` → fetches it → returns
-  status + body.
+  status + body. It also serves `POST /grpc`, described below.
 - **Egress gateway** — `manifests/ate-install/atenet-egress.yaml`. One pod, two containers:
   an Envoy (`envoy`) and the atenet router ext_proc (`ext-proc`, `--mode=egress`), called over
   localhost. In egress mode the router serves the egress ext_proc handler only — no xDS server,
@@ -107,7 +107,7 @@ TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterI
 # 2. Create and resume an Actor.
 kubectl ate create atespace demo
 kubectl ate create actor egress-demo -a demo --template ate-demo-egress/egress
-kubectl ate resume actor egress-demo -a demo   # wait for STATUS_RUNNING
+kubectl ate resume actor egress-demo -a demo   # wait for ACTOR_STATE_RUNNING
 
 # 3. Drive the Actor's egress through the ingress gateway.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
@@ -131,6 +131,40 @@ kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress id
 
 The `whoami` body shows `RemoteAddr: <atenet-egress pod IP>` — proof the request egressed
 *through* the gateway rather than directly.
+
+## gRPC over the same tunnel
+
+`POST /grpc` with `{"target":"<ip>:<port>","message":"hello","streamCount":2,"bidiCount":2}` makes
+the Actor dial that address as a cleartext-HTTP/2 gRPC server and return what came back:
+
+```json
+{
+  "message": "hello",
+  "stream": [{"message":"hello","index":0},{"message":"hello","index":1}],
+  "bidi":   [{"message":"hello-0","index":0},{"message":"hello-1","index":1}],
+  "code":   "OK"
+}
+```
+
+One RPC per streaming shape, because each fails differently over a network path:
+
+- **unary `Echo`** — always run. Its status arrives in trailers, *after* the response body, which
+  is what `code` reports and what a path that dropped trailers or downgraded to HTTP/1.1 could not
+  produce.
+- **server-streaming `EchoStream`** — when `streamCount` is positive. Many frames over one
+  held-open connection.
+- **bidirectional `EchoBidi`** — when `bidiCount` is positive. The Actor sends each message only
+  after reading the response to the previous one, then half-closes the request direction while the
+  response direction is still open. A path that serialized the two directions hangs here rather
+  than answering short.
+
+The gateway terminates the `CONNECT` and relays opaque TCP, so all of this crosses it untouched. A
+failed RPC answers `502` and still carries its gRPC code in the same field.
+
+`internal/e2e/suites/networking` drives this endpoint against the `testserver` fixture's `grpc`
+subcommand (`internal/e2e/fixtures/testserver`, deployed by `e2e.DeployServerPod` from the shared
+server-pod manifest) in `TestActorEgressGRPC`; the same fixture, or any h2c gRPC server reachable
+from the cluster, works for a manual run.
 
 ## Notes / limitations
 

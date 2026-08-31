@@ -55,19 +55,12 @@ KO_DOCKER_REPO="${KO_DOCKER_REPO:-}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
-ATE_ATEAPI_CLIENT_AUTH="${ATE_ATEAPI_CLIENT_AUTH:-cert}"
-
+# --substrate deploys the substrate-resource variant of the demo: the
+# ActorTemplate is created through the ate API instead of applied as a CRD.
+SUBSTRATE="false"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --ateapi-client-auth=*) ATE_ATEAPI_CLIENT_AUTH="${1#*=}" ;;
-    --ateapi-client-auth)
-      if [[ $# -lt 2 ]]; then
-        echo "Error: --ateapi-client-auth requires cert or token" >&2
-        exit 1
-      fi
-      shift
-      ATE_ATEAPI_CLIENT_AUTH="$1"
-      ;;
+    --substrate) SUBSTRATE="true" ;;
     *)
       echo "Error: unknown argument $1" >&2
       exit 1
@@ -75,14 +68,6 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-
-case "${ATE_ATEAPI_CLIENT_AUTH}" in
-  cert|token) ;;
-  *)
-    echo "Error: --ateapi-client-auth must be cert or token, got '${ATE_ATEAPI_CLIENT_AUTH}'" >&2
-    exit 1
-    ;;
-esac
 
 if [[ -z "${KO_DOCKER_REPO}" ]]; then
   echo "Error: KO_DOCKER_REPO is required (set it in .ate-dev-env.sh for GKE," >&2
@@ -102,10 +87,10 @@ log() {
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth="${ATE_ATEAPI_CLIENT_AUTH}"
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system --ateapi-client-auth="${ATE_ATEAPI_CLIENT_AUTH}"
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system
 fi
 
 # --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
@@ -113,9 +98,47 @@ fi
 # the arm64 virtiofsd sha at deploy (see that script for details). Ordering
 # matters: the control plane must be up so the SandboxConfig CRD exists.
 log "Installing micro-VM dependencies..."
-hack/install-microvm-deps.sh --install
+KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-microvm-deps.sh --install
 
 # --- 3. apply the demo ------------------------------------------------------
+KCTX_FLAG=""
+if [[ -n "${KUBECTL_CONTEXT}" ]]; then
+  KCTX_FLAG=" --context=${KUBECTL_CONTEXT}"
+fi
+
+if [[ "${SUBSTRATE}" == "true" ]]; then
+  # The substrate demo handler applies the worker pool, creates the atespace
+  # and the ActorTemplate through the ate API, and waits for the golden
+  # snapshot; dispatch through install-ate.sh like step 1.
+  log "Deploying the counter-substrate-microvm demo (--deploy-demo-counter-substrate-microvm)..."
+  if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
+    KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-demo-counter-substrate-microvm
+  else
+    KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-demo-counter-substrate-microvm
+  fi
+
+  log "Demo applied. Next steps:"
+  cat <<EOF
+
+  1. Inspect the actor template (its golden snapshot is already Ready):
+       kubectl ate${KCTX_FLAG} get actor-templates -a ate-demo-counter-substrate-microvm
+
+  2. Create an actor in the template's atespace (kubectl-ate; install with: go install ./cmd/kubectl-ate):
+       kubectl ate${KCTX_FLAG} create actor my-counter-1 -a ate-demo-counter-substrate-microvm \\
+         --template-ref counter-microvm
+
+  3. Port-forward the atenet-router and curl the in-RAM counter:
+       kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
+       curl -X POST \\
+         -H "Host: my-counter-1.ate-demo-counter-substrate-microvm.actors.resources.substrate.ate.dev" \\
+         http://localhost:8000
+
+     Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-substrate-microvm),
+     resume on another worker, and confirm the count continues — the guest memory snapshot round-tripped.
+EOF
+  exit 0
+fi
+
 # Use ./hack/run-tool.sh ko so ko honors KO_DOCKER_REPO (the committed .ko.yaml base
 # is used as-is — no override). Only ko apply/create/delete/run accept args after
 # `--`; thread --context there (mirrors the run_ko helper in hack/install-ate.sh).
@@ -125,10 +148,6 @@ sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
   | ./hack/run-tool.sh ko apply -f - ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
 
 # --- 4. next steps ----------------------------------------------------------
-KCTX_FLAG=""
-if [[ -n "${KUBECTL_CONTEXT}" ]]; then
-  KCTX_FLAG=" --context=${KUBECTL_CONTEXT}"
-fi
 log "Demo applied. Next steps:"
 cat <<EOF
 

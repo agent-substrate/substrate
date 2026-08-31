@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,24 +35,38 @@ import (
 
 const networkingAtespace = "networking-e2e"
 
-// actorTemplate identifies a demo ActorTemplate to build test Actors from,
-// along with the hack/install-ate.sh flag that deploys it.
-type actorTemplate struct {
-	namespace string
-	name      string
-	// deployFlag names the install flag that creates the template, so a
-	// missing fixture reports how to fix it rather than just failing.
-	deployFlag string
+// egressFixture returns the egress demo the egress tests build their actors
+// from, for the sandbox class under test and the egress gateway variant
+// deployed.
+//
+// Deploy the one matching the lane:
+//
+//	hack/install-ate-kind.sh --deploy-demo-egress                     # passthrough, gVisor
+//	hack/install-ate-kind.sh --deploy-demo-egress-microvm             # passthrough, micro-VM
+//	hack/install-ate-kind.sh --deploy-demo-egress-mitm                # sdsmint, gVisor
+//	hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm        # sdsmint, micro-VM
+func egressFixture() e2e.Fixture {
+	// E2E_EGRESS_MITM selects the egress gateway variant.
+	if os.Getenv("E2E_EGRESS_MITM") == "" {
+		return e2e.EgressFixture()
+	}
+	if e2e.IsMicroVM() {
+		return e2e.Fixture{
+			Namespace:  "ate-demo-egress-microvm-mitm",
+			Name:       "egress-microvm-mitm",
+			DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress-microvm-mitm",
+		}
+	}
+	return e2e.Fixture{
+		Namespace:  "ate-demo-egress-mitm",
+		Name:       "egress-mitm",
+		DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress-mitm",
+	}
 }
-
-var (
-	counterTemplate = actorTemplate{namespace: "ate-demo-counter", name: "counter", deployFlag: "--deploy-demo-counter"}
-	egressTemplate  = actorTemplate{namespace: "ate-demo-egress", name: "egress", deployFlag: "--deploy-demo-egress"}
-)
 
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
-	actorName, actor := createAndResumeActor(t, ctx, "direct", counterTemplate)
+	actorName, actor := createAndResumeSubstrateActor(t, ctx, "direct", e2e.SubstrateCounterFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -74,7 +90,7 @@ func TestActorDirectAccess(t *testing.T) {
 // asserts the gateway is deployed and that it did not reject the Actor.
 func TestActorEgress(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "egress", egressTemplate)
+	actorName, _ := createAndResumeActor(t, ctx, "egress", egressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -93,7 +109,7 @@ func TestActorEgress(t *testing.T) {
 // between the Actor and the origin.
 func TestActorEgressHTTPS(t *testing.T) {
 	ctx := context.Background()
-	actorName, _ := createAndResumeActor(t, ctx, "egress-https", egressTemplate)
+	actorName, _ := createAndResumeActor(t, ctx, "egress-https", egressFixture())
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -111,23 +127,84 @@ func TestActorEgressHTTPS(t *testing.T) {
 	assertEgressGatewayConnect(t, ctx, since, actorName, "443")
 }
 
+// httpTarget is the origin TestActorEgressNonStandardPort dials: a plain HTTP
+// server on a port that is neither 80 nor 443. testserver's http subcommand
+// serves nothing but /healthz, which is all this target is dialed for.
+var httpTarget = e2e.ServerPod{
+	Name:       "httptarget",
+	ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+	Args:       []string{"http"},
+	Port:       8080,
+}
+
+// TestActorEgressNonStandardPort covers plaintext HTTP/1.1 egress to a port
+// that is neither 80 nor 443, the shape most in-cluster services actually take.
+//
+// The port is worth its own test because nothing in the egress path holds it as
+// a constant or derives it from the scheme: it is the Actor's own TCP
+// destination port, recovered from SO_ORIGINAL_DST by TCPOriginalDestination
+// after the prerouting REDIRECT that InstallActorNftablesRules adds inside the
+// worker pod's netns, and then written verbatim into the CONNECT authority by
+// atunnel's Client.DialContext. The other two tests would still pass if that
+// port were defaulted from the scheme, because 80 and 443 are exactly what such
+// a default would produce.
+func TestActorEgressNonStandardPort(t *testing.T) {
+	ctx := context.Background()
+
+	// Stand the target up first: a fixture failure here should not leave a
+	// resumed Actor idling in the cluster waiting for a destination.
+	target := e2e.DeployServerPod(t, ctx, httpTarget)
+
+	actorName, _ := createAndResumeActor(t, ctx, "egress-port", egressFixture())
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+
+	// Address() is the ClusterIP literal, not the Service's DNS name: the
+	// authority atunnel sends is always an address, so the name would add
+	// nothing but a dependency on the sandbox's DNS-over-UDP masquerade path --
+	// turning a DNS failure into something that reads as an egress-port
+	// failure. kube-proxy's service DNAT happens later, in the host netns, so
+	// <ClusterIP>:8080 is what SO_ORIGINAL_DST returns and what has to reach
+	// the gateway.
+	url := fmt.Sprintf("http://%s/healthz", target.Address())
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	status, body := fetchThroughEgressActor(t, ctx, router, actorRef, url)
+	if status != http.StatusOK {
+		t.Fatalf("Actor egress fetch of %s returned HTTP %d, want 200; body: %s", url, status, body)
+	}
+	t.Logf("Actor egress fetch of %s succeeded", url)
+
+	assertEgressGatewayConnect(t, ctx, since, actorName, strconv.Itoa(httpTarget.Port))
+}
+
 // fetchThroughEgressActor asks the egress demo Actor to fetch url and returns
-// the status and body it echoes back. Retries a non-200 response for up to
-// 30s: ResumeActor can return before its route reaches atenet-router's xDS
-// snapshot, and a request sent in that window sees a transient 503.
+// the status and body it echoes back.
 func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string) (int, []byte) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]string{"url": url})
 	if err != nil {
 		t.Fatalf("marshaling the fetch request for %s: %v", url, err)
 	}
+	return postThroughEgressActor(t, ctx, router, actorRef, "/", payload)
+}
+
+// postThroughEgressActor POSTs payload to path on the egress demo Actor and
+// returns the status and body it answered with. Retries a non-200 response for
+// up to 30s: ResumeActor can return before its route reaches atenet-router's
+// xDS snapshot, and a request sent in that window sees a transient 503. The
+// retry also rides out an origin that is reachable but not yet answering, which
+// the Actor reports as a 502.
+func postThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string, payload []byte) (int, []byte) {
+	t.Helper()
 
 	const timeout = 30 * time.Second
 	deadline := time.Now().Add(timeout)
 	for {
-		response, err := router.PostJSON(ctx, actorRef, "/", payload)
+		response, err := router.PostJSON(ctx, actorRef, path, payload)
 		if err != nil {
-			t.Fatalf("POST %s to egress Actor through ingress: %v", url, err)
+			t.Fatalf("POST %s to egress Actor through ingress: %v", path, err)
 		}
 		body, err := io.ReadAll(response.Body)
 		response.Body.Close()
@@ -137,7 +214,7 @@ func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.Rout
 		if response.StatusCode == http.StatusOK || time.Now().After(deadline) {
 			return response.StatusCode, body
 		}
-		t.Logf("fetch through egress Actor returned HTTP %d; retrying...", response.StatusCode)
+		t.Logf("POST %s through egress Actor returned HTTP %d; retrying... body: %s", path, response.StatusCode, body)
 		time.Sleep(1 * time.Second)
 	}
 }
@@ -231,7 +308,21 @@ func accessLogField(line, key string) (string, bool) {
 	return value, true
 }
 
-func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template actorTemplate) (string, *ateapipb.Actor) {
+func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture) (string, *ateapipb.Actor) {
+	t.Helper()
+	actor := &ateapipb.Actor{ActorTemplateNamespace: template.Namespace, ActorTemplateName: template.Name}
+	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith)
+}
+
+// createAndResumeSubstrateActor is createAndResumeActor for a substrate
+// ActorTemplate fixture, referenced by atespace/name instead of the CRD pair.
+func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture) (string, *ateapipb.Actor) {
+	t.Helper()
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
+	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith)
+}
+
+func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string) (string, *ateapipb.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
@@ -241,19 +332,16 @@ func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, temp
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: networkingAtespace}},
 	})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName},
-		ActorTemplateNamespace: template.namespace,
-		ActorTemplateName:      template.name,
-	}}); err != nil {
-		t.Fatalf("CreateActor from %s/%s: %v (deploy the fixture with %s)", template.namespace, template.name, err, template.deployFlag)
+	actor.Metadata = &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: actor}); err != nil {
+		t.Fatalf("CreateActor from %s: %v (deploy the fixture with %s)", source, err, deployWith)
 	}
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
 		_, _ = clients.SubstrateAPI.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actorRef})
 	})
 
-	resumeResponse, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef})
+	resumeResponse, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef})
 	if err != nil {
 		t.Fatalf("ResumeActor: %v", err)
 	}
@@ -303,7 +391,7 @@ func waitForRouteReady(t *testing.T, what string, request func() (*http.Response
 
 func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapipb.Actor) {
 	t.Helper()
-	if actor.GetWorkerAssignment().GetWorkerNamespace() == "" || actor.GetWorkerAssignment().GetWorkerPod() == "" {
+	if actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace() == "" || actor.GetStatus().GetWorkerAssignment().GetWorkerPod() == "" {
 		t.Fatalf("resumed Actor has no worker pod assignment: %+v", actor)
 	}
 
@@ -312,16 +400,16 @@ func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Cli
 	// verifies that the old direct path remains unavailable without relying on
 	// the test runner having a route to the pod CIDR.
 	result := clients.K8s.CoreV1().RESTClient().Get().
-		Namespace(actor.GetWorkerAssignment().GetWorkerNamespace()).
+		Namespace(actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()).
 		Resource("pods").
-		Name(actor.GetWorkerAssignment().GetWorkerPod() + ":80").
+		Name(actor.GetStatus().GetWorkerAssignment().GetWorkerPod() + ":80").
 		SubResource("proxy").
 		Suffix("readyz").
 		Do(ctx)
 	body, err := result.Raw()
 
 	if err == nil {
-		t.Fatalf("direct Actor access through %s/%s:80 unexpectedly succeeded; body: %s", actor.GetWorkerAssignment().GetWorkerNamespace(), actor.GetWorkerAssignment().GetWorkerPod(), body)
+		t.Fatalf("direct Actor access through %s/%s:80 unexpectedly succeeded; body: %s", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), body)
 	}
-	t.Logf("direct Actor access through %s/%s:80 was blocked as expected: %v", actor.GetWorkerAssignment().GetWorkerNamespace(), actor.GetWorkerAssignment().GetWorkerPod(), err)
+	t.Logf("direct Actor access through %s/%s:80 was blocked as expected: %v", actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace(), actor.GetStatus().GetWorkerAssignment().GetWorkerPod(), err)
 }

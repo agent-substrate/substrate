@@ -20,43 +20,9 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
-
-// With an identity dir, a read-only bind mount appears at IdentityMountPath.
-func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
-	spec := buildActorOCISpec(
-		"actor_uid",
-		[]string{"/app"},
-		[]string{"FOO=bar"},
-		map[string]string{"k": "v"},
-		"/run/netns/x",
-		"/host/actors/actor_uid/identity",
-		nil,
-		nil,
-	)
-	found := false
-	for _, m := range spec.Mounts {
-		if m.Destination != IdentityMountPath {
-			continue
-		}
-		found = true
-		if m.Source != "/host/actors/actor_uid/identity" {
-			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
-		}
-		if m.Type != "bind" {
-			t.Errorf("identity mount type = %q, want bind", m.Type)
-		}
-		if !slices.Contains(m.Options, "ro") {
-			t.Errorf("identity mount must be read-only, options=%v", m.Options)
-		}
-	}
-	if !found {
-		t.Fatalf("identity mount %q missing; mounts=%v", IdentityMountPath, spec.Mounts)
-	}
-}
 
 func TestResolveActorEnv(t *testing.T) {
 	defaultPath := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -192,54 +158,79 @@ func TestResolveProcessArgs(t *testing.T) {
 	}
 }
 
-// Without an identity dir (the pause container), no identity mount appears.
-func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("actor_uid", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil)
-	for _, m := range bare.Mounts {
-		if m.Destination == IdentityMountPath {
-			t.Errorf("identity mount must be absent when identityDir is empty")
-		}
-	}
+// wantDefaultCapabilities is the set a container gets when it asks for no
+// adjustment. It is spelled out rather than derived from defaultCapabilities so
+// that widening or narrowing the default is a deliberate test change.
+var wantDefaultCapabilities = []string{
+	"CAP_AUDIT_WRITE",
+	"CAP_KILL",
+	"CAP_NET_BIND_SERVICE",
 }
 
-// Each durable-dir volume mount becomes a bind mount whose source is the
-// per-actor on-host DurableDirVolumeMountPoint for that volume name.
-func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
-	const actorUID = "actor_uid"
-	durableDirs := []*ateletpb.VolumeMount{
-		{Name: "data", MountPath: "/var/data"},
-		{Name: "cache", MountPath: "/var/cache"},
+func withoutCaps(in []string, drop ...string) []string {
+	out := slices.Clone(in)
+	for _, d := range drop {
+		out = slices.DeleteFunc(out, func(c string) bool { return c == d })
 	}
-	volumes := []*ateletpb.Volume{
-		{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-		{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-	}
-	spec := buildActorOCISpec(
-		actorUID,
-		[]string{"/app"}, nil, nil,
-		"/run/netns/x",
-		"",
-		volumes,
-		durableDirs,
-	)
+	return out
+}
 
-	for _, vm := range durableDirs {
-		wantSrc := ateompath.DurableDirVolumeMountPoint(actorUID, vm.Name)
-		found := false
-		for _, m := range spec.Mounts {
-			if m.Destination != vm.MountPath {
-				continue
+func withCaps(in []string, add ...string) []string {
+	out := append(slices.Clone(in), add...)
+	slices.Sort(out)
+	return out
+}
+
+func TestResolveCapabilities(t *testing.T) {
+	tests := []struct {
+		name string
+		caps *ateletpb.Capabilities
+		want []string
+	}{{
+		name: "unset keeps the default set",
+		caps: nil,
+		want: wantDefaultCapabilities,
+	}, {
+		name: "empty keeps the default set",
+		caps: &ateletpb.Capabilities{},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "drop removes from the default set",
+		caps: &ateletpb.Capabilities{Drop: []string{"NET_BIND_SERVICE", "AUDIT_WRITE"}},
+		want: withoutCaps(wantDefaultCapabilities, "CAP_NET_BIND_SERVICE", "CAP_AUDIT_WRITE"),
+	}, {
+		name: "add grants on top of the default set",
+		caps: &ateletpb.Capabilities{Add: []string{"SYS_ADMIN"}},
+		want: withCaps(wantDefaultCapabilities, "CAP_SYS_ADMIN"),
+	}, {
+		name: "drop ALL clears the default set",
+		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}},
+		want: nil,
+	}, {
+		name: "drop ALL with add gives an exact set",
+		caps: &ateletpb.Capabilities{Drop: []string{"ALL"}, Add: []string{"NET_ADMIN", "CHOWN"}},
+		want: []string{"CAP_CHOWN", "CAP_NET_ADMIN"},
+	}, {
+		// Drop applies first, so naming a capability in both grants it.
+		name: "add wins over drop",
+		caps: &ateletpb.Capabilities{Drop: []string{"KILL"}, Add: []string{"KILL"}},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "adding a default capability does not duplicate it",
+		caps: &ateletpb.Capabilities{Add: []string{"KILL"}},
+		want: wantDefaultCapabilities,
+	}, {
+		name: "dropping a capability outside the default set is a no-op",
+		caps: &ateletpb.Capabilities{Drop: []string{"SYS_ADMIN"}},
+		want: wantDefaultCapabilities,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveCapabilities(tt.caps)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("resolveCapabilities() = %v, want %v", got, tt.want)
 			}
-			found = true
-			if m.Source != wantSrc {
-				t.Errorf("durable-dir %q source = %q, want %q", vm.Name, m.Source, wantSrc)
-			}
-			if m.Type != "bind" {
-				t.Errorf("durable-dir %q type = %q, want bind", vm.Name, m.Type)
-			}
-		}
-		if !found {
-			t.Fatalf("durable-dir mount for %q missing; mounts=%v", vm.MountPath, spec.Mounts)
-		}
+		})
 	}
 }

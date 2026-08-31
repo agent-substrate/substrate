@@ -173,7 +173,7 @@ func TestWorkerPoolReplicasUpdate(t *testing.T) {
 	})
 }
 
-// TestWorkerPoolImageUpdate verifies that changing spec.ateomImage on a
+// TestWorkerPoolImageUpdate verifies that changing spec.workerImage on a
 // WorkerPool propagates to the managed Deployment.
 func TestWorkerPoolImageUpdate(t *testing.T) {
 	t.Parallel()
@@ -190,7 +190,7 @@ func TestWorkerPoolImageUpdate(t *testing.T) {
 	})
 
 	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool image", func(current *atev1alpha1.WorkerPool) {
-		current.Spec.AteomImage = "ateom:v2"
+		current.Spec.WorkerImage = "ateom:v2"
 	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
@@ -424,13 +424,9 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
 	})
 
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
-		t.Fatalf("re-fetch WorkerPool: %v", err)
-	}
-	wp.Spec.Template.NodeSelector = map[string]string{"workload": "updated"}
-	if err := k8sClient.Update(ctx, wp); err != nil {
-		t.Fatalf("update WorkerPool template: %v", err)
-	}
+	updateWorkerPoolSpec(t, ctx, wp, "update WorkerPool template", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.NodeSelector = map[string]string{"workload": "updated"}
+	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
 		dep, err := getDeployment(ctx, wp)
@@ -573,8 +569,8 @@ func makeWorkerPool(name, ns string, replicas int32, image string) *atev1alpha1.
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:   replicas,
-			AteomImage: image,
+			Replicas:    replicas,
+			WorkerImage: image,
 		},
 	}
 }

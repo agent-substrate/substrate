@@ -25,8 +25,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -37,45 +37,56 @@ import (
 func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
-	var actorTemplate *atev1alpha1.ActorTemplate
+	var actorTemplate *ateapipb.ActorTemplate
 	var wireSnapshotScope string
+	// Set just before finalize; nil until then, so earlier exits label
+	// themselves from the record they hold.
+	var finalAttrs []attribute.KeyValue
 
 	defer func() {
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err,
-			lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)...)
+		attrs := finalAttrs
+		if attrs == nil {
+			attrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
+		}
+		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err, attrs...)
 	}()
 
-	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
+	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
-	defer lock.Close()
+	defer lease.Close()
 
-	actor, actorTemplate, err = w.loadActorForPause(lockCtx, actorRef)
+	actor, actorTemplate, err = w.loadActorForPause(leaseCtx, actorRef)
 	if err != nil {
 		return nil, err
 	}
-	if actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		// Fully paused already: FinalizePaused commits PAUSED and the cleared
 		// worker assignment in a single update, so there is nothing left to do.
+		// This success reports no pool, and cannot: the previous attempt
+		// released the worker, so the record names none (#957).
 		return actor, nil
 	}
 	var marked *ateapipb.Actor
-	if marked, err = w.ensureMarkedPausing(lockCtx, actorRef, actor); err != nil {
+	if marked, err = w.ensureMarkedPausing(leaseCtx, actorRef, actor); err != nil {
 		return nil, err
 	}
 	actor = marked
-	if wireSnapshotScope, err = w.ensureAteletPaused(lockCtx, actorRef, actor, actorTemplate); err != nil {
+	if wireSnapshotScope, err = w.ensureAteletPaused(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, err
 	}
 	// TODO: There is no difference between suspend and pause for now, but we
 	// could optimize pause by not detaching. We would need to make sure Resume
 	// is idempotent.
-	if err = w.ensureVolumesDetached(lockCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
+	if err = w.ensureVolumesDetached(leaseCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
 		return nil, err
 	}
+	// FinalizePaused clears the WorkerAssignment the labels read, so snapshot
+	// them here, as crash.go does for the crash counter.
+	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensurePausedFinalized(lockCtx, actorRef, actorTemplate); err != nil {
+	if finalized, err = w.ensurePausedFinalized(leaseCtx, actorRef, actorTemplate); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -83,7 +94,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 }
 
 // loadActorForPause fetches the current actor record and its template.
-func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *atev1alpha1.ActorTemplate, err error) {
+func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForPause")
 	defer func() { err = done(err) }()
 
@@ -91,9 +102,9 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 	if err != nil {
 		return nil, nil, err
 	}
-	actorTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
 	if err != nil {
-		return nil, nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+		return nil, nil, err
 	}
 	return actor, actorTemplate, nil
 }
@@ -106,13 +117,13 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	ctx, done := stepSpan(ctx, "MarkPausing")
 	defer func() { err = done(err) }()
 
-	if actor.GetStatus() == ateapipb.Actor_STATUS_PAUSING {
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSING {
 		markSkipped(ctx, "actor already PAUSING")
 		return actor, nil
 	}
 	// The pause edge only exists from RUNNING.
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return nil, status.Errorf(codes.FailedPrecondition, "MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		return nil, status.Errorf(codes.FailedPrecondition, "MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
 	// By design a golden actor cannot be paused — it can only be suspended
 	// (committed).
@@ -121,11 +132,11 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	}
 
 	snapshotName := resources.NewSnapshotName()
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status = ateapipb.Actor_STATUS_PAUSING
-		toUpdate.InProgressLocalSnapshotName = snapshotName
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
+		toUpdate.Status.InProgressLocalSnapshotName = snapshotName
 		return nil
-	}))
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -141,11 +152,11 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 // the once-minted snapshot name, so a re-entered workflow re-sends the same
 // semantic request; once atelet's Checkpoint is idempotent on those keys this
 // step becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (wireSnapshotScope string, err error) {
+func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletPause")
 	defer func() { err = done(err) }()
 
-	assignment := actor.GetWorkerAssignment()
+	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
 		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment); err != nil {
@@ -157,7 +168,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_local_snapshot_name", actor.GetInProgressLocalSnapshotName())
+			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_local_snapshot_name", actor.GetStatus().GetInProgressLocalSnapshotName())
 			if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateattr.ReasonWorkerPodGone); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
@@ -185,10 +196,10 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotName: actor.GetInProgressLocalSnapshotName(),
+				SnapshotName: actor.GetStatus().GetInProgressLocalSnapshotName(),
 			},
 		},
-		Scope:    toAteletSnapshotScope(actorTemplate.Spec.SnapshotsConfig.OnPause),
+		Scope:    actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause()),
 		ActorUid: actor.GetMetadata().Uid,
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
@@ -204,7 +215,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 // never be resumed. It re-reads the actor first so an out-of-band transition
 // (e.g. the syncer crashing the actor after its worker died) is not
 // overwritten: with no assignment left there is nothing to finalize.
-func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
 
@@ -214,8 +225,8 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
-	if assignment := latestActor.GetWorkerAssignment(); assignment != nil {
-		worker, err := w.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
+	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
+		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
 		nodeName := ""
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
@@ -226,10 +237,13 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
 
-			if wass := worker.Assignment; wass != nil {
+			if wass := worker.GetStatus().GetAssignment(); wass != nil {
 				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
-					worker.Assignment = nil
-					if err := w.store.UpdateWorker(ctx, worker, worker.Version); err != nil {
+					_, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+						toUpdate.Status.Assignment = nil
+						return nil
+					})
+					if err != nil {
 						if errors.Is(err, store.ErrVersionConflict) {
 							return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 						}
@@ -244,43 +258,43 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		if err != nil {
 			return nil, err
 		}
-		wasAlreadyCrashed := latestActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
-		newStatus := ateapipb.Actor_STATUS_PAUSED
+		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
+		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
 			// stuck in PAUSED.
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", actorRef))
-			newStatus = ateapipb.Actor_STATUS_CRASHED
+			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		}
-		contentScope := toActorSnapshotContentScope(actorTemplate.Spec.SnapshotsConfig.OnPause)
+		contentScope := effectiveContentScope(actorTemplate.GetSnapshotsConfig().GetOnPause())
 		sandboxClass := ""
 		if worker != nil {
 			sandboxClass = worker.GetSandboxClass()
 		}
 		// Snapshot crash attributes before pod and pool pointers are cleared below.
-		latestActor.Status = newStatus
+		latestActor.Status.State = newState
 		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 
-		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
-			toUpdate.Status = newStatus
+		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
+			toUpdate.Status.State = newState
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
-			if toUpdate.GetInProgressLocalSnapshotName() != "" {
+			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
 				localInfo := &ateapipb.LocalSnapshotInfo{
-					SnapshotName: toUpdate.GetInProgressLocalSnapshotName(),
+					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
 				}
-				if newStatus != ateapipb.Actor_STATUS_CRASHED {
+				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 					localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
 				}
-				toUpdate.LocalSnapshotInfo = localInfo
-				toUpdate.InProgressLocalSnapshotName = ""
+				toUpdate.Status.LocalSnapshotInfo = localInfo
+				toUpdate.Status.InProgressLocalSnapshotName = ""
 			}
-			toUpdate.WorkerAssignment = nil
+			toUpdate.Status.WorkerAssignment = nil
 			return nil
-		}))
-		if err == nil && storedActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED && !wasAlreadyCrashed {
+		})
+		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
 			recordActorCrash(ctx, crashAttrs)
 		}
 		if err != nil {

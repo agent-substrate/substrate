@@ -1,0 +1,145 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Per-test Job manifest for `type: nighthawk-ingress` tests. Rendered by
+# orchestrator.py (${...} placeholders substituted before kubectl apply);
+# mirrors runner-job.yaml.tmpl's structure, labels, and credential volumes.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmarking
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: automated-benchmarking-permissions
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: benchmark-runner
+  namespace: benchmarking
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: benchmarking
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: substrate-benchmark-runner
+        test-name: ${NAME}
+        tag: ${TAG}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: benchmark-runner
+      containers:
+      - name: runner
+        image: ${IMAGE}
+        imagePullPolicy: IfNotPresent
+        command:
+        - "python3"
+        - "/app/runner.py"
+        args:
+        - "--name"
+        - "${NAME}"
+        - "--tag"
+        - "${TAG}"
+        - "--dest"
+        - "${DEST}"
+        - "--envoy-cpu"
+        - "${ENVOY_CPU}"
+        - "--actors"
+        - "${ACTORS}"
+        - "--atespace"
+        - "${ATESPACE}"
+        - "--client-concurrency"
+        - "${CLIENT_CONCURRENCY}"
+        - "--connections"
+        - "${CONNECTIONS}"
+        - "--max-pending"
+        - "${MAX_PENDING}"
+        - "--initial-rps"
+        - "${INITIAL_RPS}"
+        - "--exp-factor"
+        - "${EXP_FACTOR}"
+        - "--measuring-period"
+        - "${MEASURING_PERIOD}"
+        - "--convergence-deadline"
+        - "${CONVERGENCE_DEADLINE}"
+        - "--testing-stage-duration"
+        - "${TESTING_STAGE_DURATION}"
+        - "--success-rate-threshold"
+        - "${SUCCESS_RATE}"
+        - "--send-rate-threshold"
+        - "${SEND_RATE}"
+        - "--tail-latency-slo-ms"
+        - "${TAIL_LATENCY_SLO_MS}"
+        env:
+        - name: ATE_ATEAPI_CLIENT_AUTH
+          value: "${ATE_ATEAPI_CLIENT_AUTH}"
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: ateapi-token
+          mountPath: /run/ateapi-token
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        # One core per event loop + one for the runner; no cpu limit so
+        # open-loop pacing is never throttled.
+        resources:
+          requests:
+            cpu: "${RUNNER_CPU}"
+            memory: "1Gi"
+      volumes:
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt
+      - name: ateapi-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              audience: api.ate-system.svc
+              expirationSeconds: 3600
+              path: token
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem

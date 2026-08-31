@@ -116,9 +116,16 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 
 		status := "FREE"
 		assignedActor := "<none>"
-		if wass := w.GetAssignment(); wass != nil && wass.GetActor() != nil {
+		if wass := w.GetStatus().GetAssignment(); wass != nil && wass.GetActor() != nil {
 			status = "ASSIGNED"
-			if tpl := wass.GetActorTemplate(); tpl != nil && tpl.GetNamespace() != "" {
+			if ref := wass.GetActorTemplateRef(); ref != nil {
+				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
+					ref.GetAtespace(),
+					ref.GetName(),
+					wass.GetActor().GetAtespace(),
+					wass.GetActor().GetName(),
+				)
+			} else if tpl := wass.GetActorTemplate(); tpl != nil && tpl.GetNamespace() != "" {
 				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
 					tpl.GetNamespace(),
 					tpl.GetName(),

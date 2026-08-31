@@ -25,28 +25,33 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"
 )
 
 func main() {
 	var (
-		apiEndpoint   = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
-		routerURL     = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
-		atespace      = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
-		promAddr      = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		configJSON    = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds). Unset fields keep their built-in defaults.")
-		masterWebPort = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message and fail fatally on error. {master-host} comes from boomer's existing --master-host flag.")
-		useTokenAuth  = flag.Bool("use-token-auth", false, "Use Kubernetes ServiceAccount token for ateapi auth instead of client certificate.")
+		apiEndpoint        = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
+		routerURL          = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
+		atespace           = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
+		promAddr           = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
+		configJSON         = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds, durdir_file_size_bytes, resume_mode, durdir_read_mode, durdir_template, mem_target, mem_churn). Unset fields keep their built-in defaults.")
+		masterWebPort      = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message and fail fatally on error. {master-host} comes from boomer's existing --master-host flag.")
+		configPollInterval = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
+		userClass          = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
 	// our flag-derived values are usable before that.
 	flag.Parse()
+
+	class := strings.ToLower(*userClass)
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -69,7 +74,7 @@ func main() {
 		_ = tp.Shutdown(shutdownCtx)
 	}()
 
-	conn, apiStub, err := glutton.DialControl(*apiEndpoint, *useTokenAuth)
+	conn, apiStub, err := glutton.DialControl(*apiEndpoint)
 	if err != nil {
 		slog.Error("failed to dial ateapi", slog.String("err", err.Error()))
 		os.Exit(1)
@@ -92,17 +97,42 @@ func main() {
 				slog.String("err", err.Error()))
 			os.Exit(1)
 		}
-		slog.Info("dynconfig fetch enabled", slog.String("url", configURL))
+		// A spawn message is not sufficient by itself: locust sends one only
+		// when the number of users or the spawn rate changes. Poll also, thus
+		// a step of a load shape that changes only the sample rate reaches
+		// this worker. A failed poll is not fatal, because the worker holds
+		// the last good value.
+		dynconfig.StartPoll(ctx, configURL, dyn, sampler,
+			*configPollInterval, 5*time.Second, func(err error) {
+				slog.Warn("dynconfig poll failed; keeping the current values",
+					slog.String("url", configURL), slog.String("err", err.Error()))
+			})
+		slog.Info("dynconfig fetch enabled",
+			slog.String("url", configURL),
+			slog.Duration("poll_interval", *configPollInterval))
 	}
 
-	cfg := &glutton.Config{
+	cfg := &userclass.Config{
 		APIStub:    apiStub,
 		HTTPClient: httpClient,
 		RouterURL:  *routerURL,
 		Atespace:   *atespace,
 		Dyn:        dyn,
 	}
-	taskFn, shutdownFn := glutton.Register(cfg)
+
+	entry, ok := userclass.Lookup(class)
+	if !ok {
+		slog.Error("fatal: unknown --user-class value",
+			slog.String("user_class", *userClass),
+			slog.String("known", strings.Join(userclass.Names(), ",")))
+		os.Exit(1)
+	}
+	taskFn, shutdownFn := entry.Init(cfg)
+
+	slog.Info("registered boomer task",
+		slog.String("user_class", entry.UserClass),
+		slog.String("user_class_flag", class),
+	)
 
 	metricsCtx, metricsCancel := context.WithCancel(context.Background())
 	defer metricsCancel()
@@ -115,7 +145,7 @@ func main() {
 	// Blocks until SIGINT/SIGTERM or master quit. Boomer registers its own
 	// signal handlers; we do cleanup after it returns.
 	boomer.Run(&boomer.Task{
-		Name:   "GluttonUser",
+		Name:   entry.UserClass,
 		Weight: 1,
 		Fn:     taskFn,
 	})

@@ -93,6 +93,18 @@ if [[ -z "${action}" ]]; then
   exit 1
 fi
 
+# kubectl falls back to localhost:8080 when neither --context nor a kubeconfig
+# current-context is set, which surfaces mid-install as a confusing "connection
+# refused" from the apply -- after the assets have already been assembled and
+# staged. Resolve the target cluster up front instead.
+if [[ -z "${KUBECTL_CONTEXT}" ]] && ! kubectl config current-context >/dev/null 2>&1; then
+  echo "Error: no kube context to target: KUBECTL_CONTEXT is empty and the" >&2
+  echo "       kubeconfig has no current-context." >&2
+  echo "       Set KUBECTL_CONTEXT (e.g. in .ate-dev-env.sh) or run:" >&2
+  echo "         kubectl config use-context <name>" >&2
+  exit 1
+fi
+
 # ANSI color codes for prettier output (mirrors hack/install-ate.sh).
 COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'
@@ -128,7 +140,7 @@ if [[ -z "${ARCH:-}" ]]; then
 fi
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 
-# --- 1. assets: assemble (if missing) --------------------------------------
+# --- 1. assets: assemble (if missing or stale) -----------------------------
 need_assemble=false
 for f in cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml; do
   if [[ ! -f "${OUT}/${f}" ]]; then
@@ -136,6 +148,20 @@ for f in cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml; d
     break
   fi
 done
+# Presence alone is not enough. The five filenames don't change when a version pin
+# moves, so an asset dir assembled before a bump looks complete while holding the old
+# bytes — we'd then stage those against a SandboxConfig pinning the new shas, and the
+# mismatch would only surface at runtime as an actor wedged in STATUS_RESUMING while
+# atelet rejects the download. Compare the stamp assemble.sh left against the one it
+# would write now; a dir predating the stamp, or left by a failed assemble (which clears
+# the stamp before overwriting anything), has no file and re-assembles.
+if [[ "${need_assemble}" == "false" ]]; then
+  want_stamp="$(ARCH="${ARCH}" hack/microvm-assets/assemble.sh --print-stamp)"
+  if [[ "$(cat "${OUT}/.asset-versions" 2>/dev/null)" != "${want_stamp}" ]]; then
+    log "Asset set in ${OUT} is stale (version stamp mismatch); re-assembling."
+    need_assemble=true
+  fi
+fi
 if [[ "${need_assemble}" == "true" ]]; then
   log "Assembling micro-VM assets into ${OUT} (ARCH=${ARCH})..."
   ARCH="${ARCH}" OUT="${OUT}" hack/microvm-assets/assemble.sh

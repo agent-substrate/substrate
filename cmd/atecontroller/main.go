@@ -19,20 +19,27 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
+	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
+	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
@@ -65,9 +72,7 @@ var (
 
 	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert.")
 	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
-	ateapiTokenAuth  = pflag.Bool("ateapi-use-token-auth", false, "Authenticate to ateapi with the Bearer token from --ateapi-token-file instead of the client certificate from --ateapi-client-cert.")
-	ateapiTokenFile  = pflag.String("ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required with --ateapi-use-token-auth, ignored otherwise.")
-	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required unless --ateapi-use-token-auth is set, ignored otherwise.")
+	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
 )
 
 func init() {
@@ -120,13 +125,16 @@ func main() {
 		setupLog.Error(err, "creating kubernetes client for ateapi dialer")
 		os.Exit(1)
 	}
+	ateClient, err := versioned.NewForConfig(k8sConfig)
+	if err != nil {
+		setupLog.Error(err, "creating ate clientset for the worker syncer")
+		os.Exit(1)
+	}
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
-		UseTokenAuth:     *ateapiTokenAuth,
 		CAFile:           *ateapiCAFile,
 		ServerName:       *ateapiServerName,
-		TokenFile:        *ateapiTokenFile,
 		ClientCredBundle: *ateapiClientCert,
 	})
 	if err != nil {
@@ -143,8 +151,21 @@ func main() {
 
 	ateapiClient := ateapipb.NewControlClient(ateapiConn)
 
+	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
+	egressMITMCAPool := controllers.EgressMITMCAPoolRef()
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		Scheme: scheme,
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{
+						egressMITMCAPool.Namespace: {
+							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
+						},
+					},
+				},
+			},
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -181,6 +202,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controllers.EgressMITMTrustReconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "EgressMITMTrust")
+		os.Exit(1)
+	}
+
 	//+kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -192,8 +220,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	runCtx := ctrl.SetupSignalHandler()
+
+	// The worker syncer runs on informers of its own rather than the manager's
+	// shared cache. It needs a resync to sweep for registry records that drifted
+	// without a pod event, and an informer's resync period is a property of the
+	// informer, so asking the shared cache for one would impose it on every other
+	// controller here too.
+	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
+	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient)
+
+	// Start registers the informer event handlers, so it has to run before the
+	// factory does: the initial list then synthesizes an Add for every pod that
+	// already exists, and no explicit startup re-list is needed.
+	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolLister).Start(runCtx)
+
+	workerPodInformerFactory.Start(runCtx.Done())
+	ateFactory.Start(runCtx.Done())
+	workerPodInformerFactory.WaitForCacheSync(runCtx.Done())
+	ateFactory.WaitForCacheSync(runCtx.Done())
+
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(runCtx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

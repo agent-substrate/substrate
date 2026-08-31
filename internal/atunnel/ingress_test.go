@@ -15,6 +15,7 @@
 package atunnel
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,6 +24,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -33,6 +35,98 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRelayIngressWithHalfClose(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	actor, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actor.Close()
+	upstream := <-accepted
+	defer upstream.Close()
+
+	clientReader, clientInput := io.Pipe()
+	defer clientReader.Close()
+	var clientOutput bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		relayIngressWithHalfClose(context.Background(), upstream, clientReader, &clientOutput, clientReader)
+		close(done)
+	}()
+
+	if _, err := io.WriteString(clientInput, "request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientInput.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := actor.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	request, err := io.ReadAll(actor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(request); got != "request" {
+		t.Fatalf("actor received %q, want request", got)
+	}
+
+	if _, err := io.WriteString(actor, "response"); err != nil {
+		t.Fatal(err)
+	}
+	if err := actor.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not finish after the actor response ended")
+	}
+	if got := clientOutput.String(); got != "response" {
+		t.Errorf("client received %q, want response", got)
+	}
+}
+
+func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
+	upstream, actor := net.Pipe()
+	defer actor.Close()
+	clientReader, clientInput := io.Pipe()
+	defer clientInput.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		relayIngressWithHalfClose(ctx, upstream, clientReader, io.Discard, clientReader)
+		close(done)
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not return after cancellation")
+	}
+	// Deadline only guards against hanging; it fails once the relay closed the pipe.
+	_ = actor.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := actor.Read(make([]byte, 1)); err == nil {
+		t.Fatal("actor connection remained open after relay cancellation")
+	}
+	if _, err := io.WriteString(clientInput, "request"); err == nil {
+		t.Fatal("client stream remained open after relay cancellation")
+	}
+}
 
 func TestServeHTTP(t *testing.T) {
 	upstreamHost := make(chan string, 4)
@@ -152,6 +246,40 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	}
 }
 
+func TestServeConnectHTTPValidatesMethodAndAuthority(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer(t, upstreamURL)
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		method string
+		host   string
+		want   int
+	}{
+		{name: "rejects non CONNECT", method: http.MethodGet, host: "actor-1.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMethodNotAllowed},
+		{name: "requires authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev", want: http.StatusBadRequest},
+		{name: "rejects invalid authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev:70000", want: http.StatusMisdirectedRequest},
+		{name: "rejects inactive actor", method: http.MethodConnect, host: "actor-2.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMisdirectedRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "https://worker/", nil)
+			req.Host = tt.host
+			rec := httptest.NewRecorder()
+			s.ServeConnectHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -252,6 +380,9 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := s.tlsConfig.NextProtos; len(got) != 0 {
+		t.Fatalf("ordinary ingress ALPN protocols = %v, want none", got)
+	}
 
 	untrustedCA := newTestCA(t)
 	tests := []struct {
@@ -286,6 +417,115 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 				t.Fatalf("server error = %v, client error = %v, want error %v", serverErr, clientErr, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestServeNegotiatesH2 checks that the ingress server negotiates h2 with a
+// client that offers it, and HTTP/1.1 with one that does not. The router's
+// HTTP/2 pool depends on the h2 side, which holds only because ServeTLS
+// enables HTTP/2 when tlsConfig.NextProtos is empty — this pins that.
+func TestServeNegotiatesH2(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	bundlePath := filepath.Join(dir, "server.pem")
+	trustPath := filepath.Join(dir, "trust.pem")
+	writeCredentialBundle(t, bundlePath, serverCert)
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clientCert := ca.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+
+	// The actor: an h2c-capable backend, so gRPC-shaped requests can arrive
+	// as HTTP/2 while everything else must still be downgraded to HTTP/1.1.
+	backendAddr, protoSeen := mirrorBackend(t, true, true)
+	upstream, err := url.Parse("http://" + backendAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewServer(Config{
+		CredentialBundlePath: bundlePath,
+		TrustBundlePath:      trustPath,
+		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
+		Upstream:             upstream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- s.Serve(ctx, lis) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-served; err != nil {
+			t.Errorf("Serve: %v", err)
+		}
+	})
+
+	client := func(h2 bool) *http.Client {
+		transport := &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true, // The handshake identity checks live in TestMutualTLSClientIdentity.
+				Certificates:       []tls.Certificate{clientCert},
+			},
+			// With h2, the transport offers "h2" via ALPN like Envoy's
+			// HTTP/2 pool; without it, only http/1.1 is offered, like the
+			// HTTP/1.1 pool.
+			ForceAttemptHTTP2: h2,
+		}
+		return &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	}
+	request := func(t *testing.T, c *http.Client, method, contentType string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(method, "https://"+lis.Addr().String()+"/", http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("%s request: %v", method, err)
+		}
+		res.Body.Close()
+		return res
+	}
+
+	h2Client := client(true)
+	res := request(t, h2Client, http.MethodPost, "application/grpc")
+	if res.Proto != "HTTP/2.0" {
+		t.Fatalf("h2-only client negotiated %s, want HTTP/2.0 — Envoy's mirrored HTTP/2 pool cannot connect", res.Proto)
+	}
+	if got := <-protoSeen; got != "HTTP/2.0" {
+		t.Errorf("gRPC-shaped request reached the actor as %s, want HTTP/2.0", got)
+	}
+	// A non-gRPC request on the same negotiated h2 connection is downgraded
+	// before the actor.
+	request(t, h2Client, http.MethodGet, "")
+	if got := <-protoSeen; got != "HTTP/1.1" {
+		t.Errorf("plain GET over h2 reached the actor as %s, want HTTP/1.1", got)
+	}
+
+	// Envoy's HTTP/1.1 pool offers only http/1.1; it must not be dragged onto h2.
+	h1Client := client(false)
+	res = request(t, h1Client, http.MethodGet, "")
+	if res.Proto != "HTTP/1.1" {
+		t.Errorf("http/1.1-only client negotiated %s, want HTTP/1.1", res.Proto)
+	}
+	if got := <-protoSeen; got != "HTTP/1.1" {
+		t.Errorf("HTTP/1.1 request reached the actor as %s, want HTTP/1.1", got)
 	}
 }
 
@@ -483,4 +723,126 @@ func tlsHandshake(serverConfig, clientConfig *tls.Config) (serverErr, clientErr 
 	_ = clientConn.Close()
 	serverErr = <-done
 	return serverErr, clientErr
+}
+
+func TestIsGRPC(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		protoMajor  int
+		method      string
+		contentType string
+		want        bool
+	}{
+		{name: "grpc", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc", want: true},
+		{name: "grpc+proto", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc+proto", want: true},
+		{name: "grpc with params", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc;charset=utf-8", want: true},
+		{name: "uppercase content type", protoMajor: 2, method: http.MethodPost, contentType: "Application/GRPC", want: true},
+		{name: "uppercase with subtype", protoMajor: 2, method: http.MethodPost, contentType: "APPLICATION/GRPC+PROTO", want: true},
+		{name: "grpc-web is not grpc", protoMajor: 2, method: http.MethodPost, contentType: "application/grpc-web+proto", want: false},
+		{name: "grpc content type over http/1.1", protoMajor: 1, method: http.MethodPost, contentType: "application/grpc", want: false},
+		{name: "non-POST", protoMajor: 2, method: http.MethodGet, contentType: "application/grpc", want: false},
+		{name: "plain h2 json", protoMajor: 2, method: http.MethodPost, contentType: "application/json", want: false},
+		{name: "no content type", protoMajor: 2, method: http.MethodPost, contentType: "", want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(tt.method, "http://actor/", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.ProtoMajor = tt.protoMajor
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			if got := isGRPC(req); got != tt.want {
+				t.Errorf("isGRPC() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// mirrorBackend starts a backend speaking the given protocols and returns its
+// address plus a channel yielding the protocol each request arrived with.
+func mirrorBackend(t *testing.T, h1, h2c bool) (addr string, protoSeen chan string) {
+	t.Helper()
+	protoSeen = make(chan string, 1)
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(h1)
+	protocols.SetUnencryptedHTTP2(h2c)
+	backend := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			protoSeen <- r.Proto
+		}),
+		Protocols: protocols,
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go backend.Serve(lis)
+	t.Cleanup(func() { backend.Close() })
+	return lis.Addr().String(), protoSeen
+}
+
+// TestProtocolMirrorTransport verifies the upstream leg's protocol choice:
+// only gRPC (HTTP/2 + POST + application/grpc*) goes out as cleartext
+// prior-knowledge HTTP/2, preserving the trailers and streaming it needs;
+// everything else — including non-gRPC requests that arrived over HTTP/2 —
+// is sent as HTTP/1.1, so an HTTP/1.1-only actor keeps working no matter
+// what protocol the client spoke at the edge.
+func TestProtocolMirrorTransport(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		backendH1   bool
+		backendH2C  bool
+		protoMajor  int
+		method      string
+		contentType string
+		want        string
+		wantErr     bool
+	}{
+		// HTTP/1.1-only backend: the common actor. Every non-gRPC shape must
+		// reach it as HTTP/1.1, whatever the client negotiated with the edge.
+		{name: "h1 GET to h1-only actor", backendH1: true, protoMajor: 1, method: http.MethodGet, want: "HTTP/1.1"},
+		{name: "h2 GET downgraded for h1-only actor", backendH1: true, protoMajor: 2, method: http.MethodGet, want: "HTTP/1.1"},
+		{name: "h2 POST json downgraded for h1-only actor", backendH1: true, protoMajor: 2, method: http.MethodPost, contentType: "application/json", want: "HTTP/1.1"},
+		{name: "grpc-web stays h1 for h1-only actor", backendH1: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc-web+proto", want: "HTTP/1.1"},
+		// gRPC to an actor that can't speak h2c must fail loudly (the proxy
+		// surfaces it as 502) rather than silently fall back to HTTP/1.1,
+		// which would strip the trailers gRPC needs.
+		{name: "grpc to h1-only actor fails", backendH1: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc", wantErr: true},
+		// gRPC actor (h2c-capable): gRPC stays HTTP/2 end to end.
+		{name: "grpc to grpc actor", backendH1: true, backendH2C: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc", want: "HTTP/2.0"},
+		{name: "grpc+proto to grpc actor", backendH1: true, backendH2C: true, protoMajor: 2, method: http.MethodPost, contentType: "application/grpc+proto", want: "HTTP/2.0"},
+		// Mixed traffic to the same h2c-capable actor still downgrades
+		// non-gRPC, mirroring what a browser or curl sends.
+		{name: "h2 GET downgraded even for h2c-capable actor", backendH1: true, backendH2C: true, protoMajor: 2, method: http.MethodGet, want: "HTTP/1.1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			addr, protoSeen := mirrorBackend(t, tt.backendH1, tt.backendH2C)
+			transport := newProtocolMirrorTransport()
+			req, err := http.NewRequest(tt.method, "http://"+addr+"/", http.NoBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.ProtoMajor = tt.protoMajor
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			res, err := transport.RoundTrip(req)
+			if tt.wantErr {
+				if err == nil {
+					res.Body.Close()
+					t.Fatal("RoundTrip succeeded, want an error (no silent HTTP/1.1 fallback for gRPC)")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RoundTrip: %v", err)
+			}
+			res.Body.Close()
+			if got := <-protoSeen; got != tt.want {
+				t.Errorf("upstream saw %s, want %s", got, tt.want)
+			}
+		})
+	}
 }

@@ -3,7 +3,10 @@
 Scheduled, repeatable benchmark runs of a substrate branch. A CronJob on an
 **orchestration cluster** drives the full build/deploy/run/teardown cycle
 against a separate **test cluster**, once per entry in [tests.yaml](tests.yaml).
-Each run uploads results to GCS via `benchmarking/locust/runner.py`.
+Each run uploads results to GCS via `benchmarking/locust/runner.py`
+(`type: locust`) or `benchmarking/nighthawk-ingress/runner.py` (`type: nighthawk-ingress`,
+the router capacity benchmark — see
+[benchmarking/nighthawk-ingress/README.md](../nighthawk-ingress/README.md)).
 
 ## How it works
 
@@ -12,8 +15,9 @@ Each run uploads results to GCS via `benchmarking/locust/runner.py`.
 2. Orchestrator waits for DIND, copies the appropriate `ate-dev-env.sh`, runs
    `gcloud container clusters get-credentials` for the test cluster.
 3. Shallow-clones `--repo` at `--branch`, captures the commit hash.
-4. `docker build && docker push` builds the locust image tagged with the commit
-   hash and pushes it to `${KO_DOCKER_REPO}/locust-test:<commit>`.
+4. `docker build && docker push` builds the runner image for each test type
+   in use, tagged with the commit hash: `${KO_DOCKER_REPO}/locust-test:<commit>`
+   and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
 5. `hack/install-ate.sh --deploy-ate-system` + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
@@ -21,10 +25,17 @@ Each run uploads results to GCS via `benchmarking/locust/runner.py`.
    runs `hack/install-microvm-deps.sh --install` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
+   For a `nighthawk-ingress` test the orchestrator additionally patches the
+   `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
+   is the benchmark's independent variable and the shipped manifest sets
+   no cpu resources or `--concurrency`, so each test pins cpu
+   requests=limits and Envoy's thread count to its own `envoyCpu`, then
+   waits for the rollout before deploying workloads. The teardown after
+   each test redeploys substrate, so the pin never outlives its run.
 6. For each test in `tests.yaml`:
-   - Submits a Job using the just-built locust image; the Job runs
-     `runner.py -f <file> -t <duration> -u <users> --tag <commit> --name <name>
-     --dest <dest>`.
+   - Submits a Job using the just-built image for the test's type
+     (`runner-job.yaml.tmpl` for locust,
+     `nighthawk-ingress-runner-job.yaml.tmpl` for nighthawk-ingress).
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
    - Tears down workloads + micro-VM deps (if any) + substrate.
    - If not the last test, redeploys them so the next run starts clean.
@@ -33,7 +44,7 @@ Each run uploads results to GCS via `benchmarking/locust/runner.py`.
 
 Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
 `gvisor`). This controls both `spec.sandboxClass` on the benchmark WorkerPool
-and its `ateomImage` (`ateom-gvisor` vs `ateom-microvm`).
+and its `workerImage` (`ateom-gvisor` vs `ateom-microvm`).
 
 For `microvm` tests the target cluster must have KVM-capable nodes and the
 object store bucket named in its `.ate-dev-env.sh` must be writable by the
@@ -75,15 +86,16 @@ default is `0 3 * * *`, 3am UTC).
 
 ## Test cluster prerequisites
 
-Create the test cluster with the substrate-required beta APIs and Workload
-Identity enabled. The control plane must be on Kubernetes 1.36+ so
-`certificates.k8s.io/v1beta1` is available:
+Create the test cluster with the substrate-required beta APIs, Workload
+Identity, and Managed OpenTelemetry enabled. The control plane must be on
+Kubernetes 1.36+ so `certificates.k8s.io/v1beta1` is available:
 
 ```bash
 gcloud container clusters create <CLUSTER_NAME> \
   --location=<CLUSTER_LOCATION> \
   --num-nodes=5 \
   --workload-pool=<PROJECT_ID>.svc.id.goog \
+  --managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS \
   --enable-kubernetes-unstable-apis=certificates.k8s.io/v1beta1/podcertificaterequests,certificates.k8s.io/v1beta1/clustertrustbundles
 ```
 

@@ -113,7 +113,7 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 			continue
 		}
 		matching = append(matching, worker)
-		if worker.GetAssignment() == nil {
+		if worker.GetStatus().GetAssignment() == nil {
 			candidates = append(candidates, worker)
 		}
 	}
@@ -133,7 +133,7 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
-	if worker.GetState() != ateapipb.Worker_STATE_ACTIVE {
+	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
 		return false
 	}
 

@@ -20,7 +20,7 @@ Envoy --(ext_proc RequestHeaders)--> router.handleRequestHeaders
 `ateapi`'s `AssignWorkerStep` claims a free worker from the actor's `WorkerPool`.
 In an oversubscribed system — the core premise of Substrate, where many actors
 multiplex onto few workers — a burst of traffic can momentarily exhaust the
-pool. `AssignWorkerStep` then returns `FailedPrecondition: "no free workers
+pool. `AssignWorkerStep` then returns `ResourceExhausted: "no free workers
 available"`.
 
 Previously the router mapped that straight to an HTTP `503` and failed the
@@ -30,18 +30,39 @@ user-visible error.
 
 ## Behavior
 
-With parking enabled (the default), the router treats `FailedPrecondition` and
-`Unavailable` from `ResumeActor` as **retryable** conditions (alongside the
-existing `Aborted` concurrent-resume conflict) — a parked request rides out
-transient pool saturation and control-plane blips (e.g. an ateapi rolling
-restart) alike. The request is *parked*: the resumer keeps retrying with
-exponential backoff until either
+With parking enabled (the default), the router treats `ResourceExhausted`,
+`FailedPrecondition` and `Unavailable` from `ResumeActor` as **retryable**
+conditions (alongside the existing `Aborted` concurrent-resume conflict) — a
+parked request rides out transient pool saturation and control-plane blips
+(e.g. an ateapi rolling restart) alike. The request is *parked*: the resumer
+keeps retrying with exponential backoff until either
 
 - the resume succeeds (the actor is `RUNNING` and has a worker IP) — the request
   is then routed normally; or
 - the **park budget** (`--parked-request-budget`, default `5s`) elapses — the
   underlying capacity error is returned, surfacing as `503 "actor <id>
   unavailable: no free workers available"`.
+
+**The budget bounds retries, not a committed resume.** When the budget elapses
+the router stops starting new resume attempts, but an attempt already in
+flight is **never canceled**: by then the control plane has committed work to
+it, and canceling would discard an in-progress restore. Instead the router
+waits for that attempt's real result: a restore that overshoots the budget
+(routine under node contention) is **served late** rather than failed, and a
+late retryable error still surfaces as the capacity `503`. The attempt is
+bounded by the control plane's own server-side RPC deadline, and Envoy's
+ext_proc message timeout (`budget + 5s`) remains the ceiling on how long a
+client is held either way.
+
+**Worst-case occupancy.** A parked request's lot slot is held until its caller
+stops waiting; with the Envoy dataplane that is bounded by the ext_proc
+message timeout (`budget + 5s`). The resume attempt itself can outlive every
+caller: it carries no client-side deadline and runs until ateapi's
+server-side maximum RPC deadline, holding that actor's singleflight entry.
+New requests for the same actor during that window do not start another
+control-plane call — they join the in-flight attempt, and if it has not
+resolved by their own stream deadline they are ended by the dataplane's
+timeout rather than a router verdict.
 
 To bound resource use and provide backpressure, the router admits requests to a
 **parking lot** of fixed capacity (`--parked-request-max`, default `1024`). Each

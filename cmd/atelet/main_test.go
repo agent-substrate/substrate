@@ -50,6 +50,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
+	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
@@ -117,6 +119,163 @@ func TestSnapshotManifestRequiresPauseImage(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "pauseImage") {
 		t.Errorf("error = %v, want it to name pauseImage", err)
 	}
+}
+
+func TestWriteSystemInfoVolume(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "system-info", "vol1")
+	si := &ateletpb.SystemInfoVolume{
+		DataSources: []*ateletpb.SystemInfoDataSource{
+			{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+				ActorMetadata: &ateletpb.ActorMetadataDataSource{
+					Items: []*ateletpb.ActorMetadataItem{
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+					},
+				},
+			}},
+		},
+	}
+
+	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
+	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
+		t.Fatalf("writeSystemInfoVolume: %v", err)
+	}
+
+	// Overwrite with a different actor, as happens when a snapshot taken from
+	// one actor seeds another on resume: files must carry the new values.
+	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
+	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
+		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
+	}
+
+	// Values are written raw, no trailing newline.
+	for path, want := range map[string]string{
+		"actor-name":         "probe-alpha",
+		"atespace":           "ate-e2e-probe",
+		"identity/actor-uid": "uid-alpha",
+	} {
+		t.Run(path, func(t *testing.T) {
+			target := filepath.Join(root, path)
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("reading %q: %v", target, err)
+			}
+			if string(got) != want {
+				t.Errorf("content = %q, want %q", got, want)
+			}
+			info, err := os.Stat(target)
+			if err != nil {
+				t.Fatalf("stat %q: %v", target, err)
+			}
+			if perm := info.Mode().Perm(); perm != 0o644 {
+				t.Errorf("perm = %o, want 644", perm)
+			}
+		})
+	}
+}
+
+// TestWriteSystemInfoVolume_StableRealPaths pins the path-stability contract
+// the restore paths depend on: the micro-VM virtiofsds run in find-paths
+// migration mode, which re-binds the guest's FUSE state to files by the paths
+// recorded at suspend, and gVisor's gofer likewise re-opens files by path on
+// restore. Projected files must therefore be plain files at stable real
+// paths — no symlink indirection — and regenerating the volume must not move
+// or delete a path that guest state may reference.
+func TestWriteSystemInfoVolume_StableRealPaths(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "system-info", "vol1")
+	si := &ateletpb.SystemInfoVolume{
+		DataSources: []*ateletpb.SystemInfoDataSource{
+			{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+				ActorMetadata: &ateletpb.ActorMetadataDataSource{
+					Items: []*ateletpb.ActorMetadataItem{
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+					},
+				},
+			}},
+		},
+	}
+
+	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
+	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", nil, si); err != nil {
+		t.Fatalf("writeSystemInfoVolume: %v", err)
+	}
+
+	realBefore := map[string]string{}
+	for _, p := range []string{"actor-name", "identity/actor-uid"} {
+		visible := filepath.Join(root, p)
+		fi, err := os.Lstat(visible)
+		if err != nil {
+			t.Fatalf("lstat %q: %v", visible, err)
+		}
+		if !fi.Mode().IsRegular() {
+			t.Errorf("%q is %v, want a regular file: symlink indirection moves the real path on regeneration, which find-paths cannot re-bind", visible, fi.Mode().Type())
+		}
+		real, err := filepath.EvalSymlinks(visible)
+		if err != nil {
+			t.Fatalf("eval symlinks %q: %v", visible, err)
+		}
+		realBefore[p] = real
+	}
+
+	// Regenerate for a different actor, as a restore from a shared golden
+	// snapshot does.
+	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
+	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", nil, si); err != nil {
+		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
+	}
+
+	for _, p := range []string{"actor-name", "identity/actor-uid"} {
+		real, err := filepath.EvalSymlinks(filepath.Join(root, p))
+		if err != nil {
+			t.Fatalf("eval symlinks after rewrite %q: %v", p, err)
+		}
+		if real != realBefore[p] {
+			t.Errorf("%q real path moved on regeneration: %q -> %q; guest state recorded at suspend cannot re-bind", p, realBefore[p], real)
+		}
+		if _, err := os.Stat(realBefore[p]); err != nil {
+			t.Errorf("pre-rewrite real path %q gone after regeneration: %v; find-paths re-open of a suspend-time path would fail", realBefore[p], err)
+		}
+	}
+}
+
+func TestWriteSystemInfoVolume_TrustBundle(t *testing.T) {
+	ctx := context.Background()
+	certPEM := testCertPEM(t)
+	si := &ateletpb.SystemInfoVolume{
+		DataSources: []*ateletpb.SystemInfoDataSource{
+			{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
+				TrustBundle: &ateletpb.TrustBundleDataSource{Name: EgressTrustBundleName, Path: "trust/ca.pem"},
+			}},
+		},
+	}
+	lister := ctbLister(t, &certsv1beta1.ClusterTrustBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName},
+		Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: string(certPEM)},
+	})
+
+	root := filepath.Join(t.TempDir(), "system-info", "vol1")
+	ref := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	if err := writeSystemInfoVolume(ctx, root, ref, "uid-1", lister, si); err != nil {
+		t.Fatalf("writeSystemInfoVolume: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "trust/ca.pem"))
+	if err != nil {
+		t.Fatalf("reading projected bundle: %v", err)
+	}
+	if string(got) != string(certPEM) {
+		t.Errorf("content = %q, want the sanitized bundle", got)
+	}
+
+	t.Run("resolution failure fails the write rather than produce an empty trust file", func(t *testing.T) {
+		err := writeSystemInfoVolume(ctx, filepath.Join(t.TempDir(), "vol2"), ref, "uid-1", ctbLister(t), si)
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Errorf("writeSystemInfoVolume = %v, want not-found resolution error", err)
+		}
+	})
 }
 
 func TestWriteFileAtomic(t *testing.T) {
@@ -289,8 +448,8 @@ func TestValidateRunRequest(t *testing.T) {
 		{"invalid atespace", func(r *ateletpb.RunRequest) { r.Atespace = "../escape" }, true},
 		{"invalid actor name", func(r *ateletpb.RunRequest) { r.ActorName = "../escape" }, true},
 		{"invalid actor uid", func(r *ateletpb.RunRequest) { r.ActorUid = "../escape" }, true},
-		{"invalid actor template namespace", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace = "Not_Valid" }, true},
-		{"invalid actor template name", func(r *ateletpb.RunRequest) { r.ActorTemplateName = "Not_Valid" }, true},
+		{"any actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "Not_Valid", "Not_Valid" }, false},
+		{"empty actor template identity accepted", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "", "" }, false},
 		{"invalid container name", func(r *ateletpb.RunRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}, true},
@@ -329,8 +488,10 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		{"invalid atespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorName = "../escape" }), true},
 		{"invalid actor uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorUid = "../escape" }), true},
-		{"invalid actor template namespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
-		{"invalid actor template name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateName = "Not_Valid" }), true},
+		{"any actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.ActorTemplateNamespace, r.ActorTemplateName = "Not_Valid", "Not_Valid"
+		}), false},
+		{"empty actor template identity accepted", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "", "" }), false},
 		{"invalid container name", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}), true},
@@ -387,8 +548,10 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid atespace", makeReq(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorName = "../escape" }), true},
 		{"invalid actor uid", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorUid = "../escape" }), true},
-		{"invalid actor template namespace", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
-		{"invalid actor template name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateName = "Not_Valid" }), true},
+		{"any actor template identity accepted", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.ActorTemplateNamespace, r.ActorTemplateName = "Not_Valid", "Not_Valid"
+		}), false},
+		{"empty actor template identity accepted", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateNamespace, r.ActorTemplateName = "", "" }), false},
 		{"invalid container name", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}), true},
@@ -663,6 +826,24 @@ func TestRPCBoundariesReject(t *testing.T) {
 		})
 		wantInvalidArgument(t, "Restore", err)
 	})
+	t.Run("Terminate", func(t *testing.T) {
+		t.Run("invalid ateom UID", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				TargetAteomUid: badUID, Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing target ateom UID", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateNamespace: "default", ActorTemplateName: "template",
+				Spec: okSpec,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+	})
 }
 
 func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
@@ -693,7 +874,10 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 			{Name: "without-probe"},
 		},
 	}
-	got := buildAteomWorkloadSpec(in)
+	got, err := buildAteomWorkloadSpec(in)
+	if err != nil {
+		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
+	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
@@ -702,9 +886,10 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
-			{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-			{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-			{Name: "scratch", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+			{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+			{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+			{Name: "scratch", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+			{Name: "system-info", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
 		},
 		Containers: []*ateletpb.Container{
 			{
@@ -712,9 +897,8 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 				VolumeMounts: []*ateletpb.VolumeMount{
 					{Name: "data", MountPath: "/home/counter"},
 					{Name: "cache", MountPath: "/var/cache"},
-					// Only durable-dir volumes cross to ateom; other volume
-					// types are mounted by atelet itself.
 					{Name: "scratch", MountPath: "/scratch"},
+					{Name: "system-info", MountPath: "/run/ate"},
 				},
 			},
 			{
@@ -736,6 +920,12 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 					{VolumeName: "data", MountPath: "/home/counter"},
 					{VolumeName: "cache", MountPath: "/var/cache"},
 				},
+				CsiVolumeMounts: []*ateompb.VolumeMount{
+					{VolumeName: "scratch", MountPath: "/scratch"},
+				},
+				SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{
+					{VolumeName: "system-info", MountPath: "/run/ate"},
+				},
 			},
 			{
 				Name: "sidecar",
@@ -746,9 +936,85 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{Name: "no-volumes"},
 		},
 	}
-	got := buildAteomWorkloadSpec(in)
+	got, err := buildAteomWorkloadSpec(in)
+	if err != nil {
+		t.Fatalf("buildAteomWorkloadSpec failed: %v", err)
+	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      *ateletpb.WorkloadSpec
+		wantErr string
+	}{
+		{
+			name: "missing volume definition",
+			in: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name: "ctr",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "missing-vol", MountPath: "/data"},
+						},
+					},
+				},
+			},
+			wantErr: `container "ctr" mounts volume "missing-vol" which is not defined in workload volumes`,
+		},
+		{
+			name: "unsupported volume source",
+			in: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{Name: "data"},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name: "ctr",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "data", MountPath: "/data"},
+						},
+					},
+				},
+			},
+			wantErr: `container "ctr" mounts volume "data" with unsupported source <nil>`,
+		},
+		{
+			name: "duplicate volume names",
+			in: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+					{Name: "data", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name: "ctr",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "data", MountPath: "/data"},
+						},
+					},
+				},
+			},
+			wantErr: `duplicate volume name "data" in workload spec`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildAteomWorkloadSpec(tc.in)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if got, want := err.Error(), tc.wantErr; !strings.Contains(got, want) {
+				t.Errorf("error mismatch:\nwant: %s\ngot:  %s", want, got)
+			}
+		})
 	}
 }
 
@@ -1075,6 +1341,44 @@ func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
 	}
 	if readiness.Ready() {
 		t.Fatal("readiness should be not-ready after drain")
+	}
+}
+
+// Image volumes appear on their own ImageVolumeMounts field, separate from durable-dir mounts.
+func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
+	spec := &ateletpb.WorkloadSpec{
+		Volumes: []*ateletpb.Volume{
+			{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
+			{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+			{Name: "ext", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+		},
+		Containers: []*ateletpb.Container{{
+			Name: "app",
+			VolumeMounts: []*ateletpb.VolumeMount{
+				{Name: "agent", MountPath: "/ate"},
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "ext", MountPath: "/mnt/ext"},
+			},
+		}},
+	}
+
+	got, err := buildAteomWorkloadSpec(spec)
+	if err != nil {
+		t.Fatalf("buildAteomWorkloadSpec: %v", err)
+	}
+	if len(got.GetContainers()) != 1 {
+		t.Fatalf("containers = %d, want 1", len(got.GetContainers()))
+	}
+	ctr := got.GetContainers()[0]
+
+	if len(ctr.GetImageVolumeMounts()) != 1 {
+		t.Fatalf("image volume mounts = %v, want 1", ctr.GetImageVolumeMounts())
+	}
+	if name, path := ctr.GetImageVolumeMounts()[0].GetVolumeName(), ctr.GetImageVolumeMounts()[0].GetMountPath(); name != "agent" || path != "/ate" {
+		t.Errorf("image volume mount = (%q, %q), want (agent, /ate)", name, path)
+	}
+	if len(ctr.GetDurableDirVolumeMounts()) != 1 || ctr.GetDurableDirVolumeMounts()[0].GetVolumeName() != "data" {
+		t.Errorf("durable mounts = %v, want just data", ctr.GetDurableDirVolumeMounts())
 	}
 }
 
@@ -1560,7 +1864,10 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		{"golden atespace rejected", func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = resources.GoldenActorAtespace }, true},
 		{"invalid actor name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorName = "UPPER" }, true},
 		{"invalid actor uid", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorUid = "" }, true},
-		{"invalid template namespace", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateNamespace = "no/slashes" }, true},
+		{"any actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) { r.ActorTemplateNamespace = "no/slashes" }, false},
+		{"empty actor template identity accepted", func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.ActorTemplateNamespace, r.ActorTemplateName = "", ""
+		}, false},
 		{"invalid snapshot name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "../escape" }, true},
 		{"invalid snapshot uri", func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }, true},
 		{"unspecified scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
@@ -1576,6 +1883,75 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 			tc.mutate(req)
 			if err := validateUploadPausedCheckpointRequest(req); (err != nil) != tc.wantErr {
 				t.Errorf("validateUploadPausedCheckpointRequest err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestShouldHaveSnapshots(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateletpb.CheckpointRequest
+		want bool
+	}{
+		{
+			name: "full scope always expects snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			},
+			want: true,
+		},
+		{
+			name: "data scope with durable volumes expects snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec: &ateletpb.WorkloadSpec{
+					Volumes: []*ateletpb.Volume{
+						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "data scope with only CSI volumes does not expect snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec: &ateletpb.WorkloadSpec{
+					Volumes: []*ateletpb.Volume{
+						{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "data scope with both durable and CSI volumes expects snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec: &ateletpb.WorkloadSpec{
+					Volumes: []*ateletpb.Volume{
+						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+						{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "data scope with no volumes does not expect snapshots",
+			req: &ateletpb.CheckpointRequest{
+				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Spec:  &ateletpb.WorkloadSpec{},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldHaveSnapshots(tc.req); got != tc.want {
+				t.Errorf("shouldHaveSnapshots() = %v, want %v", got, tc.want)
 			}
 		})
 	}

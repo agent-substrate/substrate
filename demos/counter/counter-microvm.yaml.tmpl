@@ -37,7 +37,7 @@ spec:
   replicas: 2
   sandboxClass: microvm
   sandboxConfigName: microvm
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
   template:
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The micro-VM sandbox itself is
@@ -73,10 +73,26 @@ spec:
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
+    command:
+    - /ko-app/counter
+    # Exercises atenet-router's arbitrary-port ingress support: a second
+    # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
+    # from the primary port 80 every other assertion in this demo uses. Kept in
+    # step with counter.yaml.tmpl — the networking suite runs against whichever
+    # of the two the sandbox class under test selects.
+    - --extra-port=9090
     readyz:
       httpGet:
         path: /readyz
         port: 80
+      # Well above readyz.DefaultOverallTimeout (30s), which the gVisor counter
+      # is happy with. A micro-VM actor answers in a few seconds on an idle
+      # node, but CI runs every suite against this one pool on a single kind
+      # node and a guest boot stretches badly under that contention — 30s was
+      # marginal enough to fail several suites intermittently. Raising it here
+      # rather than the default is what internal/readyz asks for: "a workload
+      # that needs longer says so on its ActorTemplate".
+      timeoutSeconds: 120
     # The counter writes its file counter here. With the durableDir volume below
     # it lands on a host-backed virtio-fs share instead of the guest-RAM rootfs
     # upper, so it survives a Data-scope snapshot (which keeps no guest memory).
@@ -90,17 +106,19 @@ spec:
   resources:
     limits:
       cpu: "2"
-      memory: 1536Mi
+      memory: 512Mi
   workerSelector:
     matchLabels:
       workload: counter-microvm
   snapshotsConfig:
     onPause: Full
-    onCommit: Data
-    onResume:
-      # A Data snapshot resumes by combining the durable data with the golden
-      # snapshot's guest state (memory + fs delta) instead of cold-booting.
-      fromData: Golden
+    # Full, matching the gVisor variant: a suspend captures guest memory, so
+    # the in-RAM count continues from where it left off — the round-trip this
+    # demo's header comment promises. The golden-combining Data resume path
+    # (onResume.fromData: Golden) is exercised by the e2e demo suite's
+    # micro-VM cases; with Full on both triggers no Data snapshot is ever
+    # written here, so no onResume block is needed.
+    onCommit: Full
     location: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
   volumes:
   - name: data

@@ -57,7 +57,7 @@ func TestCredentialBrokerForwardsAuthenticatedWorkerIdentity(t *testing.T) {
 	if !proto.Equal(resp, &ateletpb.MintActorCertificateResponse{ActorCertificates: [][]byte{{1, 2, 3}}}) {
 		t.Fatalf("response = %+v", resp)
 	}
-	want := &ateapipb.MintCertRequest{WorkerNamespace: "workers", WorkerPod: "worker", WorkerPodUid: "worker-uid", ExpectedActorUid: "actor-uid", CertificateSigningRequest: csr, Purpose: ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL}
+	want := &ateapipb.MintCertRequest{Worker: &ateapipb.ObjectRef{Name: "worker-uid"}, ExpectedActorUid: "actor-uid", CertificateSigningRequest: csr, Purpose: ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL}
 	if !proto.Equal(identity.request, want) {
 		t.Fatalf("MintCert request = %+v, want %+v", identity.request, want)
 	}
