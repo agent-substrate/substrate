@@ -40,8 +40,7 @@ This command will:
 
 ### 2. Create more actors than workers
 
-Actors live in the demo's **atespace** (`ate-demo-parking`), and their DNS names
-embed it (`<id>.<atespace>.actors.resources.substrate.ate.dev`). `--template-ref`
+Actors live in the demo's **atespace** (`ate-demo-parking`). `--template-ref`
 names the template, resolved in the actor's atespace:
 
 ```bash

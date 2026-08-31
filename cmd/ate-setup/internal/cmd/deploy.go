@@ -75,7 +75,7 @@ var deployControllerCmd = &cobra.Command{
 
 var deployAtenetCmd = &cobra.Command{
 	Use:   "atenet",
-	Short: "Deploy the atenet dataplane only: router, egress, and DNS",
+	Short: "Deploy the atenet dataplane only: router and egress",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployAtenet(cmd.Context())

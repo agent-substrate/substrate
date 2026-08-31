@@ -18,8 +18,7 @@ const (
 	// ResourceNameRegexPattern is the regular expression pattern for a valid
 	// Substrate resource name.
 	ResourceNameRegexPattern = `[a-z0-9]([-a-z0-9]*[a-z0-9])?`
-	// ActorDNSSuffix is suffix to the DNS name for direct access to Actor
-	// "<actor_name>.<atespace>.actors.resources.substrate.ate.dev"
+	// ActorDNSSuffix is the suffix used by the conventional actor authority.
 	ActorDNSSuffix = "actors.resources.substrate.ate.dev"
 	// GoldenActorAtespace is the reserved system atespace that per-template golden
 	// actors live in.

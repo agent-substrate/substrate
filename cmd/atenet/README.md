@@ -2,7 +2,6 @@
 
 atenet is a combined daemon for all networking functionality.
 
-* DNS server for ATE Actor resolution: `atenet dns`
 * Envoy control plane for programming ATE resolution. `atenet router`
 
 This is built as a single binary for convenience in the prototyping.
@@ -31,8 +30,8 @@ likely be split in the future for better scalability.)
   a separate process on the worker pod, not part of Envoy -- so the port to
   reach on the actor itself (its default port, or an arbitrary one for
   CONNECT) still travels as a real header, `atunnel.TargetPortHeader`.
-  `:authority`/`Host` reaches atunnel unmodified either way, so it authorizes
-  the actor by its own DNS name.
+  `X-Ate-Actor-Name` and `X-Ate-Atespace` identify the Actor independently of
+  `:authority`/`Host`.
 * Termination: the router drains gracefully on SIGTERM (readiness flip →
   endpoint propagation → Envoy admin-API drain → ext_proc drain), and the
   Envoy container's `preStop` hook waits for the router's drain-complete
@@ -44,15 +43,6 @@ likely be split in the future for better scalability.)
 
 RBAC permissions:
 * get, list, watch on ate-system EndpointSlices
-
-### dns
-
-* `atenet dns` will be deployed as:
-  * Deployment
-  * Service exposing tcp and udp 53
-
-* read, list on kube-system services
-* read, list on ate-system services
 
 ## testing
 

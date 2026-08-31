@@ -99,8 +99,8 @@ const (
 
 	// OriginalDstClusterName routes actor traffic to the worker's atunnel
 	// ingress by the IP:port ext_proc reports in dynamic metadata (see
-	// ingress.OriginalDstMetadataKey), while the request :authority stays the
-	// actor DNS name so atunnel can identify the active actor.
+	// ingress.OriginalDstMetadataKey). Actor identity remains in explicit
+	// request headers for atunnel to authorize.
 	OriginalDstClusterName = "actor_original_dst"
 
 	WildcardIP         = "0.0.0.0"
@@ -766,9 +766,8 @@ func (x *XdsServer) buildMainInternalCluster() *clusterv3.Cluster {
 
 // buildOriginalDstCluster dials the exact worker atunnel address supplied by
 // ext_proc in dynamic metadata (see ingress.OriginalDstMetadataKey). It does
-// not derive the destination from :authority, so the request keeps the actor
-// DNS name as its Host for atunnel to authorize. mTLS to atunnel is applied
-// via the shared upstream transport socket (SPIFFE URI validation).
+// not derive the destination from :authority. mTLS to atunnel is applied via
+// the shared upstream transport socket (SPIFFE URI validation).
 func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 	cluster := &clusterv3.Cluster{
 		Name:           OriginalDstClusterName,

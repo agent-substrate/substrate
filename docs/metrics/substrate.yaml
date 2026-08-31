@@ -221,11 +221,6 @@ blind_spots:
       The hit and miss counter exists. But the garbage collector (the 85% and
       80% limits) and the time to prepare an image send nothing. Thus you cannot
       see the disk pressure from the layer pool.
-  - area: atenet-dns
-    code: cmd/atenet/internal/dns.go
-    brief: >
-      There are no instruments, and the Corefile has no prometheus plugin. If a
-      reload fails, the answers stay old and no signal shows it.
   - area: podcertcontroller
     code: cmd/podcertcontroller
     brief: This component has no metrics.
