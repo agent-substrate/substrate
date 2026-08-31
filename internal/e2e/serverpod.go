@@ -64,6 +64,10 @@ type ServerPod struct {
 	// an HTTP GET. A gRPC server answers an HTTP request with a protocol error,
 	// so a server speaking grpc must set this and register the health service.
 	GRPCProbe bool
+	// TCPProbe asks kubelet to probe by opening a TCP connection and closing
+	// it, which is all readiness can mean for a server that speaks neither HTTP
+	// nor gRPC. Ignored when GRPCProbe is set.
+	TCPProbe bool
 	// HealthPath is the HTTP readiness path, defaulting to /healthz. Ignored
 	// when GRPCProbe is set.
 	HealthPath string
@@ -93,39 +97,100 @@ func (s Server) Address() string {
 
 // DeployServerPod builds spec's image, applies the shared server manifest, waits
 // for readiness and returns the address to dial.
+func DeployServerPod(t *testing.T, ctx context.Context, spec ServerPod) Server {
+	t.Helper()
+	return DeployServerPods(t, ctx, spec)[0]
+}
+
+// DeployServerPods deploys several servers at once, into one namespace and
+// through one ko invocation, and returns their addresses in the order given.
+//
+// Worth having rather than a loop over DeployServerPod, because a serial loop
+// pays for each server end to end: ko starts, builds and pushes, then the pod
+// schedules, pulls and goes ready, and only then does the next one begin. One
+// apply overlaps all of that. ko caches builds and pushes by image reference
+// within an invocation, so servers sharing an ImportPath -- which is the common
+// case, since one testserver binary backs them all -- build once; and every pod
+// is admitted at the same instant, so the second readiness wait has usually
+// already been satisfied by the time the first returns.
 //
 // It registers no cleanup: everything the manifest creates is namespaced, so it
 // goes with the namespace CreateNamespace made — and, on failure, is retained
 // with it for `kubectl logs`.
-func DeployServerPod(t *testing.T, ctx context.Context, spec ServerPod) Server {
+func DeployServerPods(t *testing.T, ctx context.Context, specs ...ServerPod) []Server {
 	t.Helper()
+	if len(specs) == 0 {
+		t.Fatalf("DeployServerPods was given no servers to deploy")
+	}
 	if _, err := CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
-	namespace := spec.Namespace
+	namespace := serverPodNamespace(t, specs)
+
+	koApply(t, writeManifest(t, "serverpods.yaml", renderServerPods(t, specs, namespace)))
+
+	servers := make([]Server, 0, len(specs))
+	for _, spec := range specs {
+		WaitForPodReady(t, ctx, namespace, spec.Name, serverPodReadyTimeout)
+
+		service, err := GetClients().K8s.CoreV1().Services(namespace).Get(ctx, spec.Name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("getting service %s/%s: %v", namespace, spec.Name, err)
+		}
+		if service.Spec.ClusterIP == "" || service.Spec.ClusterIP == corev1.ClusterIPNone {
+			t.Fatalf("service %s/%s has no ClusterIP to dial: %q", namespace, spec.Name, service.Spec.ClusterIP)
+		}
+
+		server := Server{Namespace: namespace, ClusterIP: service.Spec.ClusterIP, Port: spec.Port}
+		t.Logf("server %s is serving at %s (namespace %s)", spec.Name, server.Address(), namespace)
+		servers = append(servers, server)
+	}
+	return servers
+}
+
+// serverPodNamespace picks the one namespace specs are deployed into: the one
+// they name, or a fresh one when none does. Sharing it is what lets a single
+// apply cover them all, so specs that disagree are a mistake in the caller
+// rather than something to paper over by applying twice.
+func serverPodNamespace(t *testing.T, specs []ServerPod) string {
+	t.Helper()
+	names := map[string]bool{}
+	namespace := ""
+	for _, spec := range specs {
+		// Distinct names, because the Pod, the Service and the app label are all
+		// spec.Name: two servers sharing one would apply over each other and
+		// leave the suite dialing a Service that selects both.
+		if names[spec.Name] {
+			t.Fatalf("two servers are both named %q", spec.Name)
+		}
+		names[spec.Name] = true
+
+		if spec.Namespace == "" {
+			continue
+		}
+		if namespace != "" && namespace != spec.Namespace {
+			t.Fatalf("servers deployed together must share a namespace, got %q and %q", namespace, spec.Namespace)
+		}
+		namespace = spec.Namespace
+	}
 	if namespace == "" {
 		namespace = CreateNamespace(t).Name
 	}
-
-	koApply(t, renderServerPod(t, spec, namespace))
-	WaitForPodReady(t, ctx, namespace, spec.Name, serverPodReadyTimeout)
-
-	service, err := GetClients().K8s.CoreV1().Services(namespace).Get(ctx, spec.Name, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting service %s/%s: %v", namespace, spec.Name, err)
-	}
-	if service.Spec.ClusterIP == "" || service.Spec.ClusterIP == corev1.ClusterIPNone {
-		t.Fatalf("service %s/%s has no ClusterIP to dial: %q", namespace, spec.Name, service.Spec.ClusterIP)
-	}
-
-	server := Server{Namespace: namespace, ClusterIP: service.Spec.ClusterIP, Port: spec.Port}
-	t.Logf("server %s is serving at %s (namespace %s)", spec.Name, server.Address(), namespace)
-	return server
+	return namespace
 }
 
-// renderServerPod writes spec's manifest into the test's temp dir and returns
-// the path. Split out of DeployServerPod so the rendering has a unit test that
-// does not need a cluster.
+// renderServerPods renders specs into one multi-document manifest.
+func renderServerPods(t *testing.T, specs []ServerPod, namespace string) string {
+	t.Helper()
+	docs := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		docs = append(docs, renderServerPod(t, spec, namespace))
+	}
+	return strings.Join(docs, "\n---\n")
+}
+
+// renderServerPod renders spec's Pod and Service. Split out of DeployServerPods
+// so the rendering has a unit test that does not need a cluster.
 func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 	t.Helper()
 	port := strconv.Itoa(spec.Port)
@@ -143,7 +208,7 @@ func renderServerPod(t *testing.T, spec ServerPod, namespace string) string {
 		"${VOLUME_MOUNTS}": yamlListBlock(t, "volumeMounts", spec.VolumeMounts, 4),
 		"${VOLUMES}":       yamlListBlock(t, "volumes", spec.Volumes, 2),
 	}
-	return renderManifest(t, serverPodTemplate, inline, blocks)
+	return renderManifestText(t, serverPodTemplate, inline, blocks)
 }
 
 // serverArgs renders the container's `args:` list -- spec.Args followed by the
@@ -162,8 +227,11 @@ func serverArgs(spec ServerPod, port string) string {
 // serverReadinessProbe renders the probe fragment for spec, indented to sit
 // under the template's `readinessProbe:` key.
 func serverReadinessProbe(spec ServerPod, port string) string {
-	if spec.GRPCProbe {
+	switch {
+	case spec.GRPCProbe:
 		return "      grpc:\n        port: " + port
+	case spec.TCPProbe:
+		return "      tcpSocket:\n        port: " + port
 	}
 	path := spec.HealthPath
 	if path == "" {

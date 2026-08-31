@@ -19,6 +19,7 @@
 //
 //	testserver grpc  --listen=:50051   a cleartext HTTP/2 gRPC echo origin
 //	testserver http  --listen=:8080    a plain HTTP origin serving /healthz
+//	testserver tcpecho --listen=:2222  a raw TCP echo origin, greeting optional
 //	testserver egressprobe --listen=:8080  a client that drives the egress gateway
 //	testserver websocket --listen=:8080  a websocket server that responds to PINGs
 //
@@ -43,7 +44,7 @@ func main() {
 		Use:   "testserver",
 		Short: "Multi-mode helper server for the egress e2e suites.",
 	}
-	root.AddCommand(newGRPCCmd(), newHTTPCmd(), newEgressProbeCmd(), newWebsocketCmd())
+	root.AddCommand(newGRPCCmd(), newHTTPCmd(), newTCPEchoCmd(), newEgressProbeCmd(), newWebsocketCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
