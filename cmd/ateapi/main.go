@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/storagebroker"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
@@ -187,7 +188,15 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	// ATE_SNAPSHOT_BROKER selects the out-of-process snapshot storage broker
+	// (e.g. "uds"); empty disables signing and atelet reads and writes snapshots
+	// with its own client. Distinct from atelet's ATE_STORAGE_BACKEND, which
+	// selects the node's own object-store client (gcs or s3).
+	storageBroker, err := storagebroker.New(ctx, os.Getenv("ATE_SNAPSHOT_BROKER"))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create storage broker", err)
+	}
+	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins, storageBroker)
 
 	// Drive stored ActorTemplates through the golden actor flow.
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, sandboxConfigLister)

@@ -300,6 +300,41 @@ message ExternalCheckpointConfiguration {
   // The object storage URI of the snapshot to write. Object names are appended
   // to it, so it addresses the snapshot as a whole rather than any one object.
   string snapshot_uri = 1;
+
+  // Field 2 previously held a single SignedObjectAccess. Signed access is now a
+  // per-snapshot-URI map on the request messages (RestoreRequest,
+  // CheckpointRequest, UploadPausedCheckpointRequest), so a restore that reads
+  // more than one snapshot can carry a capability for each.
+  reserved 2;
+  reserved "signed_access";
+}
+
+// SignedObjectAccess is a short-lived, prefix-scoped capability that lets atelet
+// read or write a single snapshot's objects with no cloud credential on the
+// node. atelet dispatches on the mechanics carried here, never on the cloud:
+// the control-plane broker fills in whichever fields its backend needs.
+message SignedObjectAccess {
+  // Base URL of the account/bucket+container, e.g.
+  // "https://acct.blob.core.windows.net/snapshots" or "http://s3-host/bucket".
+  string prefix_url = 1;
+
+  // Read mechanics (populated on restore). atelet fetches an object by either
+  // looking it up in read_object_urls (S3: per-object presigned GET), or
+  // appending "<key>?<read_token>" to prefix_url (Azure: one container SAS).
+  string read_token = 2;
+  map<string, string> read_object_urls = 3;
+
+  // Write mechanics (populated on checkpoint). write_method is "PUT" or "POST".
+  //   PUT  (Azure): atelet PUTs "<prefix_url>/<key>?<write_token>" with
+  //        write_headers (block blob needs x-ms-blob-type: BlockBlob).
+  //   POST (S3): atelet submits a multipart form to post_url with post_fields,
+  //        setting the "key" field per object; one signed starts-with policy
+  //        covers every file under the prefix.
+  string write_method = 4;
+  string write_token = 5;
+  map<string, string> write_headers = 6;
+  string post_url = 7;
+  map<string, string> post_fields = 8;
 }
 
 enum CheckpointType {
@@ -355,6 +390,12 @@ message CheckpointRequest {
 
   // What should be included in the checkpoint.
   SnapshotScope scope = 11;
+
+  // signed_access maps a snapshot URI to a short-lived, prefix-scoped
+  // capability the node uses to write that snapshot's objects over plain HTTP,
+  // with no cloud storage SDK or long-lived credential of its own. Empty means
+  // the node uses its built-in storage client.
+  map<string, SignedObjectAccess> signed_access = 12;
 }
 
 message CheckpointResponse {
@@ -382,6 +423,13 @@ message UploadPausedCheckpointRequest {
   // differ, atelet converts where possible (micro-VM FULL capture to a DATA
   // upload by selecting the durable-dir tar) and rejects otherwise.
   SnapshotScope desired_scope = 8;
+
+  // signed_access maps a snapshot URI to a short-lived, prefix-scoped
+  // capability the node uses to write the paused snapshot's objects to their
+  // destination over plain HTTP, with no cloud storage SDK or long-lived
+  // credential of its own. Empty means the node uses its built-in storage
+  // client.
+  map<string, SignedObjectAccess> signed_access = 9;
 }
 
 message UploadPausedCheckpointResponse {
@@ -430,6 +478,14 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.
+
+  // signed_access maps a snapshot URI to a short-lived, prefix-scoped
+  // capability the node uses to read that snapshot's objects over plain HTTP,
+  // with no cloud storage SDK or long-lived credential of its own. A restore
+  // that combines the actor's own snapshot with a golden snapshot carries one
+  // entry per snapshot it reads. Empty means the node uses its built-in
+  // storage client.
+  map<string, SignedObjectAccess> signed_access = 16;
 }
 
 message RestoreResponse {

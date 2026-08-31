@@ -1172,6 +1172,7 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 
 	dstDir := t.TempDir()
 	err := s.downloadCombinedCheckpoint(context.Background(),
+		nil,
 		"gs://bucket/root/snapshots/ate-demo/counter-1-snap",
 		"gs://bucket/golden-root/snapshots/ate-golden/golden-1",
 		dstDir,

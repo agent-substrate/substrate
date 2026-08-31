@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/storagebroker"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -79,6 +80,9 @@ type ActorWorkflow struct {
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
+	// broker, when set, mints short-lived per-snapshot signed access so atelet
+	// reads and writes snapshots over plain HTTP with no cloud credential.
+	broker storagebroker.Broker
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -93,6 +97,7 @@ func NewActorWorkflow(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
+	broker storagebroker.Broker,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
@@ -106,6 +111,7 @@ func NewActorWorkflow(
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
+		broker:               broker,
 	}
 }
 

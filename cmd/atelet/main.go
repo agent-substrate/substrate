@@ -763,7 +763,7 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	if err != nil {
 		return err
 	}
-	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	return s.uploadSnapshot(ctx, req.GetSignedAccess(), uri, checkpointDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 }
 
 // uploadSnapshot uploads rec's snapshot files from srcDir to uri (each
@@ -772,7 +772,8 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 // assume every file it lists is already present. A crash mid-upload thus
 // leaves only orphaned files, never a manifest pointing at files that never
 // landed; retries overwrite the deterministic object names.
-func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateNamespace, templateName string) error {
+func (s *AteomHerder) uploadSnapshot(ctx context.Context, signedAccess map[string]*ateletpb.SignedObjectAccess, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateNamespace, templateName string) error {
+	store := s.storeForURI(signedAccess, uri.String())
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range rec.SnapshotFiles {
 		local := filepath.Join(srcDir, fileName)
@@ -782,7 +783,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
-			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
+			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, store, objectURI, local); err != nil {
 				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
 			}
 			return nil
@@ -800,7 +801,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 	if err != nil {
 		return fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
 	}
-	if err := ategcs.SendBytesToGCS(ctx, s.gcsClient, manifestURI, manifest); err != nil {
+	if err := ategcs.SendBytesToGCS(ctx, store, manifestURI, manifest); err != nil {
 		return fmt.Errorf("while uploading snapshot manifest: %w", err)
 	}
 	return nil
@@ -872,7 +873,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		// means the whole snapshot is committed and this retry already
 		// succeeded. Absent on both sides, the paused actor's state is
 		// unrecoverable.
-		_, fetchErr := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
+		_, fetchErr := ategcs.FetchFromGCS(ctx, s.storeForURI(req.GetSignedAccess(), req.GetDestinationSnapshotUri()), manifestURI)
 		if fetchErr == nil {
 			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", req.GetDestinationSnapshotUri()))
 			return "", nil
@@ -910,7 +911,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		}
 	}
 
-	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	return rec.SandboxClass, s.uploadSnapshot(ctx, req.GetSignedAccess(), uri, localDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 }
 
 // narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA
@@ -1009,7 +1010,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL)
 		}
-		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
+		manifest, err := ategcs.FetchFromGCS(ctx, s.storeForURI(req.GetSignedAccess(), req.GetExternalConfig().GetSnapshotUri()), manifestURI)
 		if err != nil {
 			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while fetching snapshot manifest: %w", err), ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject)
 		}
@@ -1047,7 +1048,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidObjectURL)
 		}
-		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
+		manifest, err := ategcs.FetchFromGCS(ctx, s.storeForURI(req.GetSignedAccess(), req.GetGoldenSnapshotUri()), manifestURI)
 		if err != nil {
 			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while fetching golden snapshot manifest: %w", err), ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonFailedGetExternalObject)
 		}
@@ -1101,10 +1102,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				if goldenRec == nil {
 					return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
 				}
-				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
+				if err := s.downloadCombinedCheckpoint(gctx, req.GetSignedAccess(), req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 				}
-			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+			} else if err := s.downloadExternalCheckpoint(gctx, req.GetSignedAccess(), req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 				return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
@@ -1124,7 +1125,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			})
 			if combineWithGolden {
 				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
+					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetSignedAccess(), req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
 						return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 					}
 					return nil
@@ -1478,22 +1479,23 @@ func goldenOnlyFiles(actorFiles, goldenFiles []string) []string {
 // as a single folder: every file of the actor's own snapshot (the durable-dir
 // data) plus the golden snapshot's files the actor's set does not shadow, so
 // the result looks like a Full snapshot whose durable-dir data is the actor's.
-func (s *AteomHerder) downloadCombinedCheckpoint(ctx context.Context, actorURI, goldenURI, dstDir string, actorFiles, goldenFiles []string) error {
+func (s *AteomHerder) downloadCombinedCheckpoint(ctx context.Context, signedAccess map[string]*ateletpb.SignedObjectAccess, actorURI, goldenURI, dstDir string, actorFiles, goldenFiles []string) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, actorURI, dstDir, actorFiles)
+		return s.downloadExternalCheckpoint(gctx, signedAccess, actorURI, dstDir, actorFiles)
 	})
 	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, goldenURI, dstDir, goldenOnlyFiles(actorFiles, goldenFiles))
+		return s.downloadExternalCheckpoint(gctx, signedAccess, goldenURI, dstDir, goldenOnlyFiles(actorFiles, goldenFiles))
 	})
 	return g.Wait()
 }
 
-func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string) error {
+func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, signedAccess map[string]*ateletpb.SignedObjectAccess, snapshotURI string, dstDir string, files []string) error {
 	uri, err := resources.ParseSnapshotURI(snapshotURI)
 	if err != nil {
 		return err
 	}
+	store := s.storeForURI(signedAccess, snapshotURI)
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		fileName := fileName
@@ -1503,7 +1505,7 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
-			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
+			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, store, objectURI, local); err != nil {
 				return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
 			}
 			return nil

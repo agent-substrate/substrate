@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/storagebroker"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -71,6 +72,7 @@ func NewRPCService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
+	broker storagebroker.Broker,
 ) *RPCService {
 	impl := newServiceImpl(persistence, actorTemplateLister, storageClassLister)
 	s := &RPCService{
@@ -83,7 +85,7 @@ func NewRPCService(
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, broker)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
