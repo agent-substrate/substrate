@@ -78,29 +78,28 @@ func TestActorAttributes(t *testing.T) {
 		{
 			name: "full actor",
 			actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
-				ActorTemplateNamespace: "ate-agents",
-				ActorTemplateName:      "support-agent",
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
 			},
 			want: map[attribute.Key]any{
-				AtespaceKey:          "team-a",
-				ActorNameKey:         "support-agent-42",
-				ActorUIDKey:          "uid-abc",
-				TemplateNameKey:      "support-agent",
-				TemplateNamespaceKey: "ate-agents",
-				ActorVersionKey:      int64(7),
+				AtespaceKey:         "team-a",
+				ActorNameKey:        "support-agent-42",
+				ActorUIDKey:         "uid-abc",
+				TemplateNameKey:     "support-agent",
+				TemplateAtespaceKey: "ate-agents",
+				ActorVersionKey:     int64(7),
 			},
 		},
 		{
 			name:  "nil actor yields zero values, not a panic",
 			actor: nil,
 			want: map[attribute.Key]any{
-				AtespaceKey:          "",
-				ActorNameKey:         "",
-				ActorUIDKey:          "",
-				TemplateNameKey:      "",
-				TemplateNamespaceKey: "",
-				ActorVersionKey:      int64(0),
+				AtespaceKey:         "",
+				ActorNameKey:        "",
+				ActorUIDKey:         "",
+				TemplateNameKey:     "",
+				TemplateAtespaceKey: "",
+				ActorVersionKey:     int64(0),
 			},
 		},
 	}
@@ -156,7 +155,7 @@ func TestKeySpellings(t *testing.T) {
 		{ActorUIDKey, "ate.actor.uid"},
 		{ActorContainerNameKey, "ate.actor.container.name"},
 		{TemplateNameKey, "ate.template.name"},
-		{TemplateNamespaceKey, "ate.template.namespace"},
+		{TemplateAtespaceKey, "ate.template.atespace"},
 		{ActorVersionKey, "ate.actor.version"},
 		{ActorOperationNameKey, "ate.actor.operation.name"},
 		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
@@ -227,7 +226,7 @@ func TestActorLogLabels(t *testing.T) {
 				"ate.actor.name":           "support-agent-42",
 				"ate.actor.uid":            "uid-abc",
 				"ate.actor.container.name": containerName,
-				"ate.template.namespace":   "ate-agents",
+				"ate.template.atespace":    "ate-agents",
 				"ate.template.name":        "support-agent",
 			},
 		},
@@ -236,11 +235,11 @@ func TestActorLogLabels(t *testing.T) {
 			attribution:   attribution,
 			containerName: "",
 			want: map[string]string{
-				"ate.atespace":           "team-a",
-				"ate.actor.name":         "support-agent-42",
-				"ate.actor.uid":          "uid-abc",
-				"ate.template.namespace": "ate-agents",
-				"ate.template.name":      "support-agent",
+				"ate.atespace":          "team-a",
+				"ate.actor.name":        "support-agent-42",
+				"ate.actor.uid":         "uid-abc",
+				"ate.template.atespace": "ate-agents",
+				"ate.template.name":     "support-agent",
 			},
 		},
 		{
@@ -248,11 +247,11 @@ func TestActorLogLabels(t *testing.T) {
 			attribution:   resources.ActorAttribution{},
 			containerName: "",
 			want: map[string]string{
-				"ate.atespace":           "",
-				"ate.actor.name":         "",
-				"ate.actor.uid":          "",
-				"ate.template.namespace": "",
-				"ate.template.name":      "",
+				"ate.atespace":          "",
+				"ate.actor.name":        "",
+				"ate.actor.uid":         "",
+				"ate.template.atespace": "",
+				"ate.template.name":     "",
 			},
 		},
 	}
@@ -336,8 +335,7 @@ func TestMetricLabelValues(t *testing.T) {
 
 func TestActorMetricAttributes(t *testing.T) {
 	actor := &ateapipb.Actor{
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "counter-template",
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "counter-template"},
 		Status: &ateapipb.ActorStatus{
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				WorkerNamespace: "ate-workers",
@@ -349,7 +347,7 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("explicit operation and reason", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   "default",
+			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
@@ -364,7 +362,7 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("default unknown values", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   "default",
+			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
@@ -379,7 +377,7 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   "default",
+			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
@@ -391,7 +389,7 @@ func TestActorMetricAttributes(t *testing.T) {
 		assertAttrs(t, got, want)
 	})
 
-	t.Run("empty template ref reports unknown", func(t *testing.T) {
+	t.Run("empty template ref reports empty labels", func(t *testing.T) {
 		noTemplate := &ateapipb.Actor{
 			Status: &ateapipb.ActorStatus{
 				WorkerAssignment: &ateapipb.WorkerAssignment{
@@ -402,8 +400,8 @@ func TestActorMetricAttributes(t *testing.T) {
 		}
 		got := toMap(ActorMetricAttributes(noTemplate, "gvisor", OperationResume, ReasonUnknown))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   TemplateUnknown,
-			TemplateNameKey:        TemplateUnknown,
+			TemplateAtespaceKey:    "",
+			TemplateNameKey:        "",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
@@ -419,12 +417,11 @@ func TestActorMetricAttributes(t *testing.T) {
 	// series that looks like a real pool.
 	t.Run("unassigned actor omits both pool keys", func(t *testing.T) {
 		unassigned := &ateapipb.Actor{
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "counter-template",
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "counter-template"},
 		}
 		got := toMap(ActorMetricAttributes(unassigned, "gvisor", OperationCreate, ReasonUnknown))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:  "default",
+			TemplateAtespaceKey:   "default",
 			TemplateNameKey:       "counter-template",
 			SandboxClassKey:       "gvisor",
 			ActorOperationNameKey: OperationCreate,

@@ -183,7 +183,7 @@ type templateKey struct {
 func (k templateKey) attrs() metric.MeasurementOption {
 	attrs := make([]attribute.KeyValue, 0, 6)
 	attrs = append(attrs,
-		ateattr.TemplateNamespaceKey.String(k.templateNamespace),
+		ateattr.TemplateAtespaceKey.String(k.templateNamespace),
 		ateattr.TemplateNameKey.String(k.templateName),
 		ateattr.SandboxClassKey.String(k.sandboxClass),
 		ateattr.StatsSourceKey.String(k.source),

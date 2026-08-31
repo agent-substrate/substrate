@@ -90,7 +90,7 @@ type snapshotOp struct {
 func (o snapshotOp) attrs() []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 5)
 	attrs = append(attrs,
-		ateattr.TemplateNamespaceKey.String(o.templateNamespace),
+		ateattr.TemplateAtespaceKey.String(o.templateNamespace),
 		ateattr.TemplateNameKey.String(o.templateName),
 		ateattr.SnapshotScopeKey.String(o.scope),
 	)

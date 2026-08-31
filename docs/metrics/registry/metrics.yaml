@@ -72,10 +72,10 @@ groups:
       But an operator makes each template. No value comes from a request. Thus
       the number of values stays small.
     attributes:
-      - id: ate.template.namespace
+      - id: ate.template.atespace
         stability: development
         type: string
-        brief: The Kubernetes namespace of the ActorTemplate of the actor.
+        brief: The atespace of the ActorTemplate of the actor.
         examples: [ate-demo-counter]
       - id: ate.template.name
         stability: development
@@ -590,7 +590,7 @@ groups:
         requirement_level: required
       - ref: ate.failure.reason
         requirement_level: required
-      - ref: ate.template.namespace
+      - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
@@ -655,7 +655,7 @@ groups:
     attributes:
       - ref: ate.actor.operation.name
         requirement_level: required
-      - ref: ate.template.namespace
+      - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
@@ -773,7 +773,7 @@ groups:
         buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
         cuj: Cold starts are slow. Is the cause the download, the unpack, or ateom?
     attributes:
-      - ref: ate.template.namespace
+      - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
@@ -810,7 +810,7 @@ groups:
         buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
         cuj: Suspends are slow. Is the cause ateom or the upload?
     attributes:
-      - ref: ate.template.namespace
+      - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
@@ -849,7 +849,7 @@ groups:
     attributes:
       - ref: file.name
         requirement_level: required
-      - ref: ate.template.namespace
+      - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
@@ -874,7 +874,7 @@ groups:
         code_anchor: cmd/atelet/statspoller.go
         cuj: Which template uses the CPU of the node?
     attributes: &actor_stats_attributes
-      - ref: ate.template.namespace
+      - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
@@ -1052,7 +1052,7 @@ groups:
         buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30]
         cuj: A request stopped or got a 503 error. Was the actor cold, was the fleet full, or has the router a defect?
     attributes:
-      - ref: ate.template.namespace
+      - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required

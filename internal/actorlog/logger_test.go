@@ -51,7 +51,7 @@ var (
 	actorNameLabel     = string(ateattr.ActorNameKey)
 	actorUIDLabel      = string(ateattr.ActorUIDKey)
 	containerNameLabel = string(ateattr.ActorContainerNameKey)
-	templateNSLabel    = string(ateattr.TemplateNamespaceKey)
+	templateNSLabel    = string(ateattr.TemplateAtespaceKey)
 	templateNameLabel  = string(ateattr.TemplateNameKey)
 )
 

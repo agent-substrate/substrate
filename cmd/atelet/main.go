@@ -563,7 +563,7 @@ func recordSnapshotSize(ctx context.Context, file, path, templateAtespace, templ
 	}
 	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
 		semconv.FileNameKey.String(file),
-		ateattr.TemplateNamespaceKey.String(templateAtespace),
+		ateattr.TemplateAtespaceKey.String(templateAtespace),
 		ateattr.TemplateNameKey.String(templateName),
 	))
 }

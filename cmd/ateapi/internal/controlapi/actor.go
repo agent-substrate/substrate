@@ -51,8 +51,8 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	// validated request; malformed ones stay visible in rpc.server.call.duration.
 	defer func() {
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
-			ateattr.TemplateNameKey.String(inActor.GetActorTemplateName()),
-			ateattr.TemplateNamespaceKey.String(inActor.GetActorTemplateNamespace()),
+			ateattr.TemplateNameKey.String(inActor.GetActorTemplate().GetName()),
+			ateattr.TemplateAtespaceKey.String(inActor.GetActorTemplate().GetAtespace()),
 		)
 	}()
 
@@ -343,8 +343,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 		var attrs []attribute.KeyValue
 		if deleted != nil {
 			attrs = append(attrs,
-				ateattr.TemplateNameKey.String(deleted.GetActorTemplateName()),
-				ateattr.TemplateNamespaceKey.String(deleted.GetActorTemplateNamespace()),
+				ateattr.TemplateNameKey.String(deleted.GetActorTemplate().GetName()),
+				ateattr.TemplateAtespaceKey.String(deleted.GetActorTemplate().GetAtespace()),
 			)
 		}
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err, attrs...)
