@@ -69,6 +69,7 @@ a request are declared once, in `extproc/attributes.go`.
 | --- | --- | --- |
 | `dev.ate.actor.name` | ingress | carries the actor name across CONNECT re-entry |
 | `dev.ate.actor.atespace` | ingress | carries the atespace across CONNECT re-entry |
+| `dev.ate.connect.authority` | ingress | carries the outer CONNECT authority across re-entry for target-port selection |
 | `dev.ate.actor.identity` | egress | carries the authenticated actor identity for logs and additional ext_proc services |
 | `dev.ate.extproc.direction` | egress | selects the egress handler for dataplanes without Envoy filter chains |
 
@@ -102,9 +103,10 @@ reserved.
 ### keep it trustworthy
 
 An attribute is only as trustworthy as its source. The actor name and atespace
-carry client-selected routing coordinates. Security-sensitive attributes, such
-as actor identity, must come from dataplane-authenticated state rather than a
-client header.
+carry client-selected routing coordinates, while the CONNECT authority carries
+only the requested target port across tunnel re-entry. Security-sensitive
+attributes, such as actor identity, must come from dataplane-authenticated
+state rather than a client header.
 
 ## modes
 

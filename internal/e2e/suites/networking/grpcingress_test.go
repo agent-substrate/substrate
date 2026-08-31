@@ -26,8 +26,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
@@ -70,6 +72,8 @@ func TestIngressProtocolDowngrade(t *testing.T) {
 			return nil, err
 		}
 		req.Host = resources.ActorDNSName(actorRef)
+		req.Header.Set(atunnel.ActorNameHeader, actorRef.Name)
+		req.Header.Set(atunnel.AtespaceHeader, actorRef.Atespace)
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
 		}
@@ -141,6 +145,10 @@ func TestIngressGRPC(t *testing.T) {
 	fixture := deployGRPCEchoTemplate(t, ctx, env["BUCKET_NAME"])
 	actorName, _ := createAndResumeSubstrateActor(t, ctx, "grpcingress", fixture)
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	ctx = metadata.AppendToOutgoingContext(ctx,
+		atunnel.ActorNameHeader, actorRef.Name,
+		atunnel.AtespaceHeader, actorRef.Atespace,
+	)
 
 	// Cleartext h2c to the router's HTTP port, with the Actor's DNS name as the
 	// :authority — the same routing key every other ingress test in this suite

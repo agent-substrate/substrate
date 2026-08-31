@@ -364,6 +364,37 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	}
 }
 
+func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
+	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+	clientMock := &mockClient{
+		resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
+			}}, nil
+		},
+	}
+	attrs := map[string]*structpb.Struct{
+		"envoy.filters.http.ext_proc": {
+			Fields: map[string]*structpb.Value{
+				extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+			},
+		},
+	}
+	md := extproc.NewRequestMetadata([]*corev3.HeaderValue{
+		{Key: atunnel.ActorNameHeader, Value: testUUID},
+		{Key: atunnel.AtespaceHeader, Value: "team-a"},
+		{Key: ":authority", Value: "inner.example"},
+	}, attrs)
+
+	res, err := New(clientMock, ParkedRequestConfig{}, nil).HandleRequestHeaders(context.Background(), md)
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v", err)
+	}
+	if got, want := dynamicMetadataPort(res.DynamicMetadata), "9090"; got != want {
+		t.Errorf("target port = %q, want %q", got, want)
+	}
+}
+
 // TestHandleRequestHeaders_ParkingLotFull verifies that when the parking lot is at capacity
 // the request is shed with a 503 before any resume is attempted.
 func TestHandleRequestHeaders_ParkingLotFull(t *testing.T) {

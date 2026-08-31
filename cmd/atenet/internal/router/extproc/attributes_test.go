@@ -29,6 +29,8 @@ func TestAttributeKeys(t *testing.T) {
 		{"actor name attribute", ActorNameFilterStateAttribute, "filter_state['dev.ate.actor.name']"},
 		{"atespace filter state", AtespaceFilterStateKey, "dev.ate.actor.atespace"},
 		{"atespace attribute", AtespaceFilterStateAttribute, "filter_state['dev.ate.actor.atespace']"},
+		{"CONNECT authority filter state", ConnectAuthorityFilterStateKey, "dev.ate.connect.authority"},
+		{"CONNECT authority attribute", ConnectAuthorityFilterStateAttribute, "filter_state['dev.ate.connect.authority']"},
 		{"actor identity filter state", ActorIdentityFilterStateKey, "dev.ate.actor.identity"},
 		{"direction attribute", directionAttribute, "dev.ate.extproc.direction"},
 		{"filter chain name attribute", FilterChainNameAttribute, "xds.filter_chain_name"},
@@ -47,6 +49,7 @@ func TestSubstrateKeysShareOnePrefix(t *testing.T) {
 	for _, key := range []string{
 		ActorNameFilterStateKey,
 		AtespaceFilterStateKey,
+		ConnectAuthorityFilterStateKey,
 		ActorIdentityFilterStateKey,
 		directionAttribute,
 	} {

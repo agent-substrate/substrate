@@ -60,8 +60,9 @@ func TestActorRoutingFilterStateFilter(t *testing.T) {
 	}
 
 	want := map[string]string{
-		extproc.ActorNameFilterStateKey: "%REQ(x-ate-actor-name)%",
-		extproc.AtespaceFilterStateKey:  "%REQ(x-ate-atespace)%",
+		extproc.ActorNameFilterStateKey:        "%REQ(x-ate-actor-name)%",
+		extproc.AtespaceFilterStateKey:         "%REQ(x-ate-atespace)%",
+		extproc.ConnectAuthorityFilterStateKey: "%REQ(:authority)%",
 	}
 	if len(config.GetOnRequestHeaders()) != len(want) {
 		t.Fatalf("captured values = %d, want %d", len(config.GetOnRequestHeaders()), len(want))
@@ -72,8 +73,8 @@ func TestActorRoutingFilterStateFilter(t *testing.T) {
 		if format != want[key] {
 			t.Errorf("capture %q = %q, want %q", key, format, want[key])
 		}
-		if strings.Contains(format, ":AUTHORITY") {
-			t.Errorf("capture %q still derives actor routing from authority", key)
+		if key != extproc.ConnectAuthorityFilterStateKey && strings.Contains(strings.ToLower(format), ":authority") {
+			t.Errorf("capture %q derives actor routing from authority", key)
 		}
 	}
 }

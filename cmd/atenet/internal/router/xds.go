@@ -894,13 +894,15 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 	}
 }
 
-// actorRoutingFilterStateFilter captures the actor routing headers so
-// main_internal can read them across the CONNECT internal-listener hop.
+// actorRoutingFilterStateFilter captures actor routing headers and the target
+// authority so main_internal can read them across the CONNECT internal-listener
+// hop. The authority supplies only the target port, never the actor reference.
 func actorRoutingFilterStateFilter() *hcmv3.HttpFilter {
-	values := make([]*setfilterstatecommonv3.FilterStateValue, 0, 2)
+	values := make([]*setfilterstatecommonv3.FilterStateValue, 0, 3)
 	for _, routingField := range []struct{ key, header string }{
 		{extproc.ActorNameFilterStateKey, atunnel.ActorNameHeader},
 		{extproc.AtespaceFilterStateKey, atunnel.AtespaceHeader},
+		{extproc.ConnectAuthorityFilterStateKey, extproc.AuthorityHeader},
 	} {
 		values = append(values, &setfilterstatecommonv3.FilterStateValue{
 			Key: &setfilterstatecommonv3.FilterStateValue_ObjectKey{
@@ -1045,6 +1047,7 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		RequestAttributes: []string{
 			extproc.ActorNameFilterStateAttribute,
 			extproc.AtespaceFilterStateAttribute,
+			extproc.ConnectAuthorityFilterStateAttribute,
 		},
 		MetadataOptions: &extprocv3filter.MetadataOptions{
 			ForwardingNamespaces: &extprocv3filter.MetadataOptions_MetadataNamespaces{

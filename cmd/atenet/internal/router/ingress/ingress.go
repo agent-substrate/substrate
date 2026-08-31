@@ -92,10 +92,15 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_NotFound, "invalid actor reference")
 	}
 
-	// CONNECT traffic can name a port other than defaultActorPort in the
-	// authority.
+	// CONNECT traffic can name a port other than defaultActorPort. After Envoy
+	// terminates CONNECT, filter state retains the outer authority while md.Host
+	// belongs to the inner request.
 	targetPort := defaultActorPort
-	if _, portStr, err := net.SplitHostPort(md.Host); err == nil {
+	targetAuthority := md.Attribute(extproc.ConnectAuthorityFilterStateAttribute)
+	if targetAuthority == "" {
+		targetAuthority = md.Host
+	}
+	if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
 		if p, ok := atunnel.ParsePort(portStr); ok {
 			targetPort = p
 		}
