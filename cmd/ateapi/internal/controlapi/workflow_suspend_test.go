@@ -23,11 +23,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -382,9 +380,6 @@ func TestEnsureSuspendedFinalized_StampsSubstrateTemplateRef(t *testing.T) {
 	if st.GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		t.Errorf("snapshot ActorTemplateUid = %q, want %q", st.GetActorTemplateUid(), template.GetMetadata().GetUid())
 	}
-	if st.GetActorTemplateNamespace() != "" || st.GetActorTemplateName() != "" {
-		t.Errorf("legacy template fields = %q/%q, want empty for a ref-mode actor", st.GetActorTemplateNamespace(), st.GetActorTemplateName())
-	}
 }
 
 func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
@@ -696,14 +691,8 @@ func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
 
 	// The template needs a snapshot location: MarkSuspending validates the
 	// destination URI before the workflow reaches the crash under test.
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	if err := indexer.Add(&atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "tmpl1"},
-		Spec:       atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}},
-	}); err != nil {
-		t.Fatalf("add template to indexer: %v", err)
-	}
-	w := NewActorWorkflow(st, nil, nil, listersv1alpha1.NewActorTemplateLister(indexer), nil, nil, nil, nil, "", nil)
+	// newTestActorWorkflow's stored template carries one.
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_PAUSED)
 

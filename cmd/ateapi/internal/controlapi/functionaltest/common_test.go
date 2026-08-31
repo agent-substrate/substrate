@@ -82,7 +82,6 @@ type testContext struct {
 	workerCache         *workercache.Cache
 	fakeAtelet          *FakeAteletServer
 	cleanup             func()
-	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister
 	// ateletIndexer is the index DialForAteletOnNode looks up atelets in.
@@ -250,7 +249,6 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		workerCache:         wc,
 		fakeAtelet:          fakeAtelet,
 		cleanup:             cleanup,
-		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
 		sandboxConfigLister: sandboxConfigLister,
 		ateletIndexer:       ateletInformer.GetIndexer(),
@@ -262,9 +260,9 @@ func namespaceForTest(baseName string) string {
 	return fmt.Sprintf("%s-%d", baseName, time.Now().UnixNano())
 }
 
-func createTemplate(t *testing.T, tc *testContext, ns string) {
+func createTemplate(t *testing.T, tc *testContext, ns string) *ateapipb.ActorTemplate {
 	t.Helper()
-	createTemplateWithContainers(t, tc, ns, []atev1alpha1.Container{
+	return createTemplateWithContainers(t, tc, ns, []*ateapipb.Container{
 		{
 			Name:    "main",
 			Image:   "main@sha256:abc",
@@ -283,12 +281,14 @@ func createAtespace(t *testing.T, tc *testContext, name string) {
 
 const poolLabelKey = "pool"
 
-func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container) {
-	createTemplateWithContainersAndVolumes(t, tc, ns, containers, nil)
+func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []*ateapipb.Container) *ateapipb.ActorTemplate {
+	t.Helper()
+	return createTemplateWithContainersAndVolumes(t, tc, ns, containers, nil)
 }
 
-func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes []atev1alpha1.Volume, mounts []atev1alpha1.VolumeMount) {
-	createTemplateWithContainersAndVolumes(t, tc, ns, []atev1alpha1.Container{
+func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes []*ateapipb.Volume, mounts []*ateapipb.VolumeMount) *ateapipb.ActorTemplate {
+	t.Helper()
+	return createTemplateWithContainersAndVolumes(t, tc, ns, []*ateapipb.Container{
 		{
 			Name:         "main",
 			Image:        "main@sha256:abc",
@@ -298,32 +298,39 @@ func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes
 	}, volumes)
 }
 
-func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container, volumes []atev1alpha1.Volume) {
+// createTemplateWithContainersAndVolumes creates the substrate ActorTemplate
+// "tmpl1" in testAtespace, backed by a WorkerPool in ns whose labels match the
+// template's worker selector, and seeds its golden snapshot. ns keys the pool
+// labels, so each test's template still selects only its own pool.
+func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []*ateapipb.Container, volumes []*ateapipb.Volume) *ateapipb.ActorTemplate {
 	t.Helper()
 
-	// Sandbox binaries now live on a (cluster-scoped) SandboxConfig resolved via
-	// the actor's WorkerPool, not on the ActorTemplate. Create a default gvisor
-	// SandboxConfig so a boot-from-spec Run can resolve its assets.
+	// Sandbox binaries live on a (cluster-scoped) SandboxConfig the template
+	// names. Create a default gvisor SandboxConfig so a boot-from-spec Run can
+	// resolve its assets.
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 
-	actorTemplate := &atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "tmpl1",
-			Namespace: ns,
-		},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
-				Location: "gs://fake-fake-fake",
+	created, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     "tmpl1",
+			},
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				StorageLocation: "gs://fake-fake-fake",
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{
+				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				ConfigName:   "gvisor-default",
 			},
 			Containers: containers,
 			Volumes:    volumes,
-			WorkerSelector: &metav1.LabelSelector{
+			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
 		},
-	}
-	createdTemplate, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), actorTemplate, metav1.CreateOptions{})
+	})
 	if err != nil {
 		t.Fatalf("failed to create actor template: %v", err)
 	}
@@ -332,33 +339,29 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	storetest.MustCreateActorSnapshot(t, context.Background(), tc.persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
 		Status: &ateapipb.ActorSnapshotStatus{
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      createdTemplate.GetName(),
-			ActorTemplateUid:       string(createdTemplate.GetUID()),
-			ContentScope:           ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			SnapshotUri:            "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
+			ActorTemplateUid: created.GetMetadata().GetUid(),
+			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:      "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
 		},
 	})
-	createdTemplate.Status = atev1alpha1.ActorTemplateStatus{
-		GoldenSnapshot: goldenSnapshot,
-	}
 
-	_, err = tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).UpdateStatus(context.Background(), createdTemplate, metav1.UpdateOptions{})
+	// Record the golden snapshot on the template's status directly in the
+	// store, as the ActorTemplateReconciler's checkpoint would: there is no
+	// status RPC, and the reconciler does not run in this test environment.
+	updated, err := tc.persistence.UpdateActorTemplate(context.Background(),
+		resources.ActorTemplateRefFromActorTemplate(created), store.PreconditionFrom(created),
+		func(dbTemplate *ateapipb.ActorTemplate) error {
+			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
+				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					GoldenSnapshot: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
+				},
+			}
+			return nil
+		})
 	if err != nil {
-		t.Fatalf("failed to update status: %v", err)
+		t.Fatalf("failed to record the template's golden snapshot: %v", err)
 	}
-
-	// Wait for Informer cache to sync
-	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		tmpl, err := tc.actorTemplateLister.ActorTemplates(ns).Get("tmpl1")
-		if err != nil {
-			return false, nil // Retry if not found in cache yet
-		}
-		return tmpl.Status.GoldenSnapshot != "", nil
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for template status update in informer: %v", err)
-	}
+	return updated
 }
 
 // testPauseImage is the pause image the default test SandboxConfig carries;
@@ -426,36 +429,34 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 	}
 }
 
-func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name string, selector *metav1.LabelSelector) {
+// createTemplateWithSelector creates a substrate ActorTemplate in
+// testAtespace with the given worker selector and no golden snapshot.
+func createTemplateWithSelector(t *testing.T, tc *testContext, name string, selector *ateapipb.Selector) *ateapipb.ActorTemplate {
 	t.Helper()
 	ensureDefaultGvisorSandboxConfig(t, tc)
-	actorTemplate := &atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-		},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
-				Location: "gs://fake-fake-fake",
+	created, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     name,
 			},
-			Containers: []atev1alpha1.Container{
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				StorageLocation: "gs://fake-fake-fake",
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{
+				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+				ConfigName:   "gvisor-default",
+			},
+			Containers: []*ateapipb.Container{
 				{Name: "main", Image: "main@sha256:abc", Command: []string{"/main"}},
 			},
 			WorkerSelector: selector,
 		},
-	}
-	_, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), actorTemplate, metav1.CreateOptions{})
+	})
 	if err != nil {
 		t.Fatalf("failed to create actor template: %v", err)
 	}
-
-	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
-		_, err := tc.actorTemplateLister.ActorTemplates(ns).Get(name)
-		return err == nil, nil
-	})
-	if err != nil {
-		t.Fatalf("failed to wait for template %s/%s in informer: %v", ns, name, err)
-	}
+	return created
 }
 
 // createWorkerPod creates a worker pod, registers the matching Worker, and

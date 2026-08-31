@@ -140,6 +140,26 @@ run_kubectl_fatal() {
   fi
 }
 
+# wait_for_pool_rollout waits for a WorkerPool's Deployment to roll out.
+# ate-controller creates that Deployment, so it does not exist yet when the
+# apply returns, and `kubectl rollout status` errors on a missing object rather
+# than waiting for it. Gate on creation first.
+wait_for_pool_rollout() {
+  local pool="$1" namespace="$2" timeout="${3:-300s}"
+  run_kubectl wait --for=create "deployment/${pool}" -n "${namespace}" \
+    --timeout="${timeout}" \
+    && run_kubectl rollout status "deployment/${pool}" -n "${namespace}" \
+      --timeout="${timeout}"
+}
+
+# wait_for_pool_rollout_fatal aborts the install on failure, like run_kubectl_fatal.
+wait_for_pool_rollout_fatal() {
+  if ! wait_for_pool_rollout "$@"; then
+    echo "error: worker pool $1 did not roll out" >&2
+    exit 1
+  fi
+}
+
 run_kubectl_ate() {
   go run ./cmd/kubectl-ate \
     ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}} \

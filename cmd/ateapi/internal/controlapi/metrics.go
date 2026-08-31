@@ -183,8 +183,8 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
-		ateattr.TemplateNameKey.String(actor.GetActorTemplateName()),
-		ateattr.TemplateNamespaceKey.String(actor.GetActorTemplateNamespace()),
+		ateattr.TemplateNameKey.String(actor.GetActorTemplate().GetName()),
+		ateattr.TemplateAtespaceKey.String(actor.GetActorTemplate().GetAtespace()),
 	}
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)

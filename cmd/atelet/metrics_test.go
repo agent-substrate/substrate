@@ -126,7 +126,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		key  attribute.Key
 		want string
 	}{
-		{ateattr.TemplateNamespaceKey, testTemplateNamespace},
+		{ateattr.TemplateAtespaceKey, testTemplateNamespace},
 		{ateattr.TemplateNameKey, testTemplateName},
 		{ateattr.SnapshotKindKey, ateattr.SnapshotKindLatest},
 		{ateattr.SnapshotScopeKey, ateattr.SnapshotScopeDataOnGolden},
