@@ -107,6 +107,9 @@ data:
                   - match: { connect_matcher: {} }
                     route:
                       cluster: egress_forward_proxy
+                      # Set request timeout to disabled (0) as CONNECT is a long-running stream.
+                      # There will still be a stream_idle_timeout (5 minutes by default).
+                      timeout: 0s
                       upgrade_configs:
                       - upgrade_type: CONNECT
                         connect_config: {}
