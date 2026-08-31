@@ -55,7 +55,7 @@ func TestRelayIngressWithHalfClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer actor.Close()
-	upstream := <-accepted
+	upstream := receiveWithin(t, accepted, "accepted connection")
 	defer upstream.Close()
 
 	clientReader, clientInput := io.Pipe()
@@ -129,7 +129,7 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 }
 
 func TestServeHTTP(t *testing.T) {
-	upstreamHost := make(chan string, 4)
+	var upstreamHosts []string
 	upstreamURL, err := url.Parse("http://actor.internal:80")
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestServeHTTP(t *testing.T) {
 
 	s := newTestServer(t, upstreamURL)
 	s.proxy.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		upstreamHost <- r.Host
+		upstreamHosts = append(upstreamHosts, r.Host)
 		return &http.Response{
 			StatusCode: http.StatusNoContent,
 			Header:     make(http.Header),
@@ -188,8 +188,12 @@ func TestServeHTTP(t *testing.T) {
 		})
 	}
 
-	for _, want := range []string{"client.example", "", "actor-2.team-b.example", ""} {
-		if got := <-upstreamHost; got != want {
+	wantHosts := []string{"client.example", "", "actor-2.team-b.example", ""}
+	if len(upstreamHosts) != len(wantHosts) {
+		t.Fatalf("upstream requests = %d, want %d", len(upstreamHosts), len(wantHosts))
+	}
+	for i, want := range wantHosts {
+		if got := upstreamHosts[i]; got != want {
 			t.Errorf("upstream Host = %q, want %q", got, want)
 		}
 	}
@@ -485,8 +489,13 @@ func TestServeNegotiatesH2(t *testing.T) {
 	go func() { served <- s.Serve(ctx, lis) }()
 	t.Cleanup(func() {
 		cancel()
-		if err := <-served; err != nil {
-			t.Errorf("Serve: %v", err)
+		select {
+		case err := <-served:
+			if err != nil {
+				t.Errorf("Serve: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Error("Serve did not stop after cancellation")
 		}
 	})
 
@@ -502,6 +511,7 @@ func TestServeNegotiatesH2(t *testing.T) {
 			// HTTP/1.1 pool.
 			ForceAttemptHTTP2: h2,
 		}
+		t.Cleanup(transport.CloseIdleConnections)
 		return &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	}
 	request := func(t *testing.T, c *http.Client, method, contentType string) *http.Response {
@@ -510,7 +520,9 @@ func TestServeNegotiatesH2(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+		req.Host = "team-a-agent.example.com" // Use a custom Host header to prove that we no longer rely on Host to route to the actor
+		req.Header.Set(ActorNameHeader, "actor-1")
+		req.Header.Set(AtespaceHeader, "team-a")
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
 		}
@@ -527,13 +539,13 @@ func TestServeNegotiatesH2(t *testing.T) {
 	if res.Proto != "HTTP/2.0" {
 		t.Fatalf("h2-only client negotiated %s, want HTTP/2.0 — Envoy's mirrored HTTP/2 pool cannot connect", res.Proto)
 	}
-	if got := <-protoSeen; got != "HTTP/2.0" {
+	if got := receiveWithin(t, protoSeen, "gRPC backend protocol"); got != "HTTP/2.0" {
 		t.Errorf("gRPC-shaped request reached the actor as %s, want HTTP/2.0", got)
 	}
 	// A non-gRPC request on the same negotiated h2 connection is downgraded
 	// before the actor.
 	request(t, h2Client, http.MethodGet, "")
-	if got := <-protoSeen; got != "HTTP/1.1" {
+	if got := receiveWithin(t, protoSeen, "plain HTTP/2 backend protocol"); got != "HTTP/1.1" {
 		t.Errorf("plain GET over h2 reached the actor as %s, want HTTP/1.1", got)
 	}
 
@@ -543,7 +555,7 @@ func TestServeNegotiatesH2(t *testing.T) {
 	if res.Proto != "HTTP/1.1" {
 		t.Errorf("http/1.1-only client negotiated %s, want HTTP/1.1", res.Proto)
 	}
-	if got := <-protoSeen; got != "HTTP/1.1" {
+	if got := receiveWithin(t, protoSeen, "HTTP/1.1 backend protocol"); got != "HTTP/1.1" {
 		t.Errorf("HTTP/1.1 request reached the actor as %s, want HTTP/1.1", got)
 	}
 }
@@ -573,11 +585,11 @@ func TestDeactivateCancelsInflightRequest(t *testing.T) {
 		req.Header.Set(AtespaceHeader, "team-a")
 		s.ServeHTTP(httptest.NewRecorder(), req)
 	}()
-	<-started
+	receiveWithin(t, started, "in-flight request")
 	if err := s.Deactivate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	<-done
+	receiveWithin(t, done, "canceled in-flight request")
 }
 
 func newTestServer(t *testing.T, upstream *url.URL) *Server {
@@ -732,6 +744,9 @@ func writeCredentialBundle(t *testing.T, path string, cert tls.Certificate) {
 
 func tlsHandshake(serverConfig, clientConfig *tls.Config) (serverErr, clientErr error) {
 	serverConn, clientConn := net.Pipe()
+	deadline := time.Now().Add(5 * time.Second)
+	_ = serverConn.SetDeadline(deadline)
+	_ = clientConn.SetDeadline(deadline)
 	serverTLS := tls.Server(serverConn, serverConfig)
 	clientTLS := tls.Client(clientConn, clientConfig)
 	done := make(chan error, 1)
@@ -861,9 +876,21 @@ func TestProtocolMirrorTransport(t *testing.T) {
 				t.Fatalf("RoundTrip: %v", err)
 			}
 			res.Body.Close()
-			if got := <-protoSeen; got != tt.want {
+			if got := receiveWithin(t, protoSeen, "backend protocol"); got != tt.want {
 				t.Errorf("upstream saw %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func receiveWithin[T any](t *testing.T, channel <-chan T, description string) T {
+	t.Helper()
+	select {
+	case value := <-channel:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", description)
+		var zero T
+		return zero
 	}
 }

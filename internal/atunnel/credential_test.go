@@ -47,7 +47,8 @@ func TestBrokerCertificateSourceMintsAndReusesKey(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, second := <-broker.publicKeys, <-broker.publicKeys
+	first := receiveWithin(t, broker.publicKeys, "first certificate public key")
+	second := receiveWithin(t, broker.publicKeys, "second certificate public key")
 	if string(first) != string(second) {
 		t.Fatal("renewal replaced the actor private key")
 	}
