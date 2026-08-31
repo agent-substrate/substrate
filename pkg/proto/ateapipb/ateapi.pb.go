@@ -5691,14 +5691,18 @@ type Worker struct {
 	// +k8s:immutable
 	Ip string `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
 	// sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-	// CRD's own vocabulary, so it is not validated beyond that. Mutable.
+	// CRD's own vocabulary, so it is only bounded, not validated. Mutable.
 	//
 	// +k8s:optional
+	// +k8s:maxLength=63
 	SandboxClass string `protobuf:"bytes,8,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// labels mirror the WorkerPool object's Kubernetes labels, which selectors
 	// match against.
+	// Kubernetes does not cap an object's label count, so the bound below is
+	// a generous guardrail, not a mirror of an upstream limit.
 	//
 	// +k8s:optional
+	// +k8s:maxProperties=64
 	// +k8s:eachKey=+k8s:format=k8s-label-key
 	// +k8s:eachVal=+k8s:format=k8s-label-value
 	Labels map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`

@@ -1366,15 +1366,19 @@ message Worker {
   string ip = 7;
 
   // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-  // CRD's own vocabulary, so it is not validated beyond that. Mutable.
+  // CRD's own vocabulary, so it is only bounded, not validated. Mutable.
   //
   // +k8s:optional
+  // +k8s:maxLength=63
   string sandbox_class = 8;
 
   // labels mirror the WorkerPool object's Kubernetes labels, which selectors
   // match against.
+  // Kubernetes does not cap an object's label count, so the bound below is
+  // a generous guardrail, not a mirror of an upstream limit.
   //
   // +k8s:optional
+  // +k8s:maxProperties=64
   // +k8s:eachKey=+k8s:format=k8s-label-key
   // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> labels = 9;

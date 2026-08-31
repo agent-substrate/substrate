@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -751,10 +752,24 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ip = "not-an-ip" })),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker", "ip"), nil, "").WithOrigin("format=ip-strict")},
 	}, {
+		name: "sandbox_class too long",
+		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.SandboxClass = strings.Repeat("x", 64) })),
+		want: field.ErrorList{field.TooLong(field.NewPath("worker", "sandbox_class"), nil, 63).WithOrigin("maxLength")},
+	}, {
 		name: "valid labels",
 		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
 			w.Labels = map[string]string{"tier": "batch", "pool.ate.io/zone": "us-west1-c"}
 		})),
+	}, {
+		name: "too many labels",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			labels := make(map[string]string, 65)
+			for i := 0; i < 65; i++ {
+				labels[fmt.Sprintf("key-%d", i)] = "v"
+			}
+			w.Labels = labels
+		})),
+		want: field.ErrorList{field.TooMany(field.NewPath("worker", "labels"), 65, 64).WithOrigin("maxProperties")},
 	}, {
 		name: "invalid label key",
 		req:  validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Labels = map[string]string{"bad key!": "batch"} })),
