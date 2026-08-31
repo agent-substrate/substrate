@@ -279,22 +279,27 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		return fmt.Errorf("getting worker: %w", err)
 	}
 
-	// UpdateWorker replaces the whole resource, so the two mutable fields are
+	// UpdateWorker replaces the whole resource, so the one mutable field is
 	// edited onto the Worker as it was read and the rest is sent back unchanged
 	// — anything else altered here, including a field cleared by omission, is
 	// rejected as INVALID_ARGUMENT. Everything else on a Worker is immutable
 	// after create, so drift there cannot be repaired by an update; it takes a
 	// new pod, which arrives under a new key.
 	var changed bool
-	if w.GetSandboxClass() != string(pool.Spec.SandboxClass) {
-		slog.InfoContext(ctx, "Syncer: updating worker (SandboxClass changed)", key.logAttrs()...)
-		w.SandboxClass = string(pool.Spec.SandboxClass)
-		changed = true
-	}
 	if !maps.Equal(w.GetLabels(), pool.GetLabels()) {
 		slog.InfoContext(ctx, "Syncer: updating worker (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()
 		changed = true
+	}
+	if w.GetSandboxClass() != string(pool.Spec.SandboxClass) {
+		// Expected mid-rollout: sandboxClass drives the worker pod's shape, so
+		// editing it on the pool replaces every pod rather than reclassifying
+		// any. This pod predates that edit and is on its way out; its successor
+		// registers under a new key with the new class. Writing the pool's value
+		// back would be rejected, and would misreport this pod's shape to the
+		// scheduler if it were not.
+		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
+			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.SandboxClass)))...)
 	}
 	if w.GetIp() != pod.Status.PodIP {
 		// TODO: I don't think this is possible, but handling this case so we can

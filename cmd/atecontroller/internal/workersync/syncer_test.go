@@ -526,12 +526,12 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 
 	// Change a mutable worker field on the pool, so the next reconcile has an
 	// update to make.
-	if err := poolIndexer.Update(workerPool(ns, poolName, "microvm", map[string]string{"foo": "bar"})); err != nil {
+	if err := poolIndexer.Update(workerPool(ns, poolName, "gvisor", map[string]string{"foo": "baz"})); err != nil {
 		t.Fatalf("updating pool: %v", err)
 	}
 
 	// Land a concurrent version bump the moment the syncer calls UpdateWorker.
-	// The injected change is a drain: it is mutable, and unlike sandbox_class the
+	// The injected change is a drain: it is mutable, and unlike the labels the
 	// syncer's update path does not write it, so it survives the retry only if
 	// the retry re-read.
 	conflicted := false
@@ -556,11 +556,42 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	// The retry re-reads, so both changes end up on the record.
 	mustReconcile(t, ctx, s, key)
 	got := api.get(testPodUID)
-	if got.GetSandboxClass() != "microvm" {
-		t.Errorf("worker sandbox class = %q, want microvm", got.GetSandboxClass())
+	if got.GetLabels()["foo"] != "baz" {
+		t.Errorf("worker labels = %v, want foo=baz", got.GetLabels())
 	}
 	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		t.Errorf("worker state = %v, want the concurrently injected DRAINING to survive the retry", got.GetStatus().GetState())
+	}
+}
+
+// Editing a pool's sandboxClass rolls its pods rather than reclassifying them,
+// so a pod that outlives the edit keeps the class it was built with. Writing the
+// pool's new value back would be rejected as an immutable-field change, and
+// would misreport this pod's shape to the scheduler if it were not.
+func TestSyncer_SandboxClassDriftLeavesWorkerAlone(t *testing.T) {
+	ctx := context.Background()
+
+	ns, podName, poolName := "ns-syncer-class", "worker-unit-class", "pool-class"
+
+	api := newFakeControl()
+	s, pods, poolIndexer := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	key := seedPod(t, pods, workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"))
+
+	mustReconcile(t, ctx, s, key)
+	registered := api.get(testPodUID)
+
+	if err := poolIndexer.Update(workerPool(ns, poolName, "microvm", nil)); err != nil {
+		t.Fatalf("updating pool: %v", err)
+	}
+	mustReconcile(t, ctx, s, key)
+
+	got := api.get(testPodUID)
+	if got.GetSandboxClass() != "gvisor" {
+		t.Errorf("worker sandbox class = %q, want it left at gvisor", got.GetSandboxClass())
+	}
+	if got.GetMetadata().GetVersion() != registered.GetMetadata().GetVersion() {
+		t.Errorf("worker version = %d, want %d: the drift must not provoke a write",
+			got.GetMetadata().GetVersion(), registered.GetMetadata().GetVersion())
 	}
 }
 
