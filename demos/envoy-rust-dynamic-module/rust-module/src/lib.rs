@@ -211,13 +211,16 @@ struct Filter {
     pending: Option<Pending>,
 }
 
-impl Filter {
+/// Helpers shared by both filter modes. They depend only on the parsed config,
+/// so they live here rather than on either filter -- in particular so the
+/// co-existence filter never has to name the callout filter's type.
+impl Config {
     /// Publishes the routing decision the same way the Go ingress handler does:
     /// dynamic metadata for the ORIGINAL_DST cluster, plus the target-port
     /// header for atunnel. :authority is deliberately left untouched so atunnel
     /// still authorizes by the actor's own DNS name.
     fn route_to<EHF: EnvoyHttpFilter>(&self, envoy_filter: &mut EHF, actor: &ActorRef, worker_ip: &str) {
-        let target = format!("{}:{}", worker_ip, self.config.atunnel_port);
+        let target = format!("{}:{}", worker_ip, self.atunnel_port);
         envoy_filter.set_dynamic_metadata_string(ORIGINAL_DST_NAMESPACE, ORIGINAL_DST_ADDRESS_KEY, &target);
         envoy_filter.set_dynamic_metadata_string(
             ORIGINAL_DST_NAMESPACE,
@@ -225,7 +228,7 @@ impl Filter {
             &actor.target_port.to_string(),
         );
         envoy_filter.set_request_header(
-            &self.config.target_port_header,
+            &self.target_port_header,
             actor.target_port.to_string().as_bytes(),
         );
     }
@@ -251,7 +254,7 @@ impl Filter {
             Some((h, p)) => (h, p.parse::<u16>().ok()?),
             None => (authority, 80),
         };
-        let labels = host.strip_suffix(&self.config.actor_dns_suffix)?.strip_suffix('.')?;
+        let labels = host.strip_suffix(&self.actor_dns_suffix)?.strip_suffix('.')?;
         let (name, atespace) = labels.split_once('.')?;
         if name.is_empty() || atespace.is_empty() || atespace.contains('.') {
             return None;
@@ -270,12 +273,12 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
         envoy_filter: &mut EHF,
         _end_of_stream: bool,
     ) -> abi::envoy_dynamic_module_type_on_http_filter_request_headers_status {
-        let Some(authority) = self.authority(envoy_filter) else {
+        let Some(authority) = self.config.authority(envoy_filter) else {
             envoy_filter.send_response(404, &[], Some(b"no authority on request"), None);
             return abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
         };
 
-        let Some(actor) = self.parse_actor_ref(&authority) else {
+        let Some(actor) = self.config.parse_actor_ref(&authority) else {
             // Same disposition as ingress.invalidHostErr: an authority that is
             // not an actor DNS name is a 404, not a 500.
             envoy_filter.send_response(404, &[], Some(b"invalid actor host"), None);
@@ -293,7 +296,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
                     if let Some(id) = self.cache_hit {
                         let _ = envoy_filter.increment_counter(id, 1);
                     }
-                    self.route_to(envoy_filter, &actor, &worker_ip);
+                    self.config.route_to(envoy_filter, &actor, &worker_ip);
                     return abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
                 }
                 // Expired: drop it so a concurrent request cannot serve it either.
@@ -386,7 +389,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for Filter {
             );
         }
 
-        self.route_to(envoy_filter, &pending.actor, &resp.worker_ip);
+        self.config.route_to(envoy_filter, &pending.actor, &resp.worker_ip);
         envoy_filter.continue_decoding();
     }
 }
@@ -419,22 +422,6 @@ struct CacheFilter {
     learn_key: Option<String>,
 }
 
-impl CacheFilter {
-    fn route_to<EHF: EnvoyHttpFilter>(&self, envoy_filter: &mut EHF, actor: &ActorRef, worker_ip: &str) {
-        let target = format!("{}:{}", worker_ip, self.config.atunnel_port);
-        envoy_filter.set_dynamic_metadata_string(ORIGINAL_DST_NAMESPACE, ORIGINAL_DST_ADDRESS_KEY, &target);
-        envoy_filter.set_dynamic_metadata_string(
-            ORIGINAL_DST_NAMESPACE,
-            ORIGINAL_DST_PORT_KEY,
-            &actor.target_port.to_string(),
-        );
-        envoy_filter.set_request_header(
-            &self.config.target_port_header,
-            actor.target_port.to_string().as_bytes(),
-        );
-    }
-}
-
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
     fn on_request_headers(
         &mut self,
@@ -444,11 +431,10 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
         // A helper filter must never turn a request away: anything it cannot
         // understand is simply handed to ext_proc, which owns the error
         // responses and their exact wording.
-        let probe = Filter { config: self.config.clone(), cache_hit: None, cache_miss: None, pending: None };
-        let Some(authority) = probe.authority(envoy_filter) else {
+        let Some(authority) = self.config.authority(envoy_filter) else {
             return abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
         };
-        let Some(actor) = probe.parse_actor_ref(&authority) else {
+        let Some(actor) = self.config.parse_actor_ref(&authority) else {
             return abi::envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
         };
 
@@ -461,7 +447,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for CacheFilter {
                     if let Some(id) = self.cache_hit {
                         let _ = envoy_filter.increment_counter(id, 1);
                     }
-                    self.route_to(envoy_filter, &actor, &worker_ip);
+                    self.config.route_to(envoy_filter, &actor, &worker_ip);
                     // Mark the request and force route re-selection, so ext_proc
                     // picks up the per-route "disabled" override.
                     envoy_filter.set_request_header(ROUTE_RESOLVED_HEADER, b"1");
