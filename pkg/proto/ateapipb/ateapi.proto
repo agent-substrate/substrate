@@ -646,12 +646,14 @@ message ActorTemplate {
 
   // +k8s:required # at least one container
   // +k8s:maxItems=10 # matches the CRD's containers bound
-  // +k8s:listType=atomic
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
   repeated Container containers = 3;
 
   // +k8s:optional
   // +k8s:maxItems=32 # matches the CRD's volumes bound
-  // +k8s:listType=atomic
+  // +k8s:listType=map # the CRD declares volumes as a map keyed by name
+  // +k8s:listMapKey=name
   repeated Volume volumes = 4;
 
   // +k8s:required
@@ -679,8 +681,7 @@ message Resources {
   //
   // +k8s:optional
   // +k8s:maxItems=2
-  // +k8s:listType=atomic
-  // +k8s:unique=map
+  // +k8s:listType=map
   // +k8s:listMapKey=name
   // +k8s:customValidation # names, quantity parse/positivity, cpu bound
   repeated Limits limits = 1;
@@ -811,7 +812,6 @@ message Container {
   //
   // +k8s:optional
   // +k8s:maxItems=64 # matches the CRD's command bound
-  // +k8s:listType=atomic
   // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string command = 3;
 
@@ -820,13 +820,13 @@ message Container {
   //
   // +k8s:optional
   // +k8s:maxItems=64 # matches the CRD's args bound
-  // +k8s:listType=atomic
   // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string args = 4;
 
   // +k8s:optional
   // +k8s:maxItems=32 # matches the CRD's env bound
-  // +k8s:listType=atomic
+  // +k8s:listType=map # each variable is set at most once
+  // +k8s:listMapKey=name
   repeated EnvVar env = 5;
 
   // readyz is an optional HTTP readiness probe; when set the actor is not
@@ -836,8 +836,10 @@ message Container {
   ContainerReadyz readyz = 6;
 
   // +k8s:optional
-  // +k8s:listType=atomic
   // +k8s:maxItems=32
+  // +k8s:listType=map # a volume may be mounted at several paths, so the
+  // path, not the name, is the key
+  // +k8s:listMapKey=mount_path
   repeated VolumeMount volume_mounts = 7;
 
   // security_context adjusts the container's security settings. Unset leaves
@@ -857,6 +859,8 @@ message Container {
 // modeling a subset of the Kubernetes container securityContext.
 message SecurityContext {
   // capabilities adjusts the Linux capabilities of the container's process.
+  //
+  // +k8s:optional
   Capabilities capabilities = 1;
 }
 
@@ -865,10 +869,20 @@ message SecurityContext {
 // granted. Capabilities are named without the "CAP_" prefix; "ALL" in drop
 // removes the whole default set.
 message Capabilities {
-  // add lists capabilities to grant on top of the default set.
+  // add lists capabilities to grant on top of the default set. "ALL" is
+  // rejected: name the individual capabilities the container needs.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64 # matches the CRD's bound
+  // +k8s:customValidation # capability grammar; "ALL" not accepted
   repeated string add = 1;
 
-  // drop lists capabilities to remove from the default set.
+  // drop lists capabilities to remove from the default set. "ALL" drops the
+  // whole set, so drop+add expresses an exact set rather than a relative one.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64 # matches the CRD's bound
+  // +k8s:customValidation # capability grammar
   repeated string drop = 2;
 }
 

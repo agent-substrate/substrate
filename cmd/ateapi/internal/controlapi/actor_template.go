@@ -291,3 +291,35 @@ func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPat
 	}
 	return nil
 }
+
+// capabilityRE mirrors the ActorTemplate CRD's pattern for Linux capability
+// names: uppercase, without the "CAP_" prefix (which is added when the OCI
+// spec is written; the prefixed spelling would silently grant nothing).
+var capabilityRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+func validateCapabilities(fldPath *field.Path, caps []string, allowAll bool) field.ErrorList {
+	var errs field.ErrorList
+	for i, c := range caps {
+		p := fldPath.Index(i)
+		switch {
+		case c == "ALL" && !allowAll:
+			errs = append(errs, field.Invalid(p, c, "add does not accept 'ALL'; name the individual capabilities the container needs"))
+		case c == "ALL":
+		case len(c) > 63:
+			errs = append(errs, field.TooLong(p, nil, 63))
+		case strings.HasPrefix(c, "CAP_"):
+			errs = append(errs, field.Invalid(p, c, "must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE')"))
+		case !capabilityRE.MatchString(c):
+			errs = append(errs, field.Invalid(p, c, "must be an uppercase capability name like 'NET_BIND_SERVICE'"))
+		}
+	}
+	return errs
+}
+
+func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+	return validateCapabilities(fldPath, value, false)
+}
+
+func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+	return validateCapabilities(fldPath, value, true)
+}

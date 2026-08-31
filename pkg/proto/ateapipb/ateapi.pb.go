@@ -2057,11 +2057,13 @@ type ActorTemplate struct {
 	WorkerSelector *Selector `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
 	// +k8s:required # at least one container
 	// +k8s:maxItems=10 # matches the CRD's containers bound
-	// +k8s:listType=atomic
+	// +k8s:listType=map
+	// +k8s:listMapKey=name
 	Containers []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches the CRD's volumes bound
-	// +k8s:listType=atomic
+	// +k8s:listType=map # the CRD declares volumes as a map keyed by name
+	// +k8s:listMapKey=name
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	// +k8s:required
 	// +k8s:customValidation # on_commit must be a subset of on_pause
@@ -2174,8 +2176,7 @@ type Resources struct {
 	//
 	// +k8s:optional
 	// +k8s:maxItems=2
-	// +k8s:listType=atomic
-	// +k8s:unique=map
+	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	// +k8s:customValidation # names, quantity parse/positivity, cpu bound
 	Limits        []*Limits `protobuf:"bytes,1,rep,name=limits,proto3" json:"limits,omitempty"`
@@ -2613,7 +2614,6 @@ type Container struct {
 	//
 	// +k8s:optional
 	// +k8s:maxItems=64 # matches the CRD's command bound
-	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	// Arguments to the entrypoint; the image's CMD is used if unset (unless
@@ -2621,12 +2621,12 @@ type Container struct {
 	//
 	// +k8s:optional
 	// +k8s:maxItems=64 # matches the CRD's args bound
-	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Args []string `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches the CRD's env bound
-	// +k8s:listType=atomic
+	// +k8s:listType=map # each variable is set at most once
+	// +k8s:listMapKey=name
 	Env []*EnvVar `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
 	// readyz is an optional HTTP readiness probe; when set the actor is not
 	// ready until the endpoint returns 200.
@@ -2634,8 +2634,10 @@ type Container struct {
 	// +k8s:optional
 	Readyz *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
 	// +k8s:optional
-	// +k8s:listType=atomic
 	// +k8s:maxItems=32
+	// +k8s:listType=map # a volume may be mounted at several paths, so the
+	// path, not the name, is the key
+	// +k8s:listMapKey=mount_path
 	VolumeMounts []*VolumeMount `protobuf:"bytes,7,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// security_context adjusts the container's security settings. Unset leaves
 	// the default capability set.
@@ -2749,6 +2751,8 @@ func (x *Container) GetResources() *Resources {
 type SecurityContext struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// capabilities adjusts the Linux capabilities of the container's process.
+	//
+	// +k8s:optional
 	Capabilities  *Capabilities `protobuf:"bytes,1,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2797,9 +2801,19 @@ func (x *SecurityContext) GetCapabilities() *Capabilities {
 // removes the whole default set.
 type Capabilities struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// add lists capabilities to grant on top of the default set.
+	// add lists capabilities to grant on top of the default set. "ALL" is
+	// rejected: name the individual capabilities the container needs.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=64 # matches the CRD's bound
+	// +k8s:customValidation # capability grammar; "ALL" not accepted
 	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
-	// drop lists capabilities to remove from the default set.
+	// drop lists capabilities to remove from the default set. "ALL" drops the
+	// whole set, so drop+add expresses an exact set rather than a relative one.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=64 # matches the CRD's bound
+	// +k8s:customValidation # capability grammar
 	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

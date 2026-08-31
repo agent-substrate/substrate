@@ -431,6 +431,17 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshots_config", "on_pause"), nil, "").WithOrigin("minimum")},
 	}, {
+		name: "valid on_resume",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT}
+		},
+	}, {
+		name: "negative on_resume from_data",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(-1)}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshots_config", "on_resume", "from_data"), nil, "").WithOrigin("minimum")},
+	}, {
 		name: "on_resume from_data outside the enum",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(99)}
@@ -449,6 +460,44 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.TooMany(field.NewPath("containers"), 11, 10).WithOrigin("maxItems")},
 	}, {
+		name: "duplicate container name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = append(tmpl.Containers, &ateapipb.Container{Name: "main", Image: "example.com/other:v1"})
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(1), nil)},
+	}, {
+		name: "duplicate env name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "PORT", Value: "1"}, {Name: "PORT", Value: "2"}}
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("env").Index(1), nil)},
+	}, {
+		name: "same volume mounted at two paths is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "data", MountPath: "/mnt/data"},
+			}
+		},
+	}, {
+		name: "duplicate mount_path",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "other", MountPath: "/var/data"},
+			}
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1), nil)},
+	}, {
+		name: "duplicate volume name",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{
+				{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+				{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+			}
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("volumes").Index(1), nil)},
+	}, {
 		name: "too many command entries",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Command = make([]string, 65)
@@ -460,6 +509,33 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers[0].Command = []string{strings.Repeat("x", 4097)}
 		},
 		want: field.ErrorList{field.TooLong(field.NewPath("containers").Index(0).Child("command").Index(0), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "valid command and args",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Command = []string{"/bin/app"}
+			tmpl.Containers[0].Args = []string{"--serve", "--port=8080"}
+		},
+	}, {
+		name: "too many args entries",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Args = make([]string, 65)
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("containers").Index(0).Child("args"), 65, 64).WithOrigin("maxItems")},
+	}, {
+		name: "args entry too long",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Args = []string{strings.Repeat("x", 4097)}
+		},
+		want: field.ErrorList{field.TooLong(field.NewPath("containers").Index(0).Child("args").Index(0), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "too many volume_mounts",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			for i := 0; i < 33; i++ {
+				tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
+					&ateapipb.VolumeMount{Name: "data", MountPath: fmt.Sprintf("/mnt/p%d", i)})
+			}
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("containers").Index(0).Child("volume_mounts"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "too many env entries",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -515,6 +591,42 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), "")},
 	}, {
+		name: "valid security_context capabilities",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{
+				Add:  []string{"NET_BIND_SERVICE"},
+				Drop: []string{"ALL"},
+			}}
+		},
+	}, {
+		name: "capabilities add rejects ALL",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: []string{"ALL"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, "")},
+	}, {
+		name: "capability with CAP_ prefix",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: []string{"CAP_NET_BIND_SERVICE"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, "")},
+	}, {
+		name: "lowercase capability",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Drop: []string{"net_raw"}}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "drop").Index(0), nil, "")},
+	}, {
+		name: "too many capabilities",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			caps := make([]string, 65)
+			for i := range caps {
+				caps[i] = fmt.Sprintf("CAP%d", i)
+			}
+			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: caps}}
+		},
+		want: field.ErrorList{field.TooMany(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add"), 65, 64).WithOrigin("maxItems")},
+	}, {
 		name: "valid readyz",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{
@@ -552,6 +664,12 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{}}
 		},
 		want: field.ErrorList{field.Required(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), "")},
+	}, {
+		name: "negative readyz port",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Readyz = &ateapipb.ContainerReadyz{HttpGet: &ateapipb.HTTPGetAction{Port: -1}}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("readyz", "http_get", "port"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "readyz port out of range",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -804,7 +922,9 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 
 	// A server-owned status write passes validation and bumps the version.
 	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
-		tmpl.Status = &ateapipb.ActorTemplateStatus{SandboxAssets: &ateapipb.SandboxAssets{PauseImage: "example.com/pause@sha256:abc"}}
+		tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+			GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "snap-1"},
+		}}
 		return nil
 	})
 	if err != nil {

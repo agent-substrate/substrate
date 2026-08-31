@@ -166,11 +166,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Container.volume_mounts",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Control.CreateActorTemplate",
     "message": "method has no doc comment"
   },

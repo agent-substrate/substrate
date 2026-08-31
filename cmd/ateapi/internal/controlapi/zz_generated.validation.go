@@ -649,8 +649,14 @@ func Validate_ActorTemplate(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.Container, b *ateapipb.Container) bool { return a.Name == b.Name }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_Container); len(e) != 0 {
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.Container, b *ateapipb.Container) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_Container); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -689,8 +695,14 @@ func Validate_ActorTemplate(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.Volume, b *ateapipb.Volume) bool { return a.Name == b.Name }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_Volume); len(e) != 0 {
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.Volume, b *ateapipb.Volume) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_Volume); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -892,6 +904,87 @@ func Validate_Atespace(
 	return errs
 }
 
+// Validate_Capabilities validates an instance of Capabilities according
+// to declarative validation rules in the API schema.
+func Validate_Capabilities(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.Capabilities) (errs field.ErrorList) {
+
+	{ // field ateapipb.Capabilities.Add
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 64).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_Capabilities_Add(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Capabilities) []string {
+				return oldObj.Add
+			})
+		errs = append(errs, fn(fldPath.Child("add"), obj.Add, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.Capabilities.Drop
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 64).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_Capabilities_Drop(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Capabilities) []string {
+				return oldObj.Drop
+			})
+		errs = append(errs, fn(fldPath.Child("drop"), obj.Drop, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_Container validates an instance of Container according
 // to declarative validation rules in the API schema.
 func Validate_Container(
@@ -1065,8 +1158,14 @@ func Validate_Container(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.EnvVar, b *ateapipb.EnvVar) bool { return a.Name == b.Name }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_EnvVar); len(e) != 0 {
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.EnvVar, b *ateapipb.EnvVar) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_EnvVar); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1135,8 +1234,14 @@ func Validate_Container(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// lists with map semantics require unique keys
+			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.MountPath == b.MountPath }); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_VolumeMount); len(e) != 0 {
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.MountPath == b.MountPath }, deepEqualImpl_, Validate_VolumeMount); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1167,6 +1272,8 @@ func Validate_Container(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_SecurityContext(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -3338,6 +3445,45 @@ func Validate_SandboxConfig(
 				return &oldObj.ConfigName
 			})
 		errs = append(errs, fn(fldPath.Child("config_name"), &obj.ConfigName, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_SecurityContext validates an instance of SecurityContext according
+// to declarative validation rules in the API schema.
+func Validate_SecurityContext(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.SecurityContext) (errs field.ErrorList) {
+
+	{ // field ateapipb.SecurityContext.Capabilities
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.Capabilities,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Capabilities(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.SecurityContext) *ateapipb.Capabilities {
+				return oldObj.Capabilities
+			})
+		errs = append(errs, fn(fldPath.Child("capabilities"), obj.Capabilities, oldVal, oldObj != nil)...)
 	}
 
 	return errs
