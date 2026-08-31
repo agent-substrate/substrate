@@ -49,6 +49,7 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_checkpoint_duration",
 	"atenet_router_route_duration",
 	"ate_scheduler_eligible_workers",
+	"atelet_snapshot_size",
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
