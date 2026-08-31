@@ -1160,6 +1160,10 @@ func Validate_EgressPolicy(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
@@ -1314,11 +1318,12 @@ func Validate_EgressRuleEffects(
 		errs = append(errs, e...)
 	}
 
-	{ // field ateapipb.EgressRuleEffects.InjectStaticHeader
+	{ // field ateapipb.EgressRuleEffects.InjectStaticHeaders
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []*ateapipb.CredentialHeaderInjection,
 			oldValueCorrelated bool) (errs field.ErrorList) {
+			// Uniqueness validation is implemented via custom, handwritten validation
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
 				if ateDeepEqual(obj, oldObj) {
@@ -1331,23 +1336,34 @@ func Validate_EgressRuleEffects(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 16).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_EgressRuleEffects_InjectStaticHeaders(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// iterate the list and call the type's validation function
-			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_CredentialHeaderInjection); len(e) != 0 {
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
+				func(a *ateapipb.CredentialHeaderInjection, b *ateapipb.CredentialHeaderInjection) bool {
+					return a.Header == b.Header
+				}, deepEqualImpl_, Validate_CredentialHeaderInjection); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.EgressRuleEffects) []*ateapipb.CredentialHeaderInjection {
-				return oldObj.InjectStaticHeader
+				return oldObj.InjectStaticHeaders
 			})
-		errs = append(errs, fn(fldPath.Child("inject_static_header"), obj.InjectStaticHeader, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("inject_static_headers"), obj.InjectStaticHeaders, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -1486,6 +1502,10 @@ func Validate_HostnameRule(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
@@ -1495,6 +1515,10 @@ func Validate_HostnameRule(
 			}
 			// custom validation
 			if e := ValidateCustom_HostnameRule_Patterns(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1558,6 +1582,10 @@ func Validate_IPBlockRule(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
@@ -1567,6 +1595,10 @@ func Validate_IPBlockRule(
 			}
 			// custom validation
 			if e := ValidateCustom_IPBlockRule_Cidrs(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
