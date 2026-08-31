@@ -364,3 +364,80 @@ func TestMTLSPicksUpCARotation(t *testing.T) {
 	}
 	plugin2.client.Close()
 }
+
+func TestCAPoolCache_HitAndFileModification(t *testing.T) {
+	t.Parallel()
+	ca1 := newTestCA(t)
+	ca2 := newTestCA(t)
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "trust-bundle.pem")
+	writeFile(t, caPath, ca1.certPEM())
+
+	cache := newCAPoolCache(caPath)
+
+	pool1, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("getCertPool (1st call): %v", err)
+	}
+
+	// 2nd call should return the exact cached instance (pointer equality).
+	pool2, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("getCertPool (2nd call): %v", err)
+	}
+	if pool1 != pool2 {
+		t.Errorf("expected cached cert pool pointer equality on unchanged file, got %p != %p", pool1, pool2)
+	}
+
+	// Modify the file on disk to ca2.
+	time.Sleep(10 * time.Millisecond) // Ensure mtime advances on fast filesystems
+	writeFile(t, caPath, ca2.certPEM())
+
+	// 3rd call should detect file change and return a newly parsed pool.
+	pool3, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("getCertPool (3rd call after edit): %v", err)
+	}
+	if pool1 == pool3 {
+		t.Errorf("expected new cert pool after file modification, got same pointer %p", pool3)
+	}
+}
+
+func TestCAPoolCache_ExpiryReload(t *testing.T) {
+	t.Parallel()
+	key := newKey(t)
+	// CA cert with short lifespan in the past
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(100),
+		Subject:               pkix.Name{CommonName: "expired-ca"},
+		NotBefore:             time.Now().Add(-2 * time.Hour),
+		NotAfter:              time.Now().Add(-time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der := createCert(t, tmpl, tmpl, &key.PublicKey, key)
+	expiredPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "trust-bundle.pem")
+	writeFile(t, caPath, expiredPEM)
+
+	cache := newCAPoolCache(caPath)
+
+	pool1, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("getCertPool (expired CA): %v", err)
+	}
+
+	// Because NotAfter is in the past, expiry check (time.Now().Before(c.expiry)) fails,
+	// forcing a reload on the next call even if the file hasn't changed.
+	pool2, err := cache.getCertPool()
+	if err != nil {
+		t.Fatalf("getCertPool (2nd call on expired CA): %v", err)
+	}
+	if pool1 == pool2 {
+		t.Errorf("expected reload for expired CA bundle, got same pointer %p", pool2)
+	}
+}
