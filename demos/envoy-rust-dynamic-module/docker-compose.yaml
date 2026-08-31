@@ -1,0 +1,144 @@
+# Two gateways, one workload, one control plane.
+#
+#   arm A  localhost:10000 -> envoy-baseline -> ext_proc gRPC -> atenet-router -> fakeate (gRPC/mTLS)
+#   arm B  localhost:10001 -> envoy-dynmod   -> Rust dynamic module in-process -> fakeate (HTTP, on miss only)
+#
+# Both Envoys are the same v1.39 image substrate pins, both route to the same
+# four worker backends through an ORIGINAL_DST cluster, and both resolve actors
+# through the same fakeate with the same simulated control-plane cost. The only
+# difference is where the routing decision is made.
+name: ate-rust-dynmod
+
+networks:
+  atenet:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  shared:
+
+services:
+  # Stands in for ate-apiserver. Mints the demo CA on startup and writes it,
+  # plus the router's client bundle, to the shared volume.
+  fakeate:
+    image: debian:bookworm-slim
+    networks: [atenet]
+    volumes:
+      - shared:/shared
+      - ./bin:/bin/ate:ro
+    command:
+      - /bin/ate/fakeate
+      - --grpc-addr=:9443
+      - --http-addr=:8081
+      - --workers=172.28.0.11,172.28.0.12,172.28.0.13,172.28.0.14
+      - --resume-latency=${RESUME_LATENCY:-1ms}
+    ports:
+      # Exposed so the bench script can read and reset the control-plane call
+      # counters between arms.
+      - "21088:8081"
+
+  # The real substrate router, unmodified, running with no Kubernetes at all.
+  atenet-router:
+    image: debian:bookworm-slim
+    networks: { atenet: { ipv4_address: 172.28.0.20 } }
+    depends_on: [fakeate]
+    volumes:
+      - shared:/shared
+      - ./bin:/bin/ate:ro
+      - ./actortemplates.yaml:/etc/ate/actortemplates.yaml:ro
+    # Wait for fakeate to publish the CA before dialing it.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while [ ! -f /shared/client-bundle.pem ]; do sleep 0.2; done
+        exec /bin/ate/atenet router \
+          --mode=ingress \
+          --actor-templates-file=/etc/ate/actortemplates.yaml \
+          --ateapi-address=dns:///fakeate:9443 \
+          --ateapi-ca-file=/shared/ca.pem \
+          --ateapi-client-cert=/shared/client-bundle.pem \
+          --ateapi-server-name=fakeate \
+          --extproc-address=172.28.0.20 \
+          --port-xds=18000 \
+          --port-extproc=50051 \
+          --port-http=8080 \
+          --port-https=0 \
+          --port-connect-tls=0 \
+          --upstream-credential-bundle= \
+          --upstream-trust-bundle= \
+          --otlp-collector-address= \
+          --envoy-admin-address=envoy-baseline:9901 \
+          --status-port=4040 \
+          --health-interval=1h \
+          --log-level=${ROUTER_LOG_LEVEL:-warn}
+
+  # Arm A: Envoy configured entirely over ADS by the router above.
+  envoy-baseline:
+    image: envoyproxy/envoy:v1.39-latest
+    networks: [atenet]
+    depends_on: [atenet-router]
+    user: root
+    volumes:
+      - ./envoy/baseline-bootstrap.yaml:/etc/envoy/envoy.yaml:ro
+    command: ["/usr/local/bin/envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    ports:
+      - "21080:8080"
+      - "21900:9901"
+
+  # Arm B: Envoy with the Rust dynamic module and no Go router in the path.
+  envoy-dynmod:
+    image: envoyproxy/envoy:v1.39-latest
+    networks: [atenet]
+    depends_on: [fakeate]
+    user: root
+    environment:
+      # Envoy dlopens "${ENVOY_DYNAMIC_MODULES_SEARCH_PATH}/lib<name>.so",
+      # where <name> is dynamic_module_config.name in the filter config.
+      ENVOY_DYNAMIC_MODULES_SEARCH_PATH: /modules
+    volumes:
+      - ./envoy/dynmod.yaml:/etc/envoy/envoy.yaml:ro
+      - ./rust-module/target/release:/modules:ro
+    command: ["/usr/local/bin/envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    ports:
+      - "21081:8080"
+      - "21082:8082"
+      - "21901:9901"
+
+  actor-1:
+    image: debian:bookworm-slim
+    networks: { atenet: { ipv4_address: 172.28.0.11 } }
+    volumes: [./bin:/bin/ate:ro]
+    command: [/bin/ate/actorbackend, --name=worker-1, --addr=:443]
+  actor-2:
+    image: debian:bookworm-slim
+    networks: { atenet: { ipv4_address: 172.28.0.12 } }
+    volumes: [./bin:/bin/ate:ro]
+    command: [/bin/ate/actorbackend, --name=worker-2, --addr=:443]
+  actor-3:
+    image: debian:bookworm-slim
+    networks: { atenet: { ipv4_address: 172.28.0.13 } }
+    volumes: [./bin:/bin/ate:ro]
+    command: [/bin/ate/actorbackend, --name=worker-3, --addr=:443]
+  actor-4:
+    image: debian:bookworm-slim
+    networks: { atenet: { ipv4_address: 172.28.0.14 } }
+    volumes: [./bin:/bin/ate:ro]
+    command: [/bin/ate/actorbackend, --name=worker-4, --addr=:443]
+
+  # Arm C: the Rust module and ext_proc co-existing in one chain. This is the
+  # shape a real migration would take.
+  envoy-coexist:
+    image: envoyproxy/envoy:v1.39-latest
+    networks: [atenet]
+    depends_on: [atenet-router]
+    user: root
+    environment:
+      ENVOY_DYNAMIC_MODULES_SEARCH_PATH: /modules
+    volumes:
+      - ./envoy/coexist.yaml:/etc/envoy/envoy.yaml:ro
+      - ./rust-module/target/release:/modules:ro
+    command: ["/usr/local/bin/envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    ports:
+      - "21083:8080"
+      - "21903:9901"
