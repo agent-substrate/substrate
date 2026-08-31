@@ -129,7 +129,7 @@ func TestRelayIngressCancellationClosesBothSides(t *testing.T) {
 }
 
 func TestServeHTTP(t *testing.T) {
-	upstreamHost := make(chan string, 4)
+	upstreamHost := make(chan string, 3)
 	upstreamURL, err := url.Parse("http://actor.internal:80")
 	if err != nil {
 		t.Fatal(err)
@@ -149,28 +149,27 @@ func TestServeHTTP(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		host         string
-		originalHost string
-		wantStatus   int
+		name       string
+		host       string
+		actorName  string
+		atespace   string
+		wantStatus int
 	}{
-		{name: "active actor", host: "actor-1.team-a.actors.resources.substrate.ate.dev", wantStatus: http.StatusNoContent},
-		{name: "active actor with port", host: "actor-1.team-a.actors.resources.substrate.ate.dev:443", wantStatus: http.StatusNoContent},
-		{name: "DNS case insensitive", host: "ACTOR-1.TEAM-A.ACTORS.RESOURCES.SUBSTRATE.ATE.DEV", wantStatus: http.StatusNoContent},
-		{name: "router original host", host: "10.0.0.52:443", originalHost: "actor-1.team-a.actors.resources.substrate.ate.dev", wantStatus: http.StatusNoContent},
-		{name: "wrong actor", host: "actor-2.team-a.actors.resources.substrate.ate.dev", wantStatus: http.StatusMisdirectedRequest},
-		{name: "wrong atespace", host: "actor-1.team-b.actors.resources.substrate.ate.dev", wantStatus: http.StatusMisdirectedRequest},
-		{name: "suffix confusion", host: "actor-1.team-a.actors.resources.substrate.ate.dev.example.com", wantStatus: http.StatusMisdirectedRequest},
-		{name: "malformed port", host: "actor-1.team-a.actors.resources.substrate.ate.dev:nope", wantStatus: http.StatusMisdirectedRequest},
-		{name: "empty", wantStatus: http.StatusMisdirectedRequest},
+		{name: "active actor", host: "client.example", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
+		{name: "host does not identify actor", host: "actor-2.team-b.example", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
+		{name: "empty host", actorName: "actor-1", atespace: "team-a", wantStatus: http.StatusNoContent},
+		{name: "wrong actor", actorName: "actor-2", atespace: "team-a", wantStatus: http.StatusMisdirectedRequest},
+		{name: "wrong atespace", actorName: "actor-1", atespace: "team-b", wantStatus: http.StatusMisdirectedRequest},
+		{name: "missing actor name", atespace: "team-a", wantStatus: http.StatusMisdirectedRequest},
+		{name: "missing atespace", actorName: "actor-1", wantStatus: http.StatusMisdirectedRequest},
+		{name: "invalid actor name", actorName: "INVALID", atespace: "team-a", wantStatus: http.StatusMisdirectedRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
 			req.Host = tt.host
-			if tt.originalHost != "" {
-				req.Header.Set(OriginalHostHeader, tt.originalHost)
-			}
+			req.Header.Set(ActorNameHeader, tt.actorName)
+			req.Header.Set(AtespaceHeader, tt.atespace)
 			rec := httptest.NewRecorder()
 			s.ServeHTTP(rec, req)
 			if rec.Code != tt.wantStatus {
@@ -182,9 +181,9 @@ func TestServeHTTP(t *testing.T) {
 		})
 	}
 
-	for range 4 {
-		if got := <-upstreamHost; got != "actor-1.team-a.actors.resources.substrate.ate.dev" && got != "actor-1.team-a.actors.resources.substrate.ate.dev:443" && got != "ACTOR-1.TEAM-A.ACTORS.RESOURCES.SUBSTRATE.ATE.DEV" {
-			t.Errorf("upstream Host = %q", got)
+	for _, want := range []string{"client.example", "actor-2.team-b.example", ""} {
+		if got := <-upstreamHost; got != want {
+			t.Errorf("upstream Host = %q, want %q", got, want)
 		}
 	}
 }
@@ -196,11 +195,11 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	}
 
 	s := newTestServer(t, upstreamURL)
-	var gotURLHost, gotHost, gotHeader string
+	var gotURLHost, gotHost http.Header
 	s.proxy.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		gotURLHost = r.URL.Host
-		gotHost = r.Host
-		gotHeader = r.Header.Get(TargetPortHeader)
+		gotURLHost = http.Header{"Host": []string{r.URL.Host}}
+		gotHost = r.Header.Clone()
+		gotHost.Set("Host", r.Host)
 		return &http.Response{
 			StatusCode: http.StatusNoContent,
 			Header:     make(http.Header),
@@ -224,7 +223,9 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
-			req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+			req.Host = "client.example"
+			req.Header.Set(ActorNameHeader, "actor-1")
+			req.Header.Set(AtespaceHeader, "team-a")
 			if tt.targetPort != "" {
 				req.Header.Set(TargetPortHeader, tt.targetPort)
 			}
@@ -233,14 +234,16 @@ func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 			if rec.Code != http.StatusNoContent {
 				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
 			}
-			if gotURLHost != tt.wantDialedHost {
-				t.Errorf("dialed host = %q, want %q", gotURLHost, tt.wantDialedHost)
+			if gotURLHost.Get("Host") != tt.wantDialedHost {
+				t.Errorf("dialed host = %q, want %q", gotURLHost.Get("Host"), tt.wantDialedHost)
 			}
-			if gotHost != "actor-1.team-a.actors.resources.substrate.ate.dev" {
-				t.Errorf("Host header changed to %q; the actor should see its stable mesh hostname", gotHost)
+			if gotHost.Get("Host") != "client.example" {
+				t.Errorf("Host header changed to %q", gotHost.Get("Host"))
 			}
-			if gotHeader != "" {
-				t.Errorf("%s leaked to the actor upstream: %q", TargetPortHeader, gotHeader)
+			for _, header := range []string{TargetPortHeader, ActorNameHeader, AtespaceHeader} {
+				if got := gotHost.Get(header); got != "" {
+					t.Errorf("%s leaked to the actor upstream: %q", header, got)
+				}
 			}
 		})
 	}
@@ -264,13 +267,18 @@ func TestServeConnectHTTPValidatesMethodAndAuthority(t *testing.T) {
 	}{
 		{name: "rejects non CONNECT", method: http.MethodGet, host: "actor-1.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMethodNotAllowed},
 		{name: "requires authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev", want: http.StatusBadRequest},
-		{name: "rejects invalid authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev:70000", want: http.StatusMisdirectedRequest},
+		{name: "rejects invalid authority port", method: http.MethodConnect, host: "actor-1.team-a.actors.resources.substrate.ate.dev:70000", want: http.StatusBadRequest},
 		{name: "rejects inactive actor", method: http.MethodConnect, host: "actor-2.team-a.actors.resources.substrate.ate.dev:9090", want: http.StatusMisdirectedRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "https://worker/", nil)
 			req.Host = tt.host
+			req.Header.Set(ActorNameHeader, "actor-1")
+			req.Header.Set(AtespaceHeader, "team-a")
+			if tt.name == "rejects inactive actor" {
+				req.Header.Set(ActorNameHeader, "actor-2")
+			}
 			rec := httptest.NewRecorder()
 			s.ServeConnectHTTP(rec, req)
 			if rec.Code != tt.want {
@@ -316,6 +324,8 @@ func TestDeactivateClosesIdleUpstreamConnections(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://worker/", nil)
 	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+	req.Header.Set(ActorNameHeader, "actor-1")
+	req.Header.Set(AtespaceHeader, "team-a")
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -337,6 +347,8 @@ func TestInactive(t *testing.T) {
 	s := newTestServer(t, upstream)
 	req := httptest.NewRequest(http.MethodGet, "https://worker/", nil)
 	req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+	req.Header.Set(ActorNameHeader, "actor-1")
+	req.Header.Set(AtespaceHeader, "team-a")
 
 	for _, phase := range []string{"before activation", "after deactivation"} {
 		t.Run(phase, func(t *testing.T) {
@@ -550,6 +562,8 @@ func TestDeactivateCancelsInflightRequest(t *testing.T) {
 		defer close(done)
 		req := httptest.NewRequest(http.MethodGet, "https://worker/", nil)
 		req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+		req.Header.Set(ActorNameHeader, "actor-1")
+		req.Header.Set(AtespaceHeader, "team-a")
 		s.ServeHTTP(httptest.NewRecorder(), req)
 	}()
 	<-started

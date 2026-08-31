@@ -894,39 +894,38 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 	}
 }
 
-// authorityFilterStateFilter captures :authority into
-// extproc.AuthorityFilterStateKey filter state, so main_internal's HTTP leg
-// can read it back across the internal-listener hop (see buildHcm,
-// ingress.HandleRequestHeaders). buildConnectTerminateHCM and buildHcm's
-// ingress listeners use it; main_internal itself must not, since that would
-// capture the tunneled protocol's own, unrelated :authority instead.
-func authorityFilterStateFilter() *hcmv3.HttpFilter {
+// actorIdentityFilterStateFilter captures the actor identity headers so
+// main_internal can read them across the CONNECT internal-listener hop.
+func actorIdentityFilterStateFilter() *hcmv3.HttpFilter {
+	values := make([]*setfilterstatecommonv3.FilterStateValue, 0, 2)
+	for _, identity := range []struct{ key, header string }{
+		{extproc.ActorNameFilterStateKey, atunnel.ActorNameHeader},
+		{extproc.AtespaceFilterStateKey, atunnel.AtespaceHeader},
+	} {
+		values = append(values, &setfilterstatecommonv3.FilterStateValue{
+			Key: &setfilterstatecommonv3.FilterStateValue_ObjectKey{
+				ObjectKey: identity.key,
+			},
+			FactoryKey: "envoy.string",
+			Value: &setfilterstatecommonv3.FilterStateValue_FormatString{
+				FormatString: &corev3.SubstitutionFormatString{
+					Format: &corev3.SubstitutionFormatString_TextFormatSource{
+						TextFormatSource: &corev3.DataSource{
+							Specifier: &corev3.DataSource_InlineString{
+								InlineString: "%REQ(" + identity.header + ")%",
+							},
+						},
+					},
+				},
+			},
+			SharedWithUpstream: setfilterstatecommonv3.FilterStateValue_ONCE,
+		})
+	}
 	return &hcmv3.HttpFilter{
 		Name: "envoy.filters.http.set_filter_state",
 		ConfigType: &hcmv3.HttpFilter_TypedConfig{
 			TypedConfig: newAny(&setfilterstatev3.Config{
-				OnRequestHeaders: []*setfilterstatecommonv3.FilterStateValue{
-					{
-						Key: &setfilterstatecommonv3.FilterStateValue_ObjectKey{
-							ObjectKey: extproc.AuthorityFilterStateKey,
-						},
-						// extproc.AuthorityFilterStateKey is a custom (non-well-known)
-						// key, so the generic string factory is required.
-						FactoryKey: "envoy.string",
-						Value: &setfilterstatecommonv3.FilterStateValue_FormatString{
-							FormatString: &corev3.SubstitutionFormatString{
-								Format: &corev3.SubstitutionFormatString_TextFormatSource{
-									TextFormatSource: &corev3.DataSource{
-										Specifier: &corev3.DataSource_InlineString{
-											InlineString: "%REQ(:AUTHORITY)%",
-										},
-									},
-								},
-							},
-						},
-						SharedWithUpstream: setfilterstatecommonv3.FilterStateValue_ONCE,
-					},
-				},
+				OnRequestHeaders: values,
 			}),
 		},
 	}
@@ -961,7 +960,7 @@ func (x *XdsServer) buildConnectTerminateHCM(statPrefix string) *anypb.Any {
 		},
 		CodecType: hcmv3.HttpConnectionManager_AUTO,
 		HttpFilters: []*hcmv3.HttpFilter{
-			authorityFilterStateFilter(),
+			actorIdentityFilterStateFilter(),
 			{
 				Name: "envoy.filters.http.router",
 				ConfigType: &hcmv3.HttpFilter_TypedConfig{
@@ -1016,12 +1015,9 @@ func buildConnectRoutes() *routev3.RouteConfiguration {
 }
 
 // buildHcm builds the HTTP ext_proc-fronted HCM shared by the ingress_http,
-// ingress_https, and main_internal listeners. captureAuthority runs
-// authorityFilterStateFilter to populate the actor's :authority for ingress
-// listeners; main_internal passes false, since connect_terminate already
-// shared the correct value and re-deriving it here would clobber it with
-// the tunneled protocol's own, unrelated :authority.
-func (x *XdsServer) buildHcm(statPrefix string, captureAuthority bool) *anypb.Any {
+// ingress_https, and main_internal listeners. captureActorIdentity preserves
+// the two actor identity headers across CONNECT re-entry.
+func (x *XdsServer) buildHcm(statPrefix string, captureActorIdentity bool) *anypb.Any {
 	extProcConfig := newAny(&extprocv3filter.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
 			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
@@ -1046,11 +1042,10 @@ func (x *XdsServer) buildHcm(statPrefix string, captureAuthority bool) *anypb.An
 			RequestTrailerMode:  extprocv3filter.ProcessingMode_SKIP,
 			ResponseTrailerMode: extprocv3filter.ProcessingMode_SKIP,
 		},
-		// Passes the resolved actor's authority as a request attribute (see
-		// extproc.AuthorityFilterStateAttribute, ingress.HandleRequestHeaders)
-		// and lets the response write the resolved worker address into
-		// ingress.OriginalDstMetadataKey.
-		RequestAttributes: []string{extproc.AuthorityFilterStateAttribute},
+		RequestAttributes: []string{
+			extproc.ActorNameFilterStateAttribute,
+			extproc.AtespaceFilterStateAttribute,
+		},
 		MetadataOptions: &extprocv3filter.MetadataOptions{
 			ForwardingNamespaces: &extprocv3filter.MetadataOptions_MetadataNamespaces{
 				Untyped: []string{ingress.OriginalDstMetadataKey},
@@ -1066,8 +1061,8 @@ func (x *XdsServer) buildHcm(statPrefix string, captureAuthority bool) *anypb.An
 	accessLogConfig := newAny(&streamaccesslogv3.StdoutAccessLog{})
 
 	httpFilters := []*hcmv3.HttpFilter{}
-	if captureAuthority {
-		httpFilters = append(httpFilters, authorityFilterStateFilter())
+	if captureActorIdentity {
+		httpFilters = append(httpFilters, actorIdentityFilterStateFilter())
 	}
 	httpFilters = append(httpFilters,
 		&hcmv3.HttpFilter{

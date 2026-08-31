@@ -53,7 +53,7 @@ kubectl ate create actor jupyter-notebook -a ate-demo-jupyter --template-ref jup
 
 ### 2. Access Jupyter via the Proxy!
 
-Substrate routes HTTP traffic using the `Host` header. To make this easy without modifying local `/etc/hosts` files, this demo includes a lightweight NGINX reverse proxy (`jupyter-proxy`) that automatically injects the proper `Host` header (`jupyter-notebook.ate-demo-jupyter.actors.resources.substrate.ate.dev`) and forwards traffic internally to the Substrate router.
+Substrate routes HTTP traffic using `X-Ate-Actor-Name` and `X-Ate-Atespace`. This demo includes a lightweight NGINX reverse proxy (`jupyter-proxy`) that injects those routing headers and forwards traffic internally to the Substrate router.
 
 1. **Port-forward the lightweight proxy to your local machine:**
 

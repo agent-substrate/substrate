@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -106,8 +107,7 @@ func (c *RouterClient) BaseURL() string {
 	return c.baseURL
 }
 
-// Get issues GET path to actor through the router, setting the actor's DNS Host
-// so the router routes (and resumes) it. The caller must close the body.
+// Get issues GET path to actor through the router. The caller must close the body.
 func (c *RouterClient) Get(ctx context.Context, actorRef resources.ActorRef, path string) (*http.Response, error) {
 	return c.request(ctx, http.MethodGet, actorRef, path, nil)
 }
@@ -126,7 +126,8 @@ func (c *RouterClient) request(ctx context.Context, method string, actorRef reso
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	// The router routes on the Host/:authority, not a header.
+	req.Header.Set(atunnel.ActorNameHeader, actorRef.Name)
+	req.Header.Set(atunnel.AtespaceHeader, actorRef.Atespace)
 	req.Host = resources.ActorDNSName(actorRef)
 	return c.http.Do(req)
 }
@@ -154,6 +155,10 @@ func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef,
 		Method: http.MethodConnect,
 		URL:    &url.URL{Host: destination},
 		Host:   destination,
+		Header: http.Header{
+			atunnel.ActorNameHeader: []string{actorRef.Name},
+			atunnel.AtespaceHeader:  []string{actorRef.Atespace},
+		},
 	}
 	if err := req.Write(rawConn); err != nil {
 		_ = rawConn.Close()

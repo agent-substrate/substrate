@@ -59,7 +59,7 @@ INFORMATIONAL_METRICS = (
 
 
 def actor_host(actor: str, atespace: str) -> str:
-    """Host header the router routes on (internal/resources/actor.go)."""
+    """Return an actor's stable mesh DNS name."""
     return f"{actor}.{atespace}.actors.resources.substrate.ate.dev"
 
 
@@ -91,7 +91,8 @@ def _binary_threshold(
 def build_spec_dict(
     *,
     uri: str,
-    hosts: list[str],
+    actor_names: list[str],
+    atespace: str,
     client_concurrency: int,
     connections: int,
     max_pending_requests: int,
@@ -117,12 +118,23 @@ def build_spec_dict(
             "request_method": "POST",
             "request_headers": [
                 {
-                    "header": {"key": "host", "value": host},
+                    "header": {
+                        "key": "host",
+                        "value": actor_host(actor_name, atespace),
+                    },
                     "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
-                }
+                },
+                {
+                    "header": {"key": "x-ate-actor-name", "value": actor_name},
+                    "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                },
+                {
+                    "header": {"key": "x-ate-atespace", "value": atespace},
+                    "append_action": "OVERWRITE_IF_EXISTS_OR_ADD",
+                },
             ],
         }
-        for host in hosts
+        for actor_name in actor_names
     ]
     # Threshold roles: tail latency (mean+2stdev, ~p95 proxy — no true
     # percentiles in the builtin adaptive metrics) is the SLO bound;

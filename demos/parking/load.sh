@@ -107,7 +107,9 @@ worker() {
   while [[ $(date +%s) -lt ${deadline} ]]; do
     # %{http_code} lets us tally outcomes; %{time_total} reveals parking waits.
     curl -s -o /dev/null -w '%{http_code} %{time_total}\n' \
-      -H "Host: ${host}" "${ROUTER}" >>"${log}" 2>/dev/null
+      -H "Host: ${host}" \
+      -H "X-Ate-Actor-Name: ${actor}" \
+      -H "X-Ate-Atespace: ${ATESPACE}" "${ROUTER}" >>"${log}" 2>/dev/null
     # Free the worker so a parked competitor can proceed (simulate going idle).
     kubectl ate suspend actor "${actor}" --atespace "${ATESPACE}" >/dev/null 2>&1 || true
   done

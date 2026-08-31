@@ -120,6 +120,8 @@ kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
 curl -s -X POST http://localhost:8000/ \
   -H 'Host: egress-demo.ate-demo-egress.actors.resources.substrate.ate.dev' \
+  -H 'X-Ate-Actor-Name: egress-demo' \
+  -H 'X-Ate-Atespace: demo' \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```

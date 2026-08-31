@@ -70,8 +70,8 @@ Parking is **on by default** (`--parked-request-budget=5s`,
 Fill both workers by requesting two actors, leaving them `RUNNING`:
 
 ```bash
-curl -s -H "Host: p1.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
-curl -s -H "Host: p2.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "X-Ate-Actor-Name: p1" -H "X-Ate-Atespace: ate-demo-parking" http://localhost:8000
+curl -s -H "X-Ate-Actor-Name: p2" -H "X-Ate-Atespace: ate-demo-parking" http://localhost:8000
 
 kubectl ate get workers   # both workers are now bound to p1 and p2
 kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
@@ -82,7 +82,7 @@ the `curl` hangs while the router retries the resume:
 
 ```bash
 curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
-  -H "Host: p3.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
+  -H "X-Ate-Actor-Name: p3" -H "X-Ate-Atespace: ate-demo-parking" http://localhost:8000
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1

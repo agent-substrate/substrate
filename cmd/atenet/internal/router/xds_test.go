@@ -38,6 +38,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
@@ -46,9 +47,36 @@ import (
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
+
+func TestActorIdentityFilterStateFilter(t *testing.T) {
+	filter := actorIdentityFilterStateFilter()
+	config := &setfilterstatev3.Config{}
+	if err := filter.GetTypedConfig().UnmarshalTo(config); err != nil {
+		t.Fatalf("unmarshal set_filter_state config: %v", err)
+	}
+
+	want := map[string]string{
+		extproc.ActorNameFilterStateKey: "%REQ(" + atunnel.ActorNameHeader + ")%",
+		extproc.AtespaceFilterStateKey:  "%REQ(" + atunnel.AtespaceHeader + ")%",
+	}
+	if len(config.GetOnRequestHeaders()) != len(want) {
+		t.Fatalf("captured values = %d, want %d", len(config.GetOnRequestHeaders()), len(want))
+	}
+	for _, value := range config.GetOnRequestHeaders() {
+		key := value.GetObjectKey()
+		format := value.GetFormatString().GetTextFormatSource().GetInlineString()
+		if format != want[key] {
+			t.Errorf("capture %q = %q, want %q", key, format, want[key])
+		}
+		if strings.Contains(format, ":AUTHORITY") {
+			t.Errorf("capture %q still derives actor identity from authority", key)
+		}
+	}
+}
 
 // assertDualStackIngress checks an ingress listener keeps its 0.0.0.0 primary
 // and gains exactly one "::" socket on the same port.

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -106,7 +107,8 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 		defer conn.Close()
 
 		conn.SetDeadline(time.Now().Add(10 * time.Second))
-		if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: " + resources.ActorDNSName(actorRef) + "\r\nConnection: close\r\n\r\n")); err != nil {
+		if _, err := fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\n%s: %s\r\n%s: %s\r\nConnection: close\r\n\r\n",
+			resources.ActorDNSName(actorRef), atunnel.ActorNameHeader, actorRef.Name, atunnel.AtespaceHeader, actorRef.Atespace); err != nil {
 			t.Fatalf("writing tunneled request: %v", err)
 		}
 		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)

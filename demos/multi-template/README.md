@@ -65,11 +65,11 @@ When you send an HTTP request through the router, Substrate automatically detect
 
 ```bash
 # counter binary
-curl -s -H "Host: c1.ate-demo-multi-template-counter.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "X-Ate-Actor-Name: c1" -H "X-Ate-Atespace: ate-demo-multi-template-counter" http://localhost:8000
 # -> hello from: <ip> | preserved memory count: 1
 
 # fspersist binary
-curl -s -H "Host: f1.ate-demo-multi-template-fspersist.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "X-Ate-Actor-Name: f1" -H "X-Ate-Atespace: ate-demo-multi-template-fspersist" http://localhost:8000
 # -> pod: <ip>
 #    --- history ---
 #    pod=<ip> | count=0 | time=<timestamp>
@@ -87,7 +87,7 @@ preserves that state across the snapshot/restore cycle:
 
 ```bash
 kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
-curl -s -H "Host: f1.ate-demo-multi-template-fspersist.actors.resources.substrate.ate.dev" http://localhost:8000  # history persists; count keeps climbing
+curl -s -H "X-Ate-Actor-Name: f1" -H "X-Ate-Atespace: ate-demo-multi-template-fspersist" http://localhost:8000  # history persists; count keeps climbing
 ```
 
 ## How to Uninstall

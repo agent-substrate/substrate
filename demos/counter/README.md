@@ -80,7 +80,10 @@ When you send an HTTP request through the router, Substrate automatically detect
 
 1. Send an HTTP POST request to increment the counter:
 ```bash
-curl -X POST -H "Host: my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -X POST \
+  -H "X-Ate-Actor-Name: my-counter-1" \
+  -H "X-Ate-Atespace: ate-demo-counter" \
+  http://localhost:8000
 ```
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
@@ -117,7 +120,10 @@ through it to the named port.
 proxy behavior wouldn't do:
 
 ```bash
-curl -p -x http://localhost:8001 http://my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev:9090/
+curl -p -x http://localhost:8001 \
+  -H "X-Ate-Actor-Name: my-counter-1" \
+  -H "X-Ate-Atespace: ate-demo-counter" \
+  http://my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev:9090/
 ```
 
 This reaches the same actor's second listener and resumes it exactly like any

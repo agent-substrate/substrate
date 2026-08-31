@@ -48,9 +48,8 @@ init_wait_time()
 tracer = get_tracer(__name__)
 
 
-# Atenet router fronts all actor traffic. Actors are addressed by setting
-# the HTTP Host header to <actor-name>.<atespace>.actors.resources.substrate.ate.dev;
-# the router resolves that to the actor's current worker pod.
+# Atenet router fronts all actor traffic. The actor identity headers select
+# the actor whose current worker pod the router resolves.
 ROUTER_URL = "http://atenet-router.ate-system.svc.cluster.local"
 ACTOR_DOMAIN = "actors.resources.substrate.ate.dev"
 
@@ -99,9 +98,7 @@ class CounterUser(User):
         except Exception as e:
             logger.error(f"Failed to create actor {self.actor_name}: {e}")
 
-        # One HTTP session per user, talking to the router. The Host header
-        # pins each request to this actor regardless of which worker pod
-        # hosts it after a resume.
+        # One HTTP session per user, talking to the router.
         self.http_session = requests.Session()
         self.run_url = f"{ROUTER_URL}/"
         self.host_header = f"{self.actor_name}.{ATESPACE}.{ACTOR_DOMAIN}"
@@ -139,7 +136,11 @@ class CounterUser(User):
         # 2. Run/Increment (HTTP via atenet-router)
         start_time = time.time()
         with tracer.start_as_current_span("RunCounter") as span:
-            headers = {"Host": self.host_header}
+            headers = {
+                "Host": self.host_header,
+                "X-Ate-Actor-Name": self.actor_name,
+                "X-Ate-Atespace": ATESPACE,
+            }
             inject(headers)
             try:
                 response = self.http_session.post(self.run_url, headers=headers)

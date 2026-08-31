@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
@@ -415,6 +416,8 @@ func (u *durDirUser) httpProtoCall(ctx context.Context, metricName, route string
 	}
 	httpReq.Host = u.hostHeader
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set(atunnel.ActorNameHeader, u.actorName)
+	httpReq.Header.Set(atunnel.AtespaceHeader, u.cfg.Atespace)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 
 	start := time.Now()

@@ -44,11 +44,10 @@ const (
 	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
 	StaleAssignmentHeader = "X-Ate-Assignment-Stale"
-	// OriginalHostHeader carries the actor authority across router dataplanes
-	// that must use :authority to select the worker as their dynamic backend.
-	// atunnel only accepts mTLS-authenticated router clients, and the router's
-	// ext_proc server overwrites this header before every request.
-	OriginalHostHeader = "X-Ate-Original-Host"
+	// ActorNameHeader and AtespaceHeader identify the actor selected by the
+	// trusted ingress router.
+	ActorNameHeader = "X-Ate-Actor-Name"
+	AtespaceHeader  = "X-Ate-Atespace"
 
 	// TargetPortHeader carries the port to reach on the actor: the CONNECT
 	// :authority's port for arbitrary-port ingress, or the default 80
@@ -130,13 +129,14 @@ func NewServer(cfg Config) (*Server, error) {
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(cfg.Upstream)
-			// Retain the actor's stable mesh hostname rather than the
-			// upstream's, matching NewSingleHostReverseProxy's default
-			// behavior.
+			// Retain the client's Host rather than the upstream's, matching
+			// NewSingleHostReverseProxy's default behavior.
 			pr.Out.Host = pr.In.Host
 
 			port := pr.In.Header.Get(TargetPortHeader)
 			pr.Out.Header.Del(TargetPortHeader)
+			pr.Out.Header.Del(ActorNameHeader)
+			pr.Out.Header.Del(AtespaceHeader)
 			if p, ok := ParsePort(port); ok {
 				pr.Out.URL.Host = net.JoinHostPort(cfg.Upstream.Hostname(), strconv.Itoa(p))
 			}
@@ -465,7 +465,7 @@ func (s *Server) closeIdleUpstreamConnections() {
 	}
 }
 
-// ServeHTTP validates the actor hostname on every request before proxying it.
+// ServeHTTP validates the actor identity headers on every request before proxying it.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, requestCtx, release, ok := s.authorize(r)
 	if !ok {
@@ -474,32 +474,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	// Do not expose the router-only routing header to actor code. Restore Host
-	// so dataplanes that route dynamically on worker IP still give the actor its
-	// stable actor DNS name.
-	actorHost := r.Header.Get(OriginalHostHeader)
-	if actorHost == "" {
-		actorHost = r.Host
-	}
-	r.Header.Del(OriginalHostHeader)
-	r.Host = actorHost
-
-	// ReverseProxy changes the URL destination but intentionally retains Host,
-	// allowing the actor application to observe its stable actor DNS name.
+	// ReverseProxy changes the URL destination but intentionally retains Host.
 	s.proxy.ServeHTTP(w, r.WithContext(requestCtx))
 }
 
 func (s *Server) authorize(r *http.Request) (resources.ActorRef, context.Context, func(), bool) {
-	actorHost := r.Header.Get(OriginalHostHeader)
-	if actorHost == "" {
-		actorHost = r.Host
+	ref := resources.ActorRef{
+		Name:     r.Header.Get(ActorNameHeader),
+		Atespace: r.Header.Get(AtespaceHeader),
 	}
-	host, err := requestHostname(actorHost)
-	if err != nil {
-		return resources.ActorRef{}, nil, nil, false
-	}
-	ref, err := resources.ParseActorDNSName(host)
-	if err != nil {
+	if !resources.IsValidResourceName(ref.Name) || !resources.IsValidResourceName(ref.Atespace) {
 		return resources.ActorRef{}, nil, nil, false
 	}
 
@@ -524,23 +508,4 @@ func (s *Server) authorize(r *http.Request) (resources.ActorRef, context.Context
 func (s *Server) reject(w http.ResponseWriter) {
 	w.Header().Set(StaleAssignmentHeader, "true")
 	http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
-}
-
-func requestHostname(hostport string) (string, error) {
-	if hostport == "" {
-		return "", fmt.Errorf("empty host")
-	}
-	host := hostport
-	if strings.Contains(hostport, ":") {
-		var port string
-		var err error
-		host, port, err = net.SplitHostPort(hostport)
-		if err != nil {
-			return "", fmt.Errorf("invalid host %q: %w", hostport, err)
-		}
-		if _, ok := ParsePort(port); !ok {
-			return "", fmt.Errorf("invalid port in host %q", hostport)
-		}
-	}
-	return strings.ToLower(host), nil
 }

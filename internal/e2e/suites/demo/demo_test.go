@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -1287,6 +1288,8 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
+	reqHttp.Header.Set(atunnel.ActorNameHeader, actorRef.Name)
+	reqHttp.Header.Set(atunnel.AtespaceHeader, actorRef.Atespace)
 	reqHttp.Host = resources.ActorDNSName(actorRef)
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}

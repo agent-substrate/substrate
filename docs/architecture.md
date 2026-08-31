@@ -338,8 +338,10 @@ Handles actor-aware routing and automatic re-animation.
 
   * **Ingress Routing**: `atenet-router` runs Envoy with an `ext_proc` external
     processor and accepts HTTP traffic for the Actor DNS suffix. The ext_proc
-    extracts the Actor name and Atespace from the `Host` header and calls the
-    Control Plane to resume the Actor and resolve its current worker assignment.
+    reads the Actor name from `X-Ate-Actor-Name` and the Atespace from
+    `X-Ate-Atespace`, then calls the Control Plane to resume the Actor and
+    resolve its current worker assignment. `Host` remains application authority
+    and is not used as actor identity.
 
   * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
     authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
@@ -378,7 +380,7 @@ sequenceDiagram
 
     Client->>DNS: resolve actor DNS name
     DNS-->>Client: ingress gateway address
-    Client->>Gateway: HTTP request (Host = actor)
+    Client->>Gateway: HTTP request (X-Ate-Actor-Name, X-Ate-Atespace)
     Gateway->>API: ResumeActor(atespace, actor name)
     API->>Atelet: Restore
     Store-->>Atelet: download snapshot

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
@@ -185,6 +186,8 @@ func runCommand(ctx context.Context, atenetAddr string, actorRef resources.Actor
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(atunnel.ActorNameHeader, actorRef.Name)
+	req.Header.Set(atunnel.AtespaceHeader, actorRef.Atespace)
 	req.Host = resources.ActorDNSName(actorRef)
 
 	resp, err := http.DefaultClient.Do(req)

@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
@@ -300,6 +301,8 @@ func (u *gluttonUser) ping(ctx context.Context) {
 	}
 	httpReq.Host = u.hostHeader
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set(atunnel.ActorNameHeader, u.actorName)
+	httpReq.Header.Set(atunnel.AtespaceHeader, u.cfg.Atespace)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 
 	start := time.Now()
@@ -460,6 +463,8 @@ func (u *gluttonUser) postProto(ctx context.Context, path string, req, resp prot
 	}
 	httpReq.Host = u.hostHeader
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set(atunnel.ActorNameHeader, u.actorName)
+	httpReq.Header.Set(atunnel.AtespaceHeader, u.cfg.Atespace)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 
 	httpResp, err := u.cfg.HTTPClient.Do(httpReq)

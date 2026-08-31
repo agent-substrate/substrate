@@ -110,7 +110,7 @@ def _warm_actor(
 ) -> None:
     """Bring one created actor to serving, so the load ladder never
     measures a cold start: resume the actor, then poll POST /ping through
-    the router (addressed by the actor's Host header) until it answers
+    the router until it answers
     200 or the deadline expires. Resume errors are retried: ateapi
     returns FailedPrecondition/Unavailable until a worker frees up."""
     ref = ateapi_pb2.ObjectRef(atespace=atespace, name=name)
@@ -125,7 +125,11 @@ def _warm_actor(
         try:
             resp = session.post(
                 f"{router_url.rstrip('/')}/ping",
-                headers={"Host": host},
+                headers={
+                    "Host": host,
+                    "X-Ate-Actor-Name": name,
+                    "X-Ate-Atespace": atespace,
+                },
                 data=b"",
                 timeout=10,
             )
