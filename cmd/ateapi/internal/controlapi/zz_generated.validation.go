@@ -1868,7 +1868,7 @@ func Validate_ExternalVolume(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.LongName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 317); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

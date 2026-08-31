@@ -803,11 +803,13 @@ type ExternalVolume struct {
 	// +k8s:optional
 	// +k8s:maxLength=256
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
-	// Internal volume plugin name or CSI driver name. CSI driver names are DNS
-	// subdomains.
+	// Internal volume plugin name or CSI driver name, from the StorageClass
+	// provisioner. Values are either DNS subdomains (pd.csi.storage.gke.io) or
+	// qualified names (substrate.io/mock), so this is only bounded: 253-char
+	// prefix + '/' + 63-char name.
 	//
 	// +k8s:optional
-	// +k8s:format=k8s-long-name
+	// +k8s:maxLength=317
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// +k8s:optional
 	// +k8s:minimum=1

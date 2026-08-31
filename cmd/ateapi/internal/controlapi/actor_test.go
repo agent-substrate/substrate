@@ -535,7 +535,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			s.ActorVolumes = []*ateapipb.ExternalVolume{{
 				VolumeName:      "vol-a",
 				StorageVolumeId: strings.Repeat("x", 256), // exactly at the bound
-				VolumeType:      "pd.csi.storage.gke.io",  // dotted CSI driver names must pass
+				VolumeType:      "substrate.io/mock",      // provisioner names carry slashes and dots
 			}}
 		})),
 		nil,
@@ -547,12 +547,12 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
 	}, {
-		"actor_volumes invalid volume_type",
+		"actor_volumes volume_type too long",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "NOT_A_DRIVER"}}
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: strings.Repeat("x", 318)}}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("volume_type"), nil, "").WithOrigin("format=k8s-long-name")},
+		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("volume_type"), nil, 317).WithOrigin("maxLength")},
 	}, {
 		"valid actor.status.actor_volumes status",
 		validInput(),

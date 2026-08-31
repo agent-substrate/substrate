@@ -267,11 +267,13 @@ message ExternalVolume {
   // +k8s:maxLength=256
   string storage_volume_id = 2;
 
-  // Internal volume plugin name or CSI driver name. CSI driver names are DNS
-  // subdomains.
+  // Internal volume plugin name or CSI driver name, from the StorageClass
+  // provisioner. Values are either DNS subdomains (pd.csi.storage.gke.io) or
+  // qualified names (substrate.io/mock), so this is only bounded: 253-char
+  // prefix + '/' + 63-char name.
   //
   // +k8s:optional
-  // +k8s:format=k8s-long-name
+  // +k8s:maxLength=317
   string volume_type = 3;
 
   enum Status {
