@@ -115,14 +115,12 @@ var (
 
 // generateCDISpec runs nvidia-ctk (from the host toolkit mounted into the pod) to
 // produce a CDI spec scoped to this pod's assigned GPU. The glibc-based ateom image
-// runs the glibc-dynamic toolkit binary directly. Runs under reapLock like every
-// other subprocess in this process (a child reaper is running).
+// runs the glibc-dynamic toolkit binary directly. Runs through reaper like every
+// other synchronous subprocess here.
 func generateCDISpec(ctx context.Context, outDir string) error {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return fmt.Errorf("creating CDI output dir %s: %w", outDir, err)
 	}
-	reapLock.RLock()
-	defer reapLock.RUnlock()
 	// No --nvidia-cdi-hook-path: we discard the CDI hooks (staging SONAME symlinks
 	// ourselves), so the hook paths nvidia-ctk writes into the spec are never used.
 	cmd := exec.CommandContext(ctx, toolkitBinary("nvidia-ctk"),
@@ -133,7 +131,7 @@ func generateCDISpec(ctx context.Context, outDir string) error {
 	)
 	// nvidia-ctk finds the driver binaries (nvidia-smi, ...) via PATH.
 	cmd.Env = append(os.Environ(), "PATH="+driverBinDir+":"+os.Getenv("PATH"))
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := reaper.CombinedOutput(cmd); err != nil {
 		return fmt.Errorf("nvidia-ctk cdi generate failed: %w: %s", err, out)
 	}
 	return nil

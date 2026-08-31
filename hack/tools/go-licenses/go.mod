@@ -1,6 +1,6 @@
 module github.com/agent-substrate/substrate/hack/tools/go-licenses
 
-go 1.26.1
+go 1.27.0
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

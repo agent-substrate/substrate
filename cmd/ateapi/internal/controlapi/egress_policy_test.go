@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -36,7 +37,7 @@ func validEgressPolicy() *ateapipb.EgressPolicy {
 			Hostnames: &ateapipb.HostnameRule{
 				Patterns: []string{"api.example.com"},
 				Effects: &ateapipb.EgressRuleEffects{
-					InjectStaticHeader: []*ateapipb.CredentialHeaderInjection{{
+					InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
 						Header:        "Authorization",
 						Prefix:        "Bearer ",
 						CredentialUri: "substrate-secret://kubernetes.io/provider/ns/name",
@@ -382,7 +383,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	rule := root.Child("rules").Index(0)
 	hostnames := rule.Child("hostnames")
 	pattern := hostnames.Child("patterns").Index(0)
-	staticHeader := hostnames.Child("effects", "inject_static_header").Index(0)
+	staticHeader := hostnames.Child("effects", "inject_static_headers").Index(0)
 	validReq := func() *ateapipb.CreateActorEgressPolicyRequest {
 		return &ateapipb.CreateActorEgressPolicyRequest{
 			Actor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
@@ -390,6 +391,14 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		}
 	}
 	withoutEffects := func(p *ateapipb.EgressPolicy) { p.Rules[0].Hostnames.Effects = nil }
+	trivialHostnameRule := func(hostname string) *ateapipb.EgressRule {
+		return &ateapipb.EgressRule{
+			Hostnames: &ateapipb.HostnameRule{
+				Patterns: []string{hostname},
+			},
+		}
+	}
+
 	tests := []struct {
 		name   string
 		mutate func(*ateapipb.EgressPolicy)
@@ -397,30 +406,28 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}{{
 		name: "valid",
 	}, {
-		name: "empty rules",
+		name: "no rules",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules = nil
 		},
 	}, {
-		name: "all",
+		name: "many rules",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{All: &emptypb.Empty{}}
+			p.Rules = nil
+			for i := range 256 {
+				p.Rules = append(p.Rules, trivialHostnameRule(fmt.Sprintf("api%d.example.com", i)))
+			}
 		},
 	}, {
-		name: "wildcard without effects",
+		name: "too many rules",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
-			withoutEffects(p)
+			p.Rules = nil
+			for i := range 257 {
+				p.Rules = append(p.Rules, trivialHostnameRule(fmt.Sprintf("api%d.example.com", i)))
+			}
 		},
-	}, {
-		name: "canonical IPv4 CIDR",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"192.0.2.0/24"}}}
-		},
-	}, {
-		name: "canonical IPv6 CIDR",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"2001:db8::/32"}}}
+		want: field.ErrorList{
+			field.TooMany(root.Child("rules"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "nil rule",
@@ -431,7 +438,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Required(rule, ""),
 		},
 	}, {
-		name: "missing predicate",
+		name: "no predicates",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0] = &ateapipb.EgressRule{}
 		},
@@ -447,6 +454,11 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Invalid(rule, nil, "one of").WithOrigin("union"),
 		},
 	}, {
+		name: "match all",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{All: &emptypb.Empty{}}
+		},
+	}, {
 		name: "empty hostname list",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0].Hostnames.Patterns = nil
@@ -454,6 +466,29 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 		want: field.ErrorList{
 			field.Required(hostnames.Child("patterns"), ""),
+		},
+	}, {
+		name: "long hostname list",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var pats []string
+			for i := range 256 {
+				pats = append(pats, fmt.Sprintf("api%d.example.com", i))
+			}
+			p.Rules[0].Hostnames.Patterns = pats
+			withoutEffects(p)
+		},
+	}, {
+		name: "too-long hostname list",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var pats []string
+			for i := range 257 {
+				pats = append(pats, fmt.Sprintf("api%d.example.com", i))
+			}
+			p.Rules[0].Hostnames.Patterns = pats
+			withoutEffects(p)
+		},
+		want: field.ErrorList{
+			field.TooMany(hostnames.Child("patterns"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "missing hostname",
@@ -513,12 +548,71 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 			field.Invalid(pattern, "example.com:443", "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
 		},
 	}, {
-		name: "invalid wildcard",
+		name: "hostname wildcard without effects",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
+			withoutEffects(p)
+		},
+	}, {
+		name: "hostname wildcard with effects",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
+		},
+	}, {
+		name: "invalid hostname wildcard",
 		mutate: func(p *ateapipb.EgressPolicy) {
 			p.Rules[0].Hostnames.Patterns[0] = "api.*.example.com"
 		},
 		want: field.ErrorList{
 			field.Invalid(pattern, "api.*.example.com", "must be a DNS hostname, optionally with a complete leftmost-label wildcard"),
+		},
+	}, {
+		name: "canonical IPv4 CIDR",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"192.0.2.0/24"}}}
+		},
+	}, {
+		name: "canonical IPv6 CIDR",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{IpBlocks: &ateapipb.IPBlockRule{Cidrs: []string{"2001:db8::/32"}}}
+		},
+	}, {
+		name: "mixed IPv4 and IPv6 CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: []string{"192.0.2.0/24", "2001:db8::/32"},
+				},
+			}
+		},
+	}, {
+		name: "many CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var cidrs []string
+			for i := range 256 {
+				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
+			}
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: cidrs,
+				},
+			}
+		},
+	}, {
+		name: "too many CIDRs",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var cidrs []string
+			for i := range 257 {
+				cidrs = append(cidrs, fmt.Sprintf("192.0.2.%d/32", i))
+			}
+			p.Rules[0] = &ateapipb.EgressRule{
+				IpBlocks: &ateapipb.IPBlockRule{
+					Cidrs: cidrs,
+				},
+			}
+		},
+		want: field.ErrorList{
+			field.TooMany(rule.Child("ip_blocks", "cidrs"), 257, 256).WithOrigin("maxItems"),
 		},
 	}, {
 		name: "missing CIDR",
@@ -555,7 +649,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "missing static header",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].Header = ""
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Header = ""
 		},
 		want: field.ErrorList{
 			field.Required(staticHeader.Child("header"), ""),
@@ -563,15 +657,58 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "invalid static header",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].Header = "bad header"
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Header = "bad header"
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("header"), "bad header", "must be an HTTP header name"),
 		},
 	}, {
+		name: "duplicate header",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = append(
+				p.Rules[0].Hostnames.Effects.InjectStaticHeaders,
+				&ateapipb.CredentialHeaderInjection{Header: "authorization", CredentialUri: "substrate-secret://example.com/provider/secret"},
+			)
+		},
+		want: field.ErrorList{
+			field.Duplicate(hostnames.Child("effects", "inject_static_headers").Index(1).Child("header"), "authorization"),
+		},
+	}, {
+		name: "same header in later rule",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			p.Rules = append(p.Rules, proto.Clone(p.Rules[0]).(*ateapipb.EgressRule))
+		},
+	}, {
+		name: "many headers",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var injections []*ateapipb.CredentialHeaderInjection
+			for i := range 16 {
+				injections = append(injections, &ateapipb.CredentialHeaderInjection{
+					Header:        fmt.Sprintf("X-Header-%d", i),
+					CredentialUri: "substrate-secret://example.com/provider/secret",
+				})
+			}
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = injections
+		},
+	}, {
+		name: "too many headers",
+		mutate: func(p *ateapipb.EgressPolicy) {
+			var injections []*ateapipb.CredentialHeaderInjection
+			for i := range 17 {
+				injections = append(injections, &ateapipb.CredentialHeaderInjection{
+					Header:        fmt.Sprintf("X-Header-%d", i),
+					CredentialUri: "substrate-secret://example.com/provider/secret",
+				})
+			}
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders = injections
+		},
+		want: field.ErrorList{
+			field.TooMany(hostnames.Child("effects", "inject_static_headers"), 17, 16).WithOrigin("maxItems"),
+		},
+	}, {
 		name: "invalid prefix",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].Prefix = "Bearer\r"
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].Prefix = "Bearer\r"
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("prefix"), "Bearer\r", "must be a valid HTTP field value prefix"),
@@ -579,7 +716,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "missing credential URI",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].CredentialUri = ""
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = ""
 		},
 		want: field.ErrorList{
 			field.Required(staticHeader.Child("credential_uri"), ""),
@@ -587,7 +724,7 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 	}, {
 		name: "invalid credential URI",
 		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader[0].CredentialUri = "https://example.com/secret"
+			p.Rules[0].Hostnames.Effects.InjectStaticHeaders[0].CredentialUri = "https://example.com/secret"
 		},
 		want: field.ErrorList{
 			field.Invalid(staticHeader.Child("credential_uri"), "https://example.com/secret", "must be substrate-secret://<provider-class>/<provider-name>/<provider-specific-tail>"),
@@ -599,27 +736,6 @@ func TestValidateEgressPolicyRules(t *testing.T) {
 		},
 		want: field.ErrorList{
 			field.Required(hostnames.Child("effects"), "at least one effect must be specified"),
-		},
-	}, {
-		name: "wildcard with effects",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Patterns[0] = "*.example.com"
-		},
-	}, {
-		name: "duplicate header",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules[0].Hostnames.Effects.InjectStaticHeader = append(
-				p.Rules[0].Hostnames.Effects.InjectStaticHeader,
-				&ateapipb.CredentialHeaderInjection{Header: "authorization", CredentialUri: "substrate-secret://example.com/provider/secret"},
-			)
-		},
-		want: field.ErrorList{
-			field.Duplicate(hostnames.Child("effects", "inject_static_header").Index(1).Child("header"), "authorization"),
-		},
-	}, {
-		name: "same header in later rule",
-		mutate: func(p *ateapipb.EgressPolicy) {
-			p.Rules = append(p.Rules, proto.Clone(p.Rules[0]).(*ateapipb.EgressRule))
 		},
 	}}
 	for _, tc := range tests {
@@ -673,7 +789,7 @@ func TestActorEgressPolicy(t *testing.T) {
 				Hostnames: &ateapipb.HostnameRule{
 					Patterns: []string{"api.example.com"},
 					Effects: &ateapipb.EgressRuleEffects{
-						InjectStaticHeader: []*ateapipb.CredentialHeaderInjection{{
+						InjectStaticHeaders: []*ateapipb.CredentialHeaderInjection{{
 							Header:        "Authorization",
 							Prefix:        "Bearer ",
 							CredentialUri: "substrate-secret://kubernetes.io/provider/ns/name",
@@ -694,7 +810,7 @@ func TestActorEgressPolicy(t *testing.T) {
 	}); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("create collision status = %v, want AlreadyExists", status.Code(err))
 	}
-	if created.GetRules()[0].GetHostnames().GetEffects().GetInjectStaticHeader()[0].GetHeader() != "Authorization" {
+	if created.GetRules()[0].GetHostnames().GetEffects().GetInjectStaticHeaders()[0].GetHeader() != "Authorization" {
 		t.Fatalf("policy input was rewritten: %v", created)
 	}
 	if md := created.GetMetadata(); md.GetName() != "default" || md.GetAtespace() != testAtespace || md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {

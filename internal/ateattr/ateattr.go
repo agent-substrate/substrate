@@ -51,7 +51,7 @@ const (
 	ActorUIDKey           = attribute.Key("ate.actor.uid")
 	ActorContainerNameKey = attribute.Key("ate.actor.container.name")
 	TemplateNameKey       = attribute.Key("ate.template.name")
-	TemplateNamespaceKey  = attribute.Key("ate.template.namespace")
+	TemplateAtespaceKey   = attribute.Key("ate.template.atespace")
 	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
 
@@ -323,8 +323,8 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
 		ActorUIDKey.String(a.GetMetadata().GetUid()),
-		TemplateNameKey.String(a.GetActorTemplateName()),
-		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplate().GetName()),
+		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
 }
@@ -335,11 +335,11 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 // emitting it empty, so a consumer filtering on it gets container output only.
 func ActorLogLabels(a resources.ActorAttribution, containerName string) map[string]string {
 	labels := map[string]string{
-		string(AtespaceKey):          a.Ref.Atespace,
-		string(ActorNameKey):         a.Ref.Name,
-		string(ActorUIDKey):          a.UID,
-		string(TemplateNamespaceKey): a.TemplateNamespace,
-		string(TemplateNameKey):      a.TemplateName,
+		string(AtespaceKey):         a.Ref.Atespace,
+		string(ActorNameKey):        a.Ref.Name,
+		string(ActorUIDKey):         a.UID,
+		string(TemplateAtespaceKey): a.TemplateAtespace,
+		string(TemplateNameKey):     a.TemplateName,
 	}
 	if containerName != "" {
 		labels[string(ActorContainerNameKey)] = containerName
@@ -365,8 +365,8 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 
 	ass := a.GetStatus().GetWorkerAssignment()
 	attrs := []attribute.KeyValue{
-		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
-		TemplateNameKey.String(a.GetActorTemplateName()),
+		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
+		TemplateNameKey.String(a.GetActorTemplate().GetName()),
 		SandboxClassKey.String(sandboxClass),
 		ActorOperationNameKey.String(operationName),
 		FailureReasonKey.String(reason),

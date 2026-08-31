@@ -45,7 +45,6 @@ func TestActorTemplateCRUD(t *testing.T) {
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
 					GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "sneaky"},
 				},
-				SandboxAssets: &ateapipb.SandboxAssets{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 			},
 		},
 	})

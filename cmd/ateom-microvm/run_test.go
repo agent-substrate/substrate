@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,6 +29,70 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 )
+
+// A symlink planted in the image at /etc or /etc/resolv.conf must not be followed
+// out of the rootfs, or the image picks what ateom overwrites as root.
+func TestWriteGuestResolvConfSymlinkEscape(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		link string // rootfs-relative path planted as a symlink to the canary
+		// A planted resolv.conf is just unlinked; only an escaping directory fails.
+		wantErr bool
+	}{
+		{name: "etc dir", link: "etc", wantErr: true},
+		{name: "resolv.conf", link: "etc/resolv.conf"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			canary := filepath.Join(dir, "canary")
+			if err := os.WriteFile(canary, []byte("INITIAL_STATE"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			rootfs := filepath.Join(dir, "rootfs")
+			if err := os.MkdirAll(filepath.Join(rootfs, filepath.Dir(tc.link)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(canary, filepath.Join(rootfs, tc.link)); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := writeGuestResolvConf(rootfs); (err != nil) != tc.wantErr {
+				t.Errorf("writeGuestResolvConf(%q) error = %v, wantErr %v", rootfs, err, tc.wantErr)
+			}
+			got, err := os.ReadFile(canary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != "INITIAL_STATE" {
+				t.Errorf("canary = %q, want it untouched: the symlink was followed out of the rootfs", got)
+			}
+		})
+	}
+}
+
+func TestWriteGuestResolvConf(t *testing.T) {
+	want, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil || len(want) == 0 {
+		t.Skipf("no host /etc/resolv.conf to copy: %v", err)
+	}
+	rootfs := t.TempDir()
+
+	if err := writeGuestResolvConf(rootfs); err != nil {
+		t.Fatalf("writeGuestResolvConf(%q) = %v", rootfs, err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(rootfs, "etc", "resolv.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("guest resolv.conf = %q, want %q", got, want)
+	}
+	// A second boot of the same bundle must not fail on the file it just wrote.
+	if err := writeGuestResolvConf(rootfs); err != nil {
+		t.Errorf("writeGuestResolvConf(%q) second call = %v", rootfs, err)
+	}
+}
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
 // (it unlinks the socket in the vsock device's shutdown), so the poll must give

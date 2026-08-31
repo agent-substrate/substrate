@@ -13,12 +13,17 @@
 // limitations under the License.
 
 // Package storetest provides isolated PostgreSQL-backed stores for tests.
+//
+// One PostgreSQL container is shared by every test in a package; each test gets
+// its own database. Nothing stops that container when the test binary exits, so
+// packages using this package must call [Shutdown] from their TestMain.
 package storetest
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +31,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -116,10 +122,37 @@ func MustCreateActorSnapshot(t *testing.T, ctx context.Context, s store.Interfac
 	return created
 }
 
+// RunTests runs m and terminates the shared PostgreSQL container afterwards.
+// Packages with no other TestMain work should use it as their whole TestMain;
+// the rest must call [Shutdown] themselves.
+func RunTests(m *testing.M) {
+	code := m.Run()
+	Shutdown()
+	os.Exit(code)
+}
+
+// Shutdown terminates the shared PostgreSQL container, if one was started.
+func Shutdown() {
+	if adminPool != nil {
+		adminPool.Close()
+		adminPool = nil
+	}
+	if containerPG != nil {
+		if err := containerPG.Terminate(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "terminating PostgreSQL testcontainer: %v\n", err)
+		}
+		containerPG = nil
+	}
+}
+
 func requireAdminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
+		if err := dockerenv.Configure(ctx); err != nil {
+			containerErr = err
+			return
+		}
 		containerPG, containerErr = postgres.Run(ctx, "postgres:18-alpine",
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("postgres"),
