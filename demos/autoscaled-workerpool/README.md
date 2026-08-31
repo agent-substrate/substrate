@@ -127,12 +127,14 @@ done
 kubectl port-forward -n ate-system svc/atenet-router 8000:80 &
 ```
 
-In a separate terminal, send requests in a retry loop across all hosts to activate the actors and keep them active while the pool scales up:
+In a separate terminal, send requests in a retry loop to activate the actors
+and keep them active while the pool scales up. Each request sets the Actor name
+for that loop iteration and the demo's Atespace in the routing header:
 
 ```sh
 for attempt in {1..10}; do
   for i in {001..015}; do
-    curl -s -H "Host: c$i.ate-demo-autoscaled-workerpool.actors.resources.substrate.ate.dev" http://localhost:8000 >/dev/null
+  curl -s -H "Ate-Target-Actor: ate-demo-autoscaled-workerpool/c$i" http://localhost:8000 >/dev/null
   done
   sleep 2
 done

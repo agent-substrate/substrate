@@ -40,8 +40,7 @@ This command will:
 
 ### 2. Create more actors than workers
 
-Actors live in the demo's **atespace** (`ate-demo-parking`), and their DNS names
-embed it (`<id>.<atespace>.actors.resources.substrate.ate.dev`). `--template`
+Actors live in the demo's **atespace** (`ate-demo-parking`). `--template`
 names the template, resolved in the actor's atespace:
 
 ```bash
@@ -64,14 +63,16 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 Parking is **on by default** (`--parked-request-budget=5s`,
 `--parked-request-max=1024`), so the cluster you just deployed already parks.
+Every curl request below selects its Actor with `Ate-Target-Actor`; changing
+the URL or `Host` does not select another Actor.
 
 ### A. Watch a 503 become a served request
 
 Fill both workers by requesting two actors, leaving them `RUNNING`:
 
 ```bash
-curl -s -H "Host: p1.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
-curl -s -H "Host: p2.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "Ate-Target-Actor: ate-demo-parking/p1" http://localhost:8000
+curl -s -H "Ate-Target-Actor: ate-demo-parking/p2" http://localhost:8000
 
 kubectl ate get workers   # both workers are now bound to p1 and p2
 kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
@@ -82,7 +83,7 @@ the `curl` hangs while the router retries the resume:
 
 ```bash
 curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
-  -H "Host: p3.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
+  -H "Ate-Target-Actor: ate-demo-parking/p3" http://localhost:8000
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1

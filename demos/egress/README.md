@@ -39,7 +39,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 3. **Guide 3 — HTTP-only actors, identity carried by the certificate.** The Actor only dials plain
    HTTP. atunnel presents the actor's own certificate — minted per actor by ateapi off the
    actor-identity CA, carrying an `ActorIdentity` X.509 extension — and sends a bare `CONNECT`
-   with no identity headers at all.
+  with no actor routing header at all.
 4. **Identity authentication.** The gateway requires a client certificate signed by the
   actor-identity CA, so a non-actor client is refused at the handshake. It authorizes the
   certificate against the ATE API and rejects it unless the certified **UID** matches a real,
@@ -140,10 +140,14 @@ kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE
 # 3. Drive the Actor's egress through the ingress gateway.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
 curl -s -X POST http://localhost:8000/ \
-  -H 'Host: egress-demo.ate-demo-egress.actors.resources.substrate.ate.dev' \
+  -H 'Ate-Target-Actor: ate-demo-egress/egress-demo' \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```
+
+The `Ate-Target-Actor` header selects the Actor receiving this ingress request. The
+URL in the JSON body selects that Actor's egress destination and is unrelated
+to Actor routing.
 
 ### What to observe
 

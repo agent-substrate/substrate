@@ -157,7 +157,7 @@ echo "steady state: /readyz=200 /healthz=200"
 
 log_step "firing the request that will park (single worker is busy)"
 ( curl -s --max-time 30 -w '\nHTTP=%{http_code}\n' \
-    -H "Host: ${ACTOR_PARKED}.${ATESPACE}.actors.resources.substrate.ate.dev" \
+  -H "Ate-Target-Actor: ${ATESPACE}/${ACTOR_PARKED}" \
     "http://localhost:${LOCAL_HTTP_PORT}/" > "${CURL_OUT}" 2>&1 ) &
 CURL_PID=$!
 sleep 1  # inside the 5s park budget; the request is parked on the router

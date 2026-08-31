@@ -224,9 +224,9 @@ func TestEgressDeactivationDropsConcurrentRenewal(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- egress.Deactivate(context.Background()) }()
-	<-active.ctx.Done()
+	receiveWithin(t, active.ctx.Done(), "egress cancellation")
 	close(release)
-	if err := <-done; err != nil {
+	if err := receiveWithin(t, done, "egress deactivation"); err != nil {
 		t.Fatal(err)
 	}
 	if !active.expiresAt.IsZero() {
@@ -287,7 +287,7 @@ func TestEgressEndToEnd(t *testing.T) {
 	})
 	egress.handle(downstreamProxy)
 
-	req := <-requests
+	req := receiveWithin(t, requests, "gateway CONNECT request")
 	if req.Method != http.MethodConnect || req.Host != "192.0.2.10:443" {
 		t.Errorf("request = %s %s, want CONNECT 192.0.2.10:443", req.Method, req.Host)
 	}
@@ -313,7 +313,7 @@ func TestEgressEndToEnd(t *testing.T) {
 	if string(gotAtActor) != "from gateway" {
 		t.Errorf("actor payload = %q, want %q", gotAtActor, "from gateway")
 	}
-	<-gatewayDone
+	receiveWithin(t, gatewayDone, "gateway completion")
 
 	if err := egress.Deactivate(context.Background()); err != nil {
 		t.Fatal(err)

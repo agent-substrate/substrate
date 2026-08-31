@@ -32,9 +32,8 @@ type dataplaneHealthCheck struct {
 }
 
 // Both dataplanes resolve the worker address from ext_proc's dynamic
-// metadata (see ingress.OriginalDstMetadataKey) and leave :authority/Host
-// untouched, so atunnel always authorizes by the actor's own DNS name --
-// ingress.New needs no per-dataplane routing mode.
+// metadata (see ingress.OriginalDstMetadataKey). Actor identity is carried in
+// explicit headers, so ingress.New needs no per-dataplane routing mode.
 
 func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	switch r {

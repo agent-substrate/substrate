@@ -77,10 +77,14 @@ kubectl port-forward -n ate-system svc/atenet-router 8001:8081
 ## How to Use
 
 When you send an HTTP request through the router, Substrate automatically detects the session, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
+The two `-H` options below are the routing key; the request URL and `Host` are
+ordinary application metadata.
 
 1. Send an HTTP POST request to increment the counter:
 ```bash
-curl -X POST -H "Host: my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -X POST \
+  -H "Ate-Target-Actor: ate-demo-counter/my-counter-1" \
+  http://localhost:8000
 ```
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
@@ -117,7 +121,9 @@ through it to the named port.
 proxy behavior wouldn't do:
 
 ```bash
-curl -p -x http://localhost:8001 http://my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev:9090/
+curl -p -x http://localhost:8001 \
+  --proxy-header "Ate-Target-Actor: ate-demo-counter/my-counter-1" \
+  http://my-counter-1:9090/
 ```
 
 This reaches the same actor's second listener and resumes it exactly like any

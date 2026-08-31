@@ -141,10 +141,36 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
-### Workload Connectivity (Uniform DNS)
-Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and name:
+### Workload Connectivity
 
-**Format:** `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`
+A higher-order system reaches an actor through the **Substrate Router** by
+setting `Ate-Target-Actor` to `<atespace>/<actor>`. Substrate does not provide
+DNS discovery for actors. This value selects the Actor; `Host` and HTTP/2
+`:authority` remain application metadata.
+
+Clients that construct HTTP requests should add the routing header directly.
+For example, curl uses `-H`, Go uses `request.Header.Set`, and Python clients use
+their request `headers` mapping. WebSocket clients add the same header to the
+opening HTTP upgrade request. gRPC clients send it as outgoing metadata using
+the lowercase name `ate-target-actor`.
+
+For an HTTP `CONNECT` tunnel to a non-default Actor port, put the routing
+header on the outer `CONNECT` request and keep the target port in its
+authority. With curl, use `--proxy-header` instead of `-H`:
+
+```bash
+curl --proxytunnel --proxy http://localhost:8001 \
+  --proxy-header "Ate-Target-Actor: my-atespace/my-actor" \
+  http://actor-upstream:9090/
+```
+
+Browser navigation cannot add custom request headers. Browser-based and other
+fixed clients must therefore connect through a user-controlled reverse proxy or
+policy enforcement point that overwrites the routing header before forwarding
+to `atenet-router`. The [Jupyter demo](../demos/jupyter/README.md) shows this
+pattern with NGINX. The proxy must derive the value from trusted configuration
+or authenticated request context rather than forwarding values supplied by an
+untrusted caller.
 
 ### SystemInfo Volumes
 
@@ -153,7 +179,7 @@ To deliver identity information, including credentials, to a running actor, you 
 Available information sources:
 
 #### actorMetadata
-The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity and DNS name), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
 
 ```yaml
 spec:

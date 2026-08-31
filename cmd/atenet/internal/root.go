@@ -40,6 +40,5 @@ func Execute() {
 
 func init() {
 	rootCmd.AddCommand(router.NewRouterCmd())
-	rootCmd.AddCommand(NewDnsCmd())
 	rootCmd.AddCommand(sdsmint.NewSdsmintCmd())
 }

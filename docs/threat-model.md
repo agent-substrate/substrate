@@ -11,21 +11,21 @@ Substrate is an early, fast moving product. It is full of debate and subject to 
 
 # Intended Outcome
 
-* The suggestions from this threat model should be added to Substrate's official roadmap after review and agreement with the community.   
+* The suggestions from this threat model should be added to Substrate's official roadmap after review and agreement with the community.
 * Security review SKILLs for AI-assisted security review should be extracted from this threat model and used for continuous review on the upstream [agent-substrate/substrate](https://github.com/agent-substrate/substrate) repository.
 
 # Goals
 
-* Identify threats relevant to any system trying to achieve the same goal, with roughly the same basic building blocks as Substrate (Kubernetes, containers, sandboxes, snapshots, and lightweight "actors" dynamically scheduled to reusable "worker" Pods).   
-* Identify general "mitigating invariants" which, if implemented, eliminate or significantly decrease the severity of the threat.  
-* Suggest *possible* implementation approaches, which may change if Substrate changes.  
+* Identify threats relevant to any system trying to achieve the same goal, with roughly the same basic building blocks as Substrate (Kubernetes, containers, sandboxes, snapshots, and lightweight "actors" dynamically scheduled to reusable "worker" Pods).
+* Identify general "mitigating invariants" which, if implemented, eliminate or significantly decrease the severity of the threat.
+* Suggest *possible* implementation approaches, which may change if Substrate changes.
 * Prioritize the threats, so that resources can be spent of reducing the biggest risks first.
 
 # Non-Goals
 
-* This threat model does not attempt to predict Substrate's future architectural decisions.  
-* This threat model does not demand any particular approach to mitigation.  
-* While shown in diagrams for reference, this threat model does not focus on AI frameworks that may be used on top of Substrate. 
+* This threat model does not attempt to predict Substrate's future architectural decisions.
+* This threat model does not demand any particular approach to mitigation.
+* While shown in diagrams for reference, this threat model does not focus on AI frameworks that may be used on top of Substrate.
 
 # Architecture of Substrate
 
@@ -33,27 +33,27 @@ Substrate is an early, fast moving product. It is full of debate and subject to 
 
 # Key Components
 
-* **ate-api-server:** Actor creation and scheduling and credential issuance.  
-* **atelet:** Per-node daemon, performs snapshot/resume.  
-* **ateom:** Per-worker Pod sidecar, running inside the worker Pod. Ateom sets up "interior" sandboxes in the worker Pod and manages sandbox lifecycle, including image pulls. It currently uses gvisor but Substrate will support multiple microvm solutions.  
-* **Worker:** Preprovisioned Pods that actors get scheduled to.  
-* **Actor:** The core compute primitive, gets scheduled to/from worker via Run for cold start and Resume for snapshot resume.  
+* **ate-api-server:** Actor creation and scheduling and credential issuance.
+* **atelet:** Per-node daemon, performs snapshot/resume.
+* **ateom:** Per-worker Pod sidecar, running inside the worker Pod. Ateom sets up "interior" sandboxes in the worker Pod and manages sandbox lifecycle, including image pulls. It currently uses gvisor but Substrate will support multiple microvm solutions.
+* **Worker:** Preprovisioned Pods that actors get scheduled to.
+* **Actor:** The core compute primitive, gets scheduled to/from worker via Run for cold start and Resume for snapshot resume.
 * **Actor Network:** `ateom` creates a private point-to-point veth network for the active Actor inside a worker Pod. The Actor is not served directly from the worker Pod's port 80; ingress enters through `atunnel`'s authenticated listener on port 443.
-* **Actor DNS:** Each Actor gets a DNS name like `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`. Substrate runs a custom CoreDNS instance that returns the `atenet-router` Service IP for A record queries matching the Actor DNS pattern. A controller keeps this target current and configures kube-dns with a stub domain for `actors.resources.substrate.ate.dev`, enabling traditional Kubernetes Pods to resolve Actor names.
-* **atenet-router:** Substrate runs Envoy with an `ext_proc` external processor to handle Actor ingress. The ext_proc extracts the Actor name and Atespace from the HTTP `Host` header, calls the Substrate API to resume the Actor and obtain its current worker assignment, and selects that worker as a dynamic backend. The router then connects with mTLS to `atunnel` on worker port 443; `atunnel` validates the router identity and forwards traffic only to the Actor currently assigned to that worker.
-* **Object Storage:** Used to store actor snapshots.  
-* **Filesystem support:** Container local filesystem is saved in snapshots, future integrations likely to include networked storage.  
-* **Substrate Database:** PostgreSQL. On GCP, PostgreSQL may be Cloud SQL reached through the Cloud SQL Auth Proxy sidecar (see [tools/setup-gcp/cloud-sql.md](../tools/setup-gcp/cloud-sql.md)); that path adds two egress flows from ate-api-server: HTTPS to `sqladmin.googleapis.com:443` and the proxy tunnel to the instance IP on port 3307, both authenticated via IAM and encrypted.  
+* **Actor Routing:** Requests sent to `atenet-router` identify the target Actor with `Ate-Target-Actor: <atespace>/<actor>`. Host and authority values are application metadata and do not select the Actor.
+* **atenet-router:** Substrate runs Envoy with an `ext_proc` external processor to handle Actor ingress. The ext_proc reads and validates `Ate-Target-Actor`, calls the Substrate API to resume the Actor and obtain its current worker assignment, and selects that worker as a dynamic backend. It overwrites the routing header before forwarding. The router then connects with mTLS to `atunnel`; `atunnel` validates the router identity and authorizes the header against the Actor currently assigned to that worker.
+* **Object Storage:** Used to store actor snapshots.
+* **Filesystem support:** Container local filesystem is saved in snapshots, future integrations likely to include networked storage.
+* **Substrate Database:** PostgreSQL. On GCP, PostgreSQL may be Cloud SQL reached through the Cloud SQL Auth Proxy sidecar (see [tools/setup-gcp/cloud-sql.md](../tools/setup-gcp/cloud-sql.md)); that path adds two egress flows from ate-api-server: HTTPS to `sqladmin.googleapis.com:443` and the proxy tunnel to the instance IP on port 3307, both authenticated via IAM and encrypted.
 * **Kubernetes:** The underlying infrastructure that Substrate runs on is expected to be Kubernetes.
 
 # Threats and Mitigations
 
 **Table Schema:**
 
-* **Priority:** Critical, High, Medium, Low  
-* **Threats:** Expected risks in a naïve implementation of Substrate.  
-* **Mitigating Invariants:** High level properties which, if true, mitigate the threat.  
-* **Suggested Concrete Mitigations:** Specific options for implementing the mitigating invariants, based on current understanding of Substrate.  
+* **Priority:** Critical, High, Medium, Low
+* **Threats:** Expected risks in a naïve implementation of Substrate.
+* **Mitigating Invariants:** High level properties which, if true, mitigate the threat.
+* **Suggested Concrete Mitigations:** Specific options for implementing the mitigating invariants, based on current understanding of Substrate.
 * **Notes:** Additional relevant information.
 
 ## Attacks from External Networks

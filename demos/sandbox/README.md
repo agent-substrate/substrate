@@ -78,6 +78,16 @@ go build -o bin/sandbox-client ./demos/sandbox/client
 ./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
 ```
 
+The client sends each `/process` request to the router and automatically sets
+the routing header from `--name` and `--atespace`:
+
+```go
+req.Header.Set(atenet.TargetActorHeader, actorRef.String())
+```
+
+Any replacement HTTP client must send an equivalent `Ate-Target-Actor` header;
+the URL and `Host` header do not select the Actor.
+
 Once in the `sandbox>` prompt, you can run commands:
 
 ```bash

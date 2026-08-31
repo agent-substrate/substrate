@@ -53,7 +53,22 @@ kubectl ate create actor jupyter-notebook -a ate-demo-jupyter --template jupyter
 
 ### 2. Access Jupyter via the Proxy!
 
-Substrate routes HTTP traffic using the `Host` header. To make this easy without modifying local `/etc/hosts` files, this demo includes a lightweight NGINX reverse proxy (`jupyter-proxy`) that automatically injects the proper `Host` header (`jupyter-notebook.ate-demo-jupyter.actors.resources.substrate.ate.dev`) and forwards traffic internally to the Substrate router.
+Substrate routes HTTP traffic using `Ate-Target-Actor: <atespace>/<actor>`.
+A browser cannot add that header to an address-bar navigation or WebSocket
+upgrade, so this demo puts a lightweight NGINX reverse proxy (`jupyter-proxy`)
+between the browser and the Substrate router. Its configuration injects the
+header for the Actor created above and preserves Jupyter's WebSocket upgrade:
+
+```nginx
+proxy_pass http://atenet-router.ate-system.svc.cluster.local;
+proxy_set_header Ate-Target-Actor ate-demo-jupyter/jupyter-notebook;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+```
+
+The complete configuration is in `jupyter.yaml.tmpl`. If you create the Actor
+under another name or Atespace, update the `Ate-Target-Actor` value before
+deploying the proxy. Do not derive it from an untrusted browser-supplied header.
 
 1. **Port-forward the lightweight proxy to your local machine:**
 
@@ -75,7 +90,7 @@ print("hello world")
 
 ### 4. Suspending and Resuming the Notebook
 
-When you're not using the notebook, instead of leaving the container running, Substrate can checkpoint and suspend it to disk. 
+When you're not using the notebook, instead of leaving the container running, Substrate can checkpoint and suspend it to disk.
 
 ```bash
 kubectl ate suspend actor jupyter-notebook -a ate-demo-jupyter
@@ -93,7 +108,7 @@ To **resume** the notebook, you can either explicitly resume it via CLI:
 kubectl ate resume actor jupyter-notebook -a ate-demo-jupyter
 ```
 
-Or, even easier, you can rely on "transparent resume" — just refresh the page in your browser or make another request to the URL while it's suspended. Substrate will automatically restore its state and serve your request without any downtime. 
+Or, even easier, you can rely on "transparent resume" — just refresh the page in your browser or make another request to the URL while it's suspended. Substrate will automatically restore its state and serve your request without any downtime.
 
 ### Clean up
 

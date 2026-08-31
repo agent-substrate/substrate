@@ -66,9 +66,8 @@ for etcd.
   sandbox runtime on behalf of atelet. This decouples the physical pod
   lifecycle from the sandboxed agent process.
 
-- **atenet**: the networking stack. It provides a DNS server for actor
-  resolution and a router that resumes suspended Actors on demand and routes
-  traffic to the right worker pod.
+- **atenet**: the networking stack. Its router resumes suspended Actors on
+  demand and routes traffic to the right worker pod.
 
 - **podcertcontroller**: issues short-lived pod certificates that components
   use as their TLS identity to authenticate connections to one another
@@ -158,6 +157,6 @@ for etcd.
 
 ## Networking
 
-- **Uniform DNS Mesh**: every Actor is reachable at a uniform address,
-  `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`, resolved by atenet. Traffic to
-  that name is routed (and the Actor resumed if needed) automatically.
+- **Actor routing header**: a higher-order system sends traffic to the
+  Substrate router with `Ate-Target-Actor: <atespace>/<actor>`. The router
+  uses this header to locate and resume the Actor.

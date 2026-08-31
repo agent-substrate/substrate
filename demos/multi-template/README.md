@@ -62,14 +62,17 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 ## How to Use
 
 When you send an HTTP request through the router, Substrate automatically detects the session, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
+The two headers form the complete routing key: the Actor name alone is not
+enough, so each request below pairs it with the Atespace where that Actor was
+created.
 
 ```bash
 # counter binary
-curl -s -H "Host: c1.ate-demo-multi-template-counter.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "Ate-Target-Actor: ate-demo-multi-template-counter/c1" http://localhost:8000
 # -> hello from: <ip> | preserved memory count: 1
 
 # fspersist binary
-curl -s -H "Host: f1.ate-demo-multi-template-fspersist.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "Ate-Target-Actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000
 # -> pod: <ip>
 #    --- history ---
 #    pod=<ip> | count=0 | time=<timestamp>
@@ -87,7 +90,7 @@ preserves that state across the snapshot/restore cycle:
 
 ```bash
 kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
-curl -s -H "Host: f1.ate-demo-multi-template-fspersist.actors.resources.substrate.ate.dev" http://localhost:8000  # history persists; count keeps climbing
+curl -s -H "Ate-Target-Actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000  # history persists; count keeps climbing
 ```
 
 ## How to Uninstall

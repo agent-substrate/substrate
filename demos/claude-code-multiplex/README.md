@@ -16,6 +16,10 @@ The video shows the three-agent rotation end-to-end: queued → running → comp
 - A small web UI that drives "give a task" against random idle agents and renders the queued/running/completed badge state per agent.
 - Substrate handles the hard parts: state snapshot on suspend, scheduling decisions, resume-correctness when a pod becomes available.
 
+This demo uses the ateapi control plane to manage Actors and does not send
+workload HTTP traffic through `atenet-router`, so it does not use
+the `Ate-Target-Actor` routing header.
+
 ## Audience
 
 This guide assumes you know Kubernetes and the general shape of agent runtimes (autonomy + LLM API access). It does **not** assume prior Substrate experience.

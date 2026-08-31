@@ -18,18 +18,16 @@
 // saturated), and points the dataplane at the worker that ends up hosting it.
 //
 // Everything reaching this handler is unauthenticated client input. The
-// opposite trust model — an actor identity carried by a CA-signed client
-// certificate — belongs to the sibling egress package, and the two are kept
-// apart deliberately.
+// certificate authentication used for egress belongs to the sibling egress
+// package, and the two are kept apart deliberately.
 package ingress
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"strconv"
-	"strings"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -39,8 +37,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -87,23 +85,20 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
-	// Resolved from filter state rather than Host/:authority directly: a
-	// reinjected CONNECT tunnel's own :authority has nothing to do with the
-	// actor, so xds.go captures the real one at connect_terminate instead.
-	authority := md.Attribute(extproc.AuthorityFilterStateAttribute)
-	if authority == "" {
-		return extproc.Result{}, invalidHostErr(md.Host, fmt.Errorf("missing %s request attribute", extproc.AuthorityFilterStateAttribute))
-	}
-	actorRef, err := parseActorRef(authority)
+	actorRef, err := atenet.ParseTargetActor(routingValue(md, atenet.TargetActorHeader, extproc.TargetActorFilterStateAttribute))
 	if err != nil {
-		// Authority is invalid, respond with 404.
-		return extproc.Result{}, invalidHostErr(authority, err)
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_NotFound, "invalid actor reference")
 	}
 
-	// CONNECT traffic can name a port other than defaultActorPort in the
-	// authority.
+	// CONNECT traffic can name a port other than defaultActorPort. After Envoy
+	// terminates CONNECT, filter state retains the outer authority while md.Host
+	// belongs to the inner request.
 	targetPort := defaultActorPort
-	if _, portStr, err := net.SplitHostPort(authority); err == nil {
+	targetAuthority := md.Attribute(extproc.ConnectAuthorityFilterStateAttribute)
+	if targetAuthority == "" && md.Method == http.MethodConnect {
+		targetAuthority = md.Host
+	}
+	if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
 		if p, ok := atunnel.ParsePort(portStr); ok {
 			targetPort = p
 		}
@@ -126,7 +121,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		return extproc.Result{Resume: string(resumeOutcome)}, mapResumeError(actorRef, err)
 	}
 
-	// Actor template identity, used as low-cardinality route-latency metric
+	// Actor template coordinates, used as low-cardinality route-latency metric
 	// attributes.
 	res := extproc.Result{
 		TemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -164,14 +159,13 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 			"actor %s routing failed", actorRef)
 	}
 
-	// :authority/Host stays untouched, so atunnel authorizes by the actor's
-	// own DNS name. The target port still goes as a header: atunnel can't
-	// read dynamic metadata.
+	// Overwrite the routing header so a client-provided value cannot select a
+	// different actor after this request has been resolved.
 	mutation := &extprocv3.HeaderMutation{}
 	mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
 		Header: &corev3.HeaderValue{
-			Key:      atunnel.TargetPortHeader,
-			RawValue: []byte(strconv.Itoa(targetPort)),
+			Key:      atenet.TargetActorHeader,
+			RawValue: []byte(actorRef.String()),
 		},
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 	})
@@ -186,18 +180,9 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	return res, nil
 }
 
-// parseActorRef extracts the actor an incoming request is addressed to from its
-// Host/:authority, which has the form
-// "<actor_name>.<atespace>.actors.resources.substrate.ate.dev" (optionally with a
-// port). The atespace is part of the name because an actor name is only unique
-// within its atespace.
-func parseActorRef(host string) (resources.ActorRef, error) {
-	if strings.Contains(host, ":") {
-		h, _, err := net.SplitHostPort(host)
-		if err != nil {
-			return resources.ActorRef{}, err
-		}
-		host = h
+func routingValue(md *extproc.RequestMetadata, header, attribute string) string {
+	if value := md.Header(header); value != "" {
+		return value
 	}
-	return resources.ParseActorDNSName(host)
+	return md.Attribute(attribute)
 }
