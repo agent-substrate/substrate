@@ -141,8 +141,8 @@ These are the gaps between this prototype and something shippable.
 
 ## Where else this applies
 
-[ANALYSIS.md](ANALYSIS.md) is a full survey of the current tree (commit
-`69828945`), with every finding adversarially verified. The short version:
+Findings from a survey of the tree at commit `69828945`, each checked against
+the source:
 
 1. **Egress CONNECT is the same bug, worse.** `egress.go:168` calls `GetActor`
    on *every* CONNECT with no cache and not even singleflight — and carries its
