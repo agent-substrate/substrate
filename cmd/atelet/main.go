@@ -279,6 +279,9 @@ func main() {
 	// is unlikely to be used with frequency.
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
+	// Requested before Start so the factory runs it; the prewarm handler is
+	// attached after the herder exists (see startSandboxAssetPrewarm below).
+	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
 
 	// Start an informer on the ClusterTrustBundle we care about (currently
 	// only the egress trust bundle). The v1beta1 API is feature-gated: on a
@@ -308,6 +311,12 @@ func main() {
 		csiDriverConfigLister,
 		clusterTrustBundleLister,
 	)
+	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
+	// Run/Restore on this node hits the cache. Best-effort: on failure the
+	// on-demand fetch in ensureSandboxAssets still covers correctness.
+	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, microvmNodeCapable(hostDevRoot)); err != nil {
+		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
+	}
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,

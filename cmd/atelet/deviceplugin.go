@@ -30,6 +30,21 @@ import (
 // exist; workers are handed the real host paths, which kubelet resolves.
 const hostDevRoot = "/host/dev"
 
+// microvmNodeCapable reports whether this node can host micro-VM workers:
+// cloud-hypervisor needs /dev/kvm (VmCreate fails with EPERM without it), and
+// worker pods request the matching extended resource, so they only schedule to
+// nodes where the device exists. Device presence is therefore the earliest
+// reliable eligibility signal — known at atelet startup, before any WorkerPool
+// schedules here.
+func microvmNodeCapable(devRoot string) bool {
+	for _, d := range deviceplugin.SandboxDevices {
+		if d.ResourceName == deviceplugin.ResourceKVM {
+			return d.Present(devRoot)
+		}
+	}
+	return false
+}
+
 // startDevicePlugins advertises the sandbox host devices present on this node to
 // kubelet as extended resources, in the background for the lifetime of ctx. This
 // is what lets a worker be granted /dev/kvm without running privileged. atelet
