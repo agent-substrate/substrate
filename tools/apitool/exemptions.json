@@ -221,11 +221,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.DeleteActorRequest.any_state",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.DeleteActorSnapshotTagRequest",
     "message": "message has no doc comment"
   },

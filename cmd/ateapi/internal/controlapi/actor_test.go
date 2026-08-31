@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -445,6 +446,45 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Required(field.NewPath("status", "latest_snapshot", "atespace"), "")},
 	}, {
+		"valid actor.status.local_snapshot_info.snapshot_name",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "snap-1"}
+		})),
+		nil,
+	}, {
+		"invalid actor.status.local_snapshot_info.snapshot_name",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "SNAP 1"}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"invalid actor.status.local_snapshot_info.node_vms entry",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: []string{"node-1", "NOT A NODE"}}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots").Index(1), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
+		"too many actor.status.local_snapshot_info.node_vms entries",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			nodes := make([]string, 257)
+			for i := range nodes {
+				nodes[i] = fmt.Sprintf("node-%d", i)
+			}
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: nodes}
+		})),
+		field.ErrorList{field.TooMany(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots"), 257, 256).WithOrigin("maxItems")},
+	}, {
+		"duplicate actor.status.local_snapshot_info.node_vms entry",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: []string{"node-1", "node-1"}}
+		})),
+		field.ErrorList{field.Duplicate(field.NewPath("status", "local_snapshot_info", "node_vms_with_local_snapshots").Index(1), nil)},
+	}, {
 		"valid actor.status.local_snapshot_info.content_scope",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
@@ -471,6 +511,49 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressSnapshotSourceActorVersion = -1 })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_snapshot_source_actor_version"), nil, "").WithOrigin("minimum")},
 	}, {
+		"too many actor_volumes",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			vols := make([]*ateapipb.ExternalVolume, 33)
+			for i := range vols {
+				vols[i] = &ateapipb.ExternalVolume{VolumeName: fmt.Sprintf("vol-%d", i)}
+			}
+			s.ActorVolumes = vols
+		})),
+		field.ErrorList{field.TooMany(field.NewPath("status", "actor_volumes"), 33, 32).WithOrigin("maxItems")},
+	}, {
+		"actor_volumes invalid volume_name",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "NOT A VOLUME"}}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("volume_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"valid actor_volumes storage_volume_id and volume_type",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{
+				VolumeName:      "vol-a",
+				StorageVolumeId: strings.Repeat("x", 256), // exactly at the bound
+				VolumeType:      "pd.csi.storage.gke.io",  // dotted CSI driver names must pass
+			}}
+		})),
+		nil,
+	}, {
+		"actor_volumes storage_volume_id too long",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", StorageVolumeId: strings.Repeat("x", 257)}}
+		})),
+		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
+	}, {
+		"actor_volumes invalid volume_type",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "NOT_A_DRIVER"}}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("volume_type"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
 		"valid actor.status.actor_volumes status",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
@@ -492,6 +575,45 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("status"), nil, "").WithOrigin("maximum")},
 	}, {
+		"duplicate actor_volumes volume_name",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a"}, {VolumeName: "vol-a"}}
+		})),
+		field.ErrorList{field.Duplicate(field.NewPath("status", "actor_volumes").Index(1), nil)},
+	}, {
+		"valid actor_volumes volume_context",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: map[string]string{"attachment": "iqn.2026-08.io.ate:vol-a"}}}
+		})),
+		nil,
+	}, {
+		"too many actor_volumes volume_context entries",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			ctxMap := make(map[string]string, 33)
+			for i := 0; i < 33; i++ {
+				ctxMap[fmt.Sprintf("key-%d", i)] = "v"
+			}
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: ctxMap}}
+		})),
+		field.ErrorList{field.TooMany(field.NewPath("status", "actor_volumes").Index(0).Child("volume_context"), 33, 32).WithOrigin("maxProperties")},
+	}, {
+		"actor_volumes volume_context key too long",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: map[string]string{strings.Repeat("k", 129): "v"}}}
+		})),
+		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("volume_context"), nil, 128).WithOrigin("maxLength")},
+	}, {
+		"actor_volumes volume_context value too long",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: map[string]string{"attachment": strings.Repeat("v", 257)}}}
+		})),
+		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("volume_context").Key("attachment"), nil, 256).WithOrigin("maxLength")},
+	}, {
 		"invalid actor.status.in_progress_local_snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressLocalSnapshotName = "BAD NAME" })),
@@ -506,6 +628,16 @@ func TestValidateActorUpdate(t *testing.T) {
 			}
 		})),
 		nil,
+	}, {
+		"clear actor.status.source_snapshot",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.SourceSnapshot = &ateapipb.ActorSourceSnapshotStatus{
+				Snapshot:    &ateapipb.ObjectRef{Atespace: "as", Name: "snap-1"},
+				SnapshotUid: "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63",
+			}
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.SourceSnapshot = nil })),
+		field.ErrorList{field.Invalid(field.NewPath("status", "source_snapshot"), nil, "").WithOrigin("update")},
 	}, {
 		"change actor.status.source_snapshot",
 		validInput(withStatus(func(s *ateapipb.ActorStatus) {

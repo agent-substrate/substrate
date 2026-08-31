@@ -134,9 +134,14 @@ message LocalSnapshotInfo {
   string snapshot_name = 1;
 
   // Node VMs that have local snapshots for this actor, while it's PAUSED.
+  // Each node appears at most once.
+  //
+  // TODO: revisit this design; a snapshot propagated to every node would
+  // grow this list with the fleet, and the bound below is provisional.
   //
   // +k8s:optional
-  // +k8s:listType=atomic
+  // +k8s:maxItems=256
+  // +k8s:listType=set
   // +k8s:eachVal=+k8s:format=k8s-long-name
   repeated string node_vms_with_local_snapshots = 2;
 
@@ -246,21 +251,27 @@ message ResourceMetadata {
 }
 
 message ExternalVolume {
-  // Name of the volume specified in the actor template.
+  // Name of the volume specified in the actor template. Template volume
+  // names are DNS labels.
   //
   // +k8s:required
+  // +k8s:format=k8s-short-name
   string volume_name = 1;
 
   // The globally unique volume_id returned from the storage system.
   // This will be initially empty during volume creation. Its format is the
-  // storage system's own, so it is not validated beyond presence.
+  // storage system's own, so it is only bounded, not validated. The CSI spec
+  // caps IDs at 128 bytes but does not require it, so allow some slack.
   //
   // +k8s:optional
+  // +k8s:maxLength=256
   string storage_volume_id = 2;
 
-  // Internal volume plugin name or CSI driver name.
+  // Internal volume plugin name or CSI driver name. CSI driver names are DNS
+  // subdomains.
   //
   // +k8s:optional
+  // +k8s:format=k8s-long-name
   string volume_type = 3;
 
   enum Status {
@@ -281,9 +292,13 @@ message ExternalVolume {
 
   // volume_context contains metadata returned by the CSI driver during volume
   // provisioning, needed by the node plugin for mounting (e.g. attachment
-  // info). Keys and values are the driver's own, so they are not validated.
+  // info). Keys and values are the driver's own, so they are only bounded,
+  // not validated.
   //
   // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
   map<string, string> volume_context = 5;
 }
 
@@ -522,10 +537,15 @@ message ActorStatus {
   int64 in_progress_snapshot_source_actor_version = 6;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
-  // They are deleted when the actor is deleted.
+  // They are deleted when the actor is deleted. Each template volume
+  // appears at most once.
+  //
+  // TODO: consider a literal map keyed by volume_name instead of a list-map.
   //
   // +k8s:optional
-  // +k8s:listType=atomic
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=volume_name
   repeated ExternalVolume actor_volumes = 7;
 
   // The name of the in-progress node-local checkpoint. Like durable snapshot
@@ -540,7 +560,10 @@ message ActorStatus {
   // never changed afterward.
   //
   // +k8s:optional
-  // +k8s:update=NoModify # set at creation, never changed in place
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset # together: set once, never changed, never cleared.
+  // Not immutable: create validates the final object against the request
+  // with op=Update, and immutable rejects that nil->set.
   ActorSourceSnapshotStatus source_snapshot = 9;
 }
 

@@ -189,7 +189,6 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest
 }
 
 func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	// TODO: implement this
 	return s.store.GetActor(ctx, actorRef)
 }
 
@@ -215,7 +214,6 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 }
 
 func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
-	// TODO: implement this
 	return s.store.ListActors(ctx, atespace, opts)
 }
 
@@ -344,7 +342,6 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 }
 
 func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	// TODO: implement this
 	return s.store.DeleteActor(ctx, actorRef)
 }
 

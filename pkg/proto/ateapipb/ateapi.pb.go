@@ -529,9 +529,14 @@ type LocalSnapshotInfo struct {
 	// +k8s:format=k8s-short-name
 	SnapshotName string `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
 	// Node VMs that have local snapshots for this actor, while it's PAUSED.
+	// Each node appears at most once.
+	//
+	// TODO: revisit this design; a snapshot propagated to every node would
+	// grow this list with the fleet, and the bound below is provisional.
 	//
 	// +k8s:optional
-	// +k8s:listType=atomic
+	// +k8s:maxItems=256
+	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:format=k8s-long-name
 	NodeVmsWithLocalSnapshots []string `protobuf:"bytes,2,rep,name=node_vms_with_local_snapshots,json=nodeVmsWithLocalSnapshots,proto3" json:"node_vms_with_local_snapshots,omitempty"`
 	// Scope the pause checkpoint captured (the template's onPause at pause
@@ -784,19 +789,25 @@ func (x *ResourceMetadata) GetUpdateTime() *timestamppb.Timestamp {
 
 type ExternalVolume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Name of the volume specified in the actor template.
+	// Name of the volume specified in the actor template. Template volume
+	// names are DNS labels.
 	//
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
 	// The globally unique volume_id returned from the storage system.
 	// This will be initially empty during volume creation. Its format is the
-	// storage system's own, so it is not validated beyond presence.
+	// storage system's own, so it is only bounded, not validated. The CSI spec
+	// caps IDs at 128 bytes but does not require it, so allow some slack.
 	//
 	// +k8s:optional
+	// +k8s:maxLength=256
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
-	// Internal volume plugin name or CSI driver name.
+	// Internal volume plugin name or CSI driver name. CSI driver names are DNS
+	// subdomains.
 	//
 	// +k8s:optional
+	// +k8s:format=k8s-long-name
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// +k8s:optional
 	// +k8s:minimum=1
@@ -804,9 +815,13 @@ type ExternalVolume struct {
 	Status ExternalVolume_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.ExternalVolume_Status" json:"status,omitempty"`
 	// volume_context contains metadata returned by the CSI driver during volume
 	// provisioning, needed by the node plugin for mounting (e.g. attachment
-	// info). Keys and values are the driver's own, so they are not validated.
+	// info). Keys and values are the driver's own, so they are only bounded,
+	// not validated.
 	//
 	// +k8s:optional
+	// +k8s:maxProperties=32
+	// +k8s:eachKey=+k8s:maxLength=128
+	// +k8s:eachVal=+k8s:maxLength=256
 	VolumeContext map[string]string `protobuf:"bytes,5,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1446,10 +1461,15 @@ type ActorStatus struct {
 	// +k8s:minimum=1
 	InProgressSnapshotSourceActorVersion int64 `protobuf:"varint,6,opt,name=in_progress_snapshot_source_actor_version,json=inProgressSnapshotSourceActorVersion,proto3" json:"in_progress_snapshot_source_actor_version,omitempty"`
 	// Volumes attached to the actor. These volumes only live as long as the actor.
-	// They are deleted when the actor is deleted.
+	// They are deleted when the actor is deleted. Each template volume
+	// appears at most once.
+	//
+	// TODO: consider a literal map keyed by volume_name instead of a list-map.
 	//
 	// +k8s:optional
-	// +k8s:listType=atomic
+	// +k8s:maxItems=32 # matches the template's volumes bound
+	// +k8s:listType=map
+	// +k8s:listMapKey=volume_name
 	ActorVolumes []*ExternalVolume `protobuf:"bytes,7,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
 	// The name of the in-progress node-local checkpoint. Like durable snapshot
 	// names, these are server-generated UUIDs.
@@ -1462,7 +1482,10 @@ type ActorStatus struct {
 	// never changed afterward.
 	//
 	// +k8s:optional
-	// +k8s:update=NoModify # set at creation, never changed in place
+	// +k8s:update=NoModify
+	// +k8s:update=NoUnset # together: set once, never changed, never cleared.
+	// Not immutable: create validates the final object against the request
+	// with op=Update, and immutable rejects that nil->set.
 	SourceSnapshot *ActorSourceSnapshotStatus `protobuf:"bytes,9,opt,name=source_snapshot,json=sourceSnapshot,proto3" json:"source_snapshot,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
