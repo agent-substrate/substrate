@@ -564,3 +564,8 @@ Rules:
 - A resource with no output-only fields needs no `status` field.
 - Fields inside `status` follow the same naming rules as any other field (section #5).
 - `ResourceMetadata` (section #6) is exempt from this split. It mixes caller-specified identity (`atespace`, `name`) with server-managed fields (`uid`, `version`, timestamps).
+
+## 9. Validation
+
+All fields of all APIs must be validated.  We use
+[validation-gen](https://github.com/kubernetes/code-generator/tree/master/cmd/validation-gen) to generate validation code for our APIs.  See [the guidelines for validation](api-validation.md) for more information.

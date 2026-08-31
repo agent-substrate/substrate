@@ -29,13 +29,11 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/cache"
 )
 
 // TestSchedulerRecordable guards the retry-dedup rule: the assignment loop
@@ -1053,8 +1051,8 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			}
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, seedOpts...)
 
-			indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-			if err := indexer.Add(&atev1alpha1.ActorTemplate{
+			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+			if _, err := persistence.CreateActorTemplate(ctx, mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "tmpl1"},
 				Spec: atev1alpha1.ActorTemplateSpec{
 					SnapshotsConfig: atev1alpha1.SnapshotsConfig{
@@ -1063,11 +1061,11 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 					},
 				},
 				Status: atev1alpha1.ActorTemplateStatus{GoldenSnapshot: tt.goldenSnapshot},
-			}); err != nil {
-				t.Fatalf("add template to indexer: %v", err)
+			})); err != nil {
+				t.Fatalf("create template: %v", err)
 			}
 
-			w := &ActorWorkflow{store: persistence, actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer)}
+			w := &ActorWorkflow{store: persistence}
 			_, _, src, err := w.loadActorForResume(ctx, actorRef, false)
 			if got := status.Code(err); got != tt.wantCode {
 				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
@@ -1105,15 +1103,15 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 	})
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	if err := indexer.Add(&atev1alpha1.ActorTemplate{
+	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+	if _, err := persistence.CreateActorTemplate(ctx, mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "tmpl1"},
 		Status:     atev1alpha1.ActorTemplateStatus{GoldenSnapshot: "golden-1"},
-	}); err != nil {
-		t.Fatalf("add template to indexer: %v", err)
+	})); err != nil {
+		t.Fatalf("create template: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer)}
+	w := &ActorWorkflow{store: persistence}
 	_, _, _, err := w.loadActorForResume(ctx, actorRef, false)
 	if got := status.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("status.Code(err) = %v, want FailedPrecondition (err: %v)", got, err)
@@ -1129,12 +1127,11 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 	// Seed the actor as RUNNING. Note: No snapshot or template is seeded in the
-	// store or lister, proving that loadActorForResume short-circuits before
-	// attempting to fetch either.
+	// store, proving that loadActorForResume short-circuits before attempting
+	// to fetch either.
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "missing-tmpl", ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	w := &ActorWorkflow{store: persistence, actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer)}
+	w := &ActorWorkflow{store: persistence}
 
 	actor, tmpl, src, err := w.loadActorForResume(ctx, actorRef, false)
 	if err != nil {

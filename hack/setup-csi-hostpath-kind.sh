@@ -18,7 +18,7 @@
 
 set -o errexit -o nounset -o pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(git rev-parse --show-toplevel)"
 
 # Define paths
 DRIVER_DIR="${ROOT}/hack/third_party/csi-driver-host-path"

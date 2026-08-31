@@ -16,8 +16,8 @@
 // the platform metrics in e2e.PlatformMetricPrefixes reach the kind stack's OTel
 // Collector. It closes the "silent regression" gap: a renamed or dropped
 // instrument fails here rather than surfacing as an empty dashboard. The prefix
-// set grows as each metric slice lands. Requires the demo counter template for
-// the sandbox class under test to be installed (see e2e.CounterFixture).
+// set grows as each metric slice lands. Requires the substrate counter demo for
+// the sandbox class under test to be installed (see e2e.SubstrateCounterFixture).
 package metrics
 
 import (
@@ -40,7 +40,7 @@ const metricsAtespace = "ate-metrics-e2e"
 func TestPlatformMetricsEmitted(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
-	tmpl := e2e.CounterFixture()
+	tmpl := e2e.SubstrateCounterFixture()
 	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
@@ -49,9 +49,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	})
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
-		ActorTemplateNamespace: tmpl.Namespace,
-		ActorTemplateName:      tmpl.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: tmpl.Atespace, Name: tmpl.Name},
 	}}); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
@@ -220,7 +219,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					foundCrashLine = true
 					opVal := extractLabelValue(line, "ate_actor_operation_name")
 					reasonVal := extractLabelValue(line, "ate_failure_reason")
-					tmplNSVal := extractLabelValue(line, "ate_template_namespace")
+					tmplAtespaceVal := extractLabelValue(line, "ate_template_atespace")
 					tmplNameVal := extractLabelValue(line, "ate_template_name")
 					workerPoolNSVal := extractLabelValue(line, "ate_workerpool_namespace")
 					workerPoolVal := extractLabelValue(line, "ate_workerpool_name")
@@ -239,8 +238,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 						crashErrs = append(crashErrs, fmt.Sprintf("ate_failure_reason %q is invalid (must be a registered ateerrors reason enum like CORRUPTED_ASSIGNMENT, WORKER_POD_GONE, WORKER_REASSIGNED, UNKNOWN)", reasonVal))
 					}
 
-					if tmplNSVal == "" {
-						crashErrs = append(crashErrs, "ate_template_namespace label is missing or empty")
+					if tmplAtespaceVal == "" {
+						crashErrs = append(crashErrs, "ate_template_atespace label is missing or empty")
 					}
 					if tmplNameVal == "" {
 						crashErrs = append(crashErrs, "ate_template_name label is missing or empty")
@@ -259,8 +258,8 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 					}
 
 					if len(crashErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q)",
-							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal))
+						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplAtespace=%q, tmplName=%q, workerPoolNS=%q, workerPool=%q, sandboxClass=%q)",
+							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplAtespaceVal, tmplNameVal, workerPoolNSVal, workerPoolVal, sandboxVal))
 					}
 				}
 			}

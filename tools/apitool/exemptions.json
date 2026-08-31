@@ -156,11 +156,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ArchAssets",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Container.env",
     "message": "field has no doc comment"
   },
@@ -507,11 +502,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.ResumeActorResponse.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.SandboxAssets.sandbox_class",
     "message": "field has no doc comment"
   },
   {

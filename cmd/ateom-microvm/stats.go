@@ -228,11 +228,11 @@ func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorA
 	}
 
 	return &ateompb.WorkloadStatsSample{
-		Atespace:               active.Ref.Atespace,
-		ActorName:              active.Ref.Name,
-		ActorUid:               active.UID,
-		ActorTemplateNamespace: active.TemplateNamespace,
-		ActorTemplateName:      active.TemplateName,
+		Atespace:              active.Ref.Atespace,
+		ActorName:             active.Ref.Name,
+		ActorUid:              active.UID,
+		ActorTemplateAtespace: active.TemplateAtespace,
+		ActorTemplateName:     active.TemplateName,
 
 		SandboxClass: ateompb.SandboxClass_SANDBOX_CLASS_MICROVM,
 		Source:       ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT,

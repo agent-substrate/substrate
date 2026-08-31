@@ -143,23 +143,16 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	// Setup WorkerPool and ActorTemplate from the standard counter demo
-	wp, at := setupDemoCounterTemplate(ctx, t, clients, nsObj.Name)
-
-	// Create Atespace
-	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: nsObj.Name}},
-	}); err != nil {
-		t.Fatalf("failed to create atespace: %v", err)
-	}
+	// Setup WorkerPool and ActorTemplate from the substrate counter demo (the
+	// template's atespace, named after the test namespace, is created there).
+	poolName, at := setupDemoCounterTemplate(ctx, t, clients, nsObj.Name)
 
 	// Create and Resume Actor
 	actorName := "netpol-dataplane-" + nsObj.Name
 	t.Logf("Creating Actor %q in Atespace %q...", actorName, nsObj.Name)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
-		ActorTemplateNamespace: nsObj.Name,
-		ActorTemplateName:      at.Name,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
+		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
@@ -218,10 +211,10 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 
 	// Find the IP address of the worker pod backing our WorkerPool
 	pods, err := clients.K8s.CoreV1().Pods(nsObj.Name).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("ate.dev/worker-pool=%s", wp.Name),
+		LabelSelector: fmt.Sprintf("ate.dev/worker-pool=%s", poolName),
 	})
 	if err != nil || len(pods.Items) == 0 {
-		t.Fatalf("failed to list worker pods for worker pool %q: %v", wp.Name, err)
+		t.Fatalf("failed to list worker pods for worker pool %q: %v", poolName, err)
 	}
 	var workerIP string
 	for i := range pods.Items {
@@ -232,7 +225,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 		}
 	}
 	if workerIP == "" {
-		t.Fatalf("no running worker pod with IP found for worker pool %q", wp.Name)
+		t.Fatalf("no running worker pod with IP found for worker pool %q", poolName)
 	}
 
 	// Deploy an unauthorized probe pod in an external test namespace
@@ -277,86 +270,22 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	t.Logf("Negative Data Plane Verification PASSED: Unauthorized connection attempt from %s/%s to %s:8080 was blocked as expected (err: %v)", rogueNsObj.Name, probePod.Name, workerIP, err)
 }
 
-func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (*v1alpha1.WorkerPool, *v1alpha1.ActorTemplate) {
+// setupDemoCounterTemplate provisions the per-test WorkerPool and substrate
+// ActorTemplate from the substrate counter demo, returning the pool name and
+// the template. The template lives in an atespace named after the test's k8s
+// namespace, so its name needs no per-test suffix. SnapshotsConfig is copied
+// from the source, as the CRD-era setup did.
+func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapipb.ActorTemplate) {
 	t.Helper()
-	src := e2e.CounterFixture()
-	srcNS, srcName := src.Namespace, src.Name
-
-	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(srcNS).Get(ctx, srcName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get existing WorkerPool %s/%s: %v", srcNS, srcName, err)
-	}
-
-	existingAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(srcNS).Get(ctx, srcName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get existing ActorTemplate %s/%s: %v", srcNS, srcName, err)
-	}
-
-	wp := &v1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "counter",
-			Namespace: ns,
-			Labels:    map[string]string{"netpol-test": ns},
-		},
-		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:          1,
-			WorkerImage:       existingWp.Spec.WorkerImage,
-			SandboxClass:      existingWp.Spec.SandboxClass,
-			SandboxConfigName: existingWp.Spec.SandboxConfigName,
-		},
-	}
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(ns).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("failed to create WorkerPool: %v", err)
-	}
-
-	at := &v1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "counter",
-			Namespace: ns,
-		},
-		Spec: v1alpha1.ActorTemplateSpec{
-			WorkerSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"netpol-test": ns},
-			},
-			SandboxClass: existingAt.Spec.SandboxClass,
-			Containers:   existingAt.Spec.Containers,
-			// The source's limits size the sandbox. Copying them matters most on
-			// micro-VM, where an ActorTemplate that declares none boots the guest
-			// at the kata config default (2GiB) instead of the demo's 512Mi.
-			Resources:       existingAt.Spec.Resources,
-			SnapshotsConfig: existingAt.Spec.SnapshotsConfig,
-			Volumes:         existingAt.Spec.Volumes,
-		},
-	}
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(ns).Create(ctx, at, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("failed to create ActorTemplate: %v", err)
-	}
-
-	t.Logf("Waiting for ActorTemplate %s/%s to be Ready...", ns, at.Name)
-	tmplTimeout := e2e.TemplateReadyTimeout(t)
-	tmplCtx, tmplCancel := context.WithTimeout(ctx, tmplTimeout)
-	defer tmplCancel()
-	var lastPhase v1alpha1.PhaseType
-	for {
-		curAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(ns).Get(tmplCtx, at.Name, metav1.GetOptions{})
-		if err == nil {
-			lastPhase = curAt.Status.Phase
-			if lastPhase == v1alpha1.PhaseReady {
-				t.Logf("ActorTemplate %s/%s is Ready with golden snapshot %q", ns, at.Name, curAt.Status.GoldenSnapshot)
-				break
-			}
-			if lastPhase == v1alpha1.PhaseFailed {
-				t.Fatalf("ActorTemplate %s/%s transitioned to PhaseFailed!", ns, at.Name)
-			}
-		}
-		select {
-		case <-tmplCtx.Done():
-			t.Fatalf("Timed out waiting for ActorTemplate %q to be Ready after %v (last phase: %s, err: %v)", at.Name, tmplTimeout, lastPhase, err)
-		case <-time.After(1 * time.Second):
-		}
-	}
-
-	return wp, at
+	const poolName = "counter"
+	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns, e2e.SubstrateCounterTemplateOptions{
+		Atespace:     ns,
+		Name:         "counter",
+		PoolName:     poolName,
+		PoolReplicas: 1,
+		Labels:       map[string]string{"netpol-test": ns},
+	})
+	return poolName, at
 }
 
 func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients, atespace, actorName string) {

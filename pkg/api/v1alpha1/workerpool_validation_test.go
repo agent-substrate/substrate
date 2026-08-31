@@ -64,11 +64,12 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.replicas: Invalid value: -1: spec.replicas in body should be greater than or equal to 0",
 	}, {
-		name: "unset workerImage is allowed",
+		name: "missing workerImage",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.WorkerImage = ""
 		},
-		wantErr: false,
+		wantErr: true,
+		errMsg:  "spec.workerImage: Invalid value: \"\": spec.workerImage in body should be at least 1 chars long",
 	}, {
 		name: "valid template",
 		mutate: func(wp *WorkerPool) {
