@@ -23,7 +23,6 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/internal/volume"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -51,37 +50,32 @@ func (f *fakeStorageClassLister) Get(name string) (*storagev1.StorageClass, erro
 var _ storagev1listers.StorageClassLister = (*fakeStorageClassLister)(nil)
 
 func TestInitialActorVolumes_PendingState(t *testing.T) {
-	tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Volumes: []atev1alpha1.Volume{
-				{
-					Name: "data-vol-1",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "standard",
-						},
-					},
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{
+				Name: "data-vol-1",
+				Type: "ExternalVolumeTemplate",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "standard",
 				},
-				{
-					Name: "scratch-vol",
-				},
-				{
-					Name: "durable-vol",
-					VolumeSource: atev1alpha1.VolumeSource{
-						DurableDir: &atev1alpha1.DurableDirVolumeSource{},
-					},
-				},
-				{
-					Name: "data-vol-2",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "fast",
-						},
-					},
+			},
+			{
+				Name: "scratch-vol",
+			},
+			{
+				Name:       "durable-vol",
+				Type:       "DurableDir",
+				DurableDir: &ateapipb.DurableDirVolumeSource{},
+			},
+			{
+				Name: "data-vol-2",
+				Type: "ExternalVolumeTemplate",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "fast",
 				},
 			},
 		},
-	})
+	}
 
 	want := []*ateapipb.ExternalVolume{
 		{
@@ -120,51 +114,43 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 func TestCreateActorVolumes(t *testing.T) {
 	ctx := context.Background()
 
-	standardTmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Volumes: []atev1alpha1.Volume{
-				{
-					Name: "data-vol",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "standard",
-						},
-					},
+	standardTmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{
+				Name: "data-vol",
+				Type: "ExternalVolumeTemplate",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "standard",
 				},
 			},
 		},
-	})
+	}
 
-	multiVolTmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Volumes: []atev1alpha1.Volume{
-				{
-					Name: "vol1",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "standard",
-						},
-					},
+	multiVolTmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{
+				Name: "vol1",
+				Type: "ExternalVolumeTemplate",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "standard",
 				},
-				{
-					Name: "vol2",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "standard",
-						},
-					},
+			},
+			{
+				Name: "vol2",
+				Type: "ExternalVolumeTemplate",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "standard",
 				},
-				{
-					Name: "vol3",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "standard",
-						},
-					},
+			},
+			{
+				Name: "vol3",
+				Type: "ExternalVolumeTemplate",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "standard",
 				},
 			},
 		},
-	})
+	}
 
 	tests := []struct {
 		name         string
@@ -247,11 +233,7 @@ func TestCreateActorVolumes(t *testing.T) {
 		},
 		{
 			name: "volume not found in template returns error",
-			tmpl: mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{},
-				},
-			}),
+			tmpl: &ateapipb.ActorTemplate{},
 			inputVolumes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "missing-vol",

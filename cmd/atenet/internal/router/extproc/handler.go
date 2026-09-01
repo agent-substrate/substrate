@@ -52,12 +52,12 @@ type Result struct {
 	// /statusz page. Empty for handlers that do not pick an upstream.
 	Target string
 
-	// TemplateNamespace and TemplateName identify the actor template the
+	// TemplateAtespace and TemplateName identify the actor template the
 	// request resolved to. They are the low-cardinality attributes on the
 	// route-duration metric, and are empty when the direction has no template
 	// (or the request failed before resolving one).
-	TemplateNamespace string
-	TemplateName      string
+	TemplateAtespace string
+	TemplateName     string
 
 	// Resume is the actor-resume outcome, as one of the ateattr.RouterResume*
 	// values. Empty means "none" — the direction never resumes an actor, or the

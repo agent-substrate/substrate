@@ -75,7 +75,14 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 
 ```bash
 ./hack/install-ate.sh --deploy-demo-egress
-kubectl wait --for=condition=Ready actortemplate/egress -n ate-demo-egress --timeout=5m
+```
+
+The install applies the worker pool, creates the `ate-demo-egress` atespace and
+the `egress` ActorTemplate (a substrate resource, not a CRD) through the ate
+API, and blocks until the template's golden snapshot is built:
+
+```bash
+kubectl ate get actor-template egress -a ate-demo-egress
 ```
 
 ## Run the automated test (easiest)
@@ -104,15 +111,15 @@ kubectl -n egress-target create deployment whoami --image=traefik/whoami
 kubectl -n egress-target expose deployment whoami --port=80
 TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterIP}')
 
-# 2. Create and resume an Actor.
-kubectl ate create atespace demo
-kubectl ate create actor egress-demo -a demo --template ate-demo-egress/egress
-kubectl ate resume actor egress-demo -a demo   # wait for ACTOR_STATE_RUNNING
+# 2. Create and resume an Actor in the demo's atespace: --template-ref
+#    resolves the template by name within the actor's own atespace.
+kubectl ate create actor egress-demo -a ate-demo-egress --template-ref egress
+kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
 
 # 3. Drive the Actor's egress through the ingress gateway.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
 curl -s -X POST http://localhost:8000/ \
-  -H 'Host: egress-demo.demo.actors.resources.substrate.ate.dev' \
+  -H 'Host: egress-demo.ate-demo-egress.actors.resources.substrate.ate.dev' \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```
@@ -122,11 +129,11 @@ curl -s -X POST http://localhost:8000/ \
 ```bash
 # The egress gateway logs each tunneled CONNECT against the verified peer certificate:
 kubectl -n ate-system logs deploy/atenet-egress | grep '\[egress\]'
-#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/demo/actor/egress-demo … code=200 …
+#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/ate-demo-egress/actor/egress-demo … code=200 …
 
 # The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
 kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress identity\|egress denied'
-#   egress identity authenticated  atespace=demo actor=egress-demo actorUid=… destination=<TARGET_IP>:80
+#   egress identity authenticated  atespace=ate-demo-egress actor=egress-demo actorUid=… destination=<TARGET_IP>:80
 ```
 
 The `whoami` body shows `RemoteAddr: <atenet-egress pod IP>` — proof the request egressed

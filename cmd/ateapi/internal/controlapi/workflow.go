@@ -72,7 +72,6 @@ type ActorWorkflow struct {
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
-	actorTemplateLister  listersv1alpha1.ActorTemplateLister
 	workerPoolLister     listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
 	storageClassLister   storagev1listers.StorageClassLister
@@ -86,7 +85,6 @@ func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
-	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
@@ -99,7 +97,6 @@ func NewActorWorkflow(
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
 		dialer:               dialer,
-		actorTemplateLister:  actorTemplateLister,
 		workerPoolLister:     workerPoolLister,
 		sandboxConfigLister:  sandboxConfigLister,
 		storageClassLister:   storageClassLister,

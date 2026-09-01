@@ -102,7 +102,7 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 	if err != nil {
 		return nil, nil, err
 	}
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -190,8 +190,8 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		TargetAteomUid:        assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
-		ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
-		ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{

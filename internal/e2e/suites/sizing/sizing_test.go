@@ -19,23 +19,19 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
 	sizingTemplate = "probe-sized"
 
-	// The limits declared in probe-sized.yaml.tmpl. Keep these in sync with the
-	// manifest: the whole point of the suite is to assert the sandbox observes
-	// exactly what the ActorTemplate declared.
+	// The limits declared in probe-sized-template.yaml.tmpl. Keep these in sync
+	// with the manifest: the whole point of the suite is to assert the sandbox
+	// observes exactly what the ActorTemplate declared.
 	wantCPU      = 2
 	wantMemBytes = 512 * 1024 * 1024 // 512Mi
 )
@@ -73,8 +69,7 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	deploySizedProbe(t, env["BUCKET_NAME"])
-	waitForTemplateReady(t, ctx, clients)
+	deploySizedProbe(t, ctx, clients, env["BUCKET_NAME"])
 
 	const id = "sized-actor"
 	createAndResumeActor(t, ctx, clients, id)
@@ -112,62 +107,21 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 	}
 }
 
-func deploySizedProbe(t *testing.T, bucket string) {
+// deploySizedProbe installs the sized probe fixture for the sandbox class
+// under test and waits for its golden snapshot.
+func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) {
 	t.Helper()
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-
-	// One manifest, rendered for the sandbox class under test (mirrors the
-	// identity suite).
-	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl", bucket, "sizing")
-
-	// Build/push the probe image and apply through the repo's pinned ko. See the
-	// identity suite's deployProbe for why KO_CONFIG_PATH and the trailing
-	// `-- --context=...` are required.
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
-	t.Cleanup(func() {
-		delArgs := []string{"delete", "--ignore-not-found", "-f", manifest}
-		if e2e.KubeContext != "" {
-			delArgs = append([]string{"--context=" + e2e.KubeContext}, delArgs...)
-		}
-		e2e.RunCmd(t, "kubectl", delArgs...)
-	})
-}
-
-func waitForTemplateReady(t *testing.T, ctx context.Context, clients *e2e.Clients) {
-	t.Helper()
-	deadline := time.Now().Add(e2e.TemplateReadyTimeout(t))
-	for time.Now().Before(deadline) {
-		at, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(sizingNamespace).Get(ctx, sizingTemplate, metav1.GetOptions{})
-		if err == nil {
-			switch at.Status.Phase {
-			case v1alpha1.PhaseReady:
-				t.Logf("sized probe ActorTemplate ready, golden=%s", at.Status.GoldenActorID)
-				return
-			case v1alpha1.PhaseFailed:
-				t.Fatalf("sized probe ActorTemplate entered PhaseFailed")
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("timed out waiting for sized probe ActorTemplate to be Ready")
+	e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
+	}, bucket, "sizing", false)
 }
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	// CreateActor requires the atespace to exist first.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: sizingNamespace}}})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: sizingNamespace, Name: id},
-		ActorTemplateNamespace: sizingNamespace,
-		ActorTemplateName:      sizingTemplate,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: sizingNamespace, Name: id},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}

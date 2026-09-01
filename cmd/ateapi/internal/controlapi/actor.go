@@ -71,7 +71,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	// will still exist later.  Checking it here produces a nice error UX, but
 	// we still have to handle the template not existing later, which makes the
 	// UX inconsistent, at best.  Is it actually worth checking at all?
-	template, err := resolveActorTemplate(ctx, s.store, s.actorTemplateLister, inActor)
+	template, err := resolveActorTemplate(ctx, s.store, inActor)
 	if err != nil {
 		return nil, err
 	}

@@ -20,13 +20,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func toActorSnapshotContentScope(in atev1alpha1.SnapshotScope) ateapipb.SnapshotContentScope {
-	if in == atev1alpha1.SnapshotScopeData {
-		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-	}
-	return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-}
-
 func actorSnapshotContentScopeToAtelet(in ateapipb.SnapshotContentScope) ateletpb.SnapshotScope {
 	if in == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA

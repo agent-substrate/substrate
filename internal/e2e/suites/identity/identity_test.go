@@ -24,9 +24,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const probeTemplate = "probe"
@@ -79,8 +77,13 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// ensures a bundle EXISTS): the assertions below compare the projected
 	// file against this run's CA, and rotation later replaces it again.
 	wantTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust")
-	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity", e2e.WithTrustBundle())
-	golden := waitForGolden(t, ctx, clients)
+	var tmpl *ateapipb.ActorTemplate
+	probeNamespace, tmpl = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity", e2e.WithTrustBundle())
+	// The golden actor's id, for the not-golden assertion below. Coupled to
+	// the reconciler's naming: the golden actor is named after the template's
+	// UID (cmd/ateapi template reconciler), so a naming change there weakens
+	// this check to a no-op rather than false-failing it.
+	golden := tmpl.GetMetadata().GetUid()
 
 	// Two distinct actors from the same golden snapshot.
 	ids := []string{"probe-alpha", "probe-beta"}
@@ -216,30 +219,8 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, want)
 }
 
-func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) string {
-	t.Helper()
-	deadline := time.Now().Add(e2e.TemplateReadyTimeout(t))
-	for time.Now().Before(deadline) {
-		at, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(probeNamespace).Get(ctx, probeTemplate, metav1.GetOptions{})
-		if err == nil {
-			switch at.Status.Phase {
-			case v1alpha1.PhaseReady:
-				t.Logf("probe ActorTemplate ready, golden=%s", at.Status.GoldenActorID)
-				return at.Status.GoldenActorID
-			case v1alpha1.PhaseFailed:
-				t.Fatalf("probe ActorTemplate entered PhaseFailed")
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("timed out waiting for probe ActorTemplate to be Ready")
-	return ""
-}
-
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	// CreateActor requires the atespace to exist first.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: probeNamespace}}})
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	// The actor record lives in the ateapi store and outlives the fixture
 	// namespace, so a failed prior run can leak it and wedge every rerun on
@@ -248,9 +229,8 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplateNamespace: probeNamespace,
-		ActorTemplateName:      probeTemplate,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}

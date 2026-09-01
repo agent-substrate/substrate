@@ -1,0 +1,74 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The capabilities fixture's ActorTemplates: protojson-shaped
+# ateapipb.ActorTemplate documents (NOT the ate.dev/v1alpha1 CRD), created
+# through the ate API by e2e.DeploySubstrateFixture. Two templates run the
+# same probe image and differ only in securityContext.capabilities, so the
+# suite can compare what the kernel reports inside the sandbox against what
+# the template asked for.
+
+# No securityContext: pins the default capability set, so a change to the
+# default is caught here and not only in atelet's unit tests.
+metadata:
+  atespace: ate-e2e${FIXTURE_SUFFIX}
+  name: caps-default
+workerSelector:
+  matchLabels:
+    workload: caps
+containers:
+- name: probe
+  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  command: ["/ko-app/probe"]
+  readyz:
+    httpGet:
+      path: /healthz
+      port: 80
+    timeoutSeconds: 60
+${TEMPLATE_RESOURCES}
+${TEMPLATE_SANDBOX_CONFIG}
+snapshotsConfig:
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-default${FIXTURE_SUFFIX}/
+
+---
+
+# drop ALL + add: the resulting set is exact rather than relative, so asserting
+# it proves both halves at once — everything default was dropped, and only the
+# named capability was granted back.
+metadata:
+  atespace: ate-e2e${FIXTURE_SUFFIX}
+  name: caps-exact
+workerSelector:
+  matchLabels:
+    workload: caps
+containers:
+- name: probe
+  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  command: ["/ko-app/probe"]
+  # The probe binds :80, which is exactly what NET_BIND_SERVICE permits, so
+  # this template also proves the granted capability is usable and not merely
+  # present in the mask: without it the container could not become ready.
+  securityContext:
+    capabilities:
+      drop: ["ALL"]
+      add: ["NET_BIND_SERVICE"]
+  readyz:
+    httpGet:
+      path: /healthz
+      port: 80
+    timeoutSeconds: 60
+${TEMPLATE_RESOURCES}
+${TEMPLATE_SANDBOX_CONFIG}
+snapshotsConfig:
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-exact${FIXTURE_SUFFIX}/

@@ -410,10 +410,9 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		Status:                 &ateapipb.ActorStatus{State: f.state},
-		ActorTemplateNamespace: "ate-demo",
-		ActorTemplateName:      "counter",
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status:        &ateapipb.ActorStatus{State: f.state},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-demo", Name: "counter"},
 	}
 	if !f.noPlacement {
 		workerName := testWorkerName

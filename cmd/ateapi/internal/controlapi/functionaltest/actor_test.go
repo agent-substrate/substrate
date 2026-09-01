@@ -669,14 +669,14 @@ func TestUpdateActor_Success(t *testing.T) {
 
 // TestUpdateActor verifies a typical RMW UpdateActor flow: a
 // client reads an actor, modifies it and send an UpdateActor request.
-// Output-only fields it sets are ignored, and changes to immutable fields are
-// rejected.
+// Output-only fields it sets are ignored, and the mutable actor_template ref
+// can repoint the actor at another template.
 func TestUpdateActor(t *testing.T) {
 	ns := namespaceForTest("ns-update-replace")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createTemplate(t, tc, ns)
+	tmpl := createTemplate(t, tc, ns)
 
 	created, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
@@ -710,12 +710,24 @@ func TestUpdateActor(t *testing.T) {
 		t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
 	}
 
-	// Immutable field
-	updatedActor.ActorTemplate = &ateapipb.ObjectRef{Name: "new-templace", Atespace: "atespace"}
-	_, err = tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor: updatedActor,
-	})
-	assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor.actor_template: Invalid value: null: field is immutable")
+	// Mutable template ref: repoint the actor at a second template.
+	tmpl2 := proto.Clone(tmpl).(*ateapipb.ActorTemplate)
+	tmpl2.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl2"}
+	tmpl2.Status = nil
+	if _, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl2}); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	updatedActor.ActorTemplate = &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl2"}
+	repointed, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: updatedActor})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+	wantActor.Metadata.Version = 3
+	wantActor.ActorTemplate = &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl2"}
+	if diff := cmp.Diff(wantActor, repointed, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("UpdateActor response mismatch after template repoint (-want +got):\n%s", diff)
+	}
 }
 
 // TestUpdateActor_Preconditions verifies the required version and uid guards

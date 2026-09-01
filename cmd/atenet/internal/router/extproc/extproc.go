@@ -155,7 +155,7 @@ func (s *Server) processRequestHeaders(
 	}
 
 	elapsed := time.Since(start)
-	s.recordRouteDuration(ctx, elapsed, res.TemplateNamespace, res.TemplateName, classifyOutcome(err), res.resume())
+	s.recordRouteDuration(ctx, elapsed, res.TemplateAtespace, res.TemplateName, classifyOutcome(err), res.resume())
 
 	if err != nil {
 		slog.ErrorContext(ctx, "Error during ext_proc RequestHeaders processing",

@@ -61,8 +61,8 @@ func init() {
 		DemoName:       "demo-counter",
 		Short:          "A counter actor exercising snapshot, resume, and atenet ingress",
 		Template:       template,
-		Deployments:    []steps.TemplateRef{{Namespace: namespace, Name: "counter"}},
-		ActorTemplates: []steps.TemplateRef{{Namespace: namespace, Name: "counter"}},
+		Deployments:    []steps.TemplateRef{{Atespace: namespace, Name: "counter"}},
+		ActorTemplates: []steps.TemplateRef{{Atespace: namespace, Name: "counter"}},
 	}})
 }
 

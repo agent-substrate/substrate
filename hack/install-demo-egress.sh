@@ -15,6 +15,14 @@
 # limitations under the License.
 #
 # This is sourced as part of install-ate.sh. Do not run directly.
+#
+# The egress demo: each variant applies a worker pool manifest, then creates
+# its ActorTemplate as a substrate resource through the ate API with
+# `kubectl ate create actor-template`. The micro-VM variants need the
+# cluster-wide `microvm` SandboxConfig from hack/install-microvm-deps.sh
+# --install; the MITM variants need an sdsmint install
+# (--experimental-use-sdsmint), because their actors project the egress
+# gateway trust bundle, which does not resolve otherwise.
 
 ATE_DEMOS+=(demo-egress) # register demo-egress
 # The micro-VM variant is its own demo rather than a flag on demo-egress: that
@@ -74,24 +82,16 @@ demo-egress-microvm-mitm_cmdline() {
 }
 
 demo-egress_deploy() {
-  log_step "demo-egress_deploy"
-  ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress.yaml.tmpl \
-    | run_ko apply -f -
-
-  log_step "Waiting for egress demo to be ready..."
-  # The WorkerPool controller names the Deployment after the WorkerPool
-  # ("egress"), the same way demo-counter gets "deployment/counter". The old
-  # "egress-deployment" name was NotFound on every successful deploy.
-  wait_for_pool_rollout egress ate-demo-egress
-  run_kubectl wait --for=condition=Ready actortemplate/egress -n ate-demo-egress --timeout=300s
+  deploy_substrate_demo demo-egress \
+    demos/egress/egress.yaml.tmpl \
+    demos/egress/egress-template.yaml.tmpl \
+    ate-demo-egress egress egress 300
 }
 
 demo-egress_delete() {
-  log_step "demo-egress_delete"
-  delete_demo_actors ate-demo-egress egress
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo demo-egress \
+    demos/egress/egress.yaml.tmpl \
+    ate-demo-egress egress
 }
 
 demo-egress-microvm_usage() {
@@ -99,24 +99,18 @@ demo-egress-microvm_usage() {
 }
 
 demo-egress-microvm_deploy() {
-  log_step "demo-egress-microvm_deploy"
-  ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm.yaml.tmpl \
-    | run_ko apply -f -
-
-  log_step "Waiting for micro-VM egress demo to be ready..."
-  wait_for_pool_rollout egress-microvm ate-demo-egress-microvm
-  # A micro-VM golden is a cloud-hypervisor cold boot plus a checkpoint, on
-  # nested KVM in CI, so it needs a longer budget than the gVisor one above.
-  run_kubectl wait --for=condition=Ready actortemplate/egress-microvm \
-    -n ate-demo-egress-microvm --timeout=600s
+  # 600s golden budget: a micro-VM golden is a cloud-hypervisor cold boot
+  # plus checkpoint, on nested KVM in CI.
+  deploy_substrate_demo demo-egress-microvm \
+    demos/egress/egress-microvm.yaml.tmpl \
+    demos/egress/egress-microvm-template.yaml.tmpl \
+    ate-demo-egress-microvm egress-microvm egress-microvm 600
 }
 
 demo-egress-microvm_delete() {
-  log_step "demo-egress-microvm_delete"
-  delete_demo_actors ate-demo-egress-microvm egress-microvm
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo demo-egress-microvm \
+    demos/egress/egress-microvm.yaml.tmpl \
+    ate-demo-egress-microvm egress-microvm
 }
 
 demo-egress-mitm_usage() {
@@ -125,25 +119,19 @@ demo-egress-mitm_usage() {
 }
 
 demo-egress-mitm_deploy() {
-  log_step "demo-egress-mitm_deploy"
-  ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-mitm.yaml.tmpl \
-    | run_ko apply -f -
-
-  log_step "Waiting for MITM egress demo to be ready..."
-  wait_for_pool_rollout egress-mitm ate-demo-egress-mitm
-  # The golden snapshot only becomes Ready once an actor starts, and an actor
-  # whose trust bundle does not resolve never does — so a timeout here is the
+  # The golden snapshot only exists once an actor starts, and an actor whose
+  # trust bundle does not resolve never does — so a timeout here is the
   # symptom of a missing sdsmint install (see demo-egress-mitm_usage).
-  run_kubectl wait --for=condition=Ready actortemplate/egress-mitm \
-    -n ate-demo-egress-mitm --timeout=300s
+  deploy_substrate_demo demo-egress-mitm \
+    demos/egress/egress-mitm.yaml.tmpl \
+    demos/egress/egress-mitm-template.yaml.tmpl \
+    ate-demo-egress-mitm egress-mitm egress-mitm 300
 }
 
 demo-egress-mitm_delete() {
-  log_step "demo-egress-mitm_delete"
-  delete_demo_actors ate-demo-egress-mitm egress-mitm
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-mitm.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo demo-egress-mitm \
+    demos/egress/egress-mitm.yaml.tmpl \
+    ate-demo-egress-mitm egress-mitm
 }
 
 demo-egress-microvm-mitm_usage() {
@@ -152,22 +140,14 @@ demo-egress-microvm-mitm_usage() {
 }
 
 demo-egress-microvm-mitm_deploy() {
-  log_step "demo-egress-microvm-mitm_deploy"
-  ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm-mitm.yaml.tmpl \
-    | run_ko apply -f -
-
-  log_step "Waiting for micro-VM MITM egress demo to be ready..."
-  wait_for_pool_rollout egress-microvm-mitm ate-demo-egress-microvm-mitm
-  # A micro-VM golden is a cloud-hypervisor cold boot plus a checkpoint, on
-  # nested KVM in CI, so it needs a longer budget than the gVisor one above.
-  run_kubectl wait --for=condition=Ready actortemplate/egress-microvm-mitm \
-    -n ate-demo-egress-microvm-mitm --timeout=600s
+  deploy_substrate_demo demo-egress-microvm-mitm \
+    demos/egress/egress-microvm-mitm.yaml.tmpl \
+    demos/egress/egress-microvm-mitm-template.yaml.tmpl \
+    ate-demo-egress-microvm-mitm egress-microvm-mitm egress-microvm-mitm 600
 }
 
 demo-egress-microvm-mitm_delete() {
-  log_step "demo-egress-microvm-mitm_delete"
-  delete_demo_actors ate-demo-egress-microvm-mitm egress-microvm-mitm
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/egress/egress-microvm-mitm.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo demo-egress-microvm-mitm \
+    demos/egress/egress-microvm-mitm.yaml.tmpl \
+    ate-demo-egress-microvm-mitm egress-microvm-mitm
 }

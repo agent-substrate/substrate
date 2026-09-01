@@ -17,21 +17,20 @@ package e2e
 import (
 	"context"
 	"testing"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // ProbeName is the name of the probe fixture's WorkerPool and ActorTemplate,
-// inside the namespace DeployProbe returns.
+// inside the atespace (and matching k8s namespace) DeployProbe returns.
 const ProbeName = "probe"
 
-// probeManifest is the fixture template DeployProbe renders.
-const probeManifest = "internal/e2e/fixtures/probe/probe.yaml.tmpl"
-
-// trustBundleDataSource fills ${TEMPLATE_TRUST_BUNDLE}, indented to sit in the
-// template's dataSources list. The name must be on atelet's supported-bundle
-// allowlist.
-const trustBundleDataSource = `      - trustBundle:
-          name: egress-mitm.ate.dev
-          path: trust-bundle.pem`
+// probeManifests are the fixture templates DeployProbe deploys: the k8s pool
+// half and the substrate ActorTemplate half.
+var probeManifests = SubstrateFixtureManifests{
+	Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
+	Template: "internal/e2e/fixtures/probe/probe-template.yaml.tmpl",
+}
 
 // ProbeOption adjusts what DeployProbe installs.
 type ProbeOption func(*probeConfig)
@@ -49,12 +48,14 @@ type probeConfig struct{ trustBundle bool }
 // step, leaving the identity suite the only opt-in in the standard lanes.
 func WithTrustBundle() ProbeOption { return func(c *probeConfig) { c.trustBundle = true } }
 
-// DeployProbe builds the probe fixture image and applies its manifest for the
-// sandbox class under test, removing it when the test ends. name distinguishes
-// the caller (by convention its suite name): each suite gets its own copy of
-// the fixture, so no suite's cleanup can delete the fixture out from under
-// another running concurrently. It returns the fixture's namespace.
-func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) string {
+// DeployProbe builds the probe fixture image and installs the fixture for the
+// sandbox class under test, removing it when the test ends. name
+// distinguishes the caller (by convention its suite name): each suite gets
+// its own copy of the fixture, so no suite's cleanup can delete the fixture
+// out from under another running concurrently. It returns the fixture's
+// atespace (which also names the k8s namespace holding the pool) and the
+// created ActorTemplate, already golden-snapshotted.
+func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string, *ateapipb.ActorTemplate) {
 	t.Helper()
 
 	var cfg probeConfig
@@ -67,35 +68,6 @@ func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) string 
 		EnsureEgressTrustBundle(t, context.Background(), GetClients())
 	}
 
-	// One manifest, rendered for the sandbox class under test, so both apply
-	// and delete consume the same file without any shell involved.
-	manifest := renderProbeManifest(t, bucket, name, cfg)
-	koApply(t, manifest)
-
-	// Unlike the fixtures that live in a namespace CreateNamespace tears down,
-	// this one installs into a fixed namespace it shares with nothing, so it has
-	// to clean up after itself.
-	t.Cleanup(func() {
-		// Deletion needs no image build, so go straight to kubectl. `ko delete`
-		// rejects this arg shape ("you may not specify resource arguments as
-		// well").
-		delArgs := []string{"delete", "--ignore-not-found", "-f", manifest}
-		if KubeContext != "" {
-			delArgs = append([]string{"--context=" + KubeContext}, delArgs...)
-		}
-		RunCmd(t, "kubectl", delArgs...)
-	})
-
-	return FixtureName("ate-e2e-probe") + "-" + name
-}
-
-// renderProbeManifest renders the probe fixture for cfg. Split out of
-// DeployProbe so the rendering has a unit test that needs no cluster.
-func renderProbeManifest(t *testing.T, bucket, name string, cfg probeConfig) string {
-	t.Helper()
-	inline, blocks := fixtureSubstitutions(bucket, name)
-	if cfg.trustBundle {
-		blocks["${TEMPLATE_TRUST_BUNDLE}"] = trustBundleDataSource
-	}
-	return renderManifest(t, probeManifest, inline, blocks)
+	atespace, templates := DeploySubstrateFixture(t, context.Background(), GetClients(), probeManifests, bucket, name, cfg.trustBundle)
+	return atespace, templates[0]
 }

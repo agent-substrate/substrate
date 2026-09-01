@@ -33,8 +33,8 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
 			Status: &ateapipb.WorkerStatus{
 				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-1", Name: "counter"},
-					Actor:         &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
+					ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ns-1", Name: "counter"},
+					Actor:            &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
 				},
 			},
 		},
@@ -53,8 +53,8 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
 			Status: &ateapipb.WorkerStatus{
 				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-2", Name: "counter"},
-					Actor:         &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
+					ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ns-2", Name: "counter"},
+					Actor:            &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
 				},
 			},
 		},

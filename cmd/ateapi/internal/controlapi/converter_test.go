@@ -18,46 +18,39 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestSnapshotScopeToAtelet covers the wire scope derivation for CRD scopes
-// converted to proto content scopes: unknown and empty CRD scopes fall back
-// to Full, matching the CRD's default.
+// TestSnapshotScopeToAtelet covers the wire scope derivation for template
+// content scopes: an unset scope falls back to Full.
 func TestSnapshotScopeToAtelet(t *testing.T) {
 	tests := []struct {
 		name     string
-		in       atev1alpha1.SnapshotScope
+		in       ateapipb.SnapshotContentScope
 		expected ateletpb.SnapshotScope
 	}{
 		{
 			name:     "Full scope",
-			in:       atev1alpha1.SnapshotScopeFull,
+			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 		{
 			name:     "Data scope",
-			in:       atev1alpha1.SnapshotScopeData,
+			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 		},
 		{
-			name:     "Default scope (empty)",
-			in:       "",
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		},
-		{
-			name:     "Default scope (unknown)",
-			in:       "unknown",
+			name:     "Default scope (unspecified)",
+			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := actorSnapshotContentScopeToAtelet(toActorSnapshotContentScope(tt.in))
+			result := actorSnapshotContentScopeToAtelet(tt.in)
 			if result != tt.expected {
-				t.Errorf("actorSnapshotContentScopeToAtelet(toActorSnapshotContentScope(%q)) = %v, want %v", tt.in, result, tt.expected)
+				t.Errorf("actorSnapshotContentScopeToAtelet(%v) = %v, want %v", tt.in, result, tt.expected)
 			}
 		})
 	}
