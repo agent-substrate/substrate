@@ -16,10 +16,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/tools/cache"
@@ -52,9 +54,10 @@ type sandboxPrewarmer struct {
 
 // startSandboxAssetPrewarm registers an event handler on the SandboxConfig
 // informer and starts a background worker that pre-downloads each config's
-// sandbox assets for this node's architecture. Prewarming is purely a latency
-// optimization: every failure is logged and left to the on-demand fetch in
-// ensureSandboxAssets, which remains the correctness path.
+// sandbox assets for this node's architecture, and pulls its pause image into
+// the image cache. Prewarming is purely a latency optimization: every failure
+// is logged and left to the on-demand fetch in ensureSandboxAssets and the
+// pull inside prepareOCIBundles, which remain the correctness path.
 //
 // TODO: the static-files cache is never pruned, and prewarming every config
 // revision makes stale releases accumulate faster. Add a GC that removes
@@ -136,20 +139,44 @@ func (p *sandboxPrewarmer) run(ctx context.Context) {
 }
 
 // prewarm fetches every asset of one SandboxConfig into the static-files
-// cache. Racing an on-demand ensureSandboxAssets for the same assets is safe:
-// both paths install content-addressed files via atomic rename.
+// cache and its pause image into the image cache. Racing an on-demand
+// ensureSandboxAssets for the same assets is safe: both paths install
+// content-addressed files via atomic rename, and the image cache collapses
+// concurrent pulls of one digest.
 func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxConfig) error {
 	rec, err := recordFromSandboxConfig(cfg)
 	if err != nil {
 		return err
 	}
 	t := time.Now()
-	if _, err := p.herder.ensureSandboxAssets(ctx, rec); err != nil {
+	// The pause image is a sandbox prerequisite like the runtime binaries: it
+	// is the root container of every actor, and without prewarming each node
+	// pulls it inside its first Run/Restore — which at fleet scale is a
+	// synchronized stampede on the image registry. The two fetches live in
+	// different backends (bucket vs. registry), so they run concurrently and
+	// fail independently: either being warm still shortens the first actor's
+	// critical path.
+	var assetErr, imageErr error
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, assetErr = p.herder.ensureSandboxAssets(ctx, rec)
+	})
+	wg.Go(func() {
+		if rec.PauseImage == "" {
+			return
+		}
+		if _, err := p.herder.imageCache.EnsureImage(ctx, rec.PauseImage); err != nil {
+			imageErr = fmt.Errorf("while prewarming pause image %q: %w", rec.PauseImage, err)
+		}
+	})
+	wg.Wait()
+	if err := errors.Join(assetErr, imageErr); err != nil {
 		return err
 	}
 	slog.InfoContext(ctx, "Sandbox assets prewarmed",
 		slog.String("config", cfg.Name),
 		slog.Int("assets", len(rec.Assets)),
+		slog.String("pauseImage", rec.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }
