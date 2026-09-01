@@ -312,10 +312,10 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 				WithType(corev1.SeccompProfileTypeUnconfined))
 	}
 	// runsc's sandbox child also pivot_root()s, so it needs the same relaxation:
-	// a cluster that defaults seccomp to RuntimeDefault (an increasingly common
-	// baseline) denies the syscall whatever capabilities the worker holds, and the
-	// sandbox then dies during startup. Declare Unconfined explicitly so the
-	// worker does not depend on the cluster leaving the profile unset.
+	// a cluster that defaults seccomp to RuntimeDefault denies the syscall whatever
+	// capabilities the worker holds, and the sandbox then dies during startup.
+	// Declare Unconfined explicitly so the worker does not depend on the cluster
+	// leaving the profile unset.
 	return sc.
 		WithCapabilities(corev1ac.Capabilities().
 			WithDrop("ALL").
