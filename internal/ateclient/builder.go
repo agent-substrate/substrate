@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -43,9 +44,11 @@ import (
 	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
-const (
-	apiServerName = "api.ate-system.svc"
+// apiServerName is the in-cluster DNS name of the ateapi Service, used as the
+// audience of the bearer token minted for it.
+var apiServerName = fmt.Sprintf("%s.%s.svc", installdefaults.APIServiceName, installdefaults.SystemNamespace)
 
+const (
 	// serviceDNSSignerName and liveBundleSelector mirror the
 	// clusterTrustBundle projected-volume sources that in-cluster clients
 	// mount to verify ateapi's serving cert.
@@ -82,8 +85,8 @@ func (c *Client) Close() {
 	}
 }
 
-// NewClient creates a new Ate API client. If endpoint is empty, it automatically port-forwards
-// to the ate-api-server pod in the ate-system namespace.
+// NewClient creates a new Ate API client. If endpoint is empty, it automatically
+// port-forwards to the ate-api-server pod in substrate's system namespace.
 func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
 	tp, err := initTracing(ctx, traceEnabled)
 	if err != nil {
@@ -167,7 +170,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 
 	// TODO: Should we special-case a LoadBalancer "api" Service and dial its
 	// address directly instead of port-forwarding?
-	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, "ate-system", "api", 443)
+	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, installdefaults.SystemNamespace, installdefaults.APIServiceName, 443)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +259,7 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
-	token, err := clientset.CoreV1().ServiceAccounts("ate-system").CreateToken(ctx, "ate-client", tokenRequest, metav1.CreateOptions{})
+	token, err := clientset.CoreV1().ServiceAccounts(installdefaults.SystemNamespace).CreateToken(ctx, "ate-client", tokenRequest, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
 	}

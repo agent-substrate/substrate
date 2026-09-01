@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -156,8 +157,13 @@ func main() {
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
+	// atelet shares ateapi's namespace in every supported deployment topology,
+	// so we read it from Kubernetes' downward API rather than expose a flag.
+	ateletNamespace := installdefaults.NamespaceFromPodEnv()
+	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace))
+
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
-	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
+	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
@@ -186,7 +192,7 @@ func main() {
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
-	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
+	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), ateletNamespace, *ateletClientCredBundle, *podIdentityCACerts)
 	controlSrv := controlapi.NewRPCService(persistence, workerCache, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
 	// Drive stored ActorTemplates through the golden actor flow.
