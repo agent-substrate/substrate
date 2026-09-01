@@ -51,10 +51,12 @@ import (
 const (
 	userClass    = "GluttonUser"
 	templateName = "glutton"
-	templateNS   = "benchmark-workloads"
-	actorDomain  = "actors.resources.substrate.ate.dev"
-	pingPath     = "/ping"
-	writeRAMPath = "/writeram"
+	// templateAtespace is the atespace holding the benchmark ActorTemplates
+	// (see benchmarking/workloads/manifests).
+	templateAtespace = "benchmark-workloads"
+	actorDomain      = "actors.resources.substrate.ate.dev"
+	pingPath         = "/ping"
+	writeRAMPath     = "/writeram"
 
 	sourceClient = "client"
 	sourceServer = "server"
@@ -205,7 +207,7 @@ func (u *gluttonUser) create(ctx context.Context) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: templateName},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err

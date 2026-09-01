@@ -1,0 +1,38 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the usermem
+# benchmark workload (locust/tests/usermem.py): stress holds 1 GiB of user
+# memory to size memory snapshots. Not part of deploy.sh's default template
+# set; deploy with WORKLOAD_TEMPLATES="usermem ...". No memory limit: the
+# workload allocates 1 GiB, well above the 256Mi default --actor-memory the
+# other templates take. The sandbox class must match the WorkerPool's so
+# snapshots stay within a class.
+metadata:
+  atespace: benchmark-workloads
+  name: usermem
+workerSelector:
+  matchLabels:
+    workload: benchmark-ateom
+containers:
+- name: usermem
+  image: containerstack/alpine-stress:latest
+  command: ["stress", "--vm", "1", "--vm-bytes", "1G", "--vm-keep", "--vm-hang", "0"]
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/usermem/
+sandboxConfig:
+  sandboxClass: ${SANDBOX_CLASS_ENUM}
+  configName: ${SANDBOX_CONFIG_NAME}

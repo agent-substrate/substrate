@@ -36,8 +36,8 @@
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
 #   workerWaitTimeout
-#                  Optional (default "300s", set by workloads/deploy.sh).
-#                  Go duration for the wait after the WorkerPool deploy for
+#                  Optional (default 300, set by workloads/deploy.sh).
+#                  Whole seconds to wait after the WorkerPool deploy for
 #                  the ateom worker pods to become ready. Raise it for
 #                  large workerCount fleets whose image pulls or scheduling
 #                  outrun the default.

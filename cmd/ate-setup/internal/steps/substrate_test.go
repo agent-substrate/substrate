@@ -40,6 +40,15 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 		t.Fatalf("RepoRoot: %v", err)
 	}
 
+	// The values benchmarking/workloads/deploy.sh substitutes, beyond the
+	// ${BUCKET_NAME} every installer provides.
+	benchmarkValues := map[string]string{
+		"${ACTOR_MEMORY}":        "256Mi",
+		"${OTLP_ENDPOINT}":       "http://otel-collector.otel-system:4317",
+		"${SANDBOX_CLASS_ENUM}":  "SANDBOX_CLASS_GVISOR",
+		"${SANDBOX_CONFIG_NAME}": "gvisor-default",
+	}
+
 	tests := []struct {
 		relPath string
 		values  map[string]string
@@ -56,6 +65,36 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 		{
 			relPath: "demos/sandbox/manual-test-multi-template.yaml",
 			want:    resources.ActorTemplateRef{Atespace: "ate-manual-test-multi", Name: "sandbox-template"},
+		},
+		{
+			relPath: "benchmarking/workloads/manifests/sleep-template.yaml.tmpl",
+			values:  benchmarkValues,
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "sleep"},
+		},
+		{
+			relPath: "benchmarking/workloads/manifests/glutton-template.yaml.tmpl",
+			values:  benchmarkValues,
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "glutton"},
+		},
+		{
+			relPath: "benchmarking/workloads/manifests/glutton-durdir-data-template.yaml.tmpl",
+			values:  benchmarkValues,
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "glutton-durdir-data"},
+		},
+		{
+			relPath: "benchmarking/workloads/manifests/glutton-durdir-full-template.yaml.tmpl",
+			values:  benchmarkValues,
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "glutton-durdir-full"},
+		},
+		{
+			relPath: "benchmarking/workloads/manifests/usermem-template.yaml.tmpl",
+			values:  benchmarkValues,
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "usermem"},
+		},
+		{
+			relPath: "benchmarking/workloads/manifests/kernelmem-template.yaml.tmpl",
+			values:  benchmarkValues,
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "kernelmem"},
 		},
 	}
 	for _, tc := range tests {

@@ -1,0 +1,55 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the
+# glutton-durdir-data benchmark workload, created through the ate API by
+# workloads/deploy.sh. Suspend uploads ONLY the durable dir (DATA-scope
+# commit); resume from it is a cold boot.
+metadata:
+  atespace: benchmark-workloads
+  name: glutton-durdir-data
+workerSelector:
+  matchLabels:
+    workload: benchmark-ateom
+containers:
+- name: glutton
+  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  command:
+  - "/ko-app/glutton"
+  - "--grpc-listen-addr=:80"
+  - "--metrics-listen-addr=:9090"
+  - "--data-dir=/var/lib/glutton"
+  - "--mode=http"
+  # Data-scope resume is a cold boot; without this the router can reach the
+  # sandbox before glutton is listening.
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 80
+  volumeMounts:
+  - name: data
+    mountPath: /var/lib/glutton
+volumes:
+- name: data
+  type: DurableDir
+  durableDir: {}
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_DATA
+  onResume:
+    fromData: RESUME_SOURCE_COLD_BOOT
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-data/
+sandboxConfig:
+  sandboxClass: ${SANDBOX_CLASS_ENUM}
+  configName: ${SANDBOX_CONFIG_NAME}
