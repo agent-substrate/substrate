@@ -367,7 +367,8 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 
 func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
 	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
-	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
+	// The template is mutated in place: callers pass a dedicated object.
+	dbTemplate := template
 	if dbTemplate.Metadata == nil {
 		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
 	}
@@ -1286,7 +1287,8 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, tagRef resourc
 // --- Workers ---
 
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
+	// The worker is mutated in place: callers pass a dedicated object.
+	dbWorker := worker
 	if dbWorker.Metadata == nil {
 		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
 	}
