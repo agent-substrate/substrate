@@ -1688,7 +1688,7 @@ func TestResumeActor(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createTemplate(t, tc, ns)
+	tmpl := createTemplate(t, tc, ns)
 
 	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
@@ -1722,7 +1722,9 @@ func TestResumeActor(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			State:                   ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
 				WorkerNamespace: ns,
