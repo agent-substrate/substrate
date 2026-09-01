@@ -821,57 +821,10 @@ prepare_actor_for_delete() {
   return 1
 }
 
-# delete_demo_actors removes all actors for one or more (namespace, template)
-# pairs before the demo manifests are deleted. Arguments are alternating
-# namespace and template name, e.g.:
-#   delete_demo_actors ate-demo-egress egress
-#   delete_demo_actors ns-a tmpl-a ns-b tmpl-b
-delete_demo_actors() {
-  if ! command -v jq &>/dev/null; then
-    echo "jq is required to delete demo actors" >&2
-    return 1
-  fi
-
-  if (($# == 0 || $# % 2 != 0)); then
-    echo "delete_demo_actors expects namespace/template pairs" >&2
-    return 1
-  fi
-
-  if ! run_kubectl get deployment/ate-api-server -n ate-system >/dev/null 2>&1; then
-    log_step "ate-api-server not found; skipping actor cleanup"
-    return 0
-  fi
-
-  local actors_json
-  if ! actors_json=$(run_kubectl_ate get actors -A -o json 2>/dev/null); then
-    echo "warning: could not list actors; skipping actor cleanup" >&2
-    return 0
-  fi
-
-  local ns tmpl atespace actor_name
-  while (($# > 0)); do
-    ns="$1"
-    tmpl="$2"
-    shift 2
-
-    log_step "Deleting actors for ${ns}/${tmpl}"
-    while IFS=$'\t' read -r atespace actor_name; do
-      [[ -z "${actor_name}" ]] && continue
-      log_step "  preparing actor ${atespace}/${actor_name} for delete"
-      prepare_actor_for_delete "${actor_name}" "${atespace}"
-      run_kubectl_ate delete actor "${actor_name}" -a "${atespace}"
-    done < <(
-      jq -r --arg ns "${ns}" --arg tmpl "${tmpl}" \
-        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.metadata.atespace)\t\(.metadata.name)"' \
-        <<<"${actors_json}"
-    )
-  done
-}
-
-# delete_demo_actors_substrate is delete_demo_actors for actors created from a
-# substrate ActorTemplate resource: those reference their template via the
-# actorTemplate {atespace, name} ref. Arguments are alternating atespace and
-# template name.
+# delete_demo_actors_substrate removes all actors created from a substrate
+# ActorTemplate resource before the demo manifests are deleted: those
+# reference their template via the actorTemplate {atespace, name} ref.
+# Arguments are alternating atespace and template name.
 delete_demo_actors_substrate() {
   if ! command -v jq &>/dev/null; then
     echo "jq is required to delete demo actors" >&2

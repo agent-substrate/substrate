@@ -43,7 +43,7 @@ likely be split in the future for better scalability.)
   drain is what makes the old system's termination lossless.
 
 RBAC permissions:
-* read, list on ActorTemplate
+* get, list, watch on ate-system EndpointSlices
 
 ### dns
 

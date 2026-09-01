@@ -230,8 +230,8 @@ blind_spots:
     code: cmd/podcertcontroller
     brief: This component has no metrics.
   - area: golden snapshot pipeline
-    code: cmd/atecontroller/internal/controllers/actortemplate_controller.go
-    brief: The ActorTemplate controller has no instruments. Thus nothing measures a build of a golden image.
+    code: cmd/ateapi/internal/controlapi/template_reconciler.go
+    brief: The template reconciler in ate-api has no instruments. Thus nothing measures a build of a golden image.
   - area: router shutdown outcome
     code: cmd/atenet/internal/router/drain.go
     brief: The code has two TODOs. Nothing counts a drain that ends with an error.

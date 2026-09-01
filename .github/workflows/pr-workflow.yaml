@@ -151,7 +151,7 @@ jobs:
     - name: Dump diagnostics on failure
       if: failure()
       run: |
-        kubectl --context kind-kind get actortemplate,workerpool,pods -A -o wide || true
+        kubectl --context kind-kind get workerpool,pods -A -o wide || true
         dump() {
           echo "=== logs: $1/$2 ==="
           kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true

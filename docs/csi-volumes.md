@@ -179,6 +179,7 @@ containers:
       port: 8080
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
 snapshotsConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:

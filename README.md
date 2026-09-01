@@ -231,7 +231,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 
 * `cmd/ateapi`: The core control plane API server exposing gRPC endpoints to manage actor and worker lifecycles.
 * `cmd/atelet`: A node-level DaemonSet that supervises physical worker pods, coordinates snapshotting, and manages state transfers.
-* `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool and ActorTemplate custom resources.
+* `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool custom resources.
 * `cmd/atenet`: A combined networking controller providing DNS, Envoy routing, and proxy sidecars.
 * `cmd/ateom-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
 * `cmd/ateom-microvm`: The micro-VM peer of `ateom-gvisor`, running actors as cloud-hypervisor VMs.
