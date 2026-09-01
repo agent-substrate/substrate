@@ -12,7 +12,6 @@ Router has several responsibilities:
   * Make sure the interface with ATE API is pluggable so that we can test with a mock ATE API.
 * Runs an xDS server for the Envoy deployment that defines the Cluster information for the ATEs.
   * the xDS configuration will configure Envoy to send traffic to ext_proc
-* Watches the ActorTemplates to get out the definitions for how to route the actor IDs.
 * Parks requests whose actor cannot be served immediately due to transient
   worker-pool saturation, retrying the resume until the actor is routable or a
   bounded wait elapses, instead of failing fast. See
@@ -107,7 +106,7 @@ header gives the property back.
 
 One binary serves both directions. `--mode` selects which:
 
-| `--mode` | ext_proc handlers | xDS server + ActorTemplate controller | Kubernetes access |
+| `--mode` | ext_proc handlers | xDS server | Kubernetes access |
 | --- | --- | --- | --- |
 | `ingress` | ingress | yes | yes |
 | `egress` | egress | no | none |

@@ -23,7 +23,7 @@ rules:
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
-  resources: ["actortemplates", "workerpools", "sandboxconfigs", "csidriverconfigs"]
+  resources: ["workerpools", "sandboxconfigs", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
