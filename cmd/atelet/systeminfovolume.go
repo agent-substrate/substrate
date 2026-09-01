@@ -268,9 +268,9 @@ func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 	}
 }
 
-// run drains the refresh queue until ctx ends, in the repo's controller form
-// (signercontroller): a crashed worker restarts after a second, and failed
-// refreshes requeue with backoff. One worker: writes serialize under mu.
+// run drains the refresh queue until ctx ends, in the repo's controller
+// form (signercontroller). One worker: writes serialize under mu anyway.
+// wait.UntilWithContext gives a worker panic the standard logged-stack crash.
 func (r *systemInfoVolumeRefresher) run(ctx context.Context) {
 	defer r.queue.ShutDown()
 	if r.hasSynced != nil && !cache.WaitForCacheSync(ctx.Done(), r.hasSynced) {
