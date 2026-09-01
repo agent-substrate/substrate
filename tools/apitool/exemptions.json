@@ -11,17 +11,7 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Actor.actor_template_name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorAssignment.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorAssignment.actor_template_ref",
     "message": "field has no doc comment"
   },
   {
@@ -53,16 +43,6 @@
     "rule": "documented",
     "subject": "ateapi.ActorSnapshotStatus",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.actor_template_name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.actor_template_namespace",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -347,21 +327,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.HTTPGetAction.port",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef.namespace",
     "message": "field has no doc comment"
   },
   {

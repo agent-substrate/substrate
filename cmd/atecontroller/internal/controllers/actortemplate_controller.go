@@ -100,8 +100,10 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 					Atespace: resources.GoldenActorAtespace,
 					Name:     actorName,
 				},
-				ActorTemplateNamespace: at.ObjectMeta.Namespace,
-				ActorTemplateName:      at.ObjectMeta.Name,
+				ActorTemplate: &ateapipb.ObjectRef{
+					Atespace: at.ObjectMeta.Namespace,
+					Name:     at.ObjectMeta.Name,
+				},
 			},
 		}
 		_, err = r.AteClient.CreateActor(ctx, createReq)

@@ -136,9 +136,9 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// Actor template identity, used as low-cardinality route-latency metric
 	// attributes.
 	res := extproc.Result{
-		TemplateNamespace: actor.GetActorTemplateNamespace(),
-		TemplateName:      actor.GetActorTemplateName(),
-		Resume:            string(resumeOutcome),
+		TemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+		TemplateName:     actor.GetActorTemplate().GetName(),
+		Resume:           string(resumeOutcome),
 	}
 
 	workerIP := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIp()

@@ -54,9 +54,9 @@ func newAPIWorker(name string) *ateapipb.Worker {
 
 func newAPIAssignment(actorUID string) *ateapipb.ActorAssignment {
 	return &ateapipb.ActorAssignment{
-		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ate-system", Name: "tmpl"},
-		Actor:         &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid:      actorUID,
+		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ate-system", Name: "tmpl"},
+		Actor:            &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid:         actorUID,
 	}
 }
 

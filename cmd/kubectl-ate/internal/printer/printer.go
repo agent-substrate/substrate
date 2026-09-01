@@ -60,13 +60,10 @@ func sortActors(actors []*ateapipb.Actor) {
 }
 
 // actorTemplateDisplay renders the template an actor was created from, in
-// "<atespace>/<name>" form for substrate-resource references and
-// "<namespace>/<name>" form for legacy CRD references.
+// "<atespace>/<name>" form.
 func actorTemplateDisplay(a *ateapipb.Actor) string {
-	if ref := a.GetActorTemplate(); ref != nil {
-		return ref.GetAtespace() + "/" + ref.GetName()
-	}
-	return a.GetActorTemplateNamespace() + "/" + a.GetActorTemplateName()
+	ref := a.GetActorTemplate()
+	return ref.GetAtespace() + "/" + ref.GetName()
 }
 
 // PrintActorsTo prints a slice of actors to the provided writer.
@@ -136,14 +133,9 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 			assignedActor := "<none>"
 			if wass := worker.GetStatus().GetAssignment(); wass != nil {
 				status = "ASSIGNED"
-				// The assignment names the template either as a substrate
-				// resource ref or as a legacy CRD ref; exactly one is set.
-				template := wass.GetActorTemplate().GetNamespace() + "/" + wass.GetActorTemplate().GetName()
-				if ref := wass.GetActorTemplateRef(); ref != nil {
-					template = ref.GetAtespace() + "/" + ref.GetName()
-				}
-				assignedActor = fmt.Sprintf("%s/%s/%s",
-					template, wass.GetActor().GetAtespace(), wass.GetActor().GetName())
+				ref := wass.GetActorTemplateRef()
+				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
+					ref.GetAtespace(), ref.GetName(), wass.GetActor().GetAtespace(), wass.GetActor().GetName())
 			}
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ns, pool, class, pod, status, assignedActor)
