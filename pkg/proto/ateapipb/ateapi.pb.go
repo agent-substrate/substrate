@@ -5916,12 +5916,13 @@ func (x *WorkerCapacity) GetMemoryBytes() int64 {
 // WorkerAssignment.
 type ActorAssignment struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:opaqueType
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	ActorTemplateRef *ObjectRef `protobuf:"bytes,4,opt,name=actor_template_ref,json=actorTemplateRef,proto3" json:"actor_template_ref,omitempty"`
 	unknownFields    protoimpl.UnknownFields

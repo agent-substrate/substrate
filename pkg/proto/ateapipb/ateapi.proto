@@ -1428,13 +1428,15 @@ message WorkerCapacity {
 // ActorAssignment names the Actor currently bound to a Worker — the inverse of
 // WorkerAssignment.
 message ActorAssignment {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
 
   // +k8s:required
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
-  // +k8s:optional
+
+  // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
 }
