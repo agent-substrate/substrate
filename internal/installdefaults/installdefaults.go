@@ -18,7 +18,11 @@
 // the canonical layout pass actual values via the corresponding flags.
 package installdefaults
 
-import "os"
+import (
+	"net/url"
+	"os"
+	"path"
+)
 
 const (
 	// SystemNamespace is the namespace where substrate's control-plane
@@ -28,6 +32,16 @@ const (
 	APIServiceName = "api"
 	// RouterServiceName is the Service name of atenet-router.
 	RouterServiceName = "atenet-router"
+
+	// AteletTrustDomain, AteletServiceAccount and RouterServiceAccount are the
+	// trust-domain and service-account segments of the SPIFFE IDs that atelet
+	// and atenet-router Pod certificates carry, as minted by the podidentity
+	// signer (cmd/podcertcontroller/internal/podidentitysigner). The namespace
+	// segment is the namespace they run in, which callers resolve themselves
+	// rather than assume.
+	AteletTrustDomain    = "cluster.local"
+	AteletServiceAccount = "atelet"
+	RouterServiceAccount = "atenet-router"
 
 	// PodNamespaceEnv is the conventional env var name for the namespace
 	// a pod is running in, exposed via Kubernetes' downward API.
@@ -42,4 +56,24 @@ func NamespaceFromPodEnv() string {
 		return ns
 	}
 	return SystemNamespace
+}
+
+// SPIFFEID returns the SPIFFE ID that Pod certificates for serviceAccount in
+// namespace carry. Peers authenticate by comparing against this exact string.
+func SPIFFEID(namespace, serviceAccount string) string {
+	return (&url.URL{
+		Scheme: "spiffe",
+		Host:   AteletTrustDomain,
+		Path:   path.Join("ns", namespace, "sa", serviceAccount),
+	}).String()
+}
+
+// AteletSPIFFEID returns the SPIFFE ID atelet presents when it runs in namespace.
+func AteletSPIFFEID(namespace string) string {
+	return SPIFFEID(namespace, AteletServiceAccount)
+}
+
+// RouterSPIFFEID returns the SPIFFE ID atenet-router presents when it runs in namespace.
+func RouterSPIFFEID(namespace string) string {
+	return SPIFFEID(namespace, RouterServiceAccount)
 }

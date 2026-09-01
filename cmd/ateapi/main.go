@@ -220,7 +220,7 @@ func main() {
 		serverboot.Fatal(ctx, "while loading the Actor ID JWT authority pool", err)
 	}
 
-	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, actorIDJWTAuthorityPool, actorIDCAPool, persistence, workerCache)
+	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, actorIDJWTAuthorityPool, actorIDCAPool, persistence, workerCache, ateletNamespace)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -255,7 +255,7 @@ func main() {
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
 	ateapipb.RegisterActorIdentityServer(mux, actorIdentitySrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, ateletNamespace))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{

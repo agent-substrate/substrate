@@ -43,6 +43,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/testenv"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
@@ -86,8 +87,9 @@ func TestMain(m *testing.M) {
 	}
 
 	if err := (&NetworkPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SystemNamespace: installdefaults.SystemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "netpolicy controller setup failed: %v\n", err)
 		os.Exit(1)

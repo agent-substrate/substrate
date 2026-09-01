@@ -55,6 +55,10 @@ type BrokerConfig struct {
 	// ExpectedActorUID prevents a mint started for an old activation from
 	// receiving the newly assigned actor's certificate.
 	ExpectedActorUID string
+	// AteletSPIFFEID is the identity the node-local atelet must present on the
+	// credential broker connection. It names atelet's namespace, not this
+	// worker's, so it is configured rather than derived from the downward API.
+	AteletSPIFFEID string
 }
 
 // NewBrokerCertificateSource creates one actor key for this activation. The key
@@ -64,7 +68,10 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 	if cfg.SocketPath == "" || cfg.CredentialBundlePath == "" || cfg.TrustBundlePath == "" || cfg.ExpectedActorUID == "" {
 		return nil, fmt.Errorf("atunnel: credential broker socket, credentials, trust bundle, and expected actor UID are required")
 	}
-	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath)
+	if cfg.AteletSPIFFEID == "" {
+		return nil, fmt.Errorf("atunnel: expected atelet SPIFFE ID is required")
+	}
+	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
 		return nil, fmt.Errorf("atunnel: %w", err)
 	}

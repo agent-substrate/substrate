@@ -58,17 +58,22 @@ type Server struct {
 	// is entitled to the actor it is asking for a credential for.
 	store   store.Interface
 	workers *workercache.Cache
+
+	// ateletNamespace is the namespace the calling atelet runs in, which its
+	// SPIFFE ID names.
+	ateletNamespace string
 }
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer string, actorIDJWTPool localjwtauthority.Pool, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer string, actorIDJWTPool localjwtauthority.Pool, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache, ateletNamespace string) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPool:         actorIDJWTPool,
 		actorIDCAPool:          actorIDCAPool,
 		store:                  store,
 		workers:                workers,
+		ateletNamespace:        ateletNamespace,
 	}
 }
 
@@ -123,7 +128,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 }
 
 func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*ateapipb.MintCertResponse, error) {
-	caller, err := ateletauth.Authenticate(ctx)
+	caller, err := ateletauth.Authenticate(ctx, s.ateletNamespace)
 	if err != nil {
 		return nil, err
 	}

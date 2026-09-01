@@ -41,18 +41,22 @@ type Server struct {
 	// store is where a Worker's reported capacity is recorded, and the
 	// authoritative state the report is authorized against.
 	store store.Interface
+
+	// ateletNamespace is the namespace the calling atelet runs in, which its
+	// SPIFFE ID names.
+	ateletNamespace string
 }
 
 var _ ateapipb.WorkerServiceServer = (*Server)(nil)
 
-func New(store store.Interface) *Server {
-	return &Server{store: store}
+func New(store store.Interface, ateletNamespace string) *Server {
+	return &Server{store: store, ateletNamespace: ateletNamespace}
 }
 
 // SetWorkerCapacity records a Worker's reported capacity. As with MintCert,
 // the caller must be an atelet running on the Worker's node.
 func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerCapacityRequest) (*ateapipb.SetWorkerCapacityResponse, error) {
-	caller, err := ateletauth.Authenticate(ctx)
+	caller, err := ateletauth.Authenticate(ctx, s.ateletNamespace)
 	if err != nil {
 		return nil, err
 	}
