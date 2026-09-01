@@ -15,6 +15,7 @@
 package controllers
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -437,8 +438,8 @@ func TestTerminationGracePeriodSeconds(t *testing.T) {
 }
 
 // TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint and the
-// pod-scoped resource identity are set on the ateom container only when an endpoint
-// is configured, and that the $(POD_*) refs precede OTEL_RESOURCE_ATTRIBUTES.
+// resource identity are set on the ateom container only when an endpoint is
+// configured, and that every ref the value substitutes is declared ahead of it.
 func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	const endpoint = "http://collector.otel-system.svc:4317"
 	tests := []struct {
@@ -460,7 +461,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE"} {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE", "NODE_NAME"} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -471,11 +472,19 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"].value; got != endpoint {
 				t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", got, endpoint)
 			}
-			if got := env["OTEL_RESOURCE_ATTRIBUTES"].value; got != ateomOTelResourceAttributes {
-				t.Errorf("OTEL_RESOURCE_ATTRIBUTES = %q, want %q", got, ateomOTelResourceAttributes)
+			resourceAttrs := env["OTEL_RESOURCE_ATTRIBUTES"].value
+
+			wantKeys := []string{"k8s.namespace.name", "k8s.pod.name", "k8s.pod.uid", "k8s.node.name", "service.instance.id"}
+			if diff := cmp.Diff(wantKeys, envAttrKeys(resourceAttrs)); diff != "" {
+				t.Errorf("OTEL_RESOURCE_ATTRIBUTES keys (-want +got):\n%s", diff)
+			}
+
+			refs := envRefs(resourceAttrs)
+			if len(refs) == 0 {
+				t.Fatalf("OTEL_RESOURCE_ATTRIBUTES %q substitutes nothing, so the ref check below proves nothing", resourceAttrs)
 			}
 			raIdx := env["OTEL_RESOURCE_ATTRIBUTES"].index
-			for _, ref := range []string{"POD_UID", "POD_NAME", "POD_NAMESPACE"} {
+			for _, ref := range refs {
 				if _, ok := env[ref]; !ok {
 					t.Errorf("%s must be set for OTEL_RESOURCE_ATTRIBUTES substitution", ref)
 					continue
@@ -607,6 +616,33 @@ func TestBuildDeploymentApplyConfigTracesSamplerPropagation(t *testing.T) {
 type envInfo struct {
 	index int
 	value string
+}
+
+var envRefPattern = regexp.MustCompile(`\$\(([A-Za-z_][A-Za-z0-9_]*)\)`)
+
+// envRefs returns the distinct variables a value substitutes, first use first.
+func envRefs(value string) []string {
+	var refs []string
+	seen := make(map[string]bool)
+	for _, m := range envRefPattern.FindAllStringSubmatch(value, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		refs = append(refs, m[1])
+	}
+	return refs
+}
+
+// envAttrKeys returns the attribute keys of an OTEL_RESOURCE_ATTRIBUTES value.
+func envAttrKeys(value string) []string {
+	var keys []string
+	for _, pair := range strings.Split(value, ",") {
+		if k, _, ok := strings.Cut(pair, "="); ok {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 func envByName(env []corev1ac.EnvVarApplyConfiguration) map[string]envInfo {
