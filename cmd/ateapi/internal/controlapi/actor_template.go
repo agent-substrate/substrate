@@ -273,10 +273,10 @@ func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, f
 	return errs
 }
 
-// ValidateCustom_ActorTemplate_SnapshotsConfig requires on_commit to be a
+// ValidateCustom_SnapshotsConfig requires on_commit to be a
 // subset of on_pause. UNSPECIFIED means FULL, so an unset on_commit over a
 // DATA on_pause is rejected too.
-func ValidateCustom_ActorTemplate_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
+func ValidateCustom_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
 	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}

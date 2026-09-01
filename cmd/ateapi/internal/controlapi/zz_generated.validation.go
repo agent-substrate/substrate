@@ -1053,10 +1053,6 @@ func Validate_ActorTemplate(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_ActorTemplate_SnapshotsConfig(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
 			// call the type's validation function
 			errs = append(errs, Validate_SnapshotsConfig(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -5485,6 +5481,11 @@ func Validate_SetWorkerCapacityRequest(
 func Validate_SnapshotsConfig(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.SnapshotsConfig) (errs field.ErrorList) {
+
+	// custom validation
+	if e := ValidateCustom_SnapshotsConfig(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
 
 	{ // field ateapipb.SnapshotsConfig.OnPause
 		fn := func(
