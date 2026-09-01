@@ -265,9 +265,15 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tSTATUS\tAGE")
 		for _, t := range templates {
-			status := "Failed"
-			if t.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot() != nil {
+			// An empty golden snapshot ref without an error means the golden
+			// snapshot is still being built, not that the template failed.
+			status := "Pending"
+			gss := t.GetStatus().GetGoldenSnapshotStatus()
+			switch {
+			case gss.GetGoldenSnapshot() != nil:
 				status = "Ready"
+			case gss.GetErrorMessage() != "":
+				status = "Failed"
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
