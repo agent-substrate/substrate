@@ -163,7 +163,7 @@ spec:
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
         # OTLP exporter settings are shared by every control plane component;
-        # see manifests/ate-install/ate-otel-config.yaml.
+        # see manifests/ate-install/otel/none/ate-otel-config.yaml.
         envFrom:
         - configMapRef:
             name: ate-otel-config

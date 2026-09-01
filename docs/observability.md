@@ -280,6 +280,40 @@ To visualize traces locally:
 
 ## 4. Where Telemetry Goes
 
+### Selecting a collector
+
+The telemetry stack is optional, because substrate must run on a cluster that has no collector. Thus the collector is a choice that the install makes, and the choice is explicit: a default that names one collector is correct on one type of cluster only, and it is wrong with no message on each other type. `hack/install-ate.sh --observability MODE` gives the choice:
+
+| Mode | The control plane sends its telemetry to | Notes |
+|---|---|---|
+| `none` | nothing | The default. `ateapi`, `atelet`, and `atenet-router` still serve their own `/metrics` endpoints; `ate-controller` and the ateoms push only, thus they emit nothing. |
+| `otlp` | the collector of `--otlp-endpoint` | For a collector that you operate, and for a measurement (read [benchmarking/telemetry](../benchmarking/telemetry/README.md)). |
+| `gke` | the collector of the GKE managed OTel addon | The addon must be enabled on the cluster. |
+| `kind` | the in-cluster collector that the same install applies | The default of `hack/install-ate-kind.sh`. |
+
+Mode `none` is quiet, and not only unconfigured: `internal/serverboot` builds no OTLP exporter when the standard `OTEL_TRACES_EXPORTER` / `OTEL_METRICS_EXPORTER` say `none`, when `OTEL_SDK_DISABLED` is true, or when the endpoint is empty. That last rule is the one that matters on a cluster with no collector: the OTel SDK reads an empty variable as an absent one and falls back to `localhost:4317`, thus each component would log a failed export once each tick, for its whole life. The tracer provider stays registered, thus the spans keep their IDs and the logs keep the `trace_id` that joins them.
+
+The install tests the mode before it applies a workload. A mode that names a collector which the cluster does not have stops the install with a message. Thus an absent dependency does not become a fault of the network: without this test, each component fails to find the collector one time each minute, and the telemetry stops with no message.
+
+Each mode supplies the `ate-otel-config` ConfigMap from its own file under [`manifests/ate-install/otel/`](../manifests/ate-install/otel), in the directory that carries the name of the mode. No bundle holds a copy of that ConfigMap, thus the mode of the install is the mode that the cluster keeps.
+
+### The mode of a cluster
+
+The mode is state of the cluster, and not only a flag. The install writes it on the ConfigMap, as the `ate.dev/observability-mode` annotation, and reads it back when the command line gives no mode:
+
+```bash
+./hack/install-ate.sh --deploy-ate-system --observability=gke   # the cluster is now in mode gke
+./hack/install-ate.sh --deploy-atelet                           # keeps mode gke, and reports it
+```
+
+Thus a deploy of one component does not put the default over the collector of the cluster. The report of each install names the mode and where it came from. A ConfigMap from an install that came before the modes carries no annotation; the install reads the mode from the endpoint in it, thus that cluster also keeps its collector.
+
+To change the collector, install again with a different mode. A change of the ConfigMap on its own does not restart the pods that read it, because the pod template stays the same. Thus the install restarts `ate-api-server`, `ate-controller`, `atenet-router`, and `atelet` when, and only when, the collector changed.
+
+> A restart of `ate-controller` rolls each WorkerPool Deployment, thus a change of mode replaces the running workers together with the actors on them. Change the mode when that cost is acceptable.
+
+### The backends
+
 Telemetry is emitted the same way everywhere; only the backend differs between a local Kind cluster and a Google Cloud (GKE) deployment. The cloud-side backends below are all **GCP services**.
 
 | | Kind | GKE (Google Cloud) |
@@ -291,7 +325,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 
 > In Kind, `ateapi`, `atelet`, `ate-controller`, and `atenet-router` are pointed at the in-cluster collector, and the controller propagates the endpoint to the ateom worker pods it creates, so all component telemetry lands locally.
 >
-> Every component reads that endpoint from the shared `ate-otel-config` ConfigMap ([`manifests/ate-install/ate-otel-config.yaml`](../manifests/ate-install/ate-otel-config.yaml), with a Kind replacement of the same name under [`manifests/ate-install/kind/`](../manifests/ate-install/kind/ate-otel-config.yaml)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
+> Every component reads that endpoint from the shared `ate-otel-config` ConfigMap, which the install applies from the file of the selected mode (see [Selecting a collector](#selecting-a-collector)). Editing it does not restart the pods that consume it — follow a change with `kubectl rollout restart`.
 >
 > ateom workers don't read the ConfigMap at all — `ate-controller` copies the value into each worker pod at creation. A new endpoint reaches them only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
 

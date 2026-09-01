@@ -1,0 +1,57 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The OTLP exporter settings that each control plane component reads with
+# `envFrom` (ate-api-server, ate-controller, atelet, atenet-router).
+# ate-controller also copies the values to the ateom worker pods that it makes,
+# because those pods have no other source. atenet-router gives the endpoint to
+# Envoy through --otlp-collector-address, thus the Envoy spans follow it too.
+#
+# This file names no collector, because substrate must not assume one. The
+# endpoint is empty, thus ate-controller puts no OTLP configuration in the
+# worker pods, and atenet-router starts Envoy with no tracing.
+#
+# hack/install-ate.sh applies this file for --observability=none, and applies
+# one of these files for the other modes:
+#
+#   gke   ../gke/ate-otel-config.yaml    the GKE managed collector
+#   kind  ../kind/ate-otel-config.yaml   the in-cluster kind collector
+#   otlp  this file, with the URL of --otlp-endpoint in it
+#
+# The ConfigMap must exist in each mode, with an endpoint or without one: a
+# container whose `envFrom` names an absent ConfigMap does not start.
+#
+# NOTE: a change to this ConfigMap does not restart the pods that read it. The
+# pod template stays the same, thus there is no new rollout. After a change, do
+# `kubectl rollout restart` on the affected workloads.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-otel-config
+  namespace: ate-system
+  annotations:
+    # The mode that applied this ConfigMap. The installer reads it back: a
+    # deploy of one component, with no --observability, keeps the mode that the
+    # cluster has, and does not put the default over it. For mode otlp, the
+    # installer writes otlp here, because that mode uses this file.
+    ate.dev/observability-mode: none
+data:
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  # The standard OTel switches, which internal/serverboot reads: each component
+  # builds no OTLP exporter at all. An empty endpoint alone would give the same
+  # result, because serverboot reads it as "no collector", but the two keys say
+  # so where an operator looks first. For mode otlp the installer replaces them
+  # with otlp, together with the endpoint above.
+  OTEL_TRACES_EXPORTER: "none"
+  OTEL_METRICS_EXPORTER: "none"

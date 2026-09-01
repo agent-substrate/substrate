@@ -15,9 +15,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# ate-otel-config.yaml carries the OTLP settings every component above consumes
-# via envFrom. The kind overlay lists its own copy of the same ConfigMap name
-# instead of building on this directory, so the two never collide.
+# The ate-otel-config ConfigMap, which each component below reads with envFrom,
+# is not here. hack/install-ate.sh applies it on its own, because the file that
+# supplies it changes with --observability; see manifests/ate-install/otel/.
+# A copy here would replace the selected mode each time this bundle is applied.
 resources:
   - ../ate-api-server.yaml
   - ../ate-controller.yaml
@@ -26,4 +27,3 @@ resources:
   - ../atenet-router.yaml
   - ../postgres.yaml
   - ../pod-certificate-controller.yaml
-  - ../ate-otel-config.yaml

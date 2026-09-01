@@ -40,11 +40,15 @@ METER=http://telemetry-meter.benchmarking.svc.cluster.local:4317
 ./hack/install-ate.sh --deploy-ate-system --otlp-endpoint "${METER}"
 ```
 
-`--otlp-endpoint` patches the `ate-otel-config` ConfigMap and restarts the
-workloads that read it. One patch is sufficient for `ateapi`, `ate-controller`,
-`atelet`, and `atenet-router`, because each one reads the ConfigMap through
-`envFrom`. `ate-controller` also copies the values to the ateom worker pods
-that it creates.
+`--otlp-endpoint` selects `--observability=otlp` and puts the address in the
+`ate-otel-config` ConfigMap, ahead of the workloads. One ConfigMap is sufficient
+for `ateapi`, `ate-controller`, `atelet`, and `atenet-router`, because each one
+reads it through `envFrom`. `ate-controller` also copies the values to the ateom
+worker pods that it creates.
+
+The install stops with a message if the meter is absent, thus apply
+`meter.yaml` first. To go back to the collector of the cluster, install again
+with the mode of that cluster, or with `--observability=none`.
 
 The actor containers are different. Substrate puts no OTLP configuration in
 them, thus they use the `env` of the ActorTemplate:
@@ -79,9 +83,10 @@ kubectl port-forward -n otel-system svc/prometheus 9090:9090
 The queries below are the same. Three items differ:
 
 - Prometheus and the collector are in `otel-system`, and not in `benchmarking`.
-- Give no `--otlp-endpoint`. The kind `ate-otel-config` ConfigMap already names
-  the collector, and `benchmarking/workloads/deploy.sh` reads that ConfigMap,
-  thus the actors follow the control plane with no flag.
+- Give no `--otlp-endpoint`. A kind install selects `--observability=kind`, thus
+  the `ate-otel-config` ConfigMap already names the collector. And
+  `benchmarking/workloads/deploy.sh` reads that ConfigMap, thus the actors follow
+  the control plane with no flag.
 - The kind ConfigMap sets `OTEL_METRIC_EXPORT_INTERVAL` to 10s, and not to the
   60s of GKE. Thus a range of `[1m]` is sufficient there.
 

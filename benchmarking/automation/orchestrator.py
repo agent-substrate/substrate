@@ -306,7 +306,17 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
 
 
 def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
-    run(["hack/install-ate.sh", "--deploy-ate-system", *(str(a) for a in ate_args)])
+    args = [str(a) for a in ate_args]
+    # Each test tears the install down and puts it back, and an install exports
+    # no telemetry unless it is told where to. A benchmark needs the telemetry:
+    # workloads/deploy.sh reads the collector of the control plane and gives it
+    # to the actors, and it stops when there is none. The harness runs on GKE,
+    # thus the default here is the collector of the managed addon; set
+    # ATE_OBSERVABILITY for a different one, together with ATE_OTLP_ENDPOINT for
+    # mode otlp. A test that names its own collector in ateArgs keeps it.
+    if not any(a.startswith(("--observability", "--otlp-endpoint")) for a in args):
+        args.append(f"--observability={os.environ.get('ATE_OBSERVABILITY', 'gke')}")
+    run(["hack/install-ate.sh", "--deploy-ate-system", *args])
 
 
 def teardown_substrate() -> None:

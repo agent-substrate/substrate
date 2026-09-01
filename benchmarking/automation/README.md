@@ -18,7 +18,8 @@ the router capacity benchmark — see
 4. `docker build && docker push` builds the runner image for each test type
    in use, tagged with the commit hash: `${KO_DOCKER_REPO}/locust-test:<commit>`
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
-5. `hack/install-ate.sh --deploy-ate-system` + `benchmarking/workloads/deploy.sh
+5. `hack/install-ate.sh --deploy-ate-system --observability=gke` +
+   `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
    `make build-images` step). For a `microvm` test the orchestrator also
@@ -32,6 +33,10 @@ the router capacity benchmark — see
    requests=limits and Envoy's thread count to its own `envoyCpu`, then
    waits for the rollout before deploying workloads. The teardown after
    each test redeploys substrate, so the pin never outlives its run.
+   `--observability=gke` names the collector of the GKE managed addon, which
+   the actors follow through `workloads/deploy.sh`. Set `ATE_OBSERVABILITY`
+   for a different mode, together with `ATE_OTLP_ENDPOINT` for mode `otlp`;
+   a test that names its own collector in `ateArgs` keeps it.
 6. For each test in `tests.yaml`:
    - Submits a Job using the just-built image for the test's type
      (`runner-job.yaml.tmpl` for locust,

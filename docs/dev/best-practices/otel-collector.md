@@ -426,9 +426,17 @@ that defaults to it, so you should not normally need either:
 the `ateom` worker pods it creates, and `atenet-router`'s
 `--otlp-collector-address`, which is what its Envoy is given over xDS.
 
-Rather than editing the base manifests, prefer a kustomize overlay that
-patches the variable — see `manifests/ate-install/kind/kustomization.yaml`
-for a worked example.
+Do not edit the manifests to set the variable. Each component reads it from the
+shared `ate-otel-config` ConfigMap, and the install applies that ConfigMap from
+the file of the selected mode:
+
+```bash
+./hack/install-ate.sh --deploy-ate-system --otlp-endpoint http://collector.my-ns.svc:4317
+```
+
+The install stops with a message if the Service of that address is absent. Read
+[Selecting a collector](../../observability.md#selecting-a-collector) for the
+other modes.
 
 ### A Note on Logs
 
@@ -498,9 +506,9 @@ failure.
 `hack/install-ate-kind.sh` installs a collector plus a Jaeger all-in-one into
 the `otel-system` namespace — see
 `manifests/ate-install/kind/otel-collector.yaml`. It is a single-replica
-Deployment, which is appropriate for a one-node kind cluster. The kind
-overlay patches every component's `OTEL_EXPORTER_OTLP_ENDPOINT` to point at
-it.
+Deployment, which is appropriate for a one-node kind cluster. That install
+selects `--observability=kind`, thus every component's
+`OTEL_EXPORTER_OTLP_ENDPOINT` points at it.
 
 View traces:
 

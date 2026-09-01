@@ -39,3 +39,10 @@ export KO_DOCKER_REPO="gcr.io/${PROJECT_ID}/ate-images"
 
 # Set this if you want to override the default build platforms
 export KO_DEFAULTPLATFORMS=linux/amd64
+
+# Where the control plane sends its telemetry: none | otlp | gke. An install
+# exports nothing unless it is told where to, and each component still serves
+# its own /metrics endpoint. `go run ./tools/setup-gcp` enables the GKE managed
+# OTel addon on the cluster, thus mode gke works on a cluster that it made.
+# Mode otlp also needs ATE_OTLP_ENDPOINT with the address of your collector.
+# export ATE_OBSERVABILITY=gke

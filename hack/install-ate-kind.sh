@@ -28,7 +28,9 @@ export NO_DEV_ENV="true"
 export KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:5001}"
 # we want to build for the host architecture
 export KO_DEFAULTPLATFORMS="linux/${goarch}"
-# install resolved manifests using Kustomize overlay for local Kind cluster
+# install resolved manifests using Kustomize overlay for local Kind cluster.
+# This also gives --observability its kind default, thus the control plane goes
+# to the in-cluster collector that the same install applies.
 export ATE_INSTALL_KIND="true"
 # use default bucket name for local deployment
 export BUCKET_NAME="ate-snapshots"

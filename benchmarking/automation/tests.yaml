@@ -44,7 +44,9 @@
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-router=agentgateway"]
-#                  or ["--experimental-use-sdsmint"]).
+#                  or ["--experimental-use-sdsmint"]). A collector named here,
+#                  with --observability or --otlp-endpoint, replaces the
+#                  --observability=gke that the orchestrator gives by default.
 #
 # ---- type: locust -----------------------------------------------------------
 #

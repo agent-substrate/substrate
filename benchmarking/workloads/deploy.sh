@@ -77,6 +77,10 @@ usage() {
 # ate-system must exist, because the workloads below need its CRDs. Thus an
 # absent ConfigMap is an error and not a condition to work around: a default
 # here would send the actor telemetry to the wrong collector with no message.
+#
+# An empty endpoint is an error for the same reason. It is the value of
+# --observability=none, in which the control plane has no collector; the actors
+# then need --otlp-endpoint, or a collector for the whole install.
 resolve_otlp_endpoint() {
   if [[ -n "${OTLP_ENDPOINT}" ]]; then
     return 0
@@ -84,8 +88,9 @@ resolve_otlp_endpoint() {
   OTLP_ENDPOINT="$(kubectl get configmap ate-otel-config --namespace=ate-system \
     -o jsonpath='{.data.OTEL_EXPORTER_OTLP_ENDPOINT}' 2>/dev/null || true)"
   if [[ -z "${OTLP_ENDPOINT}" ]]; then
-    echo "Error: cannot read OTEL_EXPORTER_OTLP_ENDPOINT from the ate-otel-config" >&2
-    echo "ConfigMap in ate-system. Deploy ate-system first, or give --otlp-endpoint." >&2
+    echo "Error: the ate-otel-config ConfigMap in ate-system names no collector." >&2
+    echo "Deploy ate-system first, or install it with a collector (--observability)," >&2
+    echo "or give --otlp-endpoint to send the actors to a collector of your own." >&2
     exit 1
   fi
 }

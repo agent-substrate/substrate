@@ -147,6 +147,19 @@ curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i 
    ./hack/install-ate.sh --deploy-ate-system
    ```
 
+   The telemetry stack is optional, and this install exports no telemetry.
+   `ateapi`, `atelet`, and `atenet-router` still serve their own `/metrics`
+   endpoints. To send the control plane to a collector, add one of these:
+   ```bash
+   # the collector of the GKE managed OTel addon, which the cluster must have
+   ./hack/install-ate.sh --deploy-ate-system --observability=gke
+
+   # your own collector
+   ./hack/install-ate.sh --deploy-ate-system --otlp-endpoint http://collector.example.svc:4317
+   ```
+   The install stops with a message if the collector of the selected mode is
+   absent. Read [docs/observability.md](docs/observability.md) for the modes.
+
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
    ./hack/install-ate.sh --deploy-demo-counter
