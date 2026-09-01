@@ -99,6 +99,16 @@ go run ./tools/setup-gcp create cluster [flags]
 | `--subnetwork` | VPC subnetwork name. | `SUBNETWORK` | `default` |
 | `--machine-type` | Machine type for the gVisor node pool. | `GVISOR_NODE_MACHINE_TYPE` | `c3-standard-4` |
 
+**Node version labels:** pool labels are the birth default for every node GKE
+creates later (autoscaling, auto-repair, node upgrades), and `setup-gcp` does
+not set `ate.dev/substrate-version` on the pool, so those nodes arrive
+unlabeled and run no dataplane pods (see the README's note on node version
+labels). Stamp the pool with
+`gcloud container node-pools update ... --node-labels=...` (list the existing
+labels first and carry them all over; the flag replaces the full set), and
+create additional pools with
+`--node-labels=ate.dev/substrate-version=<build version>`.
+
 ### 3. Create Bucket
 
 Creates a GCS bucket for storing snapshots.

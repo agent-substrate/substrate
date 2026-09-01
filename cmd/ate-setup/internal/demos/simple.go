@@ -142,12 +142,12 @@ func (d *Simple) WaitReady(ctx context.Context, e *steps.Env) error {
 	}
 	log.Stepf("Waiting for %s to be ready...", d.DemoName)
 	for _, ref := range d.Deployments {
-		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, ref.Namespace, ref.Name, steps.DemoTimeout); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, ref.Atespace, ref.Name, steps.DemoTimeout); err != nil {
 			return err
 		}
 	}
 	for _, ref := range d.ActorTemplates {
-		if err := WaitActorTemplateReady(ctx, e, ref.Namespace, ref.Name); err != nil {
+		if err := WaitActorTemplateReady(ctx, e, ref.Atespace, ref.Name); err != nil {
 			return err
 		}
 	}

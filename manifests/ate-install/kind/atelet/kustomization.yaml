@@ -23,7 +23,7 @@ patches:
       apiVersion: apps/v1
       kind: DaemonSet
       metadata:
-        name: atelet
+        name: atelet-${SUBSTRATE_VERSION_SUFFIX}
         namespace: ate-system
       spec:
         template:

@@ -213,9 +213,9 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
 		},
 	}
-	template := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
-	})
+	template := &ateapipb.ActorTemplate{
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
 		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeDataOnGolden)...)
 

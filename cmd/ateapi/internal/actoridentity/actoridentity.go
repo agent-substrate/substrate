@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
@@ -40,6 +41,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -94,6 +96,10 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor JWTs")
 	}
 
+	if errs := validateMintJWTRequest(ctx, req); len(errs) > 0 {
+		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+
 	// TODO: Cross-check the verified caller and requested actor against the actor database.
 
 	// TODO: Cache signing keys in memory, so we don't read from disk every time.
@@ -105,10 +111,6 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 	signingPool, err := localjwtauthority.Unmarshal(signingPoolBytes)
 	if err != nil {
 		return nil, fmt.Errorf("while unmarshaling signing pool: %w", err)
-	}
-	// We only issue tokens with audience bindings.
-	if len(req.GetAudience()) == 0 {
-		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
 	actorClaims := &actoridjwt.Claims{
@@ -150,15 +152,13 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	if errs := validateMintCertRequest(ctx, req); len(errs) > 0 {
+		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+	// Validation bounds purpose to the enum's range; which purposes this
+	// server actually supports is a policy decision that stays here.
 	if req.GetPurpose() != ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL {
 		return nil, status.Error(codes.InvalidArgument, "unsupported actor certificate purpose")
-	}
-
-	if err := validateWorkerRef(req.GetWorker()); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid worker: %v", err)
-	}
-	if req.GetExpectedActorUid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "expected_actor_uid is required")
 	}
 	actor, actorRef, err := s.authorizeActor(ctx, caller, req)
 	if err != nil {
@@ -286,10 +286,16 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 	return &ateletCaller{podName: identity.PodName, nodeName: identity.NodeName}, nil
 }
 
-// validateWorkerRef checks the reference to the Worker the certificate is
-// minted for. Workers are global-scoped, so the reference carries no atespace.
-func validateWorkerRef(worker *ateapipb.ObjectRef) error {
-	return resources.ValidateGlobalObjectRef(worker, field.NewPath("worker")).ToAggregate()
+func validateMintJWTRequest(ctx context.Context, req *ateapipb.MintJWTRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return controlapi.Validate_MintJWTRequest(ctx, op, nil, req, nil)
+}
+
+func validateMintCertRequest(ctx context.Context, req *ateapipb.MintCertRequest) field.ErrorList {
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Create}
+	return controlapi.Validate_MintCertRequest(ctx, op, nil, req, nil)
 }
 
 // authorizeActor resolves the actor from the authenticated worker and verifies

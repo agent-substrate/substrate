@@ -223,6 +223,58 @@ default_postgres_connection_string() {
   echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 }
 
+# --- Versioned dataplane rendering ---
+#
+# The atelet DaemonSet is keyed by substrate version (name suffix + nodeSelector on
+# the ate.dev/substrate-version node label) so a rolling upgrade can run two
+# daemonset on disjoint node sets.
+
+SUBSTRATE_VERSION=""
+SUBSTRATE_VERSION_SUFFIX=""
+
+ensure_substrate_version() {
+  if [[ -n "${SUBSTRATE_VERSION}" ]]; then
+    return 0
+  fi
+  local version_flag=""
+  version_flag="$(make -s ldflags | grep 'internal/version\.Version=' | head -n 1 || true)"
+  local version_raw="${version_flag#*internal/version.Version=}"
+  if [[ -z "${version_raw}" ]]; then
+    echo "error: could not read the build version from 'make ldflags'" >&2
+    return 1
+  fi
+  # Verify the build label is valid format and derive the version string and object suffix.
+  local derived=""
+  derived="$(go run ./internal/versionlabel/cmd "${version_raw}")" || return 1
+  SUBSTRATE_VERSION="${derived%% *}"
+  SUBSTRATE_VERSION_SUFFIX="${derived##* }"
+}
+
+atelet_daemonset_name() {
+  echo "atelet-${SUBSTRATE_VERSION_SUFFIX}"
+}
+
+# substitute_version fills the ${SUBSTRATE_VERSION}/${SUBSTRATE_VERSION_SUFFIX}
+# placeholders in a rendered manifest stream. It runs after kustomize and ko to replace.
+substitute_version() {
+  ensure_substrate_version
+  sed -e "s/: \${SUBSTRATE_VERSION}\$/: \"${SUBSTRATE_VERSION}\"/" \
+      -e "s/\${SUBSTRATE_VERSION}/${SUBSTRATE_VERSION}/g" \
+      -e "s/\${SUBSTRATE_VERSION_SUFFIX}/${SUBSTRATE_VERSION_SUFFIX}/g"
+}
+
+# label_nodes_substrate_version stamps ate.dev/substrate-version on every node
+# that does not carry it yet. The versioned atelet DaemonSet and worker pods
+# schedule only to nodes labeled with their substrate version.
+label_nodes_substrate_version() {
+  ensure_substrate_version
+  log_step "label_nodes_substrate_version (${SUBSTRATE_VERSION})"
+  local node=""
+  for node in $(run_kubectl get nodes -l '!ate.dev/substrate-version' -o name); do
+    run_kubectl label "${node}" "ate.dev/substrate-version=${SUBSTRATE_VERSION}"
+  done
+}
+
 render_ate_system_manifests() {
   local router=""
   router="$(atenet_router)"
@@ -232,16 +284,16 @@ render_ate_system_manifests() {
     if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
       overlay="manifests/ate-install/kind-agentgateway"
     fi
-    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
     return
   fi
 
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     # Build everything resolved with Kustomize for Kind
-    kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
   else
     # Build everything resolved with base manifests for GKE
-    run_ko resolve -f manifests/ate-install
+    run_ko resolve -f manifests/ate-install | substitute_version
   fi
 }
 
@@ -359,10 +411,16 @@ apply_otel_endpoint_override() {
 
   local workload
   for workload in deployment/ate-api-server deployment/ate-controller \
-                  deployment/atenet-router daemonset/atelet; do
+                  deployment/atenet-router; do
     if run_kubectl -n ate-system get "${workload}" >/dev/null 2>&1; then
       run_kubectl -n ate-system rollout restart "${workload}"
     fi
+  done
+  # atelet DaemonSet names carry a version suffix; restart whichever versions
+  # are installed.
+  local ds=""
+  for ds in $(run_kubectl -n ate-system get daemonset -l app=atelet -o name 2>/dev/null); do
+    run_kubectl -n ate-system rollout restart "${ds}"
   done
 }
 
@@ -555,9 +613,16 @@ setup_csi() {
 
 deploy_ate_system() {
   log_step "deploy_ate_system"
+  # Fail fast on an unusable build version before touching the cluster.
+  ensure_substrate_version
+
   # Ensure namespace exists before applying RBAC or CRDs
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  # The atelet DaemonSet applied below and the demo WorkerPools' worker pods
+  # schedule only to version-labeled nodes.
+  label_nodes_substrate_version
 
   # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
   # schemas and RBAC (role.yaml has no other apply path).
@@ -618,7 +683,7 @@ deploy_ate_system() {
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status daemonset/atelet -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n ate-system --timeout="$(rollout_timeout)"
 
   # After the bundle, which carries its own copy of ate-otel-config.
   apply_otel_endpoint_override
@@ -661,25 +726,27 @@ deploy_ate_apiserver() {
 
 deploy_atelet() {
   log_step "deploy_atelet"
+  ensure_substrate_version
   ensure_crds
 
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
+  label_nodes_substrate_version
   apply_otel_config
   apply_otel_endpoint_override
 
   local manifest=""
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     # Use Kustomize to build and resolve the atelet DaemonSet patch
-    manifest=$(kubectl kustomize manifests/ate-install/kind/atelet --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
+    manifest=$(kubectl kustomize manifests/ate-install/kind/atelet --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version)
   else
     # Use base manifest for GKE
-    manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml)
+    manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml | substitute_version)
   fi
   echo "${manifest}" | run_kubectl apply -f -
-  run_kubectl rollout status daemonset/atelet -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status "daemonset/$(atelet_daemonset_name)" -n ate-system --timeout="$(rollout_timeout)"
 }
 
 deploy_atenet() {
@@ -878,6 +945,102 @@ wait_actortemplate_ready() {
   return 1
 }
 
+# deploy_substrate_demo deploys a demo whose ActorTemplate is a substrate
+# resource: apply the pool manifest, wait for the pool rollout, create the
+# template through the ate API, and block on its golden snapshot.
+#   deploy_substrate_demo <demo> <pool_manifest> <template_manifest> \
+#     <atespace> <pool> <template> <golden_timeout> [extra sed exprs...]
+# The atespace doubles as the pool's k8s namespace, keeping the substrate
+# naming parallel to the CRD-era namespace/template pairs. An empty <pool>
+# skips the rollout wait; a golden_timeout of 0 creates the template without
+# blocking on its golden snapshot. Extra sed expressions are applied to the
+# template manifest, for demos with optional template stanzas.
+deploy_substrate_demo() {
+  local demo="$1" pool_manifest="$2" template_manifest="$3"
+  local atespace="$4" pool="$5" template="$6" golden_timeout="${7:-300}"
+  shift 7
+  log_step "${demo}_deploy (${atespace}/${template})"
+  ensure_crds
+
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${pool_manifest}" \
+    | run_ko apply -f -
+
+  if [[ -n "${pool}" ]]; then
+    log_step "Waiting for the ${pool} worker pool rollout..."
+    wait_for_pool_rollout_fatal "${pool}" "${atespace}"
+  fi
+
+  create_substrate_template "${template_manifest}" "${atespace}" "${template}" "$@"
+
+  if [[ "${golden_timeout}" != "0" ]]; then
+    # Mirrors the CRD era's `kubectl wait --for=condition=Ready
+    # actortemplate/...` (there is no kubectl wait for substrate resources).
+    log_step "Waiting for the ${atespace}/${template} golden snapshot..."
+    if ! wait_actortemplate_ready "${atespace}" "${template}" "${golden_timeout}"; then
+      exit 1
+    fi
+  fi
+}
+
+# create_substrate_template renders a protojson ActorTemplate manifest and
+# creates it through the ate API:
+#   create_substrate_template <manifest> <atespace> <template> [extra sed exprs...]
+create_substrate_template() {
+  local template_manifest="$1" atespace="$2" template="$3"
+  shift 3
+
+  # The store enforces that the template's atespace exists at create time.
+  if ! run_kubectl_ate create atespace "${atespace}" >/dev/null 2>&1 \
+      && ! run_kubectl_ate get atespace "${atespace}" >/dev/null 2>&1; then
+    echo "error: failed to create atespace ${atespace}" >&2
+    exit 1
+  fi
+
+  # ko resolve builds the ko:// image references and replaces them with pushed
+  # digests before the manifest reaches kubectl-ate. Actor templates are
+  # immutable (no update RPC), so an existing template is left in place:
+  # delete the demo and redeploy to change it.
+  if ! sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "$@" "${template_manifest}" \
+      | run_ko resolve -f - \
+      | run_kubectl_ate create actor-template -f -; then
+    if run_kubectl_ate get actor-template "${template}" -a "${atespace}" >/dev/null 2>&1; then
+      log_step "actor template ${atespace}/${template} already exists; keeping it (delete the demo to replace it)"
+    else
+      echo "error: failed to create actor template ${atespace}/${template}" >&2
+      exit 1
+    fi
+  fi
+}
+
+# delete_substrate_templates removes a demo's actors, its templates, and then
+# their shared atespace:
+#   delete_substrate_templates <atespace> <template...>
+delete_substrate_templates() {
+  local atespace="$1"
+  shift
+  local template
+  for template in "$@"; do
+    delete_demo_actors_substrate "${atespace}" "${template}"
+    # Also removes the template's golden actor and golden snapshot server-side.
+    run_kubectl_ate delete actor-template "${template}" -a "${atespace}" 2>/dev/null \
+      || log_step "actor template ${atespace}/${template} not deleted (may not exist)"
+  done
+  run_kubectl_ate delete atespace "${atespace}" 2>/dev/null \
+    || log_step "atespace ${atespace} not deleted (may not exist or is not empty)"
+}
+
+# delete_substrate_demo tears down one substrate demo: its actors, templates,
+# atespace, and pool manifest.
+#   delete_substrate_demo <demo> <pool_manifest> <atespace> <template...>
+delete_substrate_demo() {
+  local demo="$1" pool_manifest="$2" atespace="$3"
+  shift 3
+  log_step "${demo}_delete (${atespace})"
+  delete_substrate_templates "${atespace}" "$@"
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${pool_manifest}" \
+    | run_kubectl delete --ignore-not-found -f -
+}
+
 delete_ate_system() {
   log_step "delete_ate_system"
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
@@ -886,10 +1049,13 @@ delete_ate_system() {
   else
     run_kubectl delete --ignore-not-found -f manifests/ate-install
   fi
+
+  run_kubectl delete --ignore-not-found -n ate-system daemonset -l app=atelet
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/components/agentgateway/configmap.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/postgres.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
+  run_kubectl label nodes -l ate.dev/substrate-version ate.dev/substrate-version-
 }
 
 delete_atenet() {

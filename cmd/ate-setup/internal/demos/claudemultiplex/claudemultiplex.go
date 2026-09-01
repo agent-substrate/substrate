@@ -50,9 +50,9 @@ const (
 // agents are the actors the demo template declares. Their actors are removed
 // before the manifests at delete time.
 var agents = []steps.TemplateRef{
-	{Namespace: namespace, Name: "agent-luna"},
-	{Namespace: namespace, Name: "agent-mars"},
-	{Namespace: namespace, Name: "agent-orion"},
+	{Atespace: namespace, Name: "agent-luna"},
+	{Atespace: namespace, Name: "agent-mars"},
+	{Atespace: namespace, Name: "agent-orion"},
 }
 
 type demo struct{}

@@ -20,41 +20,56 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"sigs.k8s.io/yaml"
 )
 
-// fixtureManifests are every template RenderFixtureManifest is asked to render.
-var fixtureManifests = []string{
-	"internal/e2e/fixtures/probe/probe.yaml.tmpl",
-	"internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
-	"internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
-	"internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
-	"internal/e2e/fixtures/testserver/grpcecho.yaml.tmpl",
+// substrateFixtures are every fixture DeploySubstrateFixture is asked to
+// deploy: the pool half rendered by RenderFixtureManifest and the substrate
+// ActorTemplate half rendered with substrateTemplateSubstitutions, plus how
+// many template documents the latter must yield.
+var substrateFixtures = []struct {
+	manifests SubstrateFixtureManifests
+	templates int
+}{
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
+		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
+	}, 2},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
+		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/testserver/grpcecho.yaml.tmpl",
+		Template: "internal/e2e/fixtures/testserver/grpcecho-template.yaml.tmpl",
+	}, 1},
 }
 
-// renderFixture renders a manifest and decodes the two resources the
-// assertions below care about (the third document is a Namespace).
+// renderPool renders a fixture's pool manifest and strict-decodes its
+// WorkerPool.
 //
-// Strict decoding against the real API types is the point: the runtime blocks
+// Strict decoding against the real API type is the point: the runtime blocks
 // are injected as pre-indented text, so a placeholder that lands at the wrong
 // depth yields YAML that still parses but hangs the field off the wrong parent
 // — which strict mode reports as an unknown field instead of silently applying
 // a WorkerPool that never gets a micro-VM worker.
-func renderFixture(t *testing.T, relPath string) (*v1alpha1.WorkerPool, *v1alpha1.ActorTemplate) {
+func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
 	t.Helper()
-	return decodeFixture(t, relPath, RenderFixtureManifest(t, relPath, "test-bucket", "render"))
-}
-
-// decodeFixture strict-decodes an already-rendered manifest, for callers that
-// render a fixture some way other than RenderFixtureManifest.
-func decodeFixture(t *testing.T, relPath, rendered string) (*v1alpha1.WorkerPool, *v1alpha1.ActorTemplate) {
-	t.Helper()
-	raw, err := os.ReadFile(rendered)
+	raw, err := os.ReadFile(RenderFixtureManifest(t, relPath, "test-bucket", "render"))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
 	}
 
-	pool, template := &v1alpha1.WorkerPool{}, &v1alpha1.ActorTemplate{}
+	pool := &v1alpha1.WorkerPool{}
 	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
 		if strings.TrimSpace(doc) == "" {
 			continue
@@ -65,34 +80,51 @@ func decodeFixture(t *testing.T, relPath, rendered string) (*v1alpha1.WorkerPool
 		if err := yaml.Unmarshal([]byte(doc), &meta); err != nil {
 			t.Fatalf("rendered %s is not valid YAML: %v\n%s", relPath, err, doc)
 		}
-		var into any
-		switch meta.Kind {
-		case "WorkerPool":
-			into = pool
-		case "ActorTemplate":
-			into = template
-		default:
+		if meta.Kind != "WorkerPool" {
 			continue
 		}
-		if err := yaml.UnmarshalStrict([]byte(doc), into); err != nil {
-			t.Fatalf("rendered %s %s does not match the API type: %v\n%s", relPath, meta.Kind, err, doc)
+		if err := yaml.UnmarshalStrict([]byte(doc), pool); err != nil {
+			t.Fatalf("rendered %s WorkerPool does not match the API type: %v\n%s", relPath, meta.Kind, doc)
 		}
 	}
-	if pool.Name == "" || template.Name == "" {
-		t.Fatalf("rendered %s is missing a WorkerPool or an ActorTemplate", relPath)
+	if pool.Name == "" {
+		t.Fatalf("rendered %s is missing a WorkerPool", relPath)
 	}
-	return pool, template
+	return pool
 }
 
-// TestRenderFixtureManifest_GVisor pins the default rendering: every micro-VM
-// block is gone and no placeholder survives, so the gVisor lane keeps applying
-// exactly what it applied before the templates were parameterized.
-func TestRenderFixtureManifest_GVisor(t *testing.T) {
-	t.Setenv(sandboxClassEnv, "")
-	for _, relPath := range fixtureManifests {
-		t.Run(relPath, func(t *testing.T) {
-			pool, template := renderFixture(t, relPath)
+// renderTemplates renders a fixture's substrate template manifest and
+// strict-decodes its ActorTemplate documents; the protojson decode plays the
+// same misplaced-placeholder tripwire renderPool's strict mode does.
+func renderTemplates(t *testing.T, relPath string) []*ateapipb.ActorTemplate {
+	t.Helper()
+	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", false)
+	rendered, err := os.ReadFile(renderManifest(t, relPath, inline, blocks))
+	if err != nil {
+		t.Fatalf("reading the rendered %s: %v", relPath, err)
+	}
+	return decodeSubstrateTemplates(t, rendered)
+}
 
+// memoryLimit returns the template's spec-level memory limit quantity, "" if
+// none is declared.
+func memoryLimit(tmpl *ateapipb.ActorTemplate) string {
+	for _, l := range tmpl.GetResources().GetLimits() {
+		if l.GetName() == "memory" {
+			return l.GetQuantity()
+		}
+	}
+	return ""
+}
+
+// TestRenderSubstrateFixtures_GVisor pins the default rendering: every
+// micro-VM block is gone, no placeholder survives, and the templates name the
+// cluster-wide default SandboxConfig.
+func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
+	t.Setenv(sandboxClassEnv, "")
+	for _, fixture := range substrateFixtures {
+		t.Run(fixture.manifests.Pool, func(t *testing.T) {
+			pool := renderPool(t, fixture.manifests.Pool)
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-gvisor") {
 				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
 			}
@@ -101,32 +133,48 @@ func TestRenderFixtureManifest_GVisor(t *testing.T) {
 					pool.Spec.SandboxClass, pool.Spec.SandboxConfigName)
 			}
 
-			if template.Spec.SandboxClass != "" {
-				t.Errorf("ActorTemplate sandboxClass = %q, want unset for gVisor", template.Spec.SandboxClass)
+			templates := renderTemplates(t, fixture.manifests.Template)
+			if len(templates) != fixture.templates {
+				t.Fatalf("rendered %s yields %d templates, want %d", fixture.manifests.Template, len(templates), fixture.templates)
 			}
-			// An inline placeholder with an empty value must substitute, not
-			// delete its line: the location is what the golden snapshot needs.
-			if want := "gs://test-bucket/"; !strings.HasPrefix(template.Spec.SnapshotsConfig.Location, want) {
-				t.Errorf("ActorTemplate snapshot location = %q, want it to start with %q",
-					template.Spec.SnapshotsConfig.Location, want)
-			}
-			if strings.HasSuffix(template.Spec.SnapshotsConfig.Location, "-microvm/") {
-				t.Errorf("ActorTemplate snapshot location = %q, want no micro-VM suffix",
-					template.Spec.SnapshotsConfig.Location)
+			for _, tmpl := range templates {
+				name := tmpl.GetMetadata().GetName()
+				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR {
+					t.Errorf("template %s sandboxClass = %v, want GVISOR", name, got)
+				}
+				// The templates name the cluster-wide default SandboxConfig
+				// explicitly: config_name is required.
+				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "gvisor-default" {
+					t.Errorf("template %s configName = %q, want gvisor-default", name, got)
+				}
+				// An inline placeholder with an empty value must substitute, not
+				// delete its line: the location is what the golden snapshot needs.
+				location := tmpl.GetSnapshotsConfig().GetStorageLocation()
+				if want := "gs://test-bucket/"; !strings.HasPrefix(location, want) {
+					t.Errorf("template %s snapshot location = %q, want it to start with %q", name, location, want)
+				}
+				if strings.Contains(location, "-microvm") {
+					t.Errorf("template %s snapshot location = %q, want no micro-VM suffix", name, location)
+				}
+				// The selector is what ties the template to its fixture's pool.
+				for k, v := range tmpl.GetWorkerSelector().GetMatchLabels() {
+					if pool.Labels[k] != v {
+						t.Errorf("template %s selects %s=%s, which the pool's labels %v do not carry", name, k, v, pool.Labels)
+					}
+				}
 			}
 		})
 	}
 }
 
-// TestRenderFixtureManifest_MicroVM pins the micro-VM rendering: the pool names
-// the cluster-wide SandboxConfig, the template matches its class, and the
-// snapshots land under their own prefix.
-func TestRenderFixtureManifest_MicroVM(t *testing.T) {
+// TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the pool
+// names the cluster-wide SandboxConfig, the templates match its class and
+// carry limits, and the snapshots land under their own prefix.
+func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
-	for _, relPath := range fixtureManifests {
-		t.Run(relPath, func(t *testing.T) {
-			pool, template := renderFixture(t, relPath)
-
+	for _, fixture := range substrateFixtures {
+		t.Run(fixture.manifests.Pool, func(t *testing.T) {
+			pool := renderPool(t, fixture.manifests.Pool)
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-microvm") {
 				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
 			}
@@ -135,18 +183,30 @@ func TestRenderFixtureManifest_MicroVM(t *testing.T) {
 					pool.Spec.SandboxClass, pool.Spec.SandboxConfigName)
 			}
 
-			if template.Spec.SandboxClass != SandboxClassMicroVM {
-				t.Errorf("ActorTemplate sandboxClass = %q, want %q — it must match the pool's or no worker is eligible",
-					template.Spec.SandboxClass, SandboxClassMicroVM)
+			templates := renderTemplates(t, fixture.manifests.Template)
+			if len(templates) != fixture.templates {
+				t.Fatalf("rendered %s yields %d templates, want %d", fixture.manifests.Template, len(templates), fixture.templates)
 			}
-			// Undeclared limits boot the guest at the kata config default
-			// (2GiB), which does not fit beside the demo pools on one kind node.
-			if template.Spec.Resources.Limits.Memory().IsZero() {
-				t.Errorf("ActorTemplate declares no memory limit, so the guest would boot at the kata default: %+v", template.Spec.Resources)
-			}
-			if want := "-microvm-render/"; !strings.HasSuffix(template.Spec.SnapshotsConfig.Location, want) {
-				t.Errorf("ActorTemplate snapshot location = %q, want it to end with %q",
-					template.Spec.SnapshotsConfig.Location, want)
+			for _, tmpl := range templates {
+				name := tmpl.GetMetadata().GetName()
+				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
+					t.Errorf("template %s sandboxClass = %v, want MICROVM — it must match the pool's or no worker is eligible", name, got)
+				}
+				// Deliberately not the class default (see fixture.go), so a
+				// missing or stale microvm install fails loudly.
+				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "microvm" {
+					t.Errorf("template %s configName = %q, want microvm", name, got)
+				}
+				// Undeclared limits boot the guest at the kata config default
+				// (2GiB), which does not fit beside the demo pools on one kind
+				// node.
+				if memoryLimit(tmpl) == "" {
+					t.Errorf("template %s declares no memory limit, so the guest would boot at the kata default", name)
+				}
+				location := tmpl.GetSnapshotsConfig().GetStorageLocation()
+				if want := "-microvm-render/"; !strings.HasSuffix(location, want) {
+					t.Errorf("template %s snapshot location = %q, want it to end with %q", name, location, want)
+				}
 			}
 		})
 	}

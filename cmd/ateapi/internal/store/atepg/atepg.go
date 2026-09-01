@@ -1290,8 +1290,6 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 	if dbWorker.Metadata == nil {
 		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
 	}
-	// Workers are global-scoped, so the atespace is always empty.
-	dbWorker.Metadata.Atespace = ""
 	setCreateMetadata(dbWorker.Metadata)
 
 	protoBytes, err := proto.Marshal(dbWorker)
@@ -1374,21 +1372,16 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 			return nil, err
 		}
 
-		// Snapshot the stored state before handing the worker to mutate.
-		// mutate is free to edit anything it is given.
-		workerBeforeMutation := proto.Clone(dbWorker).(*ateapipb.Worker)
+		// Snapshot the stored metadata before handing the worker to mutate.
+		// mutate is free to edit anything it is given; immutable fields are
+		// the service layer's to enforce, via declarative validation.
+		oldMeta := proto.CloneOf(dbWorker.GetMetadata())
 		if err := mutate(dbWorker); err != nil {
 			return nil, err
 		}
-		if err := store.CheckWorkerMutation(workerBeforeMutation, dbWorker); err != nil {
-			return nil, err
-		}
-		// Stored server-assigned metadata is authoritative; the next revision
-		// is derived from the row we locked.
-		if dbWorker.Metadata == nil {
-			dbWorker.Metadata = &ateapipb.ResourceMetadata{}
-		}
-		setUpdateMetadata(dbWorker.Metadata, workerBeforeMutation.GetMetadata())
+		// Stored metadata is authoritative; discard any metadata edits made by
+		// the closure and derive the next revision from the row we locked.
+		setUpdateMetadata(dbWorker.Metadata, oldMeta)
 
 		protoBytes, err := proto.Marshal(dbWorker)
 		if err != nil {

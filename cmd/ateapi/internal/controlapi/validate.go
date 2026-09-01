@@ -17,13 +17,13 @@ package controlapi
 import (
 	"context"
 	"reflect"
+	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -77,23 +77,50 @@ func ateDeepEqual[T any](a, b T) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// This exists only because nested subfield tags are not supported yet.
-func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.Operation, fldPath *field.Path, actor, _ *ateapipb.Actor) field.ErrorList {
-	if actor == nil || actor.Metadata == nil {
-		return nil // handled by DV
-	}
-
-	// Updates are validated in 2 steps: first the update request and then the
-	// resource itself. DV for the request doesn't descend into the resource
-	// metadata.  Once DV supports nested subfield tags, this can be changed to
-	// something like:
-	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
-	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
-	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &actor.Metadata.Atespace, nil)...)
-	return errs
-}
-
 // This is needed because DV doesn't have a standard format for IP addresses yet.
 func ValidateCustom_WorkerAssignment_WorkerPodIp(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validation.IsValidIP(fldPath, *value)
+}
+
+// maxCSRBytes bounds MintCertRequest's CSR. Real CSRs are a few KB; this is
+// a guardrail, applied here because maxLength does not support bytes fields.
+const maxCSRBytes = 16384
+
+func ValidateCustom_MintCertRequest_CertificateSigningRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []byte) field.ErrorList {
+	if len(value) > maxCSRBytes {
+		return field.ErrorList{field.TooLong(fldPath, nil, maxCSRBytes)}
+	}
+	return nil
+}
+
+// ValidateCustom_ExternalVolume_VolumeType checks that a volume type string is well-formed.
+// It allows an optional "substrate.io/" prefix, followed by a valid DNS-1123 subdomain.
+func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if value == nil || *value == "" {
+		return nil
+	}
+	var errs field.ErrorList
+	valToValidate := strings.TrimPrefix(*value, "substrate.io/")
+	for _, msg := range validation.IsDNS1123Subdomain(valToValidate) {
+		errs = append(errs, field.Invalid(fldPath, *value, msg))
+	}
+	return errs
+}
+
+// ValidateCustom_ExternalVolume_StorageVolumeId checks that an external volume's storage ID does not
+// contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F).
+func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if value == nil || *value == "" {
+		return nil
+	}
+	for _, r := range *value {
+		if (r >= 0x0000 && r <= 0x0008) ||
+			r == 0x000B ||
+			r == 0x000C ||
+			(r >= 0x000E && r <= 0x001F) ||
+			(r >= 0x007F && r <= 0x009F) {
+			return field.ErrorList{field.Invalid(fldPath, *value, "must not contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F)")}
+		}
+	}
+	return nil
 }

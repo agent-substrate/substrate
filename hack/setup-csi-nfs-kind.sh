@@ -134,8 +134,9 @@ spec:
   nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
 EOF
 
-# 9. Restart atelet to ensure it reconnects to the new CSI socket
+# 9. Restart atelet to ensure it reconnects to the new CSI socket.
+# atelet DaemonSet names carry a build-version suffix, so select by label.
 echo "Restarting atelet DaemonSet (if present)..."
-kubectl rollout restart daemonset/atelet -n ate-system >/dev/null 2>&1 || true
+kubectl rollout restart daemonset -l app=atelet -n ate-system >/dev/null 2>&1 || true
 
 echo "CSI NFS setup complete!"

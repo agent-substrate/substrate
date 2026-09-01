@@ -172,7 +172,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		return actor, nil, src, nil
 	}
 
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
 		return nil, nil, src, err
 	}
@@ -516,14 +516,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		},
 		ActorUid: actor.GetMetadata().GetUid(),
 	}
-	if ref := actorTemplateObjectRef(actor); ref != nil {
-		assignment.ActorTemplateRef = ref
-	} else {
-		assignment.ActorTemplate = &ateapipb.KubeNamespacedObjectRef{
-			Namespace: actor.GetActorTemplateNamespace(),
-			Name:      actor.GetActorTemplateName(),
-		}
-	}
+	assignment.ActorTemplateRef = actorTemplateObjectRef(actor)
 
 	// Workers() returns pointers directly from the cache, so the claim is written
 	// by mutating the store's own copy; the cached one is only read, for the
@@ -686,8 +679,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
-			ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
-			ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
 			ActorUid:              actor.GetMetadata().Uid,
 			EgressGateway:         egressGateway,
@@ -734,8 +727,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
-			ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
-			ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
@@ -769,8 +762,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
-			ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
-			ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			SandboxAssets:         sandboxAssets,
 			Spec:                  workloadSpec,
 			ActorUid:              actor.GetMetadata().Uid,

@@ -62,7 +62,6 @@ type VolumePluginRegistry interface {
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
-	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
@@ -72,7 +71,7 @@ func NewRPCService(
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 ) *RPCService {
-	impl := newServiceImpl(persistence, actorTemplateLister, storageClassLister)
+	impl := newServiceImpl(persistence, storageClassLister)
 	s := &RPCService{
 		impl:                  impl,
 		persistence:           persistence,
@@ -83,7 +82,7 @@ func NewRPCService(
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
@@ -150,8 +149,7 @@ type ServiceImpl struct {
 	// methods we need to trap.
 	store store.Interface
 
-	actorTemplateLister listersv1alpha1.ActorTemplateLister
-	storageClassLister  storagev1listers.StorageClassLister
+	storageClassLister storagev1listers.StorageClassLister
 }
 
 var _ store.Interface = (*ServiceImpl)(nil)
@@ -160,13 +158,11 @@ var _ store.Interface = (*ServiceImpl)(nil)
 // implementation layer.
 func newServiceImpl(
 	persistence store.Interface,
-	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	storageClassLister storagev1listers.StorageClassLister,
 ) *ServiceImpl {
 	s := &ServiceImpl{
-		store:               persistence,
-		actorTemplateLister: actorTemplateLister,
-		storageClassLister:  storageClassLister,
+		store:              persistence,
+		storageClassLister: storageClassLister,
 	}
 	return s
 }

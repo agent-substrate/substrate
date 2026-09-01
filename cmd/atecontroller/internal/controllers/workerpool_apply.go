@@ -32,7 +32,7 @@ import (
 
 // ateomOTelResourceAttributes mirrors atelet.yaml; service.instance.id is the pod
 // uid so each worker pod is a distinct telemetry source.
-const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)"
+const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)"
 
 // workerTerminationGracePeriodSeconds is the hardcoded pod termination grace
 // period for worker pods (60 minutes).
@@ -201,8 +201,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 }
 
 // ateomContainerEnv adds the OTLP endpoint and resource identity only when
-// telemetry is configured. POD_* refs precede OTEL_RESOURCE_ATTRIBUTES so its
-// $(POD_*) substitutions resolve.
+// telemetry is configured. Every ref precedes OTEL_RESOURCE_ATTRIBUTES so its
+// $(...) substitutions resolve.
 func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
 	envs := []*corev1ac.EnvVarApplyConfiguration{
 		fieldRefEnv("POD_UID", "metadata.uid"),
@@ -213,6 +213,7 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 	envs = append(envs,
 		fieldRefEnv("POD_NAME", "metadata.name"),
 		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
+		fieldRefEnv("NODE_NAME", "spec.nodeName"),
 		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
 		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
 	)
