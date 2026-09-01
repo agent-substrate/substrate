@@ -794,22 +794,32 @@ type ExternalVolume struct {
 	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name
+	// +k8s:update=NoModify
+	// +k8s:update=NoUnset # set-once; immutable would reject the create
+	// ratchet's nil->set when the final object is validated as an update
 	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
 	// The globally unique volume_id returned from the storage system.
 	// This will be initially empty during volume creation. Its format is the
-	// storage system's own, so it is only bounded, not validated. The CSI spec
-	// caps IDs at 128 bytes but does not require it, so allow some slack.
+	// storage system's own, so it is only bounded and checked for control
+	// characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F).
+	// The CSI spec caps IDs at 128 bytes but does not require it, so allow
+	// some slack. Set once when provisioning completes, then never changed.
 	//
 	// +k8s:optional
 	// +k8s:maxLength=256
+	// +k8s:update=NoModify
+	// +k8s:update=NoUnset
+	// +k8s:customValidation # no control characters
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// Internal volume plugin name or CSI driver name, from the StorageClass
-	// provisioner. Values are either DNS subdomains (pd.csi.storage.gke.io) or
-	// qualified names (substrate.io/mock), so this is only bounded: 253-char
-	// prefix + '/' + 63-char name.
+	// provisioner. Must be a DNS subdomain, optionally prefixed with
+	// "substrate.io/" (per the CSI spec's driver-name syntax).
 	//
-	// +k8s:optional
-	// +k8s:maxLength=317
+	// +k8s:required
+	// +k8s:maxLength=253
+	// +k8s:update=NoModify
+	// +k8s:update=NoUnset # set-once, like volume_name above
+	// +k8s:customValidation
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// +k8s:optional
 	// +k8s:minimum=1

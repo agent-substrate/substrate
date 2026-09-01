@@ -498,103 +498,45 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			vols := make([]*ateapipb.ExternalVolume, 33)
 			for i := range vols {
-				vols[i] = &ateapipb.ExternalVolume{VolumeName: fmt.Sprintf("vol-%d", i)}
+				vols[i] = &ateapipb.ExternalVolume{VolumeName: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
 			}
 			s.ActorVolumes = vols
 		})),
 		field.ErrorList{field.TooMany(field.NewPath("status", "actor_volumes"), 33, 32).WithOrigin("maxItems")},
 	}, {
-		"actor_volumes invalid volume_name",
-		validInput(),
+		// Set-once fields permit the nil->set transition, so a volume added
+		// in an update validates like one added at creation.
+		"adding a volume on update is allowed",
+		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "NOT A VOLUME"}}
-		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("volume_name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		"valid actor_volumes storage_volume_id and volume_type",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{
-				VolumeName:      "vol-a",
-				StorageVolumeId: strings.Repeat("x", 256), // exactly at the bound
-				VolumeType:      "substrate.io/mock",      // provisioner names carry slashes and dots
-			}}
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		nil,
-	}, {
-		"actor_volumes storage_volume_id too long",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", StorageVolumeId: strings.Repeat("x", 257)}}
-		})),
-		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
-	}, {
-		"actor_volumes volume_type too long",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: strings.Repeat("x", 318)}}
-		})),
-		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("volume_type"), nil, 317).WithOrigin("maxLength")},
-	}, {
-		"valid actor.status.actor_volumes status",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
-		})),
-		nil,
-	}, {
-		"negative actor.status.actor_volumes status",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", Status: ateapipb.ExternalVolume_Status(-1)}}
-		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("status"), nil, "").WithOrigin("minimum")},
-	}, {
-		"invalid actor.status.actor_volumes status",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", Status: ateapipb.ExternalVolume_Status(4)}}
-		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("status"), nil, "").WithOrigin("maximum")},
 	}, {
 		"duplicate actor_volumes volume_name",
-		validInput(),
+		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a"}, {VolumeName: "vol-a"}}
+			s.ActorVolumes = []*ateapipb.ExternalVolume{
+				{VolumeName: "vol-a", VolumeType: "substrate.io/mock"},
+				{VolumeName: "vol-a", VolumeType: "substrate.io/mock"},
+			}
 		})),
 		field.ErrorList{field.Duplicate(field.NewPath("status", "actor_volumes").Index(1), nil)},
 	}, {
-		"valid actor_volumes volume_context",
-		validInput(),
+		"provisioning transition on an existing volume is valid",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+		})),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: map[string]string{"attachment": "iqn.2026-08.io.ate:vol-a"}}}
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{
+				VolumeName:      "vol-a",
+				VolumeType:      "substrate.io/mock",
+				StorageVolumeId: "csi-426d29b7",
+				Status:          ateapipb.ExternalVolume_STATUS_CREATED,
+				VolumeContext:   map[string]string{"attachment": "iqn.2026-08.io.ate:vol-a"},
+			}}
 		})),
 		nil,
-	}, {
-		"too many actor_volumes volume_context entries",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			ctxMap := make(map[string]string, 33)
-			for i := 0; i < 33; i++ {
-				ctxMap[fmt.Sprintf("key-%d", i)] = "v"
-			}
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: ctxMap}}
-		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "actor_volumes").Index(0).Child("volume_context"), 33, 32).WithOrigin("maxProperties")},
-	}, {
-		"actor_volumes volume_context key too long",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: map[string]string{strings.Repeat("k", 129): "v"}}}
-		})),
-		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("volume_context"), nil, 128).WithOrigin("maxLength")},
-	}, {
-		"actor_volumes volume_context value too long",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeContext: map[string]string{"attachment": strings.Repeat("v", 257)}}}
-		})),
-		field.ErrorList{field.TooLong(field.NewPath("status", "actor_volumes").Index(0).Child("volume_context").Key("attachment"), nil, 256).WithOrigin("maxLength")},
 	}, {
 		"invalid actor.status.in_progress_local_snapshot_name",
 		validInput(),

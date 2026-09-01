@@ -1803,6 +1803,11 @@ func Validate_ExternalVolume(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
+			if e := validate.UpdateValue(ctx, op, fldPath, obj, oldObj,
+				func(a string, b string) bool { return a == b }, validate.NoUnset, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if earlyReturn {
 				return // do not proceed
 			}
@@ -1834,8 +1839,17 @@ func Validate_ExternalVolume(
 			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
+			if e := validate.UpdateValue(ctx, op, fldPath, obj, oldObj,
+				func(a string, b string) bool { return a == b }, validate.NoUnset, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_ExternalVolume_StorageVolumeId(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256); len(e) != 0 {
 				errs = append(errs, e...)
@@ -1862,13 +1876,23 @@ func Validate_ExternalVolume(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.UpdateValue(ctx, op, fldPath, obj, oldObj,
+				func(a string, b string) bool { return a == b }, validate.NoUnset, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 317); len(e) != 0 {
+			// custom validation
+			if e := ValidateCustom_ExternalVolume_VolumeType(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
