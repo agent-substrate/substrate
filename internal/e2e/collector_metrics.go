@@ -129,6 +129,36 @@ func CollectorHasService(scrape string, services ...string) bool {
 	return false
 }
 
+// TargetInfoLabel returns one resource attribute of a service, or "" when it is
+// absent. The Prometheus exporter keeps resource attributes off the series and
+// publishes them once per resource in target_info, keyed by job.
+func TargetInfoLabel(scrape, service, label string) string {
+	for _, line := range strings.Split(scrape, "\n") {
+		if metricNameFromLine(line) != "target_info" || !strings.Contains(line, `job="`+service+`"`) {
+			continue
+		}
+		if v := promLabelValue(line, label); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// promLabelValue reads one label off an exposition line.
+func promLabelValue(line, label string) string {
+	key := label + `="`
+	i := strings.Index(line, key)
+	if i < 0 {
+		return ""
+	}
+	rest := line[i+len(key):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
 // metricNameFromLine extracts the metric name from one exposition line, handling
 // the "# HELP name ...", "# TYPE name type", and "name{labels} value" forms.
 // It returns "" for blank lines and other comments.

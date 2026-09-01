@@ -45,7 +45,7 @@ var apiActorRef = resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 // seedAPIActor stores an Actor bound to apiWorkerName in the given state — the
 // shape the delete's release step acts on. Its coordinates line up with
-// newAPIWorker and newAPIAssignment, so the two seeds agree about who is bound
+// validWorker and newAPIAssignment, so the two seeds agree about who is bound
 // to whom.
 func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface, state ateapipb.ActorState, opts ...func(*ateapipb.Actor)) *ateapipb.Actor {
 	t.Helper()
@@ -79,7 +79,7 @@ func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface
 func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	ctx := context.Background()
 	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
 		// Both in-progress checkpoints are set so the assertion covers the
 		// shared crash path, which cannot know which workflow was in flight.
@@ -142,7 +142,7 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 
 			ctx := context.Background()
 			wf, persistence := newWorkerDeleteWorkflow(t)
-			seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 			actor := seedAPIActor(t, ctx, persistence, tc.start)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
@@ -175,7 +175,7 @@ func TestDeleteWorkerWorkflow_ReleasedActorStateTransitions(t *testing.T) {
 func TestDeleteWorkerWorkflow_IgnoresStaleIncarnationAssignment(t *testing.T) {
 	ctx := context.Background()
 	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "old-incarnation-uid")
 
@@ -197,7 +197,7 @@ func TestDeleteWorkerWorkflow_IgnoresStaleIncarnationAssignment(t *testing.T) {
 func TestDeleteWorkerWorkflow_IgnoresActorMovedElsewhere(t *testing.T) {
 	ctx := context.Background()
 	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
 		a.Status.WorkerAssignment.Worker = workerRef(apiOtherWorkerName)
 	})
@@ -225,7 +225,7 @@ func TestDeleteWorkerWorkflow_IgnoresActorMovedElsewhere(t *testing.T) {
 func TestDeleteWorkerWorkflow_AssignedToAbsentActorDeletesAnyway(t *testing.T) {
 	ctx := context.Background()
 	wf, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
 
 	got, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
@@ -271,7 +271,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			_, persistence := newWorkerDeleteWorkflow(t)
-			seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 			actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
@@ -304,7 +304,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 func TestDeleteWorkerWorkflow_ActorDeletedDuringRelease(t *testing.T) {
 	ctx := context.Background()
 	_, persistence := newWorkerDeleteWorkflow(t)
-	seedAPIWorker(t, ctx, persistence, newAPIWorker(apiWorkerName))
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 

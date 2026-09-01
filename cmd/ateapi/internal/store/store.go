@@ -23,7 +23,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -278,45 +277,6 @@ func (p DeletePreconditions) Check(md *ateapipb.ResourceMetadata) error {
 	}
 	if p.Version != 0 && p.Version != md.GetVersion() {
 		return ErrVersionConflict
-	}
-	return nil
-}
-
-// CheckWorkerMutation reports whether an UpdateWorker mutation left the
-// worker's immutable identity fields alone. A backend calls it between running
-// the mutation and writing the result. It lives here, above any one backend,
-// so the rule is stated once and a second backend inherits it rather than
-// restating it.
-//
-// metadata is not checked: a backend re-stamps it from the object it read, so
-// whatever the mutation made of it is discarded either way.
-//
-// capacity is checked along with the rest because UpdateWorker replaces the
-// worker rather than patching it: a request that omits capacity is asking to
-// clear it, and silently losing a worker's compute capacity is worse than
-// rejecting the write. A future pod resize has to relax this rule first.
-//
-// A rejection wraps ErrImmutableField, so a backend can return it as-is and
-// callers still get the sentinel they map to INVALID_ARGUMENT.
-func CheckWorkerMutation(stored, mutated *ateapipb.Worker) error {
-	for _, f := range []struct {
-		name    string
-		stored  string
-		mutated string
-	}{
-		{"worker_namespace", stored.GetWorkerNamespace(), mutated.GetWorkerNamespace()},
-		{"worker_pool", stored.GetWorkerPool(), mutated.GetWorkerPool()},
-		{"worker_pod", stored.GetWorkerPod(), mutated.GetWorkerPod()},
-		{"worker_pod_uid", stored.GetWorkerPodUid(), mutated.GetWorkerPodUid()},
-		{"node_name", stored.GetNodeName(), mutated.GetNodeName()},
-		{"ip", stored.GetIp(), mutated.GetIp()},
-	} {
-		if f.stored != f.mutated {
-			return fmt.Errorf("%w: %s changed from %q to %q", ErrImmutableField, f.name, f.stored, f.mutated)
-		}
-	}
-	if !proto.Equal(stored.GetCapacity(), mutated.GetCapacity()) {
-		return fmt.Errorf("%w: capacity changed from %v to %v", ErrImmutableField, stored.GetCapacity(), mutated.GetCapacity())
 	}
 	return nil
 }

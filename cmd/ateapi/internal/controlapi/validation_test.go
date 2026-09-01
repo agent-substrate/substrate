@@ -776,3 +776,87 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateDeleteOptions(t *testing.T) {
+	valid := func(mutate ...func(*ateapipb.DeleteOptions)) *ateapipb.DeleteOptions {
+		tb := &ateapipb.DeleteOptions{}
+		for _, m := range mutate {
+			m(tb)
+		}
+		return tb
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateapipb.DeleteOptions
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(), // all optional fields
+	}, {
+		name: "valid version",
+		obj:  valid(func(do *ateapipb.DeleteOptions) { do.Version = 1 }),
+		want: nil,
+	}, {
+		name: "invalid version",
+		obj:  valid(func(do *ateapipb.DeleteOptions) { do.Version = -1 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("version"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "valid uid",
+		obj:  valid(func(do *ateapipb.DeleteOptions) { do.Uid = "11111111-2222-3333-4444-555555555555" }),
+		want: nil,
+	}, {
+		name: "invalid uid",
+		obj:  valid(func(do *ateapipb.DeleteOptions) { do.Uid = "not a uid" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_DeleteOptions(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
+
+func TestValidateKubeNamespacedObjectRef(t *testing.T) {
+	valid := func(mutate ...func(*ateapipb.KubeNamespacedObjectRef)) *ateapipb.KubeNamespacedObjectRef {
+		tb := &ateapipb.KubeNamespacedObjectRef{Namespace: "ns", Name: "nm"}
+		for _, m := range mutate {
+			m(tb)
+		}
+		return tb
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateapipb.KubeNamespacedObjectRef
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing namespace",
+		obj:  valid(func(or *ateapipb.KubeNamespacedObjectRef) { or.Namespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("namespace"), "")},
+	}, {
+		name: "invalid namespace",
+		obj:  valid(func(or *ateapipb.KubeNamespacedObjectRef) { or.Namespace = "not a namespace" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("namespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing name",
+		obj:  valid(func(or *ateapipb.KubeNamespacedObjectRef) { or.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name: "invalid name",
+		obj:  valid(func(or *ateapipb.KubeNamespacedObjectRef) { or.Name = "not a name" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-long-name")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
+			matcher.Test(t, tt.want, Validate_KubeNamespacedObjectRef(context.Background(), op, nil, tt.obj, nil))
+		})
+	}
+}
