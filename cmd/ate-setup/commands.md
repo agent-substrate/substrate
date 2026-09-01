@@ -31,6 +31,27 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--kubeconfig PATH` | `KUBECONFIG=PATH` | Explicit kubeconfig path |
 | `--no-dev-env` | `NO_DEV_ENV=1` | Skip `.ate-dev-env.sh` at the repository root |
 | `--version` / `-v` | — | New; the shell installer had no version |
+| `--image-repo REPO` | — | New. Install pre-built images from `REPO` instead of building them with `ko` |
+| `--image-tag TAG` | — | New. The tag those images carry. Each of the two requires the other |
+
+Both have an environment equivalent, read when the flag is absent:
+`ATE_IMAGE_REPO` and `ATE_IMAGE_TAG`.
+
+## Installing a release
+
+Without `--image-repo`, `ate-setup` builds every image from the checkout with
+`ko` and pushes it to `KO_DOCKER_REPO`. That is the developer install and is
+unchanged.
+
+```
+ate-setup deploy ate-system \
+  --image-repo registry.example.com/substrate \
+  --image-tag v0.0.0
+```
+
+installs published images instead, and never invokes `ko`. The manifests still
+come from the checkout, so this needs one; what it removes is the build, the Go
+toolchain, and write access to a registry.
 
 ## Deploy
 
