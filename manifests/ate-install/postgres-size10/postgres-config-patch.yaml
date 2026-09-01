@@ -1,0 +1,78 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Merge-patched into postgres-config by hack/install-ate.sh when
+# --cluster-size=size10. `kubectl patch --type merge` replaces the
+# postgresql.conf key without touching pg_hba.conf or reload-tls.sh, both
+# defined in manifests/ate-install/postgres/postgres.yaml.
+#
+# Sized to match the container resource patch in hack/install-ate.sh
+# (140 GiB memory, 80 vCPU request, no CPU limit, on a dedicated node).
+# Every value below depends on those numbers -- if the container is resized
+# the tuning has to move with it.
+data:
+  postgresql.conf: |
+    # Repeated from manifests/ate-install/postgres/postgres.yaml: kubectl merge patch
+    # replaces the whole postgresql.conf value, so anything omitted here would
+    # revert to the compiled-in default. TLS and hba paths have to stay wired
+    # up or the server refuses connections.
+    listen_addresses = '*'
+    ssl = on
+    ssl_cert_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
+    ssl_key_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
+    ssl_ca_file = '/run/podidentity.podcert.ate.dev/trust-bundle.pem'
+    hba_file = '/etc/postgresql/pg_hba.conf'
+
+    # Memory: container holds 140 GiB. shared_buffers at 25 % is the standard
+    # starting point; going higher rarely helps on PG 18 because the OS page
+    # cache double-buffers. effective_cache_size is a planner hint, not an
+    # allocation.
+    shared_buffers = 35GB
+    effective_cache_size = 100GB
+    work_mem = 32MB
+    maintenance_work_mem = 2GB
+    wal_buffers = 64MB
+    huge_pages = try
+
+    # 2 ate-api-server replicas at pool_max_conns=64 + 3-conn watch pool each
+    # = 134 steady-state; 300 leaves room to double replicas and for psql /
+    # monitoring / migrations.
+    max_connections = 300
+
+    # 1 GB max_wal_size (the compiled default) forces a checkpoint every few
+    # seconds under sustained writes and caps throughput well below what the
+    # disk can do. 16 GB stretches the interval out; completion_target 0.9
+    # spreads the flush across it.
+    max_wal_size = 16GB
+    min_wal_size = 4GB
+    checkpoint_completion_target = 0.9
+    wal_compression = on
+
+    # Parallelism sized to the container's vCPU (no CPU limit, so it can
+    # burst to the whole dedicated node). per_gather stays modest because
+    # the outbox workload is short OLTP, not analytical scans -- unlimited
+    # parallelism there starves concurrent short queries.
+    max_worker_processes = 88
+    max_parallel_workers = 64
+    max_parallel_workers_per_gather = 4
+    max_parallel_maintenance_workers = 6
+
+    # PD-backed SSD assumptions.
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+
+    # The outbox pattern churns dead tuples fast; give autovacuum more workers
+    # and a shorter naptime than the defaults so it stays ahead of writes.
+    autovacuum_max_workers = 6
+    autovacuum_naptime = 10s
