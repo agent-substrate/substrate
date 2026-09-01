@@ -119,6 +119,30 @@ An actor's **own** lines carry trace context only if the actor emits these field
 
 ---
 
+### Actor-Attributed Component Logs
+
+A component's own `slog` output can also be about a specific actor. Those records take the identity keys from [`internal/ateattr`](../internal/ateattr) too, flat at the top level rather than inside a label group: a component writes no envelope, so a collector lifts the keys straight onto the log record's attributes. `ateattr.ActorLogAttrs` and `ateattr.ActorLogLabels` return the same five keys for this reason, and a test holds them together. Filtering on `ate.actor.uid` therefore finds a component record and an actor's own output alike.
+
+atelet's `Restore timing breakdown` is the first of these, and the only unsampled per-actor latency record Substrate produces. It is emitted once per restore, whether the restore succeeded or failed:
+
+```json
+{"time":"…","level":"INFO","msg":"Restore timing breakdown",
+ "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
+ "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+ "ate.snapshot.scope":"full","ate.snapshot.kind":"latest","ate.sandbox.class":"gvisor",
+ "ate.actor.restore.duration.download":0.310,
+ "ate.actor.restore.duration.oci_unpack":0.050,
+ "ate.actor.restore.duration.ateom_restore":0.060,
+ "ate.actor.restore.duration.total":0.420,
+ "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
+```
+
+The duration keys are the [`ate.actor.restore.duration`](#the-metric-registry) instrument's name with an `ate.snapshot.phase` value appended, and they hold **seconds**, matching that instrument's declared unit. The same rules apply as on the histogram: a phase that never ran is absent rather than zero, phases overlap and do not sum to the total, and `ate.failure.reason` is present only when the restore failed. There is no `ate.snapshot.phase` key on the record — on a datapoint it names the one step timed, and this record carries them all.
+
+This is the record to use for a per-actor wake-up distribution. The histogram cannot answer that question at all, because actor identity is barred from metric labels; traces can, but the data plane is head-sampled at 1%.
+
+---
+
 ## 2. Metrics
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
