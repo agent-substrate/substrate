@@ -107,7 +107,7 @@ func DeployServerPod(t *testing.T, ctx context.Context, spec ServerPod) Server {
 		namespace = CreateNamespace(t).Name
 	}
 
-	koApply(t, renderServerPod(t, spec, namespace))
+	KoApply(t, renderServerPod(t, spec, namespace))
 	WaitForPodReady(t, ctx, namespace, spec.Name, serverPodReadyTimeout)
 
 	service, err := GetClients().K8s.CoreV1().Services(namespace).Get(ctx, spec.Name, metav1.GetOptions{})
