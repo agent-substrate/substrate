@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
@@ -59,33 +60,26 @@ type Server struct {
 	// is entitled to the actor it is asking for a credential for.
 	store   store.Interface
 	workers *workercache.Cache
+
+	// ateletNamespace is the namespace segment of the SPIFFE ID that the
+	// calling atelet must present to mint actor credentials.
+	ateletNamespace string
 }
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache) *Server {
+func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache, ateletNamespace string) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPoolFile:     actorIDJWTPoolFile,
 		actorIDCAPool:          actorIDCAPool,
 		store:                  store,
 		workers:                workers,
+		ateletNamespace:        ateletNamespace,
 	}
 }
 
-// The SPIFFE identity that atelet client certs carry, as minted by the
-// podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
-//
-// These mirror the constants the atelet dialer verifies against in
-// cmd/ateapi/internal/controlapi/dialer.go. They are duplicated rather than
-// imported so that this package does not depend on controlapi for three
-// strings; if a third pkg that need these constants appears, they should move to a shared package.
-const (
-	ateletTrustDomain        = "cluster.local"
-	ateletNamespace          = "ate-system"
-	ateletSA                 = "atelet"
-	actorCertificateLifetime = time.Hour
-)
+const actorCertificateLifetime = time.Hour
 
 func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*ateapipb.MintJWTResponse, error) {
 	caller, ok := principal.FromContext(ctx)
@@ -148,7 +142,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 }
 
 func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*ateapipb.MintCertResponse, error) {
-	caller, err := authenticateAtelet(ctx)
+	caller, err := s.authenticateAtelet(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +237,7 @@ type ateletCaller struct {
 // pod-identity CA (see buildServerCreds in cmd/ateapi/main.go), so the
 // extensions read here are trustworthy: only the pod-identity signer can mint
 // a certificate carrying a given pod's node name.
-func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
+func (s *Server) authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return nil, status.Errorf(codes.Unauthenticated, "no peer transport information found")
@@ -264,8 +258,8 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 	// rejected here.
 	expected := (&url.URL{
 		Scheme: "spiffe",
-		Host:   ateletTrustDomain,
-		Path:   path.Join("ns", ateletNamespace, "sa", ateletSA),
+		Host:   installdefaults.AteletTrustDomain,
+		Path:   path.Join("ns", s.ateletNamespace, "sa", installdefaults.AteletServiceAccount),
 	}).String()
 	if len(leaf.URIs) == 0 || leaf.URIs[0].String() != expected {
 		slog.WarnContext(ctx, "ActorIdentity denied: caller is not atelet",

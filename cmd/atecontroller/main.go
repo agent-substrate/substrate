@@ -21,6 +21,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
@@ -152,7 +153,8 @@ func main() {
 	ateapiClient := ateapipb.NewControlClient(ateapiConn)
 
 	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
-	egressMITMCAPool := controllers.EgressMITMCAPoolRef()
+	systemNamespace := installdefaults.NamespaceFromPodEnv()
+	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		Scheme: scheme,
 		Cache: cache.Options{
@@ -180,21 +182,24 @@ func main() {
 		OTelMetricExportTimeout:  *otelMetricExportTimeout,
 		OTelTracesSampler:        *otelTracesSampler,
 		OTelTracesSamplerArg:     *otelTracesSamplerArg,
+		SystemNamespace:          systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkerPool")
 		os.Exit(1)
 	}
 
 	if err = (&controllers.NetworkPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SystemNamespace: systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NetPolicy")
 		os.Exit(1)
 	}
 
 	if err = (&controllers.EgressMITMTrustReconciler{
-		Client: mgr.GetClient(),
+		Client:          mgr.GetClient(),
+		SystemNamespace: systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EgressMITMTrust")
 		os.Exit(1)

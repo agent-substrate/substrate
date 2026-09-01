@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -74,6 +75,15 @@ const (
 // populates. Self-signing is sufficient because the code under test reads an
 // already transport-verified peer certificate and never re-validates the chain
 // itself.
+// The atelet SPIFFE segments the tests build peer certificates from. They
+// mirror what a default install mints, which is what the Server under test is
+// configured with.
+const (
+	ateletTrustDomain = installdefaults.AteletTrustDomain
+	ateletNamespace   = installdefaults.SystemNamespace
+	ateletSA          = installdefaults.AteletServiceAccount
+)
+
 func newTestCert(t *testing.T, spiffePath string, podIdentity *substratex509.PodIdentity) *x509.Certificate {
 	t.Helper()
 
@@ -165,7 +175,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", "", pool, st, workers)
+	return New("issuer", "", pool, st, workers, ateletNamespace)
 }
 
 // staleWatchStore wraps a store with a WatchWorkers that never delivers,
@@ -324,11 +334,11 @@ func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercac
 		t.Fatalf("generate CA: %v", err)
 	}
 	pool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
-	return New("issuer", "", pool, st, workers)
+	return New("issuer", "", pool, st, workers, ateletNamespace)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
-	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example"}
+	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example", ateletNamespace: ateletNamespace}
 	for _, tt := range []struct {
 		name string
 		ctx  context.Context
@@ -918,7 +928,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 		ActiveForSigning: "test-actor-ca",
 	}
 
-	srv := New("issuer", "", pool, st, workers)
+	srv := New("issuer", "", pool, st, workers, ateletNamespace)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {

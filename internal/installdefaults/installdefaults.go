@@ -18,7 +18,11 @@
 // the canonical layout pass actual values via the corresponding flags.
 package installdefaults
 
-import "os"
+import (
+	"net/url"
+	"os"
+	"path"
+)
 
 const (
 	// SystemNamespace is the namespace where substrate's control-plane
@@ -30,6 +34,18 @@ const (
 	RouterServiceName = "atenet-router"
 	// DNSServiceName is the Service name of substrate's CoreDNS.
 	DNSServiceName = "dns"
+
+	// AteletTrustDomain and AteletServiceAccount are the trust-domain and
+	// service-account segments of the SPIFFE ID that atelet Pod certificates
+	// carry, as minted by the podidentity signer
+	// (cmd/podcertcontroller/internal/podidentitysigner). The namespace
+	// segment is the namespace atelet runs in, which callers resolve
+	// themselves rather than assume.
+	AteletTrustDomain    = "cluster.local"
+	AteletServiceAccount = "atelet"
+	// RouterServiceAccount is the service-account segment of the SPIFFE ID
+	// that atenet-router presents when calling actor ingress.
+	RouterServiceAccount = "atenet-router"
 
 	// PodNamespaceEnv is the conventional env var name for the namespace
 	// a pod is running in, exposed via Kubernetes' downward API.
@@ -44,4 +60,25 @@ func NamespaceFromPodEnv() string {
 		return ns
 	}
 	return SystemNamespace
+}
+
+// SPIFFEID returns the SPIFFE ID that Pod certificates for serviceAccount in
+// namespace carry, as minted by the podidentity signer. Peers authenticate by
+// comparing against this exact string.
+func SPIFFEID(namespace, serviceAccount string) string {
+	return (&url.URL{
+		Scheme: "spiffe",
+		Host:   AteletTrustDomain,
+		Path:   path.Join("ns", namespace, "sa", serviceAccount),
+	}).String()
+}
+
+// AteletSPIFFEID returns the SPIFFE ID atelet presents when atelet runs in namespace.
+func AteletSPIFFEID(namespace string) string {
+	return SPIFFEID(namespace, AteletServiceAccount)
+}
+
+// RouterSPIFFEID returns the SPIFFE ID atenet-router presents when it runs in namespace.
+func RouterSPIFFEID(namespace string) string {
+	return SPIFFEID(namespace, RouterServiceAccount)
 }
