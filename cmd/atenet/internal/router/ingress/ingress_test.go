@@ -220,8 +220,8 @@ func TestHandleRequestHeaders(t *testing.T) {
 			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
-			name:      "successful resume ignores host for actor routing",
-			authority: "application.example",
+			name:      "successful resume ignores host and port for actor routing",
+			authority: "127.0.0.1:44681",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
 					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},

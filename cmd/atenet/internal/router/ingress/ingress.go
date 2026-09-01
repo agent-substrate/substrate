@@ -26,6 +26,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"net/http"
 	"strconv"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -98,7 +99,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// belongs to the inner request.
 	targetPort := defaultActorPort
 	targetAuthority := md.Attribute(extproc.ConnectAuthorityFilterStateAttribute)
-	if targetAuthority == "" {
+	if targetAuthority == "" && md.Method == http.MethodConnect {
 		targetAuthority = md.Host
 	}
 	if _, portStr, err := net.SplitHostPort(targetAuthority); err == nil {
