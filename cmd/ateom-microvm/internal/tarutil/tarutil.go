@@ -35,6 +35,7 @@ package tarutil
 
 import (
 	"archive/tar"
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -45,9 +46,42 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
+
+// streamBufSize batches tar headers and padding into fewer file operations.
+// It must be smaller than copyBufSize so file contents bypass the buffer.
+const streamBufSize = 64 << 10
+
+// copyBufSize is the scratch buffer io.CopyBuffer streams file contents
+// through, in place of the fresh buffer io.Copy allocates per call.
+const copyBufSize = 128 << 10
+
+// File contents must bypass the stream buffer.
+const _ = uint(copyBufSize - streamBufSize - 1)
+
+// Stream buffers must be Reset(nil) before pooling to avoid retaining files.
+var (
+	tarWriterPool = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, streamBufSize) }}
+	tarReaderPool = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, streamBufSize) }}
+)
+
+var copyBufPool = sync.Pool{New: func() any {
+	b := make([]byte, copyBufSize)
+	return &b
+}}
+
+// copyPooled masks the fast-path interfaces so io.CopyBuffer uses the pooled buffer.
+func copyPooled(dst io.Writer, src io.Reader) (int64, error) {
+	bp := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bp)
+	return io.CopyBuffer(writerOnly{dst}, readerOnly{src}, *bp)
+}
+
+type writerOnly struct{ io.Writer }
+type readerOnly struct{ io.Reader }
 
 // Create writes a tar archive of srcDir's contents to tarPath. Entry names are
 // relative to srcDir, so extracting into another directory reproduces the tree.
@@ -75,12 +109,23 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 	}
 	defer f.Close()
 
-	tw := tar.NewWriter(f)
+	bw := tarWriterPool.Get().(*bufio.Writer)
+	bw.Reset(f)
+	defer func() {
+		bw.Reset(nil)
+		tarWriterPool.Put(bw)
+	}()
+	tw := tar.NewWriter(bw)
 	if err := writeTree(ctx, tw, srcDir, skip); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
 		return fmt.Errorf("closing tar %q: %w", tarPath, err)
+	}
+	// The buffer has to reach the file before the sync below, or the sync
+	// durably persists a truncated archive.
+	if err := bw.Flush(); err != nil {
+		return fmt.Errorf("flushing tar %q: %w", tarPath, err)
 	}
 	// Durable-dir tars are handed to atelet for upload as soon as we return, so
 	// flush to disk rather than trusting the page cache to outlive us.
@@ -211,7 +256,7 @@ func copyFileInto(tw *tar.Writer, path string) error {
 		return fmt.Errorf("opening %q: %w", path, err)
 	}
 	defer in.Close()
-	if _, err := io.Copy(tw, in); err != nil {
+	if _, err := copyPooled(tw, in); err != nil {
 		return fmt.Errorf("archiving contents of %q: %w", path, err)
 	}
 	return nil
@@ -243,7 +288,15 @@ func Extract(tarPath, dstDir string) error {
 	// are applied after every child exists (see restoreDirMeta).
 	dirs := map[string]*tar.Header{}
 
-	tr := tar.NewReader(f)
+	// Buffered like the writer: most of an archive is 512-byte headers, each
+	// of which would otherwise be a read(2) of its own.
+	br := tarReaderPool.Get().(*bufio.Reader)
+	br.Reset(f)
+	defer func() {
+		br.Reset(nil)
+		tarReaderPool.Put(br)
+	}()
+	tr := tar.NewReader(br)
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -286,7 +339,7 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		if err != nil {
 			return fmt.Errorf("creating file %q: %w", name, err)
 		}
-		_, copyErr := io.Copy(out, tr)
+		_, copyErr := copyPooled(out, tr)
 		closeErr := out.Close()
 		if copyErr != nil {
 			return fmt.Errorf("writing contents of %q: %w", name, copyErr)

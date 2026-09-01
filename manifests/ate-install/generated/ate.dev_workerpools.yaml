@@ -443,13 +443,13 @@ spec:
                     x-kubernetes-list-type: atomic
                 type: object
               workerImage:
-                description: |-
-                  WorkerImage is the ateom container image to deploy as workers. When
-                  unset, the controller injects a versioned default image for the pool's
-                  SandboxClass.
+                description: WorkerImage is the ateom container image to deploy as
+                  workers.
+                minLength: 1
                 type: string
             required:
             - replicas
+            - workerImage
             type: object
             x-kubernetes-validations:
             - message: nvidia.com/gpu is only supported when sandboxClass is 'gvisor'

@@ -85,11 +85,10 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	Replicas int32 `json:"replicas"`
 
-	// WorkerImage is the ateom container image to deploy as workers. When
-	// unset, the controller injects a versioned default image for the pool's
-	// SandboxClass.
-	// +optional
-	WorkerImage string `json:"workerImage,omitempty"`
+	// WorkerImage is the ateom container image to deploy as workers.
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	WorkerImage string `json:"workerImage"`
 
 	// Template holds optional metadata, scheduling, and resource settings for worker workloads.
 	//

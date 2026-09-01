@@ -17,11 +17,45 @@
 package kata
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// The container rootfs is untrusted (the image below, the guest's own snapshot
+// upper above): a symlink planted at proc/sys/dev must not send the mountpoint
+// mkdir somewhere else on the worker pod.
+func TestEnsureOCIMountpoints(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside")
+	rootfs := filepath.Join(dir, "rootfs")
+	if err := os.MkdirAll(filepath.Join(rootfs, "realsys"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// proc escapes, sys is an in-rootfs symlink to an existing dir, dev is absent.
+	if err := os.Symlink(filepath.Join(outside, "proc"), filepath.Join(rootfs, "proc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("realsys", filepath.Join(rootfs, "sys")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureOCIMountpoints(rootfs); err != nil {
+		t.Fatalf("ensureOCIMountpoints(%q) = %v", rootfs, err)
+	}
+
+	if _, err := os.Lstat(outside); !os.IsNotExist(err) {
+		t.Errorf("Lstat(%q) = %v, want it never created: the symlink was followed out of the rootfs", outside, err)
+	}
+	if fi, err := os.Stat(filepath.Join(rootfs, "dev")); err != nil || !fi.IsDir() {
+		t.Errorf("dev: Stat = %v, %v; want a directory", fi, err)
+	}
+	if got, err := os.Readlink(filepath.Join(rootfs, "sys")); err != nil || got != "realsys" {
+		t.Errorf("sys: Readlink = %q, %v; want the in-rootfs symlink left alone", got, err)
+	}
+}
 
 // The kernel requires overlay upperdir and workdir on the same filesystem and
 // rejects a workdir nested inside (or equal to) upperdir — so they must be

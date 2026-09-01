@@ -65,7 +65,7 @@ func (s *Server) recordRouteDuration(ctx context.Context, d time.Duration, tmplN
 		return
 	}
 	s.routeDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
-		ateattr.TemplateNamespaceKey.String(tmplNs),
+		ateattr.TemplateAtespaceKey.String(tmplNs),
 		ateattr.TemplateNameKey.String(tmplName),
 		ateattr.RouterOutcomeKey.String(outcome),
 		ateattr.RouterResumeKey.String(resume),

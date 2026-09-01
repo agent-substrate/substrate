@@ -50,9 +50,8 @@ var apiActorRef = resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface, state ateapipb.ActorState, opts ...func(*ateapipb.Actor)) *ateapipb.Actor {
 	t.Helper()
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: apiActorRef.Atespace, Name: apiActorRef.Name},
-		ActorTemplateNamespace: "ate-system",
-		ActorTemplateName:      "tmpl",
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: apiActorRef.Atespace, Name: apiActorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-system", Name: "tmpl"},
 		Status: &ateapipb.ActorStatus{
 			State: state,
 			WorkerAssignment: &ateapipb.WorkerAssignment{

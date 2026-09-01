@@ -683,16 +683,16 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         assignment.GetWorkerPodUid(),
-			Atespace:               actor.GetMetadata().GetAtespace(),
-			ActorName:              actor.GetMetadata().GetName(),
-			ActorTemplateNamespace: actor.GetActorTemplateNamespace(),
-			ActorTemplateName:      actor.GetActorTemplateName(),
-			Spec:                   workloadSpec,
-			ActorUid:               actor.GetMetadata().Uid,
-			EgressGateway:          egressGateway,
-			CpuMilli:               cpuMilli,
-			MemoryBytes:            memBytes,
+			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			Atespace:              actor.GetMetadata().GetAtespace(),
+			ActorName:             actor.GetMetadata().GetName(),
+			ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
+			ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+			Spec:                  workloadSpec,
+			ActorUid:              actor.GetMetadata().Uid,
+			EgressGateway:         egressGateway,
+			CpuMilli:              cpuMilli,
+			MemoryBytes:           memBytes,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
@@ -731,13 +731,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         assignment.GetWorkerPodUid(),
-			Atespace:               actor.GetMetadata().GetAtespace(),
-			ActorName:              actor.GetMetadata().GetName(),
-			ActorTemplateNamespace: actor.GetActorTemplateNamespace(),
-			ActorTemplateName:      actor.GetActorTemplateName(),
-			Spec:                   workloadSpec,
-			Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			Atespace:              actor.GetMetadata().GetAtespace(),
+			ActorName:             actor.GetMetadata().GetName(),
+			ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
+			ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+			Spec:                  workloadSpec,
+			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
 				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
 					SnapshotUri: src.SnapshotURI.String(),
@@ -766,17 +766,17 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 
 		req := &ateletpb.RunRequest{
-			TargetAteomUid:         assignment.GetWorkerPodUid(),
-			Atespace:               actor.GetMetadata().GetAtespace(),
-			ActorName:              actor.GetMetadata().GetName(),
-			ActorTemplateNamespace: actor.GetActorTemplateNamespace(),
-			ActorTemplateName:      actor.GetActorTemplateName(),
-			SandboxAssets:          sandboxAssets,
-			Spec:                   workloadSpec,
-			ActorUid:               actor.GetMetadata().Uid,
-			EgressGateway:          egressGateway,
-			CpuMilli:               cpuMilli,
-			MemoryBytes:            memBytes,
+			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			Atespace:              actor.GetMetadata().GetAtespace(),
+			ActorName:             actor.GetMetadata().GetName(),
+			ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
+			ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+			SandboxAssets:         sandboxAssets,
+			Spec:                  workloadSpec,
+			ActorUid:              actor.GetMetadata().Uid,
+			EgressGateway:         egressGateway,
+			CpuMilli:              cpuMilli,
+			MemoryBytes:           memBytes,
 		}
 		_, err = client.Run(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while creating workload from spec", ateattr.OperationResume)

@@ -34,10 +34,9 @@ OUT_DIR="benchmarking/locust/common"
 # exporters and google-cloud-storage for nothing.
 CODEGEN_DIR="benchmarking/locust/codegen"
 VENV_DIR="${CODEGEN_DIR}/venv"
-if [ ! -d "$VENV_DIR" ]; then
-  echo "Creating virtual environment in $VENV_DIR..."
-  python3 -m venv "$VENV_DIR"
-fi
+source hack/util/venv.sh
+ensure_venv "${VENV_DIR}"
+venv_sync_requirements "${VENV_DIR}" "${CODEGEN_DIR}/requirements.txt"
 
 # generate_proto compiles a single .proto file into ${OUT_DIR}, prepends the
 # project's license header, and rewrites the generated grpc file's intra-package
@@ -81,18 +80,10 @@ generate_proto() {
 }
 
 # Run inside a subshell so `activate` doesn't leak VIRTUAL_ENV/PATH back to
-# the caller; the subshell inherits errexit/nounset/pipefail. pip skips
-# already-installed packages, so the install is cheap on re-runs.
+# the caller; the subshell inherits errexit/nounset/pipefail.
 (
   echo "Activating virtual environment..."
   source "$VENV_DIR/bin/activate"
-  echo "Installing dependencies from ${CODEGEN_DIR}/requirements.txt..."
-  pip install --upgrade pip
-  # The requirement is pinned, so an existing venv already holding that exact
-  # version is left alone and a venv holding any other version is corrected.
-  # (An unpinned requirement would instead be satisfied by whatever is already
-  # installed, which is how the generated files came to drift.)
-  pip install -r "${CODEGEN_DIR}/requirements.txt"
 
   generate_proto "pkg/proto/ateapipb" "ateapi"
   generate_proto "internal/proto/glutton" "glutton"
