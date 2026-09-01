@@ -69,7 +69,9 @@ type systemInfoVolumeRefresher struct {
 	queue workqueue.TypedRateLimitingInterface[string]
 
 	// mu covers actors.
-	mu     sync.Mutex
+	mu sync.Mutex
+	// TODO(#1372): in-memory only, so an atelet restart drops the registry
+	// and refresh pauses until each actor's next Run/Restore re-registers it.
 	actors map[string]*registeredActor
 }
 
