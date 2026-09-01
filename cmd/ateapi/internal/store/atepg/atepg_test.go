@@ -35,7 +35,7 @@ import (
 )
 
 // One Postgres container serves every test in this package; each test gets
-// isolation via DebugClearAll rather than a fresh container, which would be
+// isolation via clearAll rather than a fresh container, which would be
 // far slower. Tests in this package are not safe to run with -parallel.
 var (
 	containerOnce sync.Once
@@ -114,6 +114,16 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	return containerPool
 }
 
+// clearAll truncates every table so the next test starts from an empty store
+// without paying for a fresh database. Nothing in production mass-deletes
+// state, so the statement lives here rather than on Persistence.
+func clearAll(t *testing.T, p *Persistence) {
+	t.Helper()
+	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
+		t.Fatalf("truncating tables: %v", err)
+	}
+}
+
 func setupPostgresPersistence(t *testing.T) *Persistence {
 	t.Helper()
 	ctx := context.Background()
@@ -122,9 +132,7 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}
 	t.Cleanup(p.Close)
-	if err := p.DebugClearAll(ctx); err != nil {
-		t.Fatalf("DebugClearAll failed: %v", err)
-	}
+	clearAll(t, p)
 	return p
 }
 

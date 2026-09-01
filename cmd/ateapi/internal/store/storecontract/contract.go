@@ -159,7 +159,6 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorSnapshotContractTests(t, setup)
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
-	runDebugContractTests(t, setup)
 }
 
 func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
@@ -1974,54 +1973,5 @@ func runLeaseContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 		lease.Close()
 		lease.Close()
-	})
-}
-
-// runDebugContractTests covers store-wide debug operations, which span every
-// resource kind rather than belonging to any single one.
-func runDebugContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
-	t.Helper()
-
-	t.Run("DebugClearAll", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
-			t.Fatalf("CreateAtespace failed: %v", err)
-		}
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"},
-			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-		}); err != nil {
-			t.Fatalf("CreateActor failed: %v", err)
-		}
-		if _, err := s.CreateWorker(ctx, &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		lease, err := s.AcquireLease(ctx, "lease-1")
-		if err != nil {
-			t.Fatalf("AcquireLease failed: %v", err)
-		}
-		defer lease.Close()
-
-		if err := s.DebugClearAll(ctx); err != nil {
-			t.Fatalf("DebugClearAll failed: %v", err)
-		}
-
-		if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("atespace survived DebugClearAll: %v", err)
-		}
-		if actors, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000}); err != nil || len(actors.Items) != 0 {
-			t.Errorf("actors survived DebugClearAll: actors=%v err=%v", actors.Items, err)
-		}
-		if workers, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000}); err != nil || len(workers.Items) != 0 {
-			t.Errorf("workers survived DebugClearAll: workers=%v err=%v", workers.Items, err)
-		}
-		reacquired, err := s.AcquireLease(ctx, "lease-1")
-		if err != nil {
-			t.Errorf("lease survived DebugClearAll: %v", err)
-		} else {
-			reacquired.Close()
-		}
 	})
 }

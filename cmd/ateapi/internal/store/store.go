@@ -237,12 +237,6 @@ type Interface interface {
 	// held and renewed automatically until the returned Lease is closed.
 	// Returns ErrLeaseConflict if the lease is already held by another client.
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
-
-	// DebugClearAll drops all data from the store. It is test-only: no RPC
-	// reaches it and nothing outside tests ever calls it (controlapi's
-	// pass-through exists only to satisfy this interface). Tests use it to get
-	// an empty store between cases without paying for a fresh database.
-	DebugClearAll(ctx context.Context) error
 }
 
 // Precondition guards an update with the uid and version the caller observed:

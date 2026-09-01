@@ -1628,16 +1628,3 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 	}
 	return nil
 }
-
-// --- Test-only ---
-
-// DebugClearAll truncates every table. It is test-only: no RPC reaches it and
-// nothing outside tests ever calls it (controlapi's pass-through exists only to
-// satisfy store.Interface). Tests use it to get an empty store between cases
-// without paying for a fresh database.
-func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
-		return fmt.Errorf("truncating tables: %w", err)
-	}
-	return nil
-}
