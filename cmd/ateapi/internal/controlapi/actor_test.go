@@ -868,18 +868,38 @@ func TestUpdateActor(t *testing.T) {
 }
 
 // TestUpdateActor_RepointTemplate covers the mutable actor_template ref: an
-// update may point the actor at a different template (it takes effect on the
-// next ResumeActor), but the new ref must resolve.
+// update may point a suspended actor at a different template (it takes effect
+// on the next ResumeActor), but the actor must be suspended, the new ref must
+// resolve, and the replacement's volumes and volume mounts must match the old
+// template's.
 func TestUpdateActor_RepointTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 
 	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
-	for _, name := range []string{"tmpl-a", "tmpl-b"} {
+	// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data volume
+	// elsewhere and tmpl-d declares an extra volume.
+	dataVolume := &ateapipb.Volume{Name: "data", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	scratchVolume := &ateapipb.Volume{Name: "scratch", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	templates := map[string]struct {
+		mountPath string
+		volumes   []*ateapipb.Volume
+	}{
+		"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}},
+	}
+	for name, tmpl := range templates {
 		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			Containers: []*ateapipb.Container{{
+				Name:         "main",
+				Image:        "example.com/app:v1",
+				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
+			}},
+			Volumes:         tmpl.volumes,
 			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
@@ -902,7 +922,26 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor to an absent template = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing at an existing template succeeds.
+	// Repointing at a template with different volume mounts is rejected.
+	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      created.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-c"},
+	}})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("UpdateActor to a template with different mounts = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+
+	// Repointing at a template with different volumes is rejected.
+	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      created.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-d"},
+	}})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+
+	// Repointing at an existing template with identical volumes and mounts
+	// succeeds.
 	updated, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
@@ -912,6 +951,138 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	}
 	if got, want := updated.GetActorTemplate().GetName(), "tmpl-b"; got != want {
 		t.Errorf("updated actor_template.name = %q, want %q", got, want)
+	}
+
+	// Repointing an actor that is not suspended is rejected, even at a
+	// compatible template.
+	running := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "running-actor"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	})
+	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      running.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
+	}})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+
+	// An update that keeps the template ref is still allowed while running:
+	// the suspended-state gate applies only to repoints.
+	kept, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:       running.GetMetadata(),
+		ActorTemplate:  &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateActor keeping the template on a running actor failed: %v", err)
+	}
+	if got, want := kept.GetActorTemplate().GetName(), "tmpl-a"; got != want {
+		t.Errorf("updated actor_template.name = %q, want %q", got, want)
+	}
+}
+
+// TestValidateTemplateVolumesUnchanged exercises the volumes and
+// per-container mount comparison applied when an actor is repointed at a
+// replacement template.
+func TestValidateTemplateVolumesUnchanged(t *testing.T) {
+	dataVolume := &ateapipb.Volume{Name: "data", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	scratchVolume := &ateapipb.Volume{Name: "scratch", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	template := func(volumes []*ateapipb.Volume, containers ...*ateapipb.Container) *ateapipb.ActorTemplate {
+		return &ateapipb.ActorTemplate{Volumes: volumes, Containers: containers}
+	}
+	container := func(name string, mounts ...*ateapipb.VolumeMount) *ateapipb.Container {
+		return &ateapipb.Container{Name: name, Image: "example.com/app:v1", VolumeMounts: mounts}
+	}
+	dataMount := &ateapipb.VolumeMount{Name: "data", MountPath: "/data"}
+	scratchMount := &ateapipb.VolumeMount{Name: "scratch", MountPath: "/scratch"}
+
+	oneVolume := []*ateapipb.Volume{dataVolume}
+	twoVolumes := []*ateapipb.Volume{dataVolume, scratchVolume}
+
+	tests := []struct {
+		name             string
+		oldTmpl, newTmpl *ateapipb.ActorTemplate
+		wantErr          bool
+	}{{
+		name:    "identical volumes and mounts",
+		oldTmpl: template(oneVolume, container("main", dataMount)),
+		newTmpl: template(oneVolume, container("main", dataMount)),
+	}, {
+		name:    "no volumes or mounts on either side",
+		oldTmpl: template(nil, container("main")),
+		newTmpl: template(nil, container("other")),
+	}, {
+		name:    "volume added",
+		oldTmpl: template(oneVolume, container("main", dataMount)),
+		newTmpl: template(twoVolumes, container("main", dataMount)),
+		wantErr: true,
+	}, {
+		name:    "volume removed",
+		oldTmpl: template(twoVolumes, container("main", dataMount)),
+		newTmpl: template(oneVolume, container("main", dataMount)),
+		wantErr: true,
+	}, {
+		name:    "volume renamed",
+		oldTmpl: template(oneVolume, container("main", dataMount)),
+		newTmpl: template([]*ateapipb.Volume{{Name: "data2", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}}, container("main", dataMount)),
+		wantErr: true,
+	}, {
+		name:    "volume source changed",
+		oldTmpl: template(oneVolume, container("main", dataMount)),
+		newTmpl: template([]*ateapipb.Volume{{Name: "data", Type: "Image", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/data@sha256:0f9c04b7387d13ba9d15ec50355f9ad533fee2e5ad25378753a30671f8f9b938"}}}, container("main", dataMount)),
+		wantErr: true,
+	}, {
+		name:    "volume order changed",
+		oldTmpl: template(twoVolumes, container("main", dataMount)),
+		newTmpl: template([]*ateapipb.Volume{scratchVolume, dataVolume}, container("main", dataMount)),
+		wantErr: true,
+	}, {
+		name:    "mount path changed",
+		oldTmpl: template(oneVolume, container("main", dataMount)),
+		newTmpl: template(oneVolume, container("main", &ateapipb.VolumeMount{Name: "data", MountPath: "/mnt/data"})),
+		wantErr: true,
+	}, {
+		name:    "mount added",
+		oldTmpl: template(twoVolumes, container("main", dataMount)),
+		newTmpl: template(twoVolumes, container("main", dataMount, scratchMount)),
+		wantErr: true,
+	}, {
+		name:    "mount removed",
+		oldTmpl: template(oneVolume, container("main", dataMount)),
+		newTmpl: template(oneVolume, container("main")),
+		wantErr: true,
+	}, {
+		name:    "mounted container renamed",
+		oldTmpl: template(oneVolume, container("main", dataMount)),
+		newTmpl: template(oneVolume, container("renamed", dataMount)),
+	}, {
+		name:    "container added with mounts",
+		oldTmpl: template(twoVolumes, container("main", dataMount)),
+		newTmpl: template(twoVolumes, container("main", dataMount), container("sidecar", scratchMount)),
+	}, {
+		name:    "mount order changed",
+		oldTmpl: template(twoVolumes, container("main", dataMount, scratchMount)),
+		newTmpl: template(twoVolumes, container("main", scratchMount, dataMount)),
+		wantErr: true,
+	}, {
+		name:    "mountless container renamed",
+		oldTmpl: template(oneVolume, container("main", dataMount), container("sidecar")),
+		newTmpl: template(oneVolume, container("main", dataMount), container("helper")),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTemplateVolumesUnchanged(tt.oldTmpl, tt.newTmpl)
+			if gotErr := err != nil; gotErr != tt.wantErr {
+				t.Fatalf("validateVolumeMountsUnchanged() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				if got := status.Code(err); got != codes.FailedPrecondition {
+					t.Errorf("status code = %v, want FailedPrecondition", got)
+				}
+			}
+		})
 	}
 }
 

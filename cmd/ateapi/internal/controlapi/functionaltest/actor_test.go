@@ -667,58 +667,85 @@ func TestUpdateActor_Success(t *testing.T) {
 
 // TestUpdateActor_RepointTemplate verifies UpdateActor can point an actor at
 // a different substrate ActorTemplate (effective on the next ResumeActor),
-// and that a ref to an absent template is rejected.
+// and that a ref to an absent template, or to one with different volumes or
+// volume mounts, is rejected.
 func TestUpdateActor_RepointTemplate(t *testing.T) {
-	ns := namespaceForTest("ns-update-repoint")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	ctx := context.Background()
-	for _, name := range []string{"tmpl-a", "tmpl-b"} {
-		if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
-			ActorTemplate: &ateapipb.ActorTemplate{
-				Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
-				Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
-				SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
-				SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
-			},
-		}); err != nil {
-			t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
-		}
+	tests := []struct {
+		name     string
+		template string
+		wantCode codes.Code
+	}{
+		{name: "absent-template", template: "absent", wantCode: codes.FailedPrecondition},
+		{name: "different-mounts", template: "tmpl-c", wantCode: codes.FailedPrecondition},
+		{name: "different-volumes", template: "tmpl-d", wantCode: codes.FailedPrecondition},
+		{name: "same-volumes", template: "tmpl-b", wantCode: codes.OK},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-update-repoint-" + tt.name)
+			tc := setupTest(t, ns)
+			defer tc.cleanup()
 
-	created, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "repoint-actor"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
-	}})
-	if err != nil {
-		t.Fatalf("CreateActor failed: %v", err)
-	}
+			ctx := context.Background()
+			// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data
+			// volume elsewhere and tmpl-d declares an extra volume.
+			dataVolume := &ateapipb.Volume{Name: "data", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+			scratchVolume := &ateapipb.Volume{Name: "scratch", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+			templates := map[string]struct {
+				mountPath string
+				volumes   []*ateapipb.Volume
+			}{
+				"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}},
+				"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}},
+				"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}},
+				"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}},
+			}
+			for name, tmpl := range templates {
+				if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+					ActorTemplate: &ateapipb.ActorTemplate{
+						Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+						Containers: []*ateapipb.Container{{
+							Name:         "main",
+							Image:        "example.com/app:v1",
+							VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
+						}},
+						Volumes:         tmpl.volumes,
+						SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+						SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+					},
+				}); err != nil {
+					t.Fatalf("CreateActorTemplate %s failed: %v", name, err)
+				}
+			}
 
-	// A ref to a template that does not exist is rejected.
-	_, err = tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      created.GetMetadata(),
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "absent"},
-	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("UpdateActor with an absent template ref = %v, want FailedPrecondition (err: %v)", got, err)
-	}
+			created, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "repoint-actor"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
+			}})
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
 
-	updated, err := tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      created.GetMetadata(),
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
-	}})
-	if err != nil {
-		t.Fatalf("UpdateActor failed: %v", err)
-	}
+			updated, err := tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      created.GetMetadata(),
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.template},
+			}})
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("UpdateActor repointing at %s = %v, want %v (err: %v)", tt.template, got, tt.wantCode, err)
+			}
+			if tt.wantCode != codes.OK {
+				return
+			}
 
-	want := &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "repoint-actor", Version: 2},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-	}
-	if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
-		t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
+			want := &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "repoint-actor", Version: 2},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.template},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			}
+			if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+				t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

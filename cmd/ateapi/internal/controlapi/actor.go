@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -277,11 +278,25 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 
 		// Do any further work on the resource.
 
-		// A repointed template ref must resolve, mirroring CreateActor's check
-		// (same non-atomicity caveat; resume re-resolves and fails cleanly).
+		// Update actor template is only allowed while the actor is suspended.
+		// The repointed ref must also resolve, mirroring CreateActor's
+		// check (same non-atomicity caveat; resume re-resolves and fails
+		// cleanly), and the replacement's volumes and volume mounts must match
+		// the old template's.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
-			// TODO: Add validation that compares the new and previous ActorTemplate.
-			if _, err := resolveActorTemplate(ctx, s.store, newVal); err != nil {
+			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+				return status.Errorf(codes.FailedPrecondition,
+					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
+			}
+			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
+			if err != nil {
+				return err
+			}
+			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
+			if err != nil {
+				return err
+			}
+			if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
 				return err
 			}
 		}
@@ -309,6 +324,40 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
 	return storedActor, nil
+}
+
+// validateTemplateVolumesUnchanged rejects a template repoint that changes
+// the template's volumes or any container's volume mounts: an actor's
+// snapshot data is laid out per the volumes and mount paths it was captured
+// with, so a different layout would restore it to the wrong places. The
+// volumes list must be identical, and containers present in both templates
+// must keep identical mounts, order included; containers added or removed by
+// the new template are unconstrained.
+func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTemplate) error {
+	if !slices.EqualFunc(oldTemplate.GetVolumes(), newTemplate.GetVolumes(), func(a, b *ateapipb.Volume) bool {
+		return proto.Equal(a, b)
+	}) {
+		return status.Error(codes.FailedPrecondition,
+			"volumes differ between the current and the new actor template; volumes must be identical to repoint an actor")
+	}
+
+	newContainers := make(map[string]*ateapipb.Container, len(newTemplate.GetContainers()))
+	for _, c := range newTemplate.GetContainers() {
+		newContainers[c.GetName()] = c
+	}
+	for _, oldC := range oldTemplate.GetContainers() {
+		newC, ok := newContainers[oldC.GetName()]
+		if !ok {
+			continue
+		}
+		if !slices.EqualFunc(oldC.GetVolumeMounts(), newC.GetVolumeMounts(), func(a, b *ateapipb.VolumeMount) bool {
+			return proto.Equal(a, b)
+		}) {
+			return status.Errorf(codes.FailedPrecondition,
+				"volume mounts of container %q differ between the current and the new actor template; volume mounts must be identical to repoint an actor", oldC.GetName())
+		}
+	}
+	return nil
 }
 
 func validateUpdateActorRequest(ctx context.Context, req *ateapipb.UpdateActorRequest) field.ErrorList {
