@@ -86,11 +86,11 @@ type sandboxAssetsRecord struct {
 	PauseImage string `json:"pauseImage"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
-	Atespace               string `json:"atespace,omitempty"`
-	ActorName              string `json:"actorName,omitempty"`
-	ActorUID               string `json:"actorUid,omitempty"`
-	ActorTemplateNamespace string `json:"actorTemplateNamespace,omitempty"`
-	ActorTemplateName      string `json:"actorTemplateName,omitempty"`
+	Atespace              string `json:"atespace,omitempty"`
+	ActorName             string `json:"actorName,omitempty"`
+	ActorUID              string `json:"actorUid,omitempty"`
+	ActorTemplateAtespace string `json:"actorTemplateAtespace,omitempty"`
+	ActorTemplateName     string `json:"actorTemplateName,omitempty"`
 	// SnapshotFiles are the (relative) names of the files ateom wrote into the
 	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
 	// in the snapshot manifest so Restore ships/downloads exactly this set

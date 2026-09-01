@@ -1515,10 +1515,25 @@ service ActorIdentity {
 }
 
 message MintJWTRequest {
+  // The audiences the minted JWT is bound to. Tokens are only issued with
+  // audience bindings, so at least one is required.
+  //
+  // +k8s:required
+  // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
   repeated string audience = 1;
 
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 3;
+
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
   string actor_uid = 4;
 }
 
@@ -1554,24 +1569,36 @@ message MintCertRequest {
   // This is the one caller that recovers a Worker name from a pod certificate:
   // the atelet has only the worker Pod's identity to go on. Everywhere else the
   // name is opaque and must be carried, not reconstructed.
-  // +k8s:opaqueType
+  //
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:required
   ObjectRef worker = 1;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
   // subject public key.
+  //
+  // +k8s:required
+  // +k8s:customValidation # size bound; maxLength is string-only
   bytes certificate_signing_request = 2;
 
   // Actor incarnation expected by the activation. This is only a stale-request
   // guard: ateapi derives the actor and its identity from the worker assignment.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string expected_actor_uid = 3;
 
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=1 # keep this in sync with the ActorCertificatePurpose enum
   ActorCertificatePurpose purpose = 4;
 }
 
 enum ActorCertificatePurpose {
   ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
   ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
+  // Keep this in sync with MintCertRequest.purpose's maximum.
 }
 
 message MintCertResponse {

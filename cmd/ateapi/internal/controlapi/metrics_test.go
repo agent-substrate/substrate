@@ -208,8 +208,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	inst, reader := newTestInstruments(t)
 
 	actor := &ateapipb.Actor{
-		ActorTemplateName:      "support-agent",
-		ActorTemplateNamespace: "ate-agents",
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
 		Status: &ateapipb.ActorStatus{
 			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ate-workers", WorkerPool: "pool-a"},
 		},
@@ -224,7 +223,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	assertAttrKeys(t, dp,
 		ateattr.ActorOperationNameKey,
 		ateattr.TemplateNameKey,
-		ateattr.TemplateNamespaceKey,
+		ateattr.TemplateAtespaceKey,
 		ateattr.WorkerPoolNamespaceKey,
 		ateattr.WorkerPoolNameKey,
 		ateattr.SandboxClassKey,
@@ -254,7 +253,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 // series would be indistinguishable from a real one. The unassigned actor also
 // pins the pool pair: a failure before the assign step emits neither key.
 func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
-	actor := &ateapipb.Actor{ActorTemplateName: "support-agent", ActorTemplateNamespace: "ate-agents"}
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"}}
 	for _, kv := range lifecycleOpAttrs(actor, nil, "", "") {
 		switch kv.Key {
 		case ateattr.SnapshotScopeKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey:
@@ -283,7 +282,7 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 			inst, reader := newTestInstruments(t)
 			inst.recordLifecycleOp(context.Background(), tt.op, time.Now(), tt.err,
 				ateattr.TemplateNameKey.String("support-agent"),
-				ateattr.TemplateNamespaceKey.String("ate-agents"),
+				ateattr.TemplateAtespaceKey.String("ate-agents"),
 			)
 
 			dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)

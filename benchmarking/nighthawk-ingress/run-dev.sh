@@ -59,6 +59,8 @@ done
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
+source hack/util/venv.sh
+
 # --- preflight (each failure prints its fix) ---------------------------------
 [[ -f .ate-dev-env.sh ]] || {
   echo "ERROR: .ate-dev-env.sh not found at repo root (see GKE Quickstart in the repo README)" >&2
@@ -101,8 +103,9 @@ echo "      atespace:             ${ATESPACE}"
 echo "      dest:                 ${DEST}"
 
 # venv: importing orchestrator.py (defaults/rendering/patch) needs PyYAML.
+# One package, no requirements.txt, so check it by import.
+ensure_venv "${VENV}"
 if ! "${VENV}/bin/python" -c 'import yaml' 2>/dev/null; then
-  python3 -m venv "${VENV}"
   "${VENV}/bin/pip" install --quiet pyyaml ||
     "${VENV}/bin/pip" install --quiet --index-url https://pypi.org/simple/ pyyaml
 fi

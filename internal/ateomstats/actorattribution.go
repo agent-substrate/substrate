@@ -31,7 +31,7 @@ type attributionSource interface {
 	GetAtespace() string
 	GetActorName() string
 	GetActorUid() string
-	GetActorTemplateNamespace() string
+	GetActorTemplateAtespace() string
 	GetActorTemplateName() string
 }
 
@@ -51,8 +51,8 @@ func ActorAttributionFromRequest(req attributionSource) resources.ActorAttributi
 			Atespace: req.GetAtespace(),
 			Name:     req.GetActorName(),
 		},
-		UID:               req.GetActorUid(),
-		TemplateNamespace: req.GetActorTemplateNamespace(),
-		TemplateName:      req.GetActorTemplateName(),
+		UID:              req.GetActorUid(),
+		TemplateAtespace: req.GetActorTemplateAtespace(),
+		TemplateName:     req.GetActorTemplateName(),
 	}
 }

@@ -23,8 +23,8 @@ package resources
 // (ateapi's ActorIdentity service, substratex509, ateompath.ActorIdentityDirPath)
 // — nothing here is a secret or is presented as proof of anything.
 type ActorAttribution struct {
-	Ref               ActorRef
-	UID               string
-	TemplateNamespace string
-	TemplateName      string
+	Ref              ActorRef
+	UID              string
+	TemplateAtespace string
+	TemplateName     string
 }

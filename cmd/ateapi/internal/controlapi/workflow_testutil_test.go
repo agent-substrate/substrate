@@ -16,20 +16,17 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/cache"
 )
 
 // testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
@@ -38,32 +35,38 @@ func testWorkerUID(podName string) string {
 	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(podName)).String()
 }
 
-// newTestActorWorkflow builds an ActorWorkflow backed by the given store and a
-// lister serving one minimal ActorTemplate. Dependencies the unit tests never
-// reach (worker cache, atelet dialer, k8s clients) are nil, so a step that
-// unexpectedly executes against them fails the test loudly.
-func newTestActorWorkflow(t *testing.T, st store.Interface, tmplNamespace, tmplName string) *ActorWorkflow {
+// newTestActorWorkflow builds an ActorWorkflow backed by the given store,
+// with one minimal ActorTemplate stored in tmplAtespace. Dependencies the
+// unit tests never reach (worker cache, atelet dialer, k8s clients) are nil,
+// so a step that unexpectedly executes against them fails the test loudly.
+func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	if err := indexer.Add(&atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{Namespace: tmplNamespace, Name: tmplName},
-	}); err != nil {
-		t.Fatalf("add template to indexer: %v", err)
+	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
+	if _, err := st.CreateActorTemplate(context.Background(), &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: "gs://snapshots",
+		},
+		SandboxConfig: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "gvisor",
+		},
+	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, listersv1alpha1.NewActorTemplateLister(indexer), nil, nil, nil, nil, "", nil)
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, nil, nil, "", nil)
 }
 
 // seedWorkflowActor stores an actor with the given state, bound to the given
-// template (pass the same tmplNamespace/tmplName as newTestActorWorkflow).
+// template (pass the same tmplAtespace/tmplName as newTestActorWorkflow).
 // opts mutate the actor before it is stored.
-func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplNamespace, tmplName string, actorState ateapipb.ActorState, opts ...func(*ateapipb.Actor)) {
+func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplAtespace, tmplName string, actorState ateapipb.ActorState, opts ...func(*ateapipb.Actor)) {
 	t.Helper()
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:                 &ateapipb.ActorStatus{State: actorState},
-		ActorTemplateNamespace: tmplNamespace,
-		ActorTemplateName:      tmplName,
+		Metadata:      &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status:        &ateapipb.ActorStatus{State: actorState},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: tmplAtespace, Name: tmplName},
 	}
 	for _, opt := range opts {
 		opt(actor)

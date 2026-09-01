@@ -442,8 +442,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 			Name:     "counter-actor",
 			Uid:      "actor-uid-1",
 		},
-		ActorTemplateNamespace: "demo-ns",
-		ActorTemplateName:      "counter-template",
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			WorkerAssignment: &ateapipb.WorkerAssignment{
@@ -483,7 +482,7 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 			for _, dp := range sum.DataPoints {
 				op, _ := dp.Attributes.Value(ateattr.ActorOperationNameKey)
 				r, _ := dp.Attributes.Value(ateattr.FailureReasonKey)
-				tNS, _ := dp.Attributes.Value(ateattr.TemplateNamespaceKey)
+				tNS, _ := dp.Attributes.Value(ateattr.TemplateAtespaceKey)
 				tName, _ := dp.Attributes.Value(ateattr.TemplateNameKey)
 				wp, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
 				sc, _ := dp.Attributes.Value(ateattr.SandboxClassKey)

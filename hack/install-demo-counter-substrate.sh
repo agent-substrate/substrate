@@ -90,7 +90,7 @@ demo-counter-substrate_deploy_variant() {
     | run_ko apply -f -
 
   log_step "Waiting for the ${pool} worker pool rollout..."
-  run_kubectl_fatal rollout status "deployment/${pool}" -n "${atespace}" --timeout=300s
+  wait_for_pool_rollout_fatal "${pool}" "${atespace}"
 
   # The store enforces that the template's atespace exists at create time.
   if ! run_kubectl_ate create atespace "${atespace}" >/dev/null 2>&1 \
