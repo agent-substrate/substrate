@@ -162,29 +162,29 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}
 
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
-		Atespace:               atespace,
-		ActorName:              actorName,
-		ActorUid:               actorUID,
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "counter",
-		TargetAteomUid:         ateomUID,
-		SandboxAssets:          sandboxAssets,
-		Spec:                   spec,
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		SandboxAssets:         sandboxAssets,
+		Spec:                  spec,
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
 	// Pause: a local checkpoint, which leaves the snapshot on this node.
 	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
-		Atespace:               atespace,
-		ActorName:              actorName,
-		ActorUid:               actorUID,
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "counter",
-		TargetAteomUid:         ateomUID,
-		Spec:                   spec,
-		Scope:                  ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		Spec:                  spec,
+		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 		},
@@ -198,15 +198,15 @@ func TestLocalSnapshotGC(t *testing.T) {
 
 	// Resume: restores from that local snapshot.
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
-		Atespace:               atespace,
-		ActorName:              actorName,
-		ActorUid:               actorUID,
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "counter",
-		TargetAteomUid:         ateomUID,
-		Spec:                   spec,
-		Scope:                  ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		Spec:                  spec,
+		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 		},
@@ -219,13 +219,13 @@ func TestLocalSnapshotGC(t *testing.T) {
 
 	// Terminate: the actor is gone, and so should its snapshot be.
 	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-		Atespace:               atespace,
-		ActorName:              actorName,
-		ActorUid:               actorUID,
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "counter",
-		TargetAteomUid:         ateomUID,
-		Spec:                   spec,
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		Spec:                  spec,
 	}); err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}

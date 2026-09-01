@@ -90,7 +90,7 @@ type snapshotOp struct {
 func (o snapshotOp) attrs() []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 5)
 	attrs = append(attrs,
-		ateattr.TemplateNamespaceKey.String(o.templateNamespace),
+		ateattr.TemplateAtespaceKey.String(o.templateNamespace),
 		ateattr.TemplateNameKey.String(o.templateName),
 		ateattr.SnapshotScopeKey.String(o.scope),
 	)
@@ -166,6 +166,16 @@ func groupFailedPhase(err, downloadErr, prepErr error, prepPhase string) string 
 // would read as an unusually fast success.
 func isCollateral(groupErr, legErr error) bool {
 	return legErr != nil && groupErr != legErr
+}
+
+// assetsAfterCollateral keeps the sandbox-asset duration when the prep leg was
+// cancelled during the later OCI unpack: only the phase a leg stopped in is
+// truncated, and dropping a completed one reports a step that ran as never run.
+func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Duration {
+	if prepFailedPhase == ateattr.SnapshotPhaseSandboxAssets {
+		return 0
+	}
+	return assets
 }
 
 // restoreSnapshotKind classifies which snapshot a restore reads. A local

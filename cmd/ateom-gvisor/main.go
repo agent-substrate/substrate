@@ -41,6 +41,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/childreap"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
@@ -50,7 +51,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/hashicorp/go-reap"
 	"github.com/spf13/pflag"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -80,7 +80,8 @@ var (
 	otlpRelaySocket = pflag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
-	reapLock sync.RWMutex
+	// reaper collects children orphaned in the pod PID namespace.
+	reaper = childreap.New()
 )
 
 // actorHTTPUpstream is the in-sandbox HTTP endpoint atunnel proxies actor
@@ -174,11 +175,7 @@ func do(ctx context.Context) error {
 		slog.InfoContext(ctx, "GPU detected; enabling runsc nvproxy for all sandboxes")
 	}
 
-	// TODO: Consider whether we want to fork, so that we have an "init" process
-	// as PID 1 that does nothing but reap processes that get reparented to it.
-	// Then we won't have to mess about with locking the reaper while we do our
-	// own exec.Cmd calls.
-	go reap.ReapChildren(nil, nil, nil, &reapLock)
+	go reaper.Run(ctx)
 	slog.InfoContext(ctx, "Child process reaper launched")
 
 	// Clean up any old socket.

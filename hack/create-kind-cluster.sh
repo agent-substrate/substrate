@@ -112,6 +112,17 @@ runtimeConfig:
   "certificates.k8s.io/v1beta1": "true"
 networking:
   ipFamily: ${IP_FAMILY}
+# The install pulls ~570MB of third-party images (postgres, prometheus, the otel
+# collector, rustfs, envoy, jaeger) onto this one node. kubelet serializes image
+# pulls by default, so they queue behind one another and whichever workload draws
+# the back of the queue can miss its readiness deadline.
+# TODO: kind should probably default to parallel pulls for its single-node
+# clusters rather than leaving every user to patch it in.
+kubeadmConfigPatches:
+- |
+  kind: KubeletConfiguration
+  serializeImagePulls: false
+  maxParallelImagePulls: 4
 EOF
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."

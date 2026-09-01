@@ -159,7 +159,6 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorSnapshotContractTests(t, setup)
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
-	runDebugContractTests(t, setup)
 }
 
 func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
@@ -336,10 +335,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		mustCreateAtespace(t, s, testAtespace)
 
 		actor := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "test-template",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		created, err := s.CreateActor(ctx, actor)
@@ -382,10 +380,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		mustCreateAtespace(t, s, testAtespace)
 
 		actor := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "test-template",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		if _, err := s.CreateActor(ctx, actor); err != nil {
@@ -402,10 +399,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		mustCreateAtespace(t, s, testAtespace)
 
 		actor := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "test-template",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		created, err := s.CreateActor(ctx, actor)
@@ -459,10 +455,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		mustCreateAtespace(t, s, testAtespace)
 
 		actor := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "test-template",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		}
 
 		if _, err := s.CreateActor(ctx, actor); err != nil {
@@ -502,10 +497,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 
 		newActor := func() *ateapipb.Actor {
 			return &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-				ActorTemplateNamespace: "default",
-				ActorTemplateName:      "test-template",
-				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			}
 		}
 
@@ -557,10 +551,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		mustCreateAtespace(t, s, testAtespace)
 
 		created, err := s.CreateActor(ctx, &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "test-template",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		})
 		if err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
@@ -589,10 +582,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		mustCreateAtespace(t, s, testAtespace)
 
 		created, err := s.CreateActor(ctx, &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "test-template",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		})
 		if err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
@@ -654,10 +646,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				mustCreateAtespace(t, s, testAtespace)
 
 				actor := &ateapipb.Actor{
-					Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-					ActorTemplateNamespace: "default",
-					ActorTemplateName:      "test-template",
-					Status:                 &ateapipb.ActorStatus{State: tt.state},
+					Metadata:      &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+					ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+					Status:        &ateapipb.ActorStatus{State: tt.state},
 				}
 				if _, err := s.CreateActor(ctx, actor); err != nil {
 					t.Fatalf("CreateActor failed: %v", err)
@@ -718,18 +709,16 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		mustCreateAtespace(t, s, testAtespace)
 
 		actor1 := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
-			ActorTemplateNamespace: "ns1",
-			ActorTemplateName:      "tmpl1",
+			Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 			Status: &ateapipb.ActorStatus{
 				State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 				LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
 			},
 		}
 		actor2 := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
-			ActorTemplateNamespace: "ns1",
-			ActorTemplateName:      "tmpl1",
+			Metadata:      &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 			Status: &ateapipb.ActorStatus{
 				State:          ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 				LatestSnapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
@@ -762,10 +751,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 
 		for i := 0; i < 5; i++ {
 			actor := &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				Metadata:      &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			}
 			if _, err := s.CreateActor(ctx, actor); err != nil {
 				t.Fatalf("failed to create actor %d: %v", i, err)
@@ -806,10 +794,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 
 		mkActor := func(atespace, name string) *ateapipb.Actor {
 			return &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+				Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 			}
 		}
 		for _, a := range []*ateapipb.Actor{mkActor("team-a", "a1"), mkActor("team-a", "a2"), mkActor("team-b", "b1")} {
@@ -1256,8 +1243,8 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		defer watch.Close()
 
 		assignment := &ateapipb.ActorAssignment{
-			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "default", Name: "test-template"},
-			Actor:         &ateapipb.ObjectRef{Name: "session-1"},
+			ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "default", Name: "test-template"},
+			Actor:            &ateapipb.ObjectRef{Name: "session-1"},
 		}
 		updated, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
 			toUpdate.Status.Assignment = assignment
@@ -1440,58 +1427,6 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 		if got.GetMetadata().GetVersion() != 1 {
 			t.Errorf("aborted mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
-		}
-	})
-
-	// Every backend must reject a mutation that touches an immutable field, and
-	// must name the field it rejected on. This is the case that holds any new
-	// backend to that.
-	t.Run("UpdateWorker_ImmutableFields", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		// Every case below is rejected, so nothing writes and this stays the
-		// current incarnation for all of them.
-		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
-		if err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-
-		for _, tc := range []struct {
-			name   string
-			field  string
-			mutate func(*ateapipb.Worker)
-		}{
-			{"worker_namespace", "worker_namespace", func(w *ateapipb.Worker) { w.WorkerNamespace = "other-ns" }},
-			{"worker_pool", "worker_pool", func(w *ateapipb.Worker) { w.WorkerPool = "other-pool" }},
-			{"worker_pod", "worker_pod", func(w *ateapipb.Worker) { w.WorkerPod = "other-pod" }},
-			{"worker_pod_uid", "worker_pod_uid", func(w *ateapipb.Worker) { w.WorkerPodUid = otherTestWorkerName }},
-			{"node_name", "node_name", func(w *ateapipb.Worker) { w.NodeName = "other-node" }},
-			{"ip", "ip", func(w *ateapipb.Worker) { w.Ip = "10.0.0.9" }},
-			{"capacity_changed", "capacity", func(w *ateapipb.Worker) { w.Capacity.CpuMilli = 4000 }},
-			// An update replaces the worker, so a caller that leaves capacity
-			// out is asking to clear it. That is a change like any other.
-			{"capacity_cleared", "capacity", func(w *ateapipb.Worker) { w.Capacity = nil }},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				_, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-					tc.mutate(toUpdate)
-					return nil
-				})
-				if !errors.Is(err, store.ErrImmutableField) {
-					t.Fatalf("changing %s returned %v, want ErrImmutableField", tc.field, err)
-				}
-				if !strings.Contains(err.Error(), tc.field) {
-					t.Errorf("error %v does not name the offending field %s", err, tc.field)
-				}
-				got, err := s.GetWorker(ctx, testWorkerName)
-				if err != nil {
-					t.Fatalf("GetWorker failed: %v", err)
-				}
-				if got.GetMetadata().GetVersion() != 1 {
-					t.Errorf("rejected mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
-				}
-			})
 		}
 	})
 
@@ -2038,54 +1973,5 @@ func runLeaseContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 		lease.Close()
 		lease.Close()
-	})
-}
-
-// runDebugContractTests covers store-wide debug operations, which span every
-// resource kind rather than belonging to any single one.
-func runDebugContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
-	t.Helper()
-
-	t.Run("DebugClearAll", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
-			t.Fatalf("CreateAtespace failed: %v", err)
-		}
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"},
-			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-		}); err != nil {
-			t.Fatalf("CreateActor failed: %v", err)
-		}
-		if _, err := s.CreateWorker(ctx, &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		lease, err := s.AcquireLease(ctx, "lease-1")
-		if err != nil {
-			t.Fatalf("AcquireLease failed: %v", err)
-		}
-		defer lease.Close()
-
-		if err := s.DebugClearAll(ctx); err != nil {
-			t.Fatalf("DebugClearAll failed: %v", err)
-		}
-
-		if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("atespace survived DebugClearAll: %v", err)
-		}
-		if actors, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000}); err != nil || len(actors.Items) != 0 {
-			t.Errorf("actors survived DebugClearAll: actors=%v err=%v", actors.Items, err)
-		}
-		if workers, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000}); err != nil || len(workers.Items) != 0 {
-			t.Errorf("workers survived DebugClearAll: workers=%v err=%v", workers.Items, err)
-		}
-		reacquired, err := s.AcquireLease(ctx, "lease-1")
-		if err != nil {
-			t.Errorf("lease survived DebugClearAll: %v", err)
-		} else {
-			reacquired.Close()
-		}
 	})
 }

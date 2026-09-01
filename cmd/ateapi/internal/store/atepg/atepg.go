@@ -410,7 +410,10 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
 	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
 	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
-	dbTemplate.Metadata = newCreateMetadata(atespace, name)
+	if dbTemplate.Metadata == nil {
+		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	setCreateMetadata(dbTemplate.Metadata)
 	protoBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
@@ -490,7 +493,10 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
 		return nil, err
 	}
-	dbTemplate.Metadata = newUpdateMetadata(templateBeforeMutation.GetMetadata())
+	if dbTemplate.Metadata == nil {
+		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
 	updatedBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
@@ -1306,8 +1312,10 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, tagRef resourc
 
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	// Workers are global-scoped, so the atespace is always empty.
-	dbWorker.Metadata = newCreateMetadata("", worker.GetMetadata().GetName())
+	if dbWorker.Metadata == nil {
+		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
+	}
+	setCreateMetadata(dbWorker.Metadata)
 
 	protoBytes, err := proto.Marshal(dbWorker)
 	if err != nil {
@@ -1389,18 +1397,16 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 			return nil, err
 		}
 
-		// Snapshot the stored state before handing the worker to mutate.
-		// mutate is free to edit anything it is given.
-		workerBeforeMutation := proto.Clone(dbWorker).(*ateapipb.Worker)
+		// Snapshot the stored metadata before handing the worker to mutate.
+		// mutate is free to edit anything it is given; immutable fields are
+		// the service layer's to enforce, via declarative validation.
+		oldMeta := proto.CloneOf(dbWorker.GetMetadata())
 		if err := mutate(dbWorker); err != nil {
-			return nil, err
-		}
-		if err := store.CheckWorkerMutation(workerBeforeMutation, dbWorker); err != nil {
 			return nil, err
 		}
 		// Stored metadata is authoritative; discard any metadata edits made by
 		// the closure and derive the next revision from the row we locked.
-		dbWorker.Metadata = newUpdateMetadata(workerBeforeMutation.GetMetadata())
+		setUpdateMetadata(dbWorker.Metadata, oldMeta)
 
 		protoBytes, err := proto.Marshal(dbWorker)
 		if err != nil {
@@ -1645,15 +1651,6 @@ func (p *Persistence) renewLease(ctx context.Context, key, token string, ttl tim
 func (p *Persistence) releaseLease(ctx context.Context, key, token string) error {
 	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE key = $1 AND token = $2`, key, token); err != nil {
 		return fmt.Errorf("releasing lease for %q: %w", key, err)
-	}
-	return nil
-}
-
-// --- Debug ---
-
-func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
-		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil
 }

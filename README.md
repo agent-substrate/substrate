@@ -115,6 +115,15 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i http://localhost:8000/
 ```
 
+Worker capacity is versioned: the dataplane (the atelet DaemonSet and the
+worker pods) schedules only on nodes that carry the
+`ate.dev/substrate-version` label, and the install stamps it on every node
+that exists when it runs. A node added later hosts no workers until you label
+it with the installed version
+(`kubectl label node <node> ate.dev/substrate-version=<build version>`).
+`kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version`
+prints the installed version, off the atelet DaemonSet the install created.
+
 ### GKE Quickstart (Development)
 
 1. Create and configure your environment file:
@@ -146,6 +155,11 @@ curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i 
    ```bash
    ./hack/install-ate.sh --deploy-ate-system
    ```
+
+   Nodes that GKE adds later (autoscaling, auto-repair, node upgrades) are
+   born with the node pool's labels, so the pool needs
+   `ate.dev/substrate-version` too; see
+   [Node version labels](tools/setup-gcp/README.md).
 
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash

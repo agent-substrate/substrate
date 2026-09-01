@@ -109,7 +109,7 @@ func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resour
 	if err != nil {
 		return nil, nil, err
 	}
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -244,13 +244,13 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
-		TargetAteomUid:         assignment.GetWorkerPodUid(),
-		Atespace:               actor.GetMetadata().GetAtespace(),
-		ActorName:              actor.GetMetadata().GetName(),
-		ActorTemplateNamespace: actor.GetActorTemplateNamespace(),
-		ActorTemplateName:      actor.GetActorTemplateName(),
-		Spec:                   workloadSpec,
-		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		Atespace:              actor.GetMetadata().GetAtespace(),
+		ActorName:             actor.GetMetadata().GetName(),
+		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+		ActorTemplateName:     actor.GetActorTemplate().GetName(),
+		Spec:                  workloadSpec,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
 				SnapshotUri: snapshotURI.String(),
@@ -303,8 +303,8 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		Atespace:               actor.GetMetadata().GetAtespace(),
 		ActorName:              actor.GetMetadata().GetName(),
 		ActorUid:               actor.GetMetadata().GetUid(),
-		ActorTemplateNamespace: actor.GetActorTemplateNamespace(),
-		ActorTemplateName:      actor.GetActorTemplateName(),
+		ActorTemplateAtespace:  actor.GetActorTemplate().GetAtespace(),
+		ActorTemplateName:      actor.GetActorTemplate().GetName(),
 		LocalSnapshotName:      local.GetSnapshotName(),
 		DestinationSnapshotUri: snapshotURI.String(),
 		// The commit scope, like a running-origin suspend; atelet converts
@@ -379,15 +379,13 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		snapshot := &ateapipb.ActorSnapshot{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: snapshotName},
 			Status: &ateapipb.ActorSnapshotStatus{
-				SourceActor:            actorRef.ToObjectRef(),
-				SourceActorUid:         latestActor.GetMetadata().GetUid(),
-				SourceActorVersion:     latestActor.GetStatus().GetInProgressSnapshotSourceActorVersion(),
-				ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
-				ActorTemplateName:      latestActor.GetActorTemplateName(),
-				ActorTemplate:          actorTemplateObjectRef(latestActor),
-				ActorTemplateUid:       actorTemplate.GetMetadata().GetUid(),
-				ContentScope:           commitSnapshotScope(actorRef.Atespace, actorTemplate),
-				SnapshotUri:            snapshotURI.String(),
+				SourceActor:        actorRef.ToObjectRef(),
+				SourceActorUid:     latestActor.GetMetadata().GetUid(),
+				SourceActorVersion: latestActor.GetStatus().GetInProgressSnapshotSourceActorVersion(),
+				ActorTemplate:      actorTemplateObjectRef(latestActor),
+				ActorTemplateUid:   actorTemplate.GetMetadata().GetUid(),
+				ContentScope:       commitSnapshotScope(actorRef.Atespace, actorTemplate),
+				SnapshotUri:        snapshotURI.String(),
 			},
 		}
 		// ErrAlreadyExists means a previous attempt crashed after creating

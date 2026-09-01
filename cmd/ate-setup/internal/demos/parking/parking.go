@@ -28,7 +28,7 @@ func init() {
 		DemoName:       "demo-parking",
 		Short:          "Actor parking and unparking on a small WorkerPool",
 		Template:       "demos/parking/parking.yaml.tmpl",
-		Deployments:    []steps.TemplateRef{{Namespace: namespace, Name: "parking"}},
-		ActorTemplates: []steps.TemplateRef{{Namespace: namespace, Name: "parking"}},
+		Deployments:    []steps.TemplateRef{{Atespace: namespace, Name: "parking"}},
+		ActorTemplates: []steps.TemplateRef{{Atespace: namespace, Name: "parking"}},
 	})
 }

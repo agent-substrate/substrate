@@ -70,13 +70,15 @@ data:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
               require_client_certificate: true
               common_tls_context:
-                tls_certificates:
-                # Gateway server identity (servicedns signer). credential-bundle.pem
-                # holds the leaf cert and key concatenated. watched_directory picks
-                # up kubelet's projected certificate rotation without a restart.
-                - certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
-                  private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
-                  watched_directory: { path: /run/servicedns.podcert.ate.dev }
+                # Gateway server identity (servicedns signer), via filesystem
+                # SDS: watched_directory only works on SDS-delivered secrets,
+                # so an inline cert would never pick up kubelet's rotation.
+                tls_certificate_sds_secret_configs:
+                - name: servicedns_serving_cert
+                  sds_config:
+                    resource_api_version: V3
+                    path_config_source:
+                      path: /etc/envoy/sds-servicedns-cert.yaml
                 validation_context:
                   # Actors authenticate with an actor-identity client cert.
                   # Envoy enforces chain, signature, and validity period here, so
@@ -141,11 +143,9 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
                   on_request_headers:
-                  - object_key: ate.actor.identity
+                  - object_key: dev.ate.actor.identity
                     factory_key: envoy.string
                     shared_with_upstream: ONCE
-                    # Nothing downstream may overwrite an authenticated identity.
-                    read_only: true
                     skip_if_empty: true
                     format_string:
                       text_format_source:
@@ -295,7 +295,7 @@ data:
                     json_format:
                       leg: mitm
                       time: "%START_TIME%"
-                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
+                      actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
                       sni: "%REQUESTED_SERVER_NAME%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
@@ -359,7 +359,10 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    # V4_ONLY resolves nothing on an IPv6-only cluster. ALL
+                    # returns both families and enables Happy Eyeballs, so
+                    # neither family is stranded.
+                    dns_lookup_family: ALL
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -424,7 +427,7 @@ data:
                     json_format:
                       leg: cleartext
                       time: "%START_TIME%"
-                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
+                      actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
                       path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
@@ -457,7 +460,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
                   dns_cache_config:
                     name: egress_dns_cache
-                    dns_lookup_family: V4_ONLY
+                    dns_lookup_family: ALL
               - name: envoy.filters.http.router
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
@@ -503,7 +506,7 @@ data:
         connect_timeout: 1s
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection. Two objects ride this hop,
-        # both set on the CONNECT leg above: ate.actor.identity, which the MITM
+        # both set on the CONNECT leg above: dev.ate.actor.identity, which the MITM
         # access logs and the optional ext_proc filter read, and
         # original_dst_address, which egress_tcp_passthrough dials.
         #
@@ -597,7 +600,7 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: ALL
         # The MITM must not weaken upstream authentication. Envoy decrypted the
         # actor's TLS with a leaf of its own; it still sends the real SNI here
         # and still validates the real origin's certificate against the public
@@ -632,7 +635,7 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: ALL
         typed_extension_protocol_options:
           envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
@@ -668,7 +671,7 @@ data:
             "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
             dns_cache_config:
               name: egress_dns_cache
-              dns_lookup_family: V4_ONLY
+              dns_lookup_family: ALL
             # Envoy refuses to build a dynamic forward proxy cluster without
             # auto_sni and auto_san_validation unless this is set, because for
             # the usual TLS case resolving the host from a header and then not
@@ -696,6 +699,36 @@ data:
         connect_timeout: 5s
 
       #ATE_MITM_EXTPROC_CLUSTER -- Don't modify this line.
+  # SDS resource for the gateway serving cert. kubelet rotates the projected
+  # volume by swapping its ..data symlink, which fires the watch and makes
+  # Envoy re-read the bundle (leaf cert and key concatenated in one file).
+  sds-servicedns-cert.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: servicedns_serving_cert
+      tls_certificate:
+        certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+        private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+        watched_directory: { path: /run/servicedns.podcert.ate.dev }
+  # The next two keys are used only by the additional_egress_ext_proc cluster
+  # spliced over the #ATE_MITM_EXTPROC_CLUSTER marker. They ship
+  # unconditionally because the splice can only rewrite envoy.yaml, not add
+  # ConfigMap keys; with the flag off they are unreferenced files.
+  sds-podidentity-cert.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: podidentity_client_cert
+      tls_certificate:
+        certificate_chain: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+        private_key: { filename: /run/podidentity.podcert.ate.dev/credential-bundle.pem }
+        watched_directory: { path: /run/podidentity.podcert.ate.dev }
+  sds-servicedns-validation.yaml: |
+    resources:
+    - "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret
+      name: servicedns_validation_context
+      validation_context:
+        trusted_ca: { filename: /run/servicedns.podcert.ate.dev/trust-bundle.pem }
+        watched_directory: { path: /run/servicedns.podcert.ate.dev }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -831,7 +864,7 @@ spec:
           readOnly: true
       containers:
       - name: envoy
-        image: envoyproxy/envoy:v1.37-latest@sha256:1c2b79776c6e3b38e8b0113b825e6a599f9bfc08d680c199d80bf8964856c529
+        image: envoyproxy/envoy:v1.39-latest@sha256:57e14a549d7bd43c8d3f6d03e8cfa653e037d4b38e133acd9b54f38c524401b4
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

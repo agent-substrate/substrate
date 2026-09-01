@@ -26,10 +26,10 @@ func init() {
 		DemoName:    "demo-multi-template",
 		Short:       "Two ActorTemplates sharing one WorkerPool",
 		Template:    "demos/multi-template/multi-template.yaml.tmpl",
-		Deployments: []steps.TemplateRef{{Namespace: "ate-demo-multi-template-pool", Name: "shared-pool"}},
+		Deployments: []steps.TemplateRef{{Atespace: "ate-demo-multi-template-pool", Name: "shared-pool"}},
 		ActorTemplates: []steps.TemplateRef{
-			{Namespace: "ate-demo-multi-template-counter", Name: "counter"},
-			{Namespace: "ate-demo-multi-template-fspersist", Name: "fspersist"},
+			{Atespace: "ate-demo-multi-template-counter", Name: "counter"},
+			{Atespace: "ate-demo-multi-template-fspersist", Name: "fspersist"},
 		},
 	})
 }

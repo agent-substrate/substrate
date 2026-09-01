@@ -16,7 +16,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
@@ -24,7 +23,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var templateFlag string
 var templateRefFlag string
 var atespaceFlag string
 var sourceSnapshotTagFlag string
@@ -34,7 +32,7 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateFlag, templateRefFlag, sourceSnapshotTagFlag)
+		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateRefFlag, sourceSnapshotTagFlag)
 		if err != nil {
 			return err
 		}
@@ -56,30 +54,19 @@ var createActorCmd = &cobra.Command{
 }
 
 // buildCreateActorRequest assembles the CreateActor request from the command
-// flags. Exactly one of template (legacy CRD reference) and templateRef
-// (substrate ActorTemplate resource) is set; cobra enforces that.
-func buildCreateActorRequest(actorName, atespace, template, templateRef, snapshotTag string) (*ateapipb.CreateActorRequest, error) {
+// flags.
+func buildCreateActorRequest(actorName, atespace, templateName, snapshotTag string) (*ateapipb.CreateActorRequest, error) {
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
 			Atespace: atespace,
 			Name:     actorName,
 		},
+		ActorTemplate: &ateapipb.ObjectRef{
+			Atespace: atespace,
+			Name:     templateName,
+		},
 	}
-	if templateRef != "" {
-		// The template name is resolved in the actor's atespace; cross-atespace
-		// references are intentionally not expressible here.
-		if strings.Contains(templateRef, "/") {
-			return nil, fmt.Errorf("malformed --template-ref: %s (expected a bare template name, resolved in the actor's atespace)", templateRef)
-		}
-		actor.ActorTemplate = &ateapipb.ObjectRef{Atespace: atespace, Name: templateRef}
-	} else {
-		parts := strings.Split(template, "/")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("malformed --template: %s (expected <namespace>/<name>)", template)
-		}
-		actor.ActorTemplateNamespace = parts[0]
-		actor.ActorTemplateName = parts[1]
-	}
+
 	if snapshotTag != "" {
 		ref, err := parseNamespacedName(snapshotTag)
 		if err != nil {
@@ -91,11 +78,9 @@ func buildCreateActorRequest(actorName, atespace, template, templateRef, snapsho
 }
 
 func init() {
-	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Legacy ActorTemplate CRD to derive the actor from, in <namespace>/<name> format")
-	// TODO: rename "template-ref" to "template" when we fully cutover.
+	// TODO: rename "template-ref" to "template" now that the legacy CRD flag is gone.
 	createActorCmd.Flags().StringVar(&templateRefFlag, "template-ref", "", "Name of the substrate ActorTemplate resource to derive the actor from, resolved in the actor's atespace (--atespace)")
-	createActorCmd.MarkFlagsMutuallyExclusive("template", "template-ref")
-	createActorCmd.MarkFlagsOneRequired("template", "template-ref")
+	_ = createActorCmd.MarkFlagRequired("template-ref")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
 	createActorCmd.Flags().StringVar(&sourceSnapshotTagFlag, "snapshot-tag", "", "Initialize from an ActorSnapshot tag in <atespace>/<name> format")

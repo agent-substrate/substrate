@@ -32,12 +32,13 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // One Postgres container serves every test in this package; each test gets
-// isolation via DebugClearAll rather than a fresh container, which would be
+// isolation via clearAll rather than a fresh container, which would be
 // far slower. Tests in this package are not safe to run with -parallel.
 var (
 	containerOnce sync.Once
@@ -67,6 +68,10 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
+		if err := dockerenv.Configure(ctx); err != nil {
+			containerErr = err
+			return
+		}
 		pgContainer, err := postgres.Run(ctx, "postgres:18-alpine",
 			postgres.WithDatabase("atepg"),
 			postgres.WithUsername("atepg"),
@@ -171,7 +176,6 @@ func TestMigrationsWaitForInProgressMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generating migration lock ID: %v", err)
 	}
-
 	lockConn, err := pool.Acquire(ctx)
 	if err != nil {
 		t.Fatalf("acquiring migration lock connection: %v", err)
@@ -443,6 +447,16 @@ func appliedMigrationVersions(t *testing.T, pool *pgxpool.Pool) []int64 {
 	return versions
 }
 
+// clearAll truncates every table so the next test starts from an empty store
+// without paying for a fresh database. Nothing in production mass-deletes
+// state, so the statement lives here rather than on Persistence.
+func clearAll(t *testing.T, p *Persistence) {
+	t.Helper()
+	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
+		t.Fatalf("truncating tables: %v", err)
+	}
+}
+
 func setupPostgresPersistence(t *testing.T) *Persistence {
 	t.Helper()
 	ctx := context.Background()
@@ -451,9 +465,7 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}
 	t.Cleanup(p.Close)
-	if err := p.DebugClearAll(ctx); err != nil {
-		t.Fatalf("DebugClearAll failed: %v", err)
-	}
+	clearAll(t, p)
 	return p
 }
 
@@ -487,10 +499,9 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 	created, err := s.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "template-a",
-		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -682,10 +693,9 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 	ctx := context.Background()
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
-		ActorTemplateNamespace: "ns1",
-		ActorTemplateName:      "tmpl1",
-		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)

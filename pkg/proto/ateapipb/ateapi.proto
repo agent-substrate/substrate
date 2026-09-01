@@ -126,12 +126,31 @@ service Control {
 }
 
 message LocalSnapshotInfo {
-  // The name of the local checkpoint on each of the nodes below.
+  // The name of the local checkpoint on each of the nodes below. Checkpoint
+  // names are server-generated UUIDs, but any resource name is valid here.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string snapshot_name = 1;
+
   // Node VMs that have local snapshots for this actor, while it's PAUSED.
+  // Each node appears at most once.
+  //
+  // TODO: revisit this design; a snapshot propagated to every node would
+  // grow this list with the fleet, and the bound below is provisional.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=256
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:format=k8s-long-name
   repeated string node_vms_with_local_snapshots = 2;
+
   // Scope the pause checkpoint captured (the template's onPause at pause
-  // time).
+  // time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 3;
 }
 
@@ -142,6 +161,7 @@ enum SnapshotContentScope {
   SNAPSHOT_CONTENT_SCOPE_FULL = 1;
   // Captures durable data without process memory or root filesystem changes.
   SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+  // Keep this in sync with the maximums on fields of this type.
 }
 
 enum ActorSnapshotTagScope {
@@ -231,14 +251,39 @@ message ResourceMetadata {
 }
 
 message ExternalVolume {
-  // Name of the volume specified in the actor template.
+  // Name of the volume specified in the actor template. Template volume
+  // names are DNS labels.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset # set-once; immutable would reject the create
+  // ratchet's nil->set when the final object is validated as an update
   string volume_name = 1;
 
   // The globally unique volume_id returned from the storage system.
-  // This will be initially empty during volume creation
+  // This will be initially empty during volume creation. Its format is the
+  // storage system's own, so it is only bounded and checked for control
+  // characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F).
+  // The CSI spec caps IDs at 128 bytes but does not require it, so allow
+  // some slack. Set once when provisioning completes, then never changed.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  // +k8s:customValidation # no control characters
   string storage_volume_id = 2;
 
-  // Internal volume plugin name or CSI driver name.
+  // Internal volume plugin name or CSI driver name, from the StorageClass
+  // provisioner. Must be a DNS subdomain, optionally prefixed with
+  // "substrate.io/" (per the CSI spec's driver-name syntax).
+  //
+  // +k8s:required
+  // +k8s:maxLength=253
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset # set-once, like volume_name above
+  // +k8s:customValidation
   string volume_type = 3;
 
   enum Status {
@@ -249,10 +294,23 @@ message ExternalVolume {
     STATUS_CREATED = 2;
     // Volume being deleted from the storage system.
     STATUS_DELETING = 3;
+    // Keep this in sync with ExternalVolume.status's maximum.
   }
+
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the Status enum
   Status status = 4;
+
   // volume_context contains metadata returned by the CSI driver during volume
-  // provisioning, needed by the node plugin for mounting (e.g. attachment info).
+  // provisioning, needed by the node plugin for mounting (e.g. attachment
+  // info). Keys and values are the driver's own, so they are only bounded,
+  // not validated.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
   map<string, string> volume_context = 5;
 }
 
@@ -263,24 +321,10 @@ message Actor {
   // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
-  // The template is named by the legacy CRD namespace/name pair below or by
-  // the substrate actor_template ref; actor_template takes precedence when
-  // set.
-  //
-  // TODO: delete both fields once we start using actor_template below.
-  // +k8s:optional
-  // +k8s:format=k8s-short-name
-  // +k8s:immutable
-  string actor_template_namespace = 2;
-  // +k8s:optional
-  // +k8s:format=k8s-long-name
-  // +k8s:immutable
-  string actor_template_name = 3;
-
   // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
-  // +k8s:optional # TODO: this should be required?
+  // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
-  // +k8s:immutable # TODO: is this mutable?
+  // +k8s:mutable
   ObjectRef actor_template = 4;
 
   // worker_selector is the per-actor placement constraint. The scheduler
@@ -325,6 +369,8 @@ message EgressPolicy {
   // later rules would also match. A request is denied when no rule matches.
   //
   // +k8s:optional
+  // +k8s:maxItems=256
+  // +k8s:listType=atomic # rule order matters
   repeated EgressRule rules = 2;
 }
 
@@ -370,6 +416,8 @@ message HostnameRule {
   // trailing dot are invalid.
   //
   // +k8s:required
+  // +k8s:maxItems=256
+  // +k8s:listType=set
   // +k8s:customValidation # format
   repeated string patterns = 1;
 
@@ -388,6 +436,8 @@ message IPBlockRule {
   // matches when the original destination IP belongs to any prefix.
   //
   // +k8s:required
+  // +k8s:maxItems=256
+  // +k8s:listType=set
   // +k8s:customValidation # format
   repeated string cidrs = 1;
 }
@@ -400,7 +450,12 @@ message EgressRuleEffects {
   // Header names must be unique case-insensitively.
   //
   // +k8s:optional
-  repeated CredentialHeaderInjection inject_static_header = 1;
+  // +k8s:maxItems=16
+  // +k8s:listType=map
+  // +k8s:listMapKey=header
+  // +k8s:customUnique # case-insensitive
+  // +k8s:customValidation # for duplicate headers
+  repeated CredentialHeaderInjection inject_static_headers = 1;
 }
 
 // CredentialHeaderInjection injects credential-provider material into an HTTP
@@ -455,33 +510,59 @@ message ActorStatus {
   // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
-  // TODO: Add DV (optional, maxLength?)
+  // The name the in-progress durable snapshot will be stored under. Snapshot
+  // names are server-generated UUIDs, but any resource name is valid here.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string in_progress_snapshot_name = 3;
 
-  // The latest durable snapshot created for this Actor.
-  // +k8s:opaqueType
-  // TODO: Add DV (required?)
+  // The latest durable snapshot created for this Actor. Unset until the first
+  // snapshot exists.
+  //
+  // +k8s:optional
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef latest_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
-  // TODO: Add DV (optional, need to recurse into this type)
+  //
+  // +k8s:optional
   LocalSnapshotInfo local_snapshot_info = 5;
 
   // Actor version captured when the current durable snapshot began.
-  // TODO: Add DV (optional, minimum?)
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int64 in_progress_snapshot_source_actor_version = 6;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
-  // They are deleted when the actor is deleted.
-  // TODO: Add DV (optional, need to recurse into this type, immutable?)
+  // They are deleted when the actor is deleted. Each template volume
+  // appears at most once.
+  //
+  // TODO: consider a literal map keyed by volume_name instead of a list-map.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=map
+  // +k8s:listMapKey=volume_name
   repeated ExternalVolume actor_volumes = 7;
 
-  // TODO: Add DV (optional, maxLength?)
+  // The name of the in-progress node-local checkpoint. Like durable snapshot
+  // names, these are server-generated UUIDs.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string in_progress_local_snapshot_name = 8;
 
   // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
-  // the Actor was not created from a snapshot.
-  // TODO: Add DV (optional, need to recurse into this type, immutable?)
+  // the Actor was not created from a snapshot. Set once at creation and
+  // never changed afterward.
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset # together: set once, never changed, never cleared.
+  // Not immutable: create validates the final object against the request
+  // with op=Update, and immutable rejects that nil->set.
   ActorSourceSnapshotStatus source_snapshot = 9;
 }
 
@@ -490,10 +571,15 @@ message ActorStatus {
 message ActorSourceSnapshotStatus {
   // The (atespace, name) of the snapshot the tag resolved to at
   // creation time.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef snapshot = 1;
 
   // UID of the snapshot resolved at creation time.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string snapshot_uid = 2;
 }
 
@@ -561,8 +647,6 @@ message ActorSnapshotStatus {
   ObjectRef source_actor = 1;
   string source_actor_uid = 2;
   int64 source_actor_version = 3;
-  string actor_template_namespace = 4;
-  string actor_template_name = 5;
   string actor_template_uid = 6;
   SnapshotContentScope content_scope = 7;
   string snapshot_uri = 8;
@@ -617,41 +701,75 @@ enum SandboxClass {
   SANDBOX_CLASS_UNSPECIFIED = 0;
   SANDBOX_CLASS_GVISOR = 1;
   SANDBOX_CLASS_MICROVM = 2;
+  // Keep this in sync with SandboxConfig.sandbox_class's maximum.
 }
 
 message ActorTemplate {
   // Common resource metadata: atespace, name, uid, version, timestamps.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
   // worker_selector restricts which worker pools actors from this template
   // may use.
   //
-  // +k8s:opaqueType
+  // +k8s:optional
   Selector worker_selector = 2;
 
+  // +k8s:required # at least one container
+  // +k8s:maxItems=10
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
   repeated Container containers = 3;
 
   // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
   repeated Volume volumes = 4;
 
+  // +k8s:required
+  // +k8s:customValidation # on_commit must be a subset of on_pause
   SnapshotsConfig snapshots_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
+  //
+  // +k8s:required
   SandboxConfig sandbox_config = 6;
 
   // Resource usage configuration.
+  //
+  // +k8s:optional
   Resources resources = 7;
 
+  // +k8s:optional
   ActorTemplateStatus status = 8;
 }
 
 message Resources {
+  // limits is the maximum amount of compute resources allowed. Only "cpu"
+  // and "memory" are supported, each at most once, and each quantity must be
+  // greater than zero; the cpu limit must be less than 1000 cores.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=2
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
+  // +k8s:customValidation # names, quantity parse/positivity, cpu bound
   repeated Limits limits = 1;
 }
 
 message Limits {
+  // +k8s:required
+  // +k8s:maxLength=16 # the hook on Resources.limits restricts values to cpu/memory
   string name = 1;
+
+  // quantity is in Kubernetes resource.Quantity string form (e.g. "500m",
+  // "2Gi").
+  //
+  // +k8s:required
+  // +k8s:maxLength=32 # the hook on Resources.limits requires a parseable quantity
   string quantity = 2;
 }
 
@@ -663,8 +781,7 @@ message GoldenSnapshotStatus {
   ObjectRef golden_snapshot = 1;
 
   // take_golden_snapshot_at is when the golden-actor warmup ends and the
-  // golden snapshot may be taken. Mirrors the CRD's status.takeGoldenSnapshotAt
-  // cmd/atecontroller/internal/controllers/actortemplate_controller.go
+  // golden snapshot may be taken.
   google.protobuf.Timestamp take_golden_snapshot_at = 2;
 
   string error_message = 3;
@@ -672,37 +789,54 @@ message GoldenSnapshotStatus {
 
 message ActorTemplateStatus {
   GoldenSnapshotStatus golden_snapshot_status = 1;
-
-  // sandbox_assets is the referenced SandboxConfig's content frozen at
-  // creation time.
-  SandboxAssets sandbox_assets = 2;
 }
 
 // SandboxConfig selects the sandbox runtime for an ActorTemplate.
 message SandboxConfig {
   // sandbox_class selects the sandbox runtime family.
-  // Required; must be specified..
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SandboxClass enum
   SandboxClass sandbox_class = 1;
 
   // config_name names the cluster-scoped SandboxConfig Kubernetes object
   // supplying the sandbox binaries. Required; must match sandbox_class.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string config_name = 2;
 }
 
 message SnapshotsConfig {
-  // on_pause selects what is captured during pause actor.
+  // on_pause selects what is captured during pause actor. UNSPECIFIED is
+  // tolerated for compatibility and reads as FULL.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope on_pause = 1;
 
   // on_commit selects what captures.
   // Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope on_commit = 2;
 
   // on_resume selects, per snapshot situation, what supplies the guest state
   // at resume. Unset means the defaults documented on OnResumeConfig.
+  //
+  // +k8s:optional
   OnResumeConfig on_resume = 3;
 
   // storage_location is the base object-storage URI snapshots of actors on
   // this version are stored under. Required.
+  //
+  // +k8s:required
+  // +k8s:maxLength=1024 # bound only; object-storage URI formats vary
+  // TODO: validate that this is a well-formed object-storage URI
   string storage_location = 4;
 }
 
@@ -716,6 +850,7 @@ enum ResumeSource {
   // Restores with the version's golden snapshot and the actor's own
   // durable data.
   RESUME_SOURCE_GOLDEN = 2;
+  // Keep this in sync with OnResumeConfig.from_data's maximum.
 }
 
 // OnResumeConfig selects, per snapshot situation, what supplies the guest
@@ -724,39 +859,79 @@ enum ResumeSource {
 // from their own content and are not configurable here.
 message OnResumeConfig {
   // from_data applies when the resume uses a DATA-scope snapshot (from
-  // on_pause or on_commit).
+  // on_pause or on_commit). UNSPECIFIED selects the documented default.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the ResumeSource enum
   ResumeSource from_data = 1;
 }
 
 // Container is a single application container of an ActorTemplate.
 message Container {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
 
+  // +k8s:required
+  // +k8s:maxLength=512 # matches ImageVolumeSource.reference's bound
+  // TODO: validate that this is a well-formed image reference
   string image = 2;
 
   // Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
   // ignored and the process argv is command + args. Unlike Kubernetes,
   // $(VAR_NAME) references are NOT expanded.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string command = 3;
 
   // Arguments to the entrypoint; the image's CMD is used if unset (unless
   // command is set, which discards the image's CMD).
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string args = 4;
 
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map # each variable is set at most once
+  // +k8s:listMapKey=name
   repeated EnvVar env = 5;
 
   // readyz is an optional HTTP readiness probe; when set the actor is not
   // ready until the endpoint returns 200.
+  //
+  // +k8s:optional
   ContainerReadyz readyz = 6;
 
+  // Each volume may be mounted at most once per container.
+  //
+  // TODO: Kubernetes permits mounting a single volume at multiple paths (which
+  // requires keying by mountPath). We restrict it to one mount per volume (keyed
+  // by name). Note that keying by name means DV will not catch
+  // two different volumes mounted to the same path.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=name
   repeated VolumeMount volume_mounts = 7;
 
   // security_context adjusts the container's security settings. Unset leaves
   // the default capability set.
+  //
+  // +k8s:optional
   SecurityContext security_context = 8;
 
   // resources carries this container's compute limits, enforced inside the
   // actor's sandbox. Only cpu and memory limits are supported.
+  //
+  // +k8s:optional
   Resources resources = 9;
 }
 
@@ -764,6 +939,8 @@ message Container {
 // modeling a subset of the Kubernetes container securityContext.
 message SecurityContext {
   // capabilities adjusts the Linux capabilities of the container's process.
+  //
+  // +k8s:optional
   Capabilities capabilities = 1;
 }
 
@@ -772,10 +949,22 @@ message SecurityContext {
 // granted. Capabilities are named without the "CAP_" prefix; "ALL" in drop
 // removes the whole default set.
 message Capabilities {
-  // add lists capabilities to grant on top of the default set.
+  // add lists capabilities to grant on top of the default set. "ALL" is
+  // rejected: name the individual capabilities the container needs.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=set
+  // +k8s:customValidation # capability grammar; "ALL" not accepted
   repeated string add = 1;
 
-  // drop lists capabilities to remove from the default set.
+  // drop lists capabilities to remove from the default set. "ALL" drops the
+  // whole set, so drop+add expresses an exact set rather than a relative one.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=set
+  // +k8s:customValidation # capability grammar
   repeated string drop = 2;
 }
 
@@ -783,47 +972,86 @@ message Capabilities {
 // expanded with Kubernetes-style $(VAR) references.
 message EnvVar {
   // name may be any printable ASCII character except '='.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256 # guardrail;
+  // +k8s:customValidation # printable ASCII except '='
   string name = 1;
 
   // value is the literal value.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=32768 # guardrail;
   string value = 2;
 }
 
 // ContainerReadyz configures the readiness signal for a container.
 message ContainerReadyz {
   // http_get specifies the HTTP request to perform. Required.
+  //
+  // +k8s:required
   HTTPGetAction http_get = 1;
 
   // timeout_seconds bounds how long to poll http_get before failing the
   // actor start. 0 means the server-applied default (30s).
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=3600
   int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction describes an HTTP GET against the container's interior IP.
 message HTTPGetAction {
-  // path defaults to "/readyz".
+  // path defaults to "/readyz". Must be a URL path starting with "/", using
+  // only RFC 3986 path-segment characters, without query or fragment.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=1024
+  // +k8s:customValidation # RFC 3986 path shape; no regex/pattern tag exists
   string path = 1;
 
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=65535
   int32 port = 2;
 }
 
 message Volume {
   // name of the volume. Must be a DNS label.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
 
   // Exactly one of durable_dir / external_volume_template / image /
   // system_info must be set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
   DurableDirVolumeSource durable_dir = 2;
+
+  // +k8s:optional
+  // +k8s:unionMember
   ExternalVolumeTemplate external_volume_template = 3;
 
   // +k8s:optional
+  // +k8s:unionMember
   SystemInfoVolumeSource system_info = 5;
 
   // image mounts the contents of an OCI image, read-only.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
   ImageVolumeSource image = 6;
 
   // type discriminates the source union: "DurableDir",
   // "ExternalVolumeTemplate", "Image" or "SystemInfo".
+  //
+  // +k8s:optional
+  // +k8s:maxLength=63
+  // TODO: enforce that type matches the populated source, either with a
+  // unionDiscriminator tag or in the service layer.
   string type = 4;
 }
 
@@ -832,6 +1060,10 @@ message Volume {
 // snapshots.
 message ImageVolumeSource {
   // reference is the OCI image reference, pinned by digest.
+  //
+  // +k8s:required
+  // +k8s:maxLength=512
+  // +k8s:customValidation # must be pinned by digest; no contains tag exists
   string reference = 1;
 }
 
@@ -844,16 +1076,22 @@ message DurableDirVolumeSource {}
 message ExternalVolumeTemplate {
   // capacity of the volume to create, in Kubernetes resource.Quantity string
   // form (e.g. "10Gi"). Required.
+  //
+  // +k8s:required
+  // +k8s:customValidation # must parse as a resource.Quantity
   string capacity = 1;
 
   // storage_class_name names the cluster-scoped Kubernetes StorageClass to
   // create the volume from. Required.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string storage_class_name = 2;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated
 // per-actor files (identity fields, projected trust bundles), regenerated by
-// atelet on every Run/Restore. Mirrors the CRD's systemInfo volume source.
+// atelet on every Run/Restore.
 message SystemInfoVolumeSource {
   // data_sources lists the projections to place within the volume. At most
   // one actor_metadata entry may appear, and file paths must be unique
@@ -861,6 +1099,7 @@ message SystemInfoVolumeSource {
   //
   // +k8s:optional
   // +k8s:maxItems=8
+  // +k8s:listType=atomic
   repeated SystemInfoDataSource data_sources = 1;
 }
 
@@ -928,38 +1167,19 @@ message TrustBundleDataSource {
 // VolumeMount mounts a named Volume into a container.
 message VolumeMount {
   // name must match the name of a Volume.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string name = 1;
 
-  // mount_path within the container. Must be a clean absolute Unix path.
+  // mount_path within the container. Must be a clean absolute Unix path:
+  // must start with '/', not be '/', and contain no ':', '..', '.', '//',
+  // trailing '/', or control characters.
+  //
+  // +k8s:required
+  // +k8s:maxLength=4096
+  // +k8s:customValidation # clean-absolute-path shape; no regex/pattern tag exists
   string mount_path = 2;
-}
-
-// SandboxAssets is the frozen description of the sandbox binaries an actor
-// boots with: a class plus content-addressed files keyed first by
-// architecture and then by asset name, mirroring the SandboxConfig
-// CRD schema.
-message SandboxAssets {
-  SandboxClass sandbox_class = 1;
-  // assets maps architecture (GOARCH, e.g. "amd64") to that arch's files.
-  map<string, ArchAssets> assets = 2;
-
-  // pause_image is the container to use as the root sandbox container.
-  string pause_image = 3;
-}
-
-message ArchAssets {
-  // files maps asset name (e.g. "gvisor", "kata-kernel") to its file.
-  map<string, AssetFile> files = 1;
-}
-
-// AssetFile is one content-addressed file atelet fetches for a sandbox
-// runtime.
-message AssetFile {
-  // URL to download the asset from (e.g. a gs:// URL).
-  string url = 1;
-
-  // Lower-case hex SHA256 naming the cached file and verifying the download.
-  string sha256 = 2;
 }
 
 message CreateAtespaceRequest {
@@ -1015,22 +1235,32 @@ message CreateActorTemplateRequest {
 }
 
 message GetActorTemplateRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template = 1;
 }
 
 message ListActorTemplatesRequest {
   // The atespace to list actor templates from. Empty lists across all
   // atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string atespace = 1;
 
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 2;
 
   // Pagination token from a previous ListActorTemplates response.
   // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 3;
 }
 
@@ -1044,12 +1274,14 @@ message ListActorTemplatesResponse {
 }
 
 message DeleteActorTemplateRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template = 1;
 }
 
 message GetActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
@@ -1078,7 +1310,8 @@ message UpdateActorRequest {
 }
 
 message SuspendActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
@@ -1087,7 +1320,8 @@ message SuspendActorResponse {
 }
 
 message PauseActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
@@ -1096,10 +1330,13 @@ message PauseActorResponse {
 }
 
 message ResumeActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
+  //
+  // +k8s:optional
   bool boot = 2;
 }
 
@@ -1112,8 +1349,13 @@ message ResumeActorResponse {
 }
 
 message DeleteActorRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // If true, delete the actor regardless of its state.
+  //
+  // +k8s:optional
   bool any_state = 2;
 }
 
@@ -1220,10 +1462,16 @@ message DeleteActorSnapshotTagRequest {
 // DeleteWorkerRequest carries it so far.
 message DeleteOptions {
   // If non-zero, delete only if the server's current version matches.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int64 version = 1;
 
   // If non-empty, delete only if the server's current uid matches. Guards
   // against name reuse across lifecycles.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
   string uid = 2;
 }
 
@@ -1231,10 +1479,16 @@ message ListWorkersRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 1;
 
   // Pagination token from a previous ListWorkers response.
   // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 2;
 }
 
@@ -1252,12 +1506,16 @@ message ListWorkersResponse {
 
 message GetWorkerRequest {
   // The Worker to fetch. atespace is always empty; Workers are global-scoped.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 }
 
 message CreateWorkerRequest {
   // The Worker to register.
+  //
+  // +k8s:required
   Worker worker = 1;
 }
 
@@ -1273,21 +1531,32 @@ message UpdateWorkerRequest {
   // send the whole thing back. A request that alters an immutable field, by
   // changing it or by omitting it, returns INVALID_ARGUMENT naming the field.
   // status is output-only and whatever it carries is ignored.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
   Worker worker = 1;
 }
 
 message DeleteWorkerRequest {
   // The Worker to deregister.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 
   // Optional per-delete preconditions.
+  //
+  // +k8s:optional
   DeleteOptions options = 2;
 }
 
 message DrainWorkerRequest {
   // The Worker to mark as terminating.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 }
 
@@ -1295,15 +1564,24 @@ message DrainWorkerRequest {
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
   // The atespace to list actors from. Empty lists across all atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string atespace = 1;
 
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 2;
 
   // Pagination token from a previous ListActors response.
   // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 3;
 }
 
@@ -1328,28 +1606,70 @@ message ListActorsResponse {
 message Worker {
   // Output-only: name, uid, version and timestamps are all server-assigned.
   // uid and version are echoed back on UpdateWorker as preconditions.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ResourceMetadata metadata = 1;
 
   // Kubernetes coordinates. Immutable, set at creation.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string worker_namespace = 2;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string worker_pool = 3;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string worker_pod = 4;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  // +k8s:immutable
   string worker_pod_uid = 5;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string node_name = 6;
+  // +k8s:required
+  // +k8s:customValidation # until `format=k8s-ip` is supported
+  // +k8s:immutable
   string ip = 7;
 
-  // Mutable.
+  // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
+  // CRD's own vocabulary, so it is only bounded, not validated. Mutable.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=63
   string sandbox_class = 8;
+
+  // labels mirror the WorkerPool object's Kubernetes labels, which selectors
+  // match against.
+  // Kubernetes does not cap an object's label count, so the bound below is
+  // a generous guardrail, not a mirror of an upstream limit.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=64
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> labels = 9;
 
   // The compute capacity this worker can give an actor sandbox. Immutable, set
-  // at creation: a worker pod's limits are fixed for its lifetime.
+  // at creation: a worker pod's limits are fixed for its lifetime. An update
+  // replaces the worker rather than patching it, so a request that omits
+  // capacity is asking to clear it, which the immutability rule rejects.
+  //
+  // +k8s:optional
+  // +k8s:immutable
   WorkerCapacity capacity = 10;
 
   // Output-only server-managed state. Absent from Create/Update request
   // payloads; whatever a request carries here is ignored. DrainWorker is the
   // only way a client moves state, and assignment is the scheduler's.
+  //
+  // +k8s:optional
   WorkerStatus status = 11;
 }
 
@@ -1359,12 +1679,18 @@ enum WorkerState {
   WORKER_STATE_ACTIVE = 1;
   // Pod terminating. Not schedulable.
   WORKER_STATE_DRAINING = 2;
+  // Keep this in sync with WorkerStatus.state's maximum.
 }
 
 message WorkerStatus {
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the WorkerState enum
   WorkerState state = 1;
 
   // The Actor currently bound to this Worker, if any.
+  //
+  // +k8s:optional
   ActorAssignment assignment = 2;
 }
 
@@ -1375,40 +1701,37 @@ message WorkerStatus {
 // "unknown/unset" for that dimension: treated as unconstrained so placement is
 // not blocked (matching the pre-capacity behavior).
 message WorkerCapacity {
-  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
-  int64 memory_bytes = 2; // Memory capacity in bytes.
+  // CPU capacity in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 cpu_milli = 1;
+
+  // Memory capacity in bytes.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 memory_bytes = 2;
 }
 
 // ActorAssignment names the Actor currently bound to a Worker — the inverse of
 // WorkerAssignment.
 message ActorAssignment {
-  // The KubeNamespacedObjectRef actor_template names the CRD-backed template
-  // of an actor created with the legacy CRD path
-  // actor_template_ref names the substrate ActorTemplate resource.
-  // Exactly one is set.
-  KubeNamespacedObjectRef actor_template = 1;
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
-  // +k8s:opaqueType
+
+  // actor_template_ref names the substrate ActorTemplate resource the
+  // assigned actor uses.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
 }
-
-message KubeNamespacedObjectRef {
-  string namespace = 1;
-  string name = 2;
-}
-
-// Debug is the RPC interface for administrative and debugging operations
-// (such as wiping state during development).
-service Debug {
-  // Debugging: drop all data from the ate database.
-  rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
-}
-
-message DebugClearRequest {}
-
-message DebugClearResponse {}
 
 // ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
@@ -1438,10 +1761,25 @@ service ActorIdentity {
 }
 
 message MintJWTRequest {
+  // The audiences the minted JWT is bound to. Tokens are only issued with
+  // audience bindings, so at least one is required.
+  //
+  // +k8s:required
+  // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
   repeated string audience = 1;
 
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 3;
+
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
   string actor_uid = 4;
 }
 
@@ -1477,24 +1815,36 @@ message MintCertRequest {
   // This is the one caller that recovers a Worker name from a pod certificate:
   // the atelet has only the worker Pod's identity to go on. Everywhere else the
   // name is opaque and must be carried, not reconstructed.
-  // +k8s:opaqueType
+  //
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:required
   ObjectRef worker = 1;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
   // subject public key.
+  //
+  // +k8s:required
+  // +k8s:customValidation # size bound; maxLength is string-only
   bytes certificate_signing_request = 2;
 
   // Actor incarnation expected by the activation. This is only a stale-request
   // guard: ateapi derives the actor and its identity from the worker assignment.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string expected_actor_uid = 3;
 
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=1 # keep this in sync with the ActorCertificatePurpose enum
   ActorCertificatePurpose purpose = 4;
 }
 
 enum ActorCertificatePurpose {
   ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
   ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
+  // Keep this in sync with MintCertRequest.purpose's maximum.
 }
 
 message MintCertResponse {

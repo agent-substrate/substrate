@@ -19,6 +19,7 @@
 package ateattr
 
 import (
+	"log/slog"
 	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -51,7 +52,7 @@ const (
 	ActorUIDKey           = attribute.Key("ate.actor.uid")
 	ActorContainerNameKey = attribute.Key("ate.actor.container.name")
 	TemplateNameKey       = attribute.Key("ate.template.name")
-	TemplateNamespaceKey  = attribute.Key("ate.template.namespace")
+	TemplateAtespaceKey   = attribute.Key("ate.template.atespace")
 	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
 
@@ -323,8 +324,8 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
 		ActorUIDKey.String(a.GetMetadata().GetUid()),
-		TemplateNameKey.String(a.GetActorTemplateName()),
-		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplate().GetName()),
+		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
 }
@@ -335,16 +336,30 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 // emitting it empty, so a consumer filtering on it gets container output only.
 func ActorLogLabels(a resources.ActorAttribution, containerName string) map[string]string {
 	labels := map[string]string{
-		string(AtespaceKey):          a.Ref.Atespace,
-		string(ActorNameKey):         a.Ref.Name,
-		string(ActorUIDKey):          a.UID,
-		string(TemplateNamespaceKey): a.TemplateNamespace,
-		string(TemplateNameKey):      a.TemplateName,
+		string(AtespaceKey):         a.Ref.Atespace,
+		string(ActorNameKey):        a.Ref.Name,
+		string(ActorUIDKey):         a.UID,
+		string(TemplateAtespaceKey): a.TemplateAtespace,
+		string(TemplateNameKey):     a.TemplateName,
 	}
 	if containerName != "" {
 		labels[string(ActorContainerNameKey)] = containerName
 	}
 	return labels
+}
+
+// ActorLogAttrs is the same identity for a component's own slog record, which
+// needs no envelope: a collector lifts flat keys straight onto the record's OTLP
+// attributes. It must agree with ActorLogLabels key for key, or joining a
+// component record to the actor lifecycle stream takes two spellings.
+func ActorLogAttrs(a resources.ActorAttribution) []slog.Attr {
+	return []slog.Attr{
+		slog.String(string(AtespaceKey), a.Ref.Atespace),
+		slog.String(string(ActorNameKey), a.Ref.Name),
+		slog.String(string(ActorUIDKey), a.UID),
+		slog.String(string(TemplateAtespaceKey), a.TemplateAtespace),
+		slog.String(string(TemplateNameKey), a.TemplateName),
+	}
 }
 
 // ActorMetricAttributes returns the metric labels for an Actor.
@@ -365,8 +380,8 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 
 	ass := a.GetStatus().GetWorkerAssignment()
 	attrs := []attribute.KeyValue{
-		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
-		TemplateNameKey.String(a.GetActorTemplateName()),
+		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
+		TemplateNameKey.String(a.GetActorTemplate().GetName()),
 		SandboxClassKey.String(sandboxClass),
 		ActorOperationNameKey.String(operationName),
 		FailureReasonKey.String(reason),

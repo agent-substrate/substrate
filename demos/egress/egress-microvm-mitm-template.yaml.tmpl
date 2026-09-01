@@ -1,0 +1,86 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Micro-VM MITM variant of the egress demo template. Delivery of
+# the projected bundle into the sandbox is what differs by class — a read-only
+# bind for gVisor, the unified virtio-fs share for the guest here — so the
+# projection is worth proving on both.
+#
+# Kept in step with egress-microvm-template.yaml.tmpl; the deltas
+# are the names, the projected trust bundle, and the two SSL_CERT_* variables.
+
+metadata:
+  atespace: ate-demo-egress-microvm-mitm
+  name: egress-microvm-mitm
+workerSelector:
+  matchLabels:
+    workload: egress-microvm-mitm
+containers:
+- name: egress
+  image: ko://github.com/agent-substrate/substrate/demos/egress
+  command: ["/ko-app/egress"]
+  # The demo fetches with a stock net/http client, so its roots come from
+  # crypto/x509's system pool — which on Unix reads both of these.
+  #
+  # SSL_CERT_FILE alone is not enough to make the projected bundle the whole
+  # story: it replaces the default cert FILE list, but the default cert
+  # DIRECTORY list is still scanned, and the base image keeps its public
+  # roots in /etc/ssl/certs. Pointing SSL_CERT_DIR at the projection too
+  # makes the anchor set exactly the gateway CA, so a successful HTTPS fetch
+  # proves the projected bundle validated the minted leaf. Under sdsmint the
+  # public roots are useless anyway: every origin is fronted by the gateway.
+  env:
+  - name: SSL_CERT_FILE
+    value: /run/ate/trust-bundle.pem
+  - name: SSL_CERT_DIR
+    value: /run/ate
+  volumeMounts:
+  # the bundle lands at /run/ate/trust-bundle.pem
+  - name: system-info
+    mountPath: /run/ate
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 80
+    # See counter-substrate-microvm-template.yaml.tmpl: a micro-VM guest needs
+    # more than readyz's 30s default once CI's single kind node is under load.
+    timeoutSeconds: 120
+volumes:
+- name: system-info
+  type: SystemInfo
+  systemInfo:
+    dataSources:
+    # The trust anchors for the per-SNI leaves the MITM egress gateway mints.
+    # Only allowlisted bundle names resolve; this is the one supported today.
+    - trustBundle:
+        name: egress-mitm.ate.dev
+        path: trust-bundle.pem
+# Sandbox size: without these the guest boots at the kata config's default
+# (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
+# strings in the proto.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_MICROVM
+  # Deliberately not the class default; installed cluster-wide by
+  # hack/install-microvm-deps.sh, so a missing or stale install fails loudly.
+  configName: microvm
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-microvm-mitm/

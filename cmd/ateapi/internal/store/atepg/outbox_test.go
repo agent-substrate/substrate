@@ -59,9 +59,7 @@ func TestConnect_DedicatedWatchPool(t *testing.T) {
 		t.Fatalf("watch pool MaxConns = %d, want %d", got, watchPoolMaxConns)
 	}
 
-	if err := p.DebugClearAll(ctx); err != nil {
-		t.Fatalf("DebugClearAll failed: %v", err)
-	}
+	clearAll(t, p)
 	watch, err := p.WatchWorkers(ctx)
 	if err != nil {
 		t.Fatalf("WatchWorkers failed: %v", err)

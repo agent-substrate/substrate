@@ -213,11 +213,11 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 	}
 
 	return &ateompb.WorkloadStatsSample{
-		Atespace:               active.Ref.Atespace,
-		ActorName:              active.Ref.Name,
-		ActorUid:               active.UID,
-		ActorTemplateNamespace: active.TemplateNamespace,
-		ActorTemplateName:      active.TemplateName,
+		Atespace:              active.Ref.Atespace,
+		ActorName:             active.Ref.Name,
+		ActorUid:              active.UID,
+		ActorTemplateAtespace: active.TemplateAtespace,
+		ActorTemplateName:     active.TemplateName,
 
 		SandboxClass: ateompb.SandboxClass_SANDBOX_CLASS_GVISOR,
 		Source:       ateompb.StatsSource_STATS_SOURCE_CGROUP,

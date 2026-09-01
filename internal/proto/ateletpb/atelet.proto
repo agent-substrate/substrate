@@ -69,7 +69,7 @@ message TerminateRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   WorkloadSpec spec = 7;
@@ -85,7 +85,7 @@ message RunRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   WorkloadSpec spec = 7;
@@ -337,7 +337,7 @@ message CheckpointRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on checkpoint: atelet uses the version the
@@ -366,7 +366,7 @@ message UploadPausedCheckpointRequest {
   string actor_uid = 3;
 
   // For metrics attribution, like on CheckpointRequest.
-  string actor_template_namespace = 4;
+  string actor_template_atespace = 4;
   string actor_template_name = 5;
 
   // The local checkpoint to upload: LocalSnapshotInfo.snapshot_name recorded
@@ -394,7 +394,7 @@ message RestoreRequest {
   string actor_name = 3;
   string actor_uid = 4;
 
-  string actor_template_namespace = 5;
+  string actor_template_atespace = 5;
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on restore: the snapshot is

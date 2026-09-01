@@ -1,0 +1,63 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The probe fixture's ActorTemplate: a protojson-shaped ateapipb.ActorTemplate
+# (NOT the ate.dev/v1alpha1 CRD), created through the ate API by
+# e2e.DeploySubstrateFixture after ko resolve pins the probe image. The
+# ate-e2e-probe${FIXTURE_SUFFIX} atespace doubles as the pool's k8s namespace
+# name in probe.yaml.tmpl.
+
+metadata:
+  atespace: ate-e2e-probe${FIXTURE_SUFFIX}
+  name: probe
+workerSelector:
+  matchLabels:
+    workload: probe${FIXTURE_SUFFIX}
+containers:
+- name: probe
+  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  command: ["/ko-app/probe"]
+  volumeMounts:
+  # the probe reads actor metadata and trust bundles under /run/ate
+  - name: system-info
+    mountPath: /run/ate
+  # The probe binary binds :80 immediately, so this gates actor start on a
+  # readiness signal rather than a guess, and carries a non-default
+  # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom
+  # instead of only the ateom's built-in default.
+  readyz:
+    httpGet:
+      path: /healthz
+      port: 80
+    timeoutSeconds: 60
+volumes:
+- name: system-info
+  type: SystemInfo
+  systemInfo:
+    dataSources:
+    - actorMetadata:
+        items:
+        - field: ACTOR_METADATA_FIELD_NAME
+          path: actor-id
+        - field: ACTOR_METADATA_FIELD_ATESPACE
+          path: atespace
+        - field: ACTOR_METADATA_FIELD_UID
+          path: actor-uid
+    # Only for suites that pass WithTrustBundle: the bundle is a cluster
+    # singleton, so a suite that merely needs a probe must not depend on it.
+${TEMPLATE_TRUST_BUNDLE}
+${TEMPLATE_RESOURCES}
+${TEMPLATE_SANDBOX_CONFIG}
+snapshotsConfig:
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

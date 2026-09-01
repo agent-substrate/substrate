@@ -65,6 +65,7 @@ type templateReconcilerStore interface {
 // goldenActorControl is the in-process slice of the Control service the
 // reconciler drives golden actors through. *RPCService satisfies it.
 type goldenActorControl interface {
+	CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error)
 	CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error)
 	GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
 	ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error)
@@ -183,7 +184,11 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	}
 
 	goldenActorRef := &ateapipb.ObjectRef{
-		Atespace: tmpl.GetMetadata().GetAtespace(),
+		// Golden actors live in the reserved ate-golden atespace, because
+		// the suspend workflow relies on the ate-golden system atespace to
+		// always take a full snapshot of the golden actor.
+		// https://github.com/agent-substrate/substrate/blob/cb7c8385ef2bb489c3d5f7bfa71820fd33935d91/cmd/ateapi/internal/controlapi/workflow_suspend.go#L170-L173
+		Atespace: resources.GoldenActorAtespace,
 		// Use the template's UID as golden actor's name to prevent collision
 		// when templates are recreated with the same name.
 		Name: tmpl.GetMetadata().GetUid(),
@@ -371,7 +376,13 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 	if status.Code(err) != codes.NotFound {
 		return nil, fmt.Errorf("while getting golden actor: %w", err)
 	}
-	// Golden actor has not yet been created.
+	// Golden actor has not yet been created. Its reserved atespace is
+	// system-owned, so ensure it exists rather than assuming bootstrap did.
+	if _, err := r.control.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
+		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: goldenActorRef.GetAtespace()}},
+	}); err != nil && status.Code(err) != codes.AlreadyExists {
+		return nil, fmt.Errorf("while ensuring atespace %q: %w", goldenActorRef.GetAtespace(), err)
+	}
 	actor, err = r.control.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{

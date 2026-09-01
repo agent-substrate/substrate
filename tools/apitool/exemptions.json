@@ -11,17 +11,7 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Actor.actor_template_name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorAssignment.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorAssignment.actor_template_ref",
     "message": "field has no doc comment"
   },
   {
@@ -53,16 +43,6 @@
     "rule": "documented",
     "subject": "ateapi.ActorSnapshotStatus",
     "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.actor_template_name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ActorSnapshotStatus.actor_template_namespace",
-    "message": "field has no doc comment"
   },
   {
     "rule": "documented",
@@ -156,27 +136,12 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ArchAssets",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Container.env",
     "message": "field has no doc comment"
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Container.image",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Container.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Container.volume_mounts",
     "message": "field has no doc comment"
   },
   {
@@ -222,11 +187,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.DeleteActorRequest.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.DeleteActorRequest.any_state",
     "message": "field has no doc comment"
   },
   {
@@ -356,32 +316,12 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.KubeNamespacedObjectRef.namespace",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Limits",
     "message": "message has no doc comment"
   },
   {
     "rule": "documented",
     "subject": "ateapi.Limits.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Limits.quantity",
     "message": "field has no doc comment"
   },
   {
@@ -486,11 +426,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Resources.limits",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ResumeActorRequest",
     "message": "message has no doc comment"
   },
@@ -507,11 +442,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.ResumeActorResponse.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.SandboxAssets.sandbox_class",
     "message": "field has no doc comment"
   },
   {
@@ -591,11 +521,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Worker.labels",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Worker.node_name",
     "message": "field has no doc comment"
   },
@@ -612,16 +537,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.Worker.worker_pool",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.WorkerCapacity.cpu_milli",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.WorkerCapacity.memory_bytes",
     "message": "field has no doc comment"
   },
   {

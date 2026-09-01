@@ -28,8 +28,10 @@ package kata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -247,8 +249,28 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	// mounts /proc,/sys,/dev over them, and find-paths re-opens the tree by path on
 	// restore, so the layout must match on every node. Created in the MERGED tree, so
 	// they land in the upper (and ride the snapshot tar) rather than dirtying the image.
+	if err := ensureOCIMountpoints(dst); err != nil {
+		return fmt.Errorf("creating OCI mountpoints under %q: %w", dst, err)
+	}
+	return nil
+}
+
+// ensureOCIMountpoints creates the /proc, /sys and /dev mountpoints in a container
+// rootfs. Neither layer of that rootfs is trusted — the lower is the actor's image
+// and the upper is restored from the snapshot the guest wrote — so it goes through
+// os.Root: a plain MkdirAll would follow a symlink planted at one of those names and
+// create the directory wherever it points on the worker pod, as root. An entry that
+// already exists (including a symlink that stays inside the rootfs) is left alone.
+func ensureOCIMountpoints(rootfs string) error {
+	root, err := os.OpenRoot(rootfs)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	for _, d := range []string{"proc", "sys", "dev"} {
-		_ = os.MkdirAll(filepath.Join(dst, d), 0o755)
+		if err := root.Mkdir(d, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
 	}
 	return nil
 }
@@ -334,9 +356,9 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	}
 	// Ensure the standard OCI mountpoints exist even for minimal images: the container
 	// mounts /proc,/sys,/dev over them, and find-paths re-opens the lower by path on
-	// restore, so the layout must match on every node. (Bind still writable; ignore EEXIST.)
-	for _, d := range []string{"proc", "sys", "dev"} {
-		_ = os.MkdirAll(filepath.Join(dst, d), 0o755)
+	// restore, so the layout must match on every node. (Bind still writable.)
+	if err := ensureOCIMountpoints(dst); err != nil {
+		return fmt.Errorf("creating OCI mountpoints under %q: %w", dst, err)
 	}
 	// Remount read-only: the lower is immutable, so all writes go to the overlay upper
 	// and it stays byte-identical across reconstructions (required by find-paths migration).

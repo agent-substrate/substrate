@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Worker pool for the egress demo. The ActorTemplate is a substrate resource,
+# not a CRD: it lives in egress-template.yaml.tmpl and is created through the
+# ate API with `kubectl ate create actor-template`.
+
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -29,27 +33,3 @@ metadata:
 spec:
   replicas: 2
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: egress
-  namespace: ate-demo-egress
-spec:
-  containers:
-  - name: egress
-    image: ko://github.com/agent-substrate/substrate/demos/egress
-    command: ["/ko-app/egress"]
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 80
-  workerSelector:
-    matchLabels:
-      workload: egress
-  snapshotsConfig:
-    onPause: Full
-    onCommit: Full
-    location: gs://${BUCKET_NAME}/ate-demo-egress/
