@@ -23,9 +23,11 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/ko"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
 // Timeouts carried over from the --timeout values in the shell installer.
@@ -87,6 +89,13 @@ func (e *Env) imageResolver() (imageResolver, error) {
 	if e.resolver != nil {
 		return e.resolver, nil
 	}
+
+	log.Stepf("images: %s", e.Cfg.Images.Describe())
+	if e.Cfg.Images.IsPrebuilt() {
+		e.resolver = images.NewPrebuilt(e.Cfg.Images)
+		return e.resolver, nil
+	}
+
 	runner, err := ko.New(e.Cfg.Root, e.Cfg.KoEnv())
 	if err != nil {
 		return nil, err

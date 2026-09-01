@@ -14,7 +14,49 @@
 
 package steps
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+)
+
+// TestSubstrateVersionPrebuilt covers the version a prebuilt install stamps.
+// Root points at a directory that is not a checkout, so `git describe` has
+// nothing to say and only the image tag can supply it.
+func TestSubstrateVersionPrebuilt(t *testing.T) {
+	t.Setenv("VERSION", "")
+
+	cases := []struct {
+		name       string
+		source     images.Source
+		want       string
+		wantSuffix string
+	}{{
+		name:       "tag is the version",
+		source:     images.Source{Repo: "example.com/substrate", Tag: "v0.0.0-503-4b3423c0"},
+		want:       "v0.0.0-503-4b3423c0",
+		wantSuffix: "v0-0-0-503-4b3423c0",
+	}, {
+		name:       "built from source falls back to git",
+		source:     images.Source{},
+		want:       "dev",
+		wantSuffix: "dev",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &config.Config{Root: t.TempDir(), Images: tc.source}}
+			got, suffix, err := e.SubstrateVersion()
+			if err != nil {
+				t.Fatalf("SubstrateVersion: %v", err)
+			}
+			if got != tc.want || suffix != tc.wantSuffix {
+				t.Fatalf("SubstrateVersion = %q, %q; want %q, %q", got, suffix, tc.want, tc.wantSuffix)
+			}
+		})
+	}
+}
 
 func TestSubstituteVersion(t *testing.T) {
 	e := &Env{substrateVersion: "v1.2.3", substrateVersionSuffix: "v1-2-3"}

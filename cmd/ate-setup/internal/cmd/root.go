@@ -95,6 +95,11 @@ func init() {
 	f.StringVar(&opts.AdditionalEgressExtprocService, "experimental-additional-egress-extproc-service", "", "Run an additional ext_proc authorization filter served by NS/SVC:PORT (requires --experimental-use-sdsmint)")
 	f.BoolVar(&opts.NoDevEnv, "no-dev-env", false, "Do not source .ate-dev-env.sh")
 
+	f.StringVar(&opts.ImageRepo, "image-repo", "",
+		"Install pre-built images from this registry path instead of building them from source (e.g. registry.example.com/substrate)")
+	f.StringVar(&opts.ImageTag, "image-tag", "",
+		"Tag the pre-built images carry (required with --image-repo)")
+
 	// Cobra's default completion command would run PersistentPreRunE and
 	// require a cluster; the tree is not deep enough to justify that.
 	rootCmd.CompletionOptions.DisableDefaultCmd = true

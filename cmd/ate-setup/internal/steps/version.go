@@ -17,6 +17,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -31,11 +32,28 @@ import (
 
 // SubstrateVersion returns the build version and the object-name suffix for atelet.
 // The version is the same one ko stamps into the binaries.
+//
+// With --image-repo nothing is built, so `git describe` would report the
+// checkout rather than the images being installed. The image tag is the version
+// in that case. It has to be: the version names the atelet DaemonSet and sets
+// the node label that partitions nodes across coexisting versions, so it must
+// describe the atelet that is actually running, which came from the image.
+// VERSION still wins over both, so a tag that is not a valid label value can be
+// worked around the same way.
 func (e *Env) SubstrateVersion() (version, suffix string, err error) {
 	if e.substrateVersion != "" {
 		return e.substrateVersion, e.substrateVersionSuffix, nil
 	}
-	raw := ko.BuildVersion(e.Cfg.Root)
+	var raw string
+	if e.Cfg.Images.IsPrebuilt() {
+		raw = os.Getenv("VERSION")
+		if raw == "" {
+			raw = e.Cfg.Images.Tag
+		}
+	} else {
+		// ko.BuildVersion consults VERSION itself before `git describe`.
+		raw = ko.BuildVersion(e.Cfg.Root)
+	}
 	if v := versionlabel.Value(raw); v != raw {
 		return "", "", fmt.Errorf("build version %q is not a valid label value (it would sanitize to %q); pin a label-safe one with the VERSION env var", raw, v)
 	}
