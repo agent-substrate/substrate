@@ -37,8 +37,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
-// ProviderClass is the substrate-secret:// URI host this backend serves.
-const ProviderClass = "kubernetes.io"
+// ProviderName is the substrate-secret:// URI host this backend serves.
+const ProviderName = "kubernetes.io"
 
 // uriScheme is the only scheme a credential URI may carry.
 const uriScheme = "substrate-secret"
@@ -69,8 +69,8 @@ func ParseURI(raw string) (SecretRef, error) {
 	if u.Scheme != uriScheme {
 		return SecretRef{}, fmt.Errorf("credential URI %q: scheme is %q, want %q", raw, u.Scheme, uriScheme)
 	}
-	if u.Host != ProviderClass {
-		return SecretRef{}, fmt.Errorf("credential URI %q: provider class is %q, this provider serves %q", raw, u.Host, ProviderClass)
+	if u.Host != ProviderName {
+		return SecretRef{}, fmt.Errorf("credential URI %q: provider class is %q, this provider serves %q", raw, u.Host, ProviderName)
 	}
 
 	segments := strings.Split(strings.Trim(u.Path, "/"), "/")
@@ -102,20 +102,15 @@ type Server struct {
 	credproviderpb.UnimplementedCredentialProviderServer
 
 	client kubernetes.Interface
-	// defaultKey is the Secret data key used when a URI omits one. When empty, a
-	// URI without a key resolves only if the Secret holds exactly one key.
-	defaultKey string
 	// nsAuth restricts which namespaces an atespace may resolve secrets from.
 	// Nil disables authorization (dev only): every URI namespace is allowed.
 	nsAuth *NamespaceAuthorizer
 }
 
-// NewServer builds a Kubernetes-backed credential provider. defaultKey is used
-// for URIs that omit a key; pass "" to require a single-key Secret in that case.
-// nsAuth enforces the atespace→namespace policy; pass nil to disable
-// authorization (dev only).
-func NewServer(client kubernetes.Interface, defaultKey string, nsAuth *NamespaceAuthorizer) *Server {
-	return &Server{client: client, defaultKey: defaultKey, nsAuth: nsAuth}
+// NewServer builds a Kubernetes-backed credential provider. nsAuth enforces the
+// atespace→namespace policy; pass nil to disable authorization (dev only).
+func NewServer(client kubernetes.Interface, nsAuth *NamespaceAuthorizer) *Server {
+	return &Server{client: client, nsAuth: nsAuth}
 }
 
 // RequestSecret resolves one substrate-secret:// URI to its Secret value.
@@ -147,7 +142,7 @@ func (s *Server) RequestSecret(ctx context.Context, req *credproviderpb.RequestS
 		return nil, status.Errorf(codes.Unavailable, "reading secret %s/%s: %v", ref.Namespace, ref.Name, err)
 	}
 
-	value, err := selectKey(secret.Data, ref.Key, s.defaultKey)
+	value, err := selectKey(secret.Data, ref.Key)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "secret %s/%s: %v", ref.Namespace, ref.Name, err)
 	}
@@ -176,23 +171,20 @@ func (s *Server) authorize(ctx context.Context, reqCtx *credproviderpb.SecretReq
 }
 
 // selectKey resolves which Secret data entry to return: the URI's explicit key,
-// else the configured default key, else the sole key of a single-key Secret.
-func selectKey(data map[string][]byte, uriKey, defaultKey string) ([]byte, error) {
-	key := uriKey
-	if key == "" {
-		key = defaultKey
-	}
-	if key == "" {
+// else the sole key of a single-key Secret. A URI without a key resolving a
+// multi-key Secret is an error rather than an ambiguous guess.
+func selectKey(data map[string][]byte, uriKey string) ([]byte, error) {
+	if uriKey == "" {
 		if len(data) != 1 {
-			return nil, fmt.Errorf("no key given and the secret has %d keys; specify one in the URI or configure a default", len(data))
+			return nil, fmt.Errorf("no key given and the secret has %d keys; specify one in the URI", len(data))
 		}
 		for _, v := range data {
 			return v, nil
 		}
 	}
-	v, ok := data[key]
+	v, ok := data[uriKey]
 	if !ok {
-		return nil, fmt.Errorf("key %q not present", key)
+		return nil, fmt.Errorf("key %q not present", uriKey)
 	}
 	return v, nil
 }

@@ -18,10 +18,19 @@ import (
 	"fmt"
 	"os"
 
-	"google.golang.org/protobuf/encoding/prototext"
-
-	"github.com/agent-substrate/substrate/internal/proto/nsauthzpb"
+	"sigs.k8s.io/yaml"
 )
+
+// namespacePolicyFile is the YAML the authorizer loads: a list of grants, each
+// mapping one atespace to the namespaces whose Secrets it may resolve.
+type namespacePolicyFile struct {
+	Policies []atespaceNamespacePolicy `json:"policies"`
+}
+
+type atespaceNamespacePolicy struct {
+	Atespace          string   `json:"atespace"`
+	AllowedNamespaces []string `json:"allowedNamespaces"`
+}
 
 // NamespaceAuthorizer decides whether an atespace may resolve secrets in a given
 // Kubernetes namespace. It is default-deny: an atespace absent from the mapping
@@ -31,35 +40,34 @@ type NamespaceAuthorizer struct {
 	allowed map[string]map[string]struct{}
 }
 
-// LoadNamespaceAuthorizer reads a textproto NamespaceAuthorizationFile from path
-// and builds an authorizer, so a malformed file fails startup rather than the
-// first request.
+// LoadNamespaceAuthorizer reads the YAML policy file at path and builds an
+// authorizer, so a malformed file fails startup rather than the first request.
 func LoadNamespaceAuthorizer(path string) (*NamespaceAuthorizer, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading namespace policy file %q: %w", path, err)
 	}
-	var file nsauthzpb.NamespaceAuthorizationFile
-	if err := prototext.Unmarshal(data, &file); err != nil {
+	var file namespacePolicyFile
+	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, fmt.Errorf("parsing namespace policy file %q: %w", path, err)
 	}
-	return NewNamespaceAuthorizer(&file)
+	return newNamespaceAuthorizer(file)
 }
 
-// NewNamespaceAuthorizer builds an authorizer over an already-parsed file,
-// validating that each policy names an atespace.
-func NewNamespaceAuthorizer(file *nsauthzpb.NamespaceAuthorizationFile) (*NamespaceAuthorizer, error) {
+// newNamespaceAuthorizer builds an authorizer over a parsed policy file,
+// validating that each grant names an atespace.
+func newNamespaceAuthorizer(file namespacePolicyFile) (*NamespaceAuthorizer, error) {
 	allowed := make(map[string]map[string]struct{})
-	for i, p := range file.GetPolicy() {
-		if p.GetAtespace() == "" {
+	for i, p := range file.Policies {
+		if p.Atespace == "" {
 			return nil, fmt.Errorf("namespace policy %d: atespace is required", i)
 		}
-		set := allowed[p.GetAtespace()]
+		set := allowed[p.Atespace]
 		if set == nil {
 			set = make(map[string]struct{})
-			allowed[p.GetAtespace()] = set
+			allowed[p.Atespace] = set
 		}
-		for _, ns := range p.GetAllowedNamespaces() {
+		for _, ns := range p.AllowedNamespaces {
 			set[ns] = struct{}{}
 		}
 	}

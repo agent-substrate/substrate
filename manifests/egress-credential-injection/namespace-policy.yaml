@@ -15,18 +15,20 @@
 # The atespace→namespace authorization policy credprovider enforces: an actor's
 # atespace may only resolve Secrets whose URI namespace is listed for it here.
 # Enforcement is default-deny — an atespace absent from this file resolves
-# nothing. credprovider loads it once at startup, so editing this ConfigMap
-# requires restarting the credprovider Deployment to take effect.
+# nothing.
+#
+# TODO: credprovider loads this once at startup, so editing this ConfigMap
+# requires restarting the credprovider Deployment. Make it reload dynamically.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: credprovider-namespace-policy
   namespace: ate-system
 data:
-  namespace-policy.textproto: |
+  namespace-policy.yaml: |
     # atespace "team-a" may resolve secrets in namespace "ns1" (matches the
     # sample policy's substrate-secret://kubernetes.io/team-secrets/ns1/example-api).
-    policy {
-      atespace: "team-a"
-      allowed_namespaces: "ns1"
-    }
+    policies:
+    - atespace: team-a
+      allowedNamespaces:
+      - ns1
