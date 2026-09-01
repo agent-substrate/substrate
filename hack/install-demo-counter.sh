@@ -15,18 +15,37 @@
 # limitations under the License.
 #
 # This is sourced as part of install-ate.sh. Do not run directly.
+#
+# The micro-VM variant additionally needs the cluster-wide `microvm`
+# SandboxConfig from hack/install-microvm-deps.sh --install.
 
 ATE_DEMOS+=(demo-counter) # register demo-counter
 
 demo-counter_usage() {
   echo "  --deploy-demo-counter-with-external-volume    Deploy demo-counter with external volume validation"
+  echo "  --deploy-demo-counter-microvm                 Deploy demo-counter on micro-VM workers (needs install-microvm-deps.sh)"
+  echo "  --delete-demo-counter-microvm                 Delete the micro-VM variant"
 }
 
 demo-counter_cmdline() {
   case "${1}" in
     --deploy-demo-counter) demo-counter_deploy "false" ;;
     --deploy-demo-counter-with-external-volume) demo-counter_deploy "true" ;;
-    --delete-demo-counter) demo-counter_delete ;;
+    --delete-demo-counter)
+      delete_substrate_demo demo-counter_render_plain \
+        demos/counter/counter.yaml.tmpl ate-demo-counter counter
+      ;;
+    --deploy-demo-counter-microvm)
+      # 600s golden budget: a micro-VM golden is a cloud-hypervisor cold boot
+      # plus checkpoint, on nested KVM in CI.
+      deploy_substrate_demo render_demo_manifest \
+        demos/counter/counter-microvm.yaml.tmpl ate-demo-counter-microvm counter-microvm 600 \
+        demos/counter/counter-microvm-template.yaml.tmpl counter-microvm
+      ;;
+    --delete-demo-counter-microvm)
+      delete_substrate_demo render_demo_manifest \
+        demos/counter/counter-microvm.yaml.tmpl ate-demo-counter-microvm counter-microvm
+      ;;
     *)
       return 1
       ;;
@@ -34,11 +53,12 @@ demo-counter_cmdline() {
   return 0
 }
 
-demo-counter_deploy() {
-  local with_external_volume="${1:-false}"
-  log_step "demo-counter_deploy (with_external_volume=${with_external_volume})"
-  ensure_crds
-
+# demo-counter_render substitutes the demo's placeholders in a manifest:
+#   demo-counter_render <with_external_volume> <manifest>
+# The external-volume lines are dropped unless <with_external_volume> is true.
+demo-counter_render() {
+  local with_external_volume="$1"
+  local manifest="$2"
   local validate_cmd=("-e" "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d")
   local ext_vol_mount_cmd=("-e" "/\${EXTERNAL_VOLUME_MOUNTS}/d")
   local ext_vol_spec_cmd=("-e" "/\${EXTERNAL_VOLUMES}/d")
@@ -50,36 +70,38 @@ demo-counter_deploy() {
       storage_class="csi-hostpath-sc"
     fi
 
-    validate_cmd=("-e" "s|\${VALIDATE_EXISTING_FILE_PATH_ARG}|    - --validate-existing-file-path=/external-data/test.txt|g")
-    ext_vol_mount_cmd=("-e" "s|\${EXTERNAL_VOLUME_MOUNTS}|    - name: external-data\n      mountPath: /external-data|g")
-    ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|  - name: external-data\n    externalVolumeTemplate:\n      capacity: 1Gi\n      storageClassName: ${storage_class}|g")
+    validate_cmd=("-e" "s|\${VALIDATE_EXISTING_FILE_PATH_ARG}|  - --validate-existing-file-path=/external-data/test.txt|g")
+    ext_vol_mount_cmd=("-e" "s|\${EXTERNAL_VOLUME_MOUNTS}|  - name: external-data\n    mountPath: /external-data|g")
+    ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|- name: external-data\n  type: ExternalVolumeTemplate\n  externalVolumeTemplate:\n    capacity: 1Gi\n    storageClassName: ${storage_class}|g")
   fi
 
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       "${validate_cmd[@]}" \
       "${ext_vol_mount_cmd[@]}" \
       "${ext_vol_spec_cmd[@]}" \
-      demos/counter/counter.yaml.tmpl \
-    | run_ko apply -f -
-
-  # Wait for the demo to be fully ready before returning. On a cold cluster the
-  # first ActorTemplate golden snapshot pays one-time costs (downloading the
-  # gVisor runsc binary, first gVisor pod start, image pulls). Blocking here
-  # means callers -- notably the e2e suite, which creates its own ActorTemplate
-  # with a tight readiness deadline -- run against an already-warm node instead
-  # of racing that cold-start work.
-  log_step "Waiting for counter demo to be ready..."
-  wait_for_pool_rollout_fatal counter ate-demo-counter
-  run_kubectl_fatal wait --for=condition=Ready actortemplate/counter -n ate-demo-counter --timeout=300s
+      "${manifest}"
 }
 
+# Wrappers in the helpers' one-argument <render_fn> shape.
+demo-counter_render_plain() { demo-counter_render false "$1"; }
+demo-counter_render_ext_vol() { demo-counter_render true "$1"; }
+
+demo-counter_deploy() {
+  local with_external_volume="${1:-false}"
+  log_step "demo-counter_deploy (with_external_volume=${with_external_volume})"
+  local render_fn=demo-counter_render_plain
+  if [[ "${with_external_volume}" == "true" ]]; then
+    render_fn=demo-counter_render_ext_vol
+  fi
+  deploy_substrate_demo "${render_fn}" \
+    demos/counter/counter.yaml.tmpl ate-demo-counter counter 300 \
+    demos/counter/counter-template.yaml.tmpl counter
+}
+
+# demo-counter_delete tears down both variants; called by delete_all.
 demo-counter_delete() {
-  log_step "demo-counter_delete"
-  delete_demo_actors ate-demo-counter counter
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      -e "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d" \
-      -e "/\${EXTERNAL_VOLUME_MOUNTS}/d" \
-      -e "/\${EXTERNAL_VOLUMES}/d" \
-      demos/counter/counter.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo demo-counter_render_plain \
+    demos/counter/counter.yaml.tmpl ate-demo-counter counter
+  delete_substrate_demo render_demo_manifest \
+    demos/counter/counter-microvm.yaml.tmpl ate-demo-counter-microvm counter-microvm
 }

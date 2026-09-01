@@ -20,21 +20,23 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/demotest"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 // TestExternalVolumeRenders covers the substitution branch of the counter
 // template, where the external-volume placeholders carry multi-line values
-// instead of being dropped. The drop branch is covered by the sweep test in the
-// demos package.
+// instead of being dropped, and checks the result still parses strictly as
+// the ActorTemplate it is created as. The drop branch is covered by the
+// sweep test in the demos package.
 func TestExternalVolumeRenders(t *testing.T) {
 	e := demotest.Env(t)
-	d := &demo{}
 
-	manifest, err := demos.Render(e, template, d.externalVolumeValues(e), nil)
+	manifest, err := demos.Render(e, "demos/counter/counter-template.yaml.tmpl", externalVolumeValues(e), nil)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	demotest.AssertRendered(t, manifest)
+	demotest.AssertRenderedActorTemplate(t, manifest,
+		resources.ActorTemplateRef{Atespace: namespace, Name: "counter"})
 
 	for _, want := range []string{
 		"--validate-existing-file-path=/external-data/test.txt",

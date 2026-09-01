@@ -174,7 +174,7 @@ kubectl ate delete actor-template <name> -a <atespace>
 ```
 
 See
-[`demos/counter/counter-substrate-template.yaml.tmpl`](../../demos/counter/counter-substrate-template.yaml.tmpl)
+[`demos/counter/counter-template.yaml.tmpl`](../../demos/counter/counter-template.yaml.tmpl)
 for a complete manifest example.
 
 #### `kubectl ate get actor-templates` output columns
@@ -227,7 +227,7 @@ kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope published
 kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope atespace
 
 # Create an actor from a tag and remove the tag when it is no longer needed.
-kubectl ate create actor <actor-name> -a <atespace> --template <namespace/name> --snapshot-tag <tag-atespace/tag-name>
+kubectl ate create actor <actor-name> -a <atespace> --template-ref <template-name> --snapshot-tag <tag-atespace/tag-name>
 kubectl ate delete snapshot-tag <tag-name> -a <atespace>
 ```
 

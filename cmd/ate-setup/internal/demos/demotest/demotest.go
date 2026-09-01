@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 // Env builds an Env with no cluster connection. The render paths only read
@@ -43,6 +44,38 @@ func Env(t *testing.T) *steps.Env {
 func AssertRendered(t *testing.T, manifest []byte) {
 	t.Helper()
 
+	assertNoPlaceholders(t, manifest)
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		t.Fatalf("DecodeManifestBytes: %v", err)
+	}
+	if len(objs) == 0 {
+		t.Error("rendered manifest decoded to no objects")
+	}
+}
+
+// AssertRenderedActorTemplate checks that a rendered protojson ActorTemplate
+// manifest has every placeholder resolved and strictly parses into the
+// ateapipb.ActorTemplate it will be created as, and that it names the given
+// (atespace, name). ko:// image references are left as written: they are
+// plain strings to the proto, resolved only at deploy time.
+func AssertRenderedActorTemplate(t *testing.T, manifest []byte, want resources.ActorTemplateRef) {
+	t.Helper()
+
+	assertNoPlaceholders(t, manifest)
+	template, err := steps.ActorTemplateFromManifest(manifest)
+	if err != nil {
+		t.Fatalf("ActorTemplateFromManifest: %v", err)
+	}
+	if got := resources.ActorTemplateRefFromActorTemplate(template); got != want {
+		t.Errorf("manifest names template %s, want %s", got, want)
+	}
+}
+
+// assertNoPlaceholders checks that no non-comment line still contains a
+// ${PLACEHOLDER}.
+func assertNoPlaceholders(t *testing.T, manifest []byte) {
+	t.Helper()
 	for i, line := range strings.Split(string(manifest), "\n") {
 		// Comments are left as written; some of them mention placeholders as
 		// documentation rather than as substitution points.
@@ -52,12 +85,5 @@ func AssertRendered(t *testing.T, manifest []byte) {
 		if strings.Contains(line, "${") {
 			t.Errorf("line %d still contains a placeholder: %s", i+1, line)
 		}
-	}
-	objs, err := kube.DecodeManifestBytes(manifest)
-	if err != nil {
-		t.Fatalf("DecodeManifestBytes: %v", err)
-	}
-	if len(objs) == 0 {
-		t.Error("rendered manifest decoded to no objects")
 	}
 }

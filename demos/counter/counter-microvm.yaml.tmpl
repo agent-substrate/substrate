@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Micro-VM (kata + cloud-hypervisor) variant of the counter demo. The counter is
-# in-RAM (atomic uint64), so a successful suspend/resume across pods shows the
-# count continuing — proving the guest memory snapshot round-tripped.
-#
-# The cluster-wide `microvm` SandboxConfig referenced below by name is
-# installed by hack/install-microvm-deps.sh
+# Worker pool for the micro-VM (kata + cloud-hypervisor) variant of the
+# counter demo. The counter is in-RAM (atomic uint64), so a successful
+# suspend/resume across pods shows the count continuing — proving the guest
+# memory snapshot round-tripped. The ActorTemplate is not a CRD: it lives in
+# counter-microvm-template.yaml.tmpl and is created through the ate API with
+# `kubectl ate create actor-template`. The cluster-wide `microvm`
+# SandboxConfig referenced by the pool is installed by
+# hack/install-microvm-deps.sh
 
 apiVersion: v1
 kind: Namespace
@@ -34,6 +36,8 @@ metadata:
   labels:
     workload: counter-microvm
 spec:
+  # Two workers: one for the demo actor, one spare for the golden actor the
+  # template reconciler runs while building the golden snapshot.
   replicas: 2
   sandboxClass: microvm
   sandboxConfigName: microvm
@@ -41,8 +45,9 @@ spec:
   template:
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The micro-VM sandbox itself is
-    # sized by the ActorTemplate's spec.resources below, not by these; keep the
-    # actor memory below this limit so the VMM reserve fits (see internal/sizing).
+    # sized by the ActorTemplate's resources in counter-microvm-template.yaml.tmpl,
+    # not by these; keep the actor memory below this limit so the VMM reserve
+    # fits (see internal/sizing).
     #
     # Capacity comes from the limits (workerCapacity reads limits only), while the
     # kube-scheduler packs nodes by the requests — so the CPU request is set well
@@ -57,69 +62,3 @@ spec:
       requests:
         cpu: 500m
         memory: 2Gi
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: counter-microvm
-  namespace: ate-demo-counter-microvm
-spec:
-  # Must match the WorkerPool's sandboxClass: a snapshot is not portable across
-  # sandbox classes, so only pools of the same class are eligible to run this
-  # template's actors.
-  sandboxClass: microvm
-  containers:
-  - name: counter
-    image: ko://github.com/agent-substrate/substrate/demos/counter
-    command:
-    - /ko-app/counter
-    # Exercises atenet-router's arbitrary-port ingress support: a second
-    # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
-    # from the primary port 80 every other assertion in this demo uses. Kept in
-    # step with counter.yaml.tmpl — the networking suite runs against whichever
-    # of the two the sandbox class under test selects.
-    - --extra-port=9090
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 80
-      # Well above readyz.DefaultOverallTimeout (30s), which the gVisor counter
-      # is happy with. A micro-VM actor answers in a few seconds on an idle
-      # node, but CI runs every suite against this one pool on a single kind
-      # node and a guest boot stretches badly under that contention — 30s was
-      # marginal enough to fail several suites intermittently. Raising it here
-      # rather than the default is what internal/readyz asks for: "a workload
-      # that needs longer says so on its ActorTemplate".
-      timeoutSeconds: 120
-    # The counter writes its file counter here. With the durableDir volume below
-    # it lands on a host-backed virtio-fs share instead of the guest-RAM rootfs
-    # upper, so it survives a Data-scope snapshot (which keeps no guest memory).
-    volumeMounts:
-    - name: data
-      mountPath: /home/counter
-  # Sandbox size: an actor occupies its whole worker. Size vCPUs + guest RAM at
-  # (or below) the pool's per-worker capacity above, leaving headroom under the
-  # worker memory limit for the VMM reserve. ateom applies these to the guest
-  # (see internal/sizing).
-  resources:
-    limits:
-      cpu: "2"
-      memory: 512Mi
-  workerSelector:
-    matchLabels:
-      workload: counter-microvm
-  snapshotsConfig:
-    onPause: Full
-    # Full, matching the gVisor variant: a suspend captures guest memory, so
-    # the in-RAM count continues from where it left off — the round-trip this
-    # demo's header comment promises. The golden-combining Data resume path
-    # (onResume.fromData: Golden) is exercised by the e2e demo suite's
-    # micro-VM cases; with Full on both triggers no Data snapshot is ever
-    # written here, so no onResume block is needed.
-    onCommit: Full
-    location: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
-  volumes:
-  - name: data
-    durableDir: {}

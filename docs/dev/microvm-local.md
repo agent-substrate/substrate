@@ -67,7 +67,8 @@ template.
 
 ```sh
 kubectl get pods -n ate-demo-counter-microvm
-kubectl get workerpools,actortemplates -A
+kubectl get workerpools -A
+kubectl ate get actor-templates -a ate-demo-counter-microvm
 ```
 
 Expected:
@@ -76,8 +77,8 @@ Expected:
 NAMESPACE                  NAME                                 DESIRED  READY  AVAILABLE
 ate-demo-counter-microvm   workerpool.ate.dev/counter-microvm   1        1      1
 
-NAMESPACE                  NAME                                      READY  AGE
-ate-demo-counter-microvm   actortemplate.ate.dev/counter-microvm     True   1m
+NAME              STATUS  AGE
+counter-microvm   Ready   1m
 ```
 
 ## Option B: Apple Silicon macOS via Lima
@@ -175,7 +176,7 @@ round-tripped. The flow is the same as the
 [README Quickstart](../../README.md#quickstart-development), just with the
 microVM template; see the
 [counter demo's micro-VM variant](../../demos/counter/README.md#micro-vm-variant)
-for background. Note that an `actortemplate` reporting `READY=True` in the
+for background. Note that an actor template reporting `Ready` in the
 verify step already exercises the runtime end-to-end — the golden snapshot
 requires a full guest boot and checkpoint.
 

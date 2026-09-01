@@ -17,29 +17,36 @@ The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, whil
 ### 1. Build and Deploy
 
 > [!NOTE]
-> Do not manually edit `demos/counter/counter-substrate.yaml.tmpl` or
-> `demos/counter/counter-substrate-template.yaml.tmpl`. The installation script
+> Do not manually edit `demos/counter/counter.yaml.tmpl` or
+> `demos/counter/counter-template.yaml.tmpl`. The installation script
 > automatically injects your `${BUCKET_NAME}` environment variable during
 > deployment.
 
 Use the core installation script to build the image and deploy the demo to your cluster:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-substrate
+./hack/install-ate.sh --deploy-demo-counter
+```
+
+To enable validation of reading from an external volume (e.g.
+`/external-data/test.txt`), run:
+
+```bash
+./hack/install-ate.sh --deploy-demo-counter-with-external-volume
 ```
 
 This command will:
 - Build the counter server image using `ko`.
-- Apply [`counter-substrate.yaml.tmpl`](counter-substrate.yaml.tmpl): the `ate-demo-counter-substrate` namespace and the `counter-substrate` `WorkerPool`, then wait for the worker rollout.
-- Create the `ate-demo-counter-substrate` atespace.
-- Create the `counter` actor template through the ate API (`kubectl ate create actor-template`) from [`counter-substrate-template.yaml.tmpl`](counter-substrate-template.yaml.tmpl). The manifest is the message's protojson form — the same shape `kubectl ate get actor-template -o yaml` prints inside its `actorTemplates` list.
+- Apply [`counter.yaml.tmpl`](counter.yaml.tmpl): the `ate-demo-counter` namespace and the `counter` `WorkerPool`, then wait for the worker rollout.
+- Create the `ate-demo-counter` atespace.
+- Create the `counter` actor template through the ate API (`kubectl ate create actor-template`) from [`counter-template.yaml.tmpl`](counter-template.yaml.tmpl). The manifest is the message's protojson form — the same shape `kubectl ate get actor-template -o yaml` prints inside its `actorTemplates` list.
 - Wait until the template's golden snapshot is ready.
 
 Inspect the deployed template with:
 
 ```bash
-kubectl ate get actor-templates -a ate-demo-counter-substrate
-kubectl ate get actor-template counter -a ate-demo-counter-substrate -o yaml
+kubectl ate get actor-templates -a ate-demo-counter
+kubectl ate get actor-template counter -a ate-demo-counter -o yaml
 ```
 
 ### 2. Create a Counter Actor
@@ -51,7 +58,7 @@ Create the counter actor with a chosen ID (e.g., `my-counter-1`) using `--templa
 go install ./cmd/kubectl-ate
 
 # Create the actor from the counter template.
-kubectl ate create actor my-counter-1 -a ate-demo-counter-substrate --template-ref counter
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template-ref counter
 ```
 
 ### 3. Port-Forward Services
@@ -73,17 +80,17 @@ When you send an HTTP request through the router, Substrate automatically detect
 
 1. Send an HTTP POST request to increment the counter:
 ```bash
-curl -X POST -H "Host: my-counter-1.ate-demo-counter-substrate.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -X POST -H "Host: my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev" http://localhost:8000
 ```
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
 ```bash
-kubectl ate get actor my-counter-1 -a ate-demo-counter-substrate
+kubectl ate get actor my-counter-1 -a ate-demo-counter
 ```
 
 3. When finished, you can manually suspend the actor back to snapshot storage:
 ```bash
-kubectl ate suspend actor my-counter-1 -a ate-demo-counter-substrate
+kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 ```
 
 Repeat the `curl` from step 1 and the actor resumes from its snapshot —
@@ -93,7 +100,7 @@ memory, the file counter from the durable volume.
 
 4. To permanently delete the suspended actor:
 ```bash
-kubectl ate delete actor my-counter-1 -a ate-demo-counter-substrate
+kubectl ate delete actor my-counter-1 -a ate-demo-counter
 ```
 
 ## Reaching a non-default port
@@ -110,7 +117,7 @@ through it to the named port.
 proxy behavior wouldn't do:
 
 ```bash
-curl -p -x http://localhost:8001 http://my-counter-1.ate-demo-counter-substrate.actors.resources.substrate.ate.dev:9090/
+curl -p -x http://localhost:8001 http://my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev:9090/
 ```
 
 This reaches the same actor's second listener and resumes it exactly like any
@@ -130,35 +137,35 @@ The same in-RAM-counter suspend/resume-continuity demo also runs on the micro-VM
 sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor), proving that
 the guest-memory snapshot round-trips just as gVisor's process snapshot does.
 
-- [`demos/counter/counter-substrate-microvm.yaml.tmpl`](counter-substrate-microvm.yaml.tmpl) —
+- [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) —
   the `WorkerPool` for the micro-VM sandbox class.
-- [`demos/counter/counter-substrate-microvm-template.yaml.tmpl`](counter-substrate-microvm-template.yaml.tmpl) —
+- [`demos/counter/counter-microvm-template.yaml.tmpl`](counter-microvm-template.yaml.tmpl) —
   the `counter-microvm` actor template, created through the ate API in the
-  `ate-demo-counter-substrate-microvm` atespace.
+  `ate-demo-counter-microvm` atespace.
 - [`hack/run-microvm-demo.sh`](../../hack/run-microvm-demo.sh) — one-shot bring-up
   that builds the micro-VM worker image, stages the guest assets, deploys the
   control plane, and applies the manifests above. Like the other hack scripts it
   reads `.ate-dev-env.sh` for GKE; use the kind wrapper for a local cluster.
 
-Run it with `--substrate` and follow the printed next steps:
+Run it and follow the printed next steps:
 
 ```bash
 # GKE (uses .ate-dev-env.sh, uploads assets to GCS):
-./hack/run-microvm-demo.sh --substrate
+./hack/run-microvm-demo.sh
 
 # local kind (local registry + in-cluster rustfs):
-KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh --substrate
+KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
 ```
 
 On a cluster that already has the micro-VM deps (`hack/install-microvm-deps.sh`),
 deploy directly instead:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-substrate-microvm
+./hack/install-ate.sh --deploy-demo-counter-microvm
 ```
 
 Then create an actor (`--template-ref counter-microvm`, in the
-`ate-demo-counter-substrate-microvm` atespace), increment the counter, suspend
+`ate-demo-counter-microvm` atespace), increment the counter, suspend
 it, resume it (even on a different worker), and confirm the count continues —
 the actor's counter lives in guest RAM, so a continuing count proves the
 guest-memory snapshot survived the round trip.
@@ -168,8 +175,8 @@ guest-memory snapshot survived the round trip.
 To remove the counter demo resources from your cluster, run:
 
 ```bash
-./hack/install-ate.sh --delete-demo-counter-substrate
-./hack/install-ate.sh --delete-demo-counter-substrate-microvm
+./hack/install-ate.sh --delete-demo-counter
+./hack/install-ate.sh --delete-demo-counter-microvm
 ```
 
 This deletes the actors created from the demo templates, the templates

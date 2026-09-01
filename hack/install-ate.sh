@@ -40,7 +40,6 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
-source "${ROOT}"/hack/install-demo-counter-substrate.sh
 source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-jupyter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
@@ -825,7 +824,7 @@ prepare_actor_for_delete() {
 # delete_demo_actors removes all actors for one or more (namespace, template)
 # pairs before the demo manifests are deleted. Arguments are alternating
 # namespace and template name, e.g.:
-#   delete_demo_actors ate-demo-counter counter
+#   delete_demo_actors ate-demo-egress egress
 #   delete_demo_actors ns-a tmpl-a ns-b tmpl-b
 delete_demo_actors() {
   if ! command -v jq &>/dev/null; then
@@ -945,62 +944,40 @@ wait_actortemplate_ready() {
   return 1
 }
 
-# deploy_substrate_demo deploys a demo whose ActorTemplate is a substrate
-# resource: apply the pool manifest, wait for the pool rollout, create the
-# template through the ate API, and block on its golden snapshot.
-#   deploy_substrate_demo <demo> <pool_manifest> <template_manifest> \
-#     <atespace> <pool> <template> <golden_timeout> [extra sed exprs...]
-# The atespace doubles as the pool's k8s namespace, keeping the substrate
-# naming parallel to the CRD-era namespace/template pairs. An empty <pool>
-# skips the rollout wait; a golden_timeout of 0 creates the template without
-# blocking on its golden snapshot. Extra sed expressions are applied to the
-# template manifest, for demos with optional template stanzas.
-deploy_substrate_demo() {
-  local demo="$1" pool_manifest="$2" template_manifest="$3"
-  local atespace="$4" pool="$5" template="$6" golden_timeout="${7:-300}"
-  shift 7
-  log_step "${demo}_deploy (${atespace}/${template})"
-  ensure_crds
+# The helpers below deploy a demo in the substrate-resource shape: a CRD
+# worker-pool manifest plus protojson ActorTemplates created through the ate
+# API. The pool's k8s namespace doubles as the atespace unless a demo says
+# otherwise; <render_fn> turns a manifest path into YAML on stdout.
 
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${pool_manifest}" \
-    | run_ko apply -f -
-
-  if [[ -n "${pool}" ]]; then
-    log_step "Waiting for the ${pool} worker pool rollout..."
-    wait_for_pool_rollout_fatal "${pool}" "${atespace}"
-  fi
-
-  create_substrate_template "${template_manifest}" "${atespace}" "${template}" "$@"
-
-  if [[ "${golden_timeout}" != "0" ]]; then
-    # Mirrors the CRD era's `kubectl wait --for=condition=Ready
-    # actortemplate/...` (there is no kubectl wait for substrate resources).
-    log_step "Waiting for the ${atespace}/${template} golden snapshot..."
-    if ! wait_actortemplate_ready "${atespace}" "${template}" "${golden_timeout}"; then
-      exit 1
-    fi
-  fi
+# render_demo_manifest substitutes ${BUCKET_NAME} in a manifest.
+render_demo_manifest() {
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "$1"
 }
 
-# create_substrate_template renders a protojson ActorTemplate manifest and
-# creates it through the ate API:
-#   create_substrate_template <manifest> <atespace> <template> [extra sed exprs...]
-create_substrate_template() {
-  local template_manifest="$1" atespace="$2" template="$3"
-  shift 3
-
-  # The store enforces that the template's atespace exists at create time.
+# ensure_atespace creates the atespace if it does not already exist. The
+# store enforces that a template's atespace exists at create time.
+ensure_atespace() {
+  local atespace="$1"
   if ! run_kubectl_ate create atespace "${atespace}" >/dev/null 2>&1 \
       && ! run_kubectl_ate get atespace "${atespace}" >/dev/null 2>&1; then
     echo "error: failed to create atespace ${atespace}" >&2
     exit 1
   fi
+}
 
-  # ko resolve builds the ko:// image references and replaces them with pushed
-  # digests before the manifest reaches kubectl-ate. Actor templates are
-  # immutable (no update RPC), so an existing template is left in place:
-  # delete the demo and redeploy to change it.
-  if ! sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "$@" "${template_manifest}" \
+# create_demo_actor_template renders a protojson ActorTemplate manifest,
+# creates it through the ate API, and blocks on its golden snapshot.
+# Templates are immutable, so an existing one is kept in place.
+create_demo_actor_template() {
+  local render_fn="$1"
+  local template_manifest="$2"
+  local atespace="$3"
+  local template="$4"
+  local timeout_secs="${5:-300}"
+
+  # ko resolve replaces ko:// image references with pushed digests;
+  # manifests without them pass through unchanged.
+  if ! "${render_fn}" "${template_manifest}" \
       | run_ko resolve -f - \
       | run_kubectl_ate create actor-template -f -; then
     if run_kubectl_ate get actor-template "${template}" -a "${atespace}" >/dev/null 2>&1; then
@@ -1010,35 +987,71 @@ create_substrate_template() {
       exit 1
     fi
   fi
+
+  # The substrate counterpart of `kubectl wait --for=condition=Ready
+  # actortemplate/...`, which does not exist for substrate resources.
+  log_step "Waiting for the ${atespace}/${template} golden snapshot..."
+  if ! wait_actortemplate_ready "${atespace}" "${template}" "${timeout_secs}"; then
+    exit 1
+  fi
 }
 
-# delete_substrate_templates removes a demo's actors, its templates, and then
-# their shared atespace:
-#   delete_substrate_templates <atespace> <template...>
-delete_substrate_templates() {
+# deploy_substrate_demo deploys the common substrate demo shape: one worker
+# pool plus ActorTemplates given as alternating manifest / name pairs after
+# the golden-snapshot timeout (micro-VM goldens pay a cloud-hypervisor cold
+# boot, so those demos pass a larger budget).
+deploy_substrate_demo() {
+  local render_fn="$1"
+  local pool_manifest="$2"
+  local atespace="$3" # also the pool's k8s namespace
+  local pool="$4"
+  local golden_timeout="$5"
+  shift 5
+
+  ensure_crds
+  "${render_fn}" "${pool_manifest}" | run_ko apply -f -
+
+  log_step "Waiting for the ${pool} worker pool rollout..."
+  wait_for_pool_rollout_fatal "${pool}" "${atespace}"
+
+  ensure_atespace "${atespace}"
+
+  local template_manifest template
+  while (($# > 0)); do
+    template_manifest="$1"
+    template="$2"
+    shift 2
+    create_demo_actor_template "${render_fn}" "${template_manifest}" "${atespace}" "${template}" "${golden_timeout}"
+  done
+}
+
+# delete_demo_actor_template deletes a template's actors, then the template
+# itself, which server-side also removes its golden actor and snapshot.
+delete_demo_actor_template() {
   local atespace="$1"
-  shift
+  local template="$2"
+  delete_demo_actors_substrate "${atespace}" "${template}"
+  run_kubectl_ate delete actor-template "${template}" -a "${atespace}" 2>/dev/null \
+    || log_step "actor template ${atespace}/${template} not deleted (may not exist)"
+}
+
+# delete_substrate_demo tears down what deploy_substrate_demo deployed:
+# actors, templates, the atespace, then the pool manifest. Arguments after
+# the atespace are the template names in that atespace.
+delete_substrate_demo() {
+  local render_fn="$1"
+  local pool_manifest="$2"
+  local atespace="$3"
+  shift 3
+
   local template
   for template in "$@"; do
-    delete_demo_actors_substrate "${atespace}" "${template}"
-    # Also removes the template's golden actor and golden snapshot server-side.
-    run_kubectl_ate delete actor-template "${template}" -a "${atespace}" 2>/dev/null \
-      || log_step "actor template ${atespace}/${template} not deleted (may not exist)"
+    delete_demo_actor_template "${atespace}" "${template}"
   done
   run_kubectl_ate delete atespace "${atespace}" 2>/dev/null \
     || log_step "atespace ${atespace} not deleted (may not exist or is not empty)"
-}
 
-# delete_substrate_demo tears down one substrate demo: its actors, templates,
-# atespace, and pool manifest.
-#   delete_substrate_demo <demo> <pool_manifest> <atespace> <template...>
-delete_substrate_demo() {
-  local demo="$1" pool_manifest="$2" atespace="$3"
-  shift 3
-  log_step "${demo}_delete (${atespace})"
-  delete_substrate_templates "${atespace}" "$@"
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${pool_manifest}" \
-    | run_kubectl delete --ignore-not-found -f -
+  "${render_fn}" "${pool_manifest}" | run_kubectl delete --ignore-not-found -f -
 }
 
 delete_ate_system() {

@@ -26,11 +26,11 @@ import (
 )
 
 const counterTemplateManifest = `metadata:
-  atespace: ate-demo-counter-substrate
+  atespace: ate-demo-counter
   name: counter
 workerSelector:
   matchLabels:
-    workload: counter-substrate
+    workload: counter
 containers:
 - name: counter
   image: ko://github.com/agent-substrate/substrate/demos/counter
@@ -51,7 +51,7 @@ resources:
 snapshotsConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
-  storageLocation: gs://ate-snapshots/ate-demo-counter-substrate/
+  storageLocation: gs://ate-snapshots/ate-demo-counter/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
   configName: gvisor-default
@@ -68,8 +68,8 @@ func TestActorTemplateFromManifest(t *testing.T) {
 	}
 
 	want := &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ate-demo-counter-substrate", Name: "counter"},
-		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"workload": "counter-substrate"}},
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ate-demo-counter", Name: "counter"},
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"workload": "counter"}},
 		Containers: []*ateapipb.Container{{
 			Name:    "counter",
 			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
@@ -86,7 +86,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 		SnapshotsConfig: &ateapipb.SnapshotsConfig{
 			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			StorageLocation: "gs://ate-snapshots/ate-demo-counter-substrate/",
+			StorageLocation: "gs://ate-snapshots/ate-demo-counter/",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -106,11 +106,11 @@ func TestActorTemplateFromManifest(t *testing.T) {
 func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
 	// protojson accepts the proto field names as well as the json names.
 	manifest := `metadata:
-  atespace: ate-demo-counter-substrate
+  atespace: ate-demo-counter
   name: counter
 snapshots_config:
   on_pause: SNAPSHOT_CONTENT_SCOPE_FULL
-  storage_location: gs://ate-snapshots/ate-demo-counter-substrate/
+  storage_location: gs://ate-snapshots/ate-demo-counter/
 sandbox_config:
   sandbox_class: SANDBOX_CLASS_MICROVM
   config_name: microvm
@@ -119,7 +119,7 @@ sandbox_config:
 	if err != nil {
 		t.Fatalf("actorTemplateFromManifest: %v", err)
 	}
-	if got.GetSnapshotsConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter-substrate/" {
+	if got.GetSnapshotsConfig().GetStorageLocation() != "gs://ate-snapshots/ate-demo-counter/" {
 		t.Errorf("storage_location = %q", got.GetSnapshotsConfig().GetStorageLocation())
 	}
 	if got.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
@@ -157,14 +157,14 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 		class    ateapipb.SandboxClass
 	}{
 		{
-			manifest: "counter-substrate-template.yaml.tmpl",
-			atespace: "ate-demo-counter-substrate",
+			manifest: "counter-template.yaml.tmpl",
+			atespace: "ate-demo-counter",
 			name:     "counter",
 			class:    ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 		},
 		{
-			manifest: "counter-substrate-microvm-template.yaml.tmpl",
-			atespace: "ate-demo-counter-substrate-microvm",
+			manifest: "counter-microvm-template.yaml.tmpl",
+			atespace: "ate-demo-counter-microvm",
 			name:     "counter-microvm",
 			class:    ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
 		},
@@ -175,8 +175,17 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading demo manifest: %v", err)
 			}
-			// The install scripts substitute the bucket before applying.
+			// The install scripts substitute the bucket and drop the unused
+			// optional placeholder lines before applying.
 			rendered := strings.ReplaceAll(string(data), "${BUCKET_NAME}", "ate-snapshots")
+			var kept []string
+			for _, line := range strings.Split(rendered, "\n") {
+				if strings.Contains(line, "${") {
+					continue
+				}
+				kept = append(kept, line)
+			}
+			rendered = strings.Join(kept, "\n")
 
 			got, err := actorTemplateFromManifest([]byte(rendered))
 			if err != nil {

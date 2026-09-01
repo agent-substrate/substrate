@@ -82,14 +82,14 @@ demo-egress-microvm-mitm_cmdline() {
 }
 
 demo-egress_deploy() {
-  deploy_substrate_demo demo-egress \
+  deploy_substrate_demo render_demo_manifest \
     demos/egress/egress.yaml.tmpl \
-    demos/egress/egress-template.yaml.tmpl \
-    ate-demo-egress egress egress 300
+    ate-demo-egress egress 300 \
+    demos/egress/egress-template.yaml.tmpl egress
 }
 
 demo-egress_delete() {
-  delete_substrate_demo demo-egress \
+  delete_substrate_demo render_demo_manifest \
     demos/egress/egress.yaml.tmpl \
     ate-demo-egress egress
 }
@@ -101,14 +101,14 @@ demo-egress-microvm_usage() {
 demo-egress-microvm_deploy() {
   # 600s golden budget: a micro-VM golden is a cloud-hypervisor cold boot
   # plus checkpoint, on nested KVM in CI.
-  deploy_substrate_demo demo-egress-microvm \
+  deploy_substrate_demo render_demo_manifest \
     demos/egress/egress-microvm.yaml.tmpl \
-    demos/egress/egress-microvm-template.yaml.tmpl \
-    ate-demo-egress-microvm egress-microvm egress-microvm 600
+    ate-demo-egress-microvm egress-microvm 600 \
+    demos/egress/egress-microvm-template.yaml.tmpl egress-microvm
 }
 
 demo-egress-microvm_delete() {
-  delete_substrate_demo demo-egress-microvm \
+  delete_substrate_demo render_demo_manifest \
     demos/egress/egress-microvm.yaml.tmpl \
     ate-demo-egress-microvm egress-microvm
 }
@@ -122,14 +122,14 @@ demo-egress-mitm_deploy() {
   # The golden snapshot only exists once an actor starts, and an actor whose
   # trust bundle does not resolve never does — so a timeout here is the
   # symptom of a missing sdsmint install (see demo-egress-mitm_usage).
-  deploy_substrate_demo demo-egress-mitm \
+  deploy_substrate_demo render_demo_manifest \
     demos/egress/egress-mitm.yaml.tmpl \
-    demos/egress/egress-mitm-template.yaml.tmpl \
-    ate-demo-egress-mitm egress-mitm egress-mitm 300
+    ate-demo-egress-mitm egress-mitm 300 \
+    demos/egress/egress-mitm-template.yaml.tmpl egress-mitm
 }
 
 demo-egress-mitm_delete() {
-  delete_substrate_demo demo-egress-mitm \
+  delete_substrate_demo render_demo_manifest \
     demos/egress/egress-mitm.yaml.tmpl \
     ate-demo-egress-mitm egress-mitm
 }
@@ -140,14 +140,14 @@ demo-egress-microvm-mitm_usage() {
 }
 
 demo-egress-microvm-mitm_deploy() {
-  deploy_substrate_demo demo-egress-microvm-mitm \
+  deploy_substrate_demo render_demo_manifest \
     demos/egress/egress-microvm-mitm.yaml.tmpl \
-    demos/egress/egress-microvm-mitm-template.yaml.tmpl \
-    ate-demo-egress-microvm-mitm egress-microvm-mitm egress-microvm-mitm 600
+    ate-demo-egress-microvm-mitm egress-microvm-mitm 600 \
+    demos/egress/egress-microvm-mitm-template.yaml.tmpl egress-microvm-mitm
 }
 
 demo-egress-microvm-mitm_delete() {
-  delete_substrate_demo demo-egress-microvm-mitm \
+  delete_substrate_demo render_demo_manifest \
     demos/egress/egress-microvm-mitm.yaml.tmpl \
     ate-demo-egress-microvm-mitm egress-microvm-mitm
 }

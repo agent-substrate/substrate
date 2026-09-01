@@ -1,0 +1,77 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the micro-VM
+# counter demo. Applied with `kubectl ate create actor-template -f -` after
+# `ko resolve` replaces the ko:// image reference; the
+# ate-demo-counter-microvm atespace must exist.
+metadata:
+  atespace: ate-demo-counter-microvm
+  name: counter-microvm
+workerSelector:
+  matchLabels:
+    workload: counter-microvm
+containers:
+- name: counter
+  image: ko://github.com/agent-substrate/substrate/demos/counter
+  command:
+  - /ko-app/counter
+  # Exercises atenet-router's arbitrary-port ingress support: a second
+  # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
+  # from the primary port 80 every other assertion in this demo uses. Kept
+  # in step with counter-template.yaml.tmpl — the networking suite runs
+  # against whichever of the two the sandbox class under test selects.
+  - --extra-port=9090
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 80
+    # Well above readyz.DefaultOverallTimeout (30s), which the gVisor counter
+    # is happy with. A micro-VM actor answers in a few seconds on an idle
+    # node, but CI runs every suite against this one pool on a single kind
+    # node and a guest boot stretches badly under that contention.
+    timeoutSeconds: 120
+  # The counter writes its file counter here. With the durableDir volume
+  # below it lands on a host-backed virtio-fs share instead of the guest-RAM
+  # rootfs upper, so it survives a DATA-scope snapshot (which keeps no guest
+  # memory).
+  volumeMounts:
+  - name: data
+    mountPath: /home/counter
+# Sandbox size: vCPUs + guest RAM at (or below) the pool's per-worker
+# capacity, leaving VMM-reserve headroom under the worker memory limit
+# (see internal/sizing). Quantities are strings in the proto.
+resources:
+  limits:
+  - name: cpu
+    quantity: "2"
+  - name: memory
+    quantity: 512Mi
+snapshotsConfig:
+  # FULL on both triggers, matching the gVisor variant: a suspend captures
+  # guest memory, so the in-RAM count continues from where it left off — the
+  # round-trip this demo promises. The golden-combining DATA resume path
+  # (onResume.fromData: RESUME_SOURCE_GOLDEN) is exercised by the e2e demo
+  # suite's micro-VM cases; with FULL on both triggers no DATA snapshot is
+  # ever written here, so no onResume block is needed.
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_MICROVM
+  configName: microvm
+volumes:
+- name: data
+  type: DurableDir
+  durableDir: {}
