@@ -472,22 +472,23 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("env").Index(1), nil)},
 	}, {
-		name: "same volume mounted at two paths is allowed",
+		// One mount per volume for now; see the TODO on volume_mounts.
+		name: "same volume mounted twice is rejected",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
 				{Name: "data", MountPath: "/var/data"},
 				{Name: "data", MountPath: "/mnt/data"},
 			}
 		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1), nil)},
 	}, {
-		name: "duplicate mount_path",
+		name: "two volumes at distinct paths are allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
 				{Name: "data", MountPath: "/var/data"},
-				{Name: "other", MountPath: "/var/data"},
+				{Name: "other", MountPath: "/mnt/other"},
 			}
 		},
-		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1), nil)},
 	}, {
 		name: "duplicate volume name",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -513,7 +514,9 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "valid command and args",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Command = []string{"/bin/app"}
-			tmpl.Containers[0].Args = []string{"--serve", "--port=8080"}
+			// Repeated argv values are legitimate; these lists are atomic,
+			// not sets.
+			tmpl.Containers[0].Args = []string{"--serve", "-v", "-v"}
 		},
 	}, {
 		name: "too many args entries",
@@ -616,6 +619,12 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Drop: []string{"net_raw"}}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "drop").Index(0), nil, "")},
+	}, {
+		name: "duplicate capability",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: []string{"NET_BIND_SERVICE", "NET_BIND_SERVICE"}}}
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(1), nil)},
 	}, {
 		name: "too many capabilities",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

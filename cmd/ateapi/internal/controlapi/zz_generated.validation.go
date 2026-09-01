@@ -1117,6 +1117,10 @@ func Validate_Capabilities(
 			if e := ValidateCustom_Capabilities_Add(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -1151,6 +1155,10 @@ func Validate_Capabilities(
 			}
 			// custom validation
 			if e := ValidateCustom_Capabilities_Drop(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			// lists with set semantics require unique values
+			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1416,12 +1424,12 @@ func Validate_Container(
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.MountPath == b.MountPath }); len(e) != 0 {
+				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.Name == b.Name }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.MountPath == b.MountPath }, deepEqualImpl_, Validate_VolumeMount); len(e) != 0 {
+				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_VolumeMount); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

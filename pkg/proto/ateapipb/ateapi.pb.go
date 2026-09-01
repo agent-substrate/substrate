@@ -998,6 +998,7 @@ type EgressPolicy struct {
 	//
 	// +k8s:optional
 	// +k8s:maxItems=256
+	// +k8s:listType=atomic # rule order matters
 	Rules         []*EgressRule `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2056,13 +2057,13 @@ type ActorTemplate struct {
 	// +k8s:optional
 	WorkerSelector *Selector `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
 	// +k8s:required # at least one container
-	// +k8s:maxItems=10 # matches the CRD's containers bound
+	// +k8s:maxItems=10
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Containers []*Container `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches the CRD's volumes bound
-	// +k8s:listType=map # the CRD declares volumes as a map keyed by name
+	// +k8s:maxItems=32
+	// +k8s:listType=map
 	// +k8s:listMapKey=name
 	Volumes []*Volume `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	// +k8s:required
@@ -2288,8 +2289,7 @@ type GoldenSnapshotStatus struct {
 	// +k8s:opaqueType
 	GoldenSnapshot *ObjectRef `protobuf:"bytes,1,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
 	// take_golden_snapshot_at is when the golden-actor warmup ends and the
-	// golden snapshot may be taken. Mirrors the CRD's status.takeGoldenSnapshotAt
-	// cmd/atecontroller/internal/controllers/actortemplate_controller.go
+	// golden snapshot may be taken.
 	TakeGoldenSnapshotAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=take_golden_snapshot_at,json=takeGoldenSnapshotAt,proto3" json:"take_golden_snapshot_at,omitempty"`
 	ErrorMessage         string                 `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
 	unknownFields        protoimpl.UnknownFields
@@ -2613,18 +2613,20 @@ type Container struct {
 	// $(VAR_NAME) references are NOT expanded.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=64 # matches the CRD's command bound
+	// +k8s:maxItems=64
+	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Command []string `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
 	// Arguments to the entrypoint; the image's CMD is used if unset (unless
 	// command is set, which discards the image's CMD).
 	//
 	// +k8s:optional
-	// +k8s:maxItems=64 # matches the CRD's args bound
+	// +k8s:maxItems=64
+	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Args []string `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`
 	// +k8s:optional
-	// +k8s:maxItems=32 # matches the CRD's env bound
+	// +k8s:maxItems=32
 	// +k8s:listType=map # each variable is set at most once
 	// +k8s:listMapKey=name
 	Env []*EnvVar `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
@@ -2633,11 +2635,17 @@ type Container struct {
 	//
 	// +k8s:optional
 	Readyz *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
+	// Each volume may be mounted at most once per container.
+	//
+	// TODO: Kubernetes permits mounting a single volume at multiple paths (which
+	// requires keying by mountPath). We restrict it to one mount per volume (keyed
+	// by name). Note that keying by name means DV will not catch
+	// two different volumes mounted to the same path.
+	//
 	// +k8s:optional
 	// +k8s:maxItems=32
-	// +k8s:listType=map # a volume may be mounted at several paths, so the
-	// path, not the name, is the key
-	// +k8s:listMapKey=mount_path
+	// +k8s:listType=map
+	// +k8s:listMapKey=name
 	VolumeMounts []*VolumeMount `protobuf:"bytes,7,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// security_context adjusts the container's security settings. Unset leaves
 	// the default capability set.
@@ -2805,14 +2813,16 @@ type Capabilities struct {
 	// rejected: name the individual capabilities the container needs.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=64 # matches the CRD's bound
+	// +k8s:maxItems=64
+	// +k8s:listType=set
 	// +k8s:customValidation # capability grammar; "ALL" not accepted
 	Add []string `protobuf:"bytes,1,rep,name=add,proto3" json:"add,omitempty"`
 	// drop lists capabilities to remove from the default set. "ALL" drops the
 	// whole set, so drop+add expresses an exact set rather than a relative one.
 	//
 	// +k8s:optional
-	// +k8s:maxItems=64 # matches the CRD's bound
+	// +k8s:maxItems=64
+	// +k8s:listType=set
 	// +k8s:customValidation # capability grammar
 	Drop          []string `protobuf:"bytes,2,rep,name=drop,proto3" json:"drop,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2870,13 +2880,13 @@ type EnvVar struct {
 	// name may be any printable ASCII character except '='.
 	//
 	// +k8s:required
-	// +k8s:maxLength=256 # guardrail; the CRD does not bound env names
+	// +k8s:maxLength=256 # guardrail;
 	// +k8s:customValidation # printable ASCII except '='
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// value is the literal value.
 	//
 	// +k8s:optional
-	// +k8s:maxLength=32768 # guardrail; the CRD does not bound env values
+	// +k8s:maxLength=32768 # guardrail;
 	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3314,7 +3324,7 @@ func (x *ExternalVolumeTemplate) GetStorageClassName() string {
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated
 // per-actor files (identity fields, projected trust bundles), regenerated by
-// atelet on every Run/Restore. Mirrors the CRD's systemInfo volume source.
+// atelet on every Run/Restore.
 type SystemInfoVolumeSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// data_sources lists the projections to place within the volume. At most
@@ -3323,6 +3333,7 @@ type SystemInfoVolumeSource struct {
 	//
 	// +k8s:optional
 	// +k8s:maxItems=8
+	// +k8s:listType=atomic
 	DataSources   []*SystemInfoDataSource `protobuf:"bytes,1,rep,name=data_sources,json=dataSources,proto3" json:"data_sources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
