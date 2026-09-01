@@ -79,6 +79,7 @@ function usage() {
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
+  echo "  --cluster-size size0|size10            Cluster size profile (default: size0). \"size10\" assumes a dedicated postgres node"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -247,8 +248,26 @@ rollout_timeout() {
   echo "${timeout}"
 }
 
+cluster_size() {
+  local size="${ATE_INSTALL_CLUSTER_SIZE:-size0}"
+  case "${size}" in
+    size0|size10) echo "${size}" ;;
+    *)
+      echo "Error: --cluster-size must be size0 or size10, got '${size}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
 default_postgres_connection_string() {
-  echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+  local dsn="postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+  # pgxpool defaults MaxConns to max(4, runtime.NumCPU()), which under-uses
+  # the size10 server's raised max_connections. Pin the pool so the client
+  # side actually opens the sockets the server is provisioned for.
+  if [[ "$(cluster_size)" == "size10" ]]; then
+    dsn="${dsn}&pool_max_conns=64&pool_min_conns=4"
+  fi
+  echo "${dsn}"
 }
 
 # True if deploying the bundled in-cluster PostgreSQL. Returns false if an
@@ -783,6 +802,35 @@ create_api_server_env_vars() {
   annotate_api_server_env_hash
 }
 
+apply_postgres_size10_overrides() {
+  if [[ "$(cluster_size)" != "size10" ]]; then
+    return 0
+  fi
+
+  log_step "apply_postgres_size10_overrides"
+
+  # Merge-patch postgresql.conf; --type merge preserves the other keys
+  # (pg_hba.conf, reload-tls.sh) that manifests/ate-install/postgres/postgres.yaml
+  # still owns.
+  run_kubectl -n ate-system patch configmap postgres-config \
+    --type merge \
+    --patch-file manifests/ate-install/postgres-size10/postgres-config-patch.yaml
+
+  # Bump the container to fill a dedicated node. Deliberately no CPU
+  # limit: hostname anti-affinity keeps this pod alone on its
+  # ate-control-plane node, so a limit only adds CFS throttling on
+  # checkpoint/autovacuum bursts. Memory request == limit keeps eviction
+  # ordering equivalent to a Guaranteed pod, which matters because postgres
+  # cannot release shared_buffers under pressure. Applied via JSON patch so
+  # the base's cpu limit is actually removed rather than merged.
+  run_kubectl -n ate-system patch statefulset postgres --type json --patch '[
+    {"op":"remove","path":"/spec/template/spec/containers/0/resources/limits/cpu"},
+    {"op":"replace","path":"/spec/template/spec/containers/0/resources/requests/cpu","value":"80"},
+    {"op":"replace","path":"/spec/template/spec/containers/0/resources/requests/memory","value":"140Gi"},
+    {"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"140Gi"}
+  ]'
+}
+
 apply_podcert_workers_override() {
   if [[ -z "${ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER:-}" ]]; then
     return 0
@@ -964,6 +1012,10 @@ deploy_ate_system() {
   # variant of each.
   ensure_egress_mitm_ca_pool_secret
   apply_atenet_egress
+
+  # Patch postgres before the rollout wait so the wait covers the final
+  # resized pod, not the size0 base rolled out by render_ate_system_manifests.
+  apply_postgres_size10_overrides
 
   log_step "Waiting for ATE system components to be ready..."
   if use_bundled_postgres; then
@@ -1459,6 +1511,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${prescan_args[$((i + 1))]}"
       ;;
+    --cluster-size=*) ATE_INSTALL_CLUSTER_SIZE="${prescan_args[i]#*=}" ;;
+    --cluster-size)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --cluster-size requires size0 or size10" >&2
+        exit 1
+      fi
+      ATE_INSTALL_CLUSTER_SIZE="${prescan_args[$((i + 1))]}"
+      ;;
     --rollout-timeout=*) ATE_INSTALL_ROLLOUT_TIMEOUT="${prescan_args[i]#*=}" ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1520,6 +1580,7 @@ case "${BENCHMARK_SANDBOX_CLASS}" in
     ;;
 esac
 podcert_workers_per_signer >/dev/null
+cluster_size >/dev/null
 rollout_timeout >/dev/null
 
 while [[ "$#" -gt 0 ]]; do
@@ -1562,6 +1623,15 @@ while [[ "$#" -gt 0 ]]; do
         exit 1
       fi
       ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="$1"
+      ;;
+    --cluster-size=*) ATE_INSTALL_CLUSTER_SIZE="${1#*=}" ;;
+    --cluster-size)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --cluster-size requires size0 or size10" >&2
+        exit 1
+      fi
+      ATE_INSTALL_CLUSTER_SIZE="$1"
       ;;
     --rollout-timeout=*) ATE_INSTALL_ROLLOUT_TIMEOUT="${1#*=}" ;;
     --rollout-timeout)
