@@ -61,6 +61,11 @@ type BrokerConfig struct {
 	ActorAtespace string
 	ActorName     string
 	ActorUID      string
+
+	// AteletSPIFFEID is the identity the node-local atelet must present on the
+	// credential broker connection. It names atelet's namespace, not this
+	// worker's, so it is configured rather than derived from the downward API.
+	AteletSPIFFEID string
 }
 
 // NewBrokerCertificateSource creates one actor key for this activation. The key
@@ -75,7 +80,10 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 		return nil, fmt.Errorf("actor information is required")
 	}
 
-	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath)
+	if cfg.AteletSPIFFEID == "" {
+		return nil, fmt.Errorf("atunnel: expected atelet SPIFFE ID is required")
+	}
+	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
 		return nil, fmt.Errorf("atunnel: %w", err)
 	}
