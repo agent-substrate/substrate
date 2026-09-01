@@ -53,8 +53,7 @@ var (
 	metricsAddr  = pflag.String("metrics-address", ":9090", "Prometheus/health HTTP listen address")
 	serverBundle = pflag.String("server-cred-bundle", "", "credential bundle (PEM key+chain) presented for serving TLS; empty serves plaintext (dev only)")
 	clientCAFile = pflag.String("client-ca-file", "", "CA bundle that caller (injector) client certificates must chain to; empty accepts any client when TLS is on")
-	defaultKey   = pflag.String("default-secret-key", "", "Secret data key used when a credential URI omits one; empty requires a single-key Secret")
-	nsPolicyFile = pflag.String("namespace-policy-file", "", "path to the atespace→namespace authorization textproto; empty disables authorization (dev only)")
+	nsPolicyFile = pflag.String("namespace-policy-file", "", "path to the atespace→namespace authorization YAML; empty disables authorization (dev only)")
 	logLevel     = pflag.String("log-level", "info", "one of debug, info, warn, error")
 	drainGrace   = pflag.Duration("drain-grace", 5*time.Second, "how long to wait for in-flight RPCs on shutdown before a hard stop")
 )
@@ -116,7 +115,7 @@ func run(ctx context.Context) error {
 	}
 	srv := grpc.NewServer(opts...)
 	reflection.Register(srv)
-	credproviderpb.RegisterCredentialProviderServer(srv, kubeprovider.NewServer(client, *defaultKey, nsAuth))
+	credproviderpb.RegisterCredentialProviderServer(srv, kubeprovider.NewServer(client, nsAuth))
 
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *listenAddr)
 	if err != nil {

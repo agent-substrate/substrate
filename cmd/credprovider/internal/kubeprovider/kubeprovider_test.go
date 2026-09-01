@@ -25,7 +25,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/proto/nsauthzpb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 )
 
@@ -71,15 +70,15 @@ func TestParseURI(t *testing.T) {
 	}
 }
 
-func TestNewNamespaceAuthorizer(t *testing.T) {
-	authz, err := NewNamespaceAuthorizer(&nsauthzpb.NamespaceAuthorizationFile{
-		Policy: []*nsauthzpb.AtespaceNamespacePolicy{
+func TestNamespaceAuthorizer(t *testing.T) {
+	authz, err := newNamespaceAuthorizer(namespacePolicyFile{
+		Policies: []atespaceNamespacePolicy{
 			{Atespace: "team-a", AllowedNamespaces: []string{"ns1", "shared"}},
 			{Atespace: "team-b", AllowedNamespaces: []string{"ns2"}},
 		},
 	})
 	if err != nil {
-		t.Fatalf("NewNamespaceAuthorizer: %v", err)
+		t.Fatalf("newNamespaceAuthorizer: %v", err)
 	}
 	tests := []struct {
 		atespace, namespace string
@@ -99,19 +98,19 @@ func TestNewNamespaceAuthorizer(t *testing.T) {
 	}
 
 	// An empty file denies everything.
-	empty, err := NewNamespaceAuthorizer(&nsauthzpb.NamespaceAuthorizationFile{})
+	empty, err := newNamespaceAuthorizer(namespacePolicyFile{})
 	if err != nil {
-		t.Fatalf("NewNamespaceAuthorizer(empty): %v", err)
+		t.Fatalf("newNamespaceAuthorizer(empty): %v", err)
 	}
 	if empty.Allowed("team-a", "ns1") {
 		t.Error("empty authorizer allowed team-a/ns1, want deny")
 	}
 
 	// A policy without an atespace is rejected.
-	if _, err := NewNamespaceAuthorizer(&nsauthzpb.NamespaceAuthorizationFile{
-		Policy: []*nsauthzpb.AtespaceNamespacePolicy{{AllowedNamespaces: []string{"ns1"}}},
+	if _, err := newNamespaceAuthorizer(namespacePolicyFile{
+		Policies: []atespaceNamespacePolicy{{AllowedNamespaces: []string{"ns1"}}},
 	}); err == nil {
-		t.Error("NewNamespaceAuthorizer accepted a policy with no atespace, want error")
+		t.Error("newNamespaceAuthorizer accepted a policy with no atespace, want error")
 	}
 }
 
@@ -120,11 +119,11 @@ func TestRequestSecretAuthorization(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "example-api", Namespace: "ns1"},
 		Data:       map[string][]byte{"token": []byte("s3cr3t")},
 	}
-	authz, err := NewNamespaceAuthorizer(&nsauthzpb.NamespaceAuthorizationFile{
-		Policy: []*nsauthzpb.AtespaceNamespacePolicy{{Atespace: "team-a", AllowedNamespaces: []string{"ns1"}}},
+	authz, err := newNamespaceAuthorizer(namespacePolicyFile{
+		Policies: []atespaceNamespacePolicy{{Atespace: "team-a", AllowedNamespaces: []string{"ns1"}}},
 	})
 	if err != nil {
-		t.Fatalf("NewNamespaceAuthorizer: %v", err)
+		t.Fatalf("newNamespaceAuthorizer: %v", err)
 	}
 	const teamAURI = "spiffe://substrate-actor.local/atespace/team-a/actor/my-actor"
 	const teamBURI = "spiffe://substrate-actor.local/atespace/team-b/actor/my-actor"
@@ -161,7 +160,7 @@ func TestRequestSecretAuthorization(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := NewServer(fake.NewSimpleClientset(secret), "", authz)
+			srv := NewServer(fake.NewSimpleClientset(secret), authz)
 			resp, err := srv.RequestSecret(context.Background(), &credproviderpb.RequestSecretRequest{Uri: tc.uri, Context: tc.ctx})
 			if tc.wantCode != codes.OK {
 				if status.Code(err) != tc.wantCode {
@@ -180,7 +179,7 @@ func TestRequestSecretAuthorization(t *testing.T) {
 
 	// With no authorizer configured, enforcement is bypassed entirely.
 	t.Run("nil authorizer bypasses", func(t *testing.T) {
-		srv := NewServer(fake.NewSimpleClientset(secret), "", nil)
+		srv := NewServer(fake.NewSimpleClientset(secret), nil)
 		if _, err := srv.RequestSecret(context.Background(), &credproviderpb.RequestSecretRequest{
 			Uri:     "substrate-secret://kubernetes.io/p/ns1/example-api/token",
 			Context: &credproviderpb.SecretRequestContext{ActorIdentity: "not-a-spiffe-uri"},
@@ -206,22 +205,15 @@ func TestRequestSecret(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		defaultKey string
-		uri        string
-		want       string
-		wantCode   codes.Code
+		name     string
+		uri      string
+		want     string
+		wantCode codes.Code
 	}{
 		{
 			name: "explicit key",
 			uri:  "substrate-secret://kubernetes.io/p/ns1/example-api/token",
 			want: "s3cr3t",
-		},
-		{
-			name:       "default key",
-			defaultKey: "token",
-			uri:        "substrate-secret://kubernetes.io/p/ns1/example-api",
-			want:       "s3cr3t",
 		},
 		{
 			name: "single-key fallback",
@@ -252,7 +244,7 @@ func TestRequestSecret(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(secret, multiKey)
-			srv := NewServer(client, tc.defaultKey, nil)
+			srv := NewServer(client, nil)
 			resp, err := srv.RequestSecret(context.Background(), &credproviderpb.RequestSecretRequest{Uri: tc.uri})
 			if tc.wantCode != codes.OK {
 				if status.Code(err) != tc.wantCode {
