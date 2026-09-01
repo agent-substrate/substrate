@@ -95,6 +95,9 @@ const actorHTTPUpstream = "http://" + ateomnet.ActorVethIP + ":80"
 // termination grace period for the ateom.
 const workloadGracePeriod = 1 * time.Minute
 
+// resumeTimeout is the conservative ceiling for unpausing a paused sandbox.
+const resumeTimeout = 30 * time.Second
+
 func main() {
 	pflag.Parse()
 	if *showVersion {
@@ -750,22 +753,34 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		var ddv []string
-		for _, ctr := range req.GetSpec().GetContainers() {
-			for _, m := range ctr.GetDurableDirVolumeMounts() {
-				ddv = append(ddv, m.GetMountPath())
-			}
-		}
-		if len(ddv) == 0 {
+		if !hasDurableVolumes(req.GetSpec().GetContainers()) {
 			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
 		}
-		if err := rcmd.cmdFsCheckpoint(ctx, "pause", checkpointPath, ddv); err != nil {
-			return nil, fmt.Errorf("while fscheckpointing durable-dir %q: %w", ddv[0], err)
+		if err := rcmd.cmdPause(ctx, "pause"); err != nil {
+			return nil, fmt.Errorf("while pausing pause container: %w", err)
+		}
+		tarErr := tarDurableVolumes(ctx, ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointPath)
+		// Undoing our own pause must not depend on the caller's context:
+		// tarutil does not check ctx, so a deadline expiring mid-tar would
+		// fail the resume instantly and leave the sandbox paused forever.
+		resumeCtx, cancelResume := context.WithTimeout(context.WithoutCancel(ctx), resumeTimeout)
+		defer cancelResume()
+		if err := rcmd.cmdResume(resumeCtx, "pause"); err != nil {
+			return nil, fmt.Errorf("while resuming pause container: %w", err)
+		}
+		if tarErr != nil {
+			return nil, fmt.Errorf("while archiving durable-dir volumes: %w", tarErr)
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		// Checkpoint pause container (root of the sandbox)
+		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
 		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
+		}
+		if hasDurableVolumes(req.GetSpec().GetContainers()) {
+			if err := tarDurableVolumes(ctx, ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointPath); err != nil {
+				return nil, fmt.Errorf("while archiving durable-dir volumes: %w", err)
+			}
 		}
 	default:
 		return nil, fmt.Errorf("unsupported snapshot scope: %v", req.GetScope())
@@ -927,6 +942,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}()
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
 
+	if hasDurableVolumes(req.GetSpec().GetContainers()) {
+		if err := untarDurableVolumes(ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointDir); err != nil {
+			return nil, fmt.Errorf("while restoring durable-dir volumes: %w", err)
+		}
+	}
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
@@ -936,22 +956,22 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		// Create and restore pause container
+		// Create and start pause container (cold boot with durable-dir volumes restored)
 		containersToDelete = append(containersToDelete, "pause")
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", []string{"--fs-restore-image-path", checkpointDir}); err != nil {
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
 		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
 		// Create and restore pause container
 		containersToDelete = append(containersToDelete, "pause")
 		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
 		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
-			return nil, fmt.Errorf("while starting pause container: %w", err)
+			return nil, fmt.Errorf("while restoring pause container: %w", err)
 		}
 	default:
 		return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
@@ -977,13 +997,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
-		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
 			containersToDelete = append(containersToDelete, ac.GetName())
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 			}
 			if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
-				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
+				return nil, fmt.Errorf("while restoring %q application container: %w", ac.GetName(), err)
 			}
 		default:
 			return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())

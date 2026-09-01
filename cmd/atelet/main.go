@@ -919,20 +919,15 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 // full checkpoint is monolithic until split checkpoints land.
 func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 	switch atev1alpha1.SandboxClass(rec.SandboxClass) {
-	case atev1alpha1.SandboxClassMicroVM:
+	case atev1alpha1.SandboxClassMicroVM, atev1alpha1.SandboxClassGvisor:
 		if !slices.Contains(rec.SnapshotFiles, ateompath.DurableDirTarFile) {
 			// No durable-dir volumes were attached at pause: this snapshot
 			// holds no data, and never will — not retryable.
-			return status.Errorf(codes.FailedPrecondition, "full micro-VM capture has no %s; the actor has no durable data to upload as %s", ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
+			return status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", rec.SandboxClass, ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
 		}
 		rec.SnapshotFiles = []string{ateompath.DurableDirTarFile}
 		rec.Scope = ateattr.SnapshotScopeData
 		return nil
-
-	case atev1alpha1.SandboxClassGvisor:
-		// TODO(#790): split-checkpoint runsc will let a full gVisor checkpoint
-		// yield its durable data; implement this branch when it lands.
-		return status.Errorf(codes.Unimplemented, "gVisor cannot extract durable data from a full checkpoint yet (see #790)")
 
 	default:
 		// The manifest's class is unvalidated input from disk/object storage.

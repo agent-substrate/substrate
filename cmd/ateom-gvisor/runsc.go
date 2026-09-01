@@ -170,6 +170,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	return nil
 }
 
+//nolint:unused
 func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string) error {
 	slog.InfoContext(ctx, "About to run runsc fscheckpoint", slog.String("container", containerName))
 
@@ -202,6 +203,56 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	err := reaper.RunCommand(cmd)
 	if err != nil {
 		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
+	}
+	return nil
+}
+
+// pauseArgs builds the argv for `runsc pause <container>`. Factored out so the
+// argument construction can be unit-tested without executing runsc.
+func (r *runsc) pauseArgs(containerName string) []string {
+	return []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
+		"pause",
+		containerName,
+	}
+}
+
+// cmdPause pauses all processes in the container (or sandbox, if pause).
+func (r *runsc) cmdPause(ctx context.Context, containerName string) error {
+	slog.InfoContext(ctx, "About to run runsc pause", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.pauseArgs(containerName)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := reaper.RunCommand(cmd); err != nil {
+		return fmt.Errorf("while running `runsc pause`: %w", err)
+	}
+	return nil
+}
+
+// resumeArgs builds the argv for `runsc resume <container>`. Factored out so the
+// argument construction can be unit-tested without executing runsc.
+func (r *runsc) resumeArgs(containerName string) []string {
+	return []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
+		"resume",
+		containerName,
+	}
+}
+
+// cmdResume unpauses a paused container (or sandbox, if pause).
+func (r *runsc) cmdResume(ctx context.Context, containerName string) error {
+	slog.InfoContext(ctx, "About to run runsc resume", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.resumeArgs(containerName)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := reaper.RunCommand(cmd); err != nil {
+		return fmt.Errorf("while running `runsc resume`: %w", err)
 	}
 	return nil
 }

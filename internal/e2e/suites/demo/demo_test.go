@@ -251,7 +251,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend:   1,
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 		{
@@ -268,7 +267,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend:   1,
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 		{
@@ -312,7 +310,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				suspendWhilePaused:       true,
-				microVMOnly:              true,
 			},
 		},
 	}
@@ -377,7 +374,6 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				checkSecondFileCounter:   true,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 	}

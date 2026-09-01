@@ -63,3 +63,43 @@ func TestWaitArgs(t *testing.T) {
 		t.Errorf("waitArgs() = %v, want %v", got, want)
 	}
 }
+
+func TestPauseArgs(t *testing.T) {
+	r := &runsc{
+		path:     "/usr/bin/runsc",
+		actorUID: "test-actor-123",
+	}
+
+	got := r.pauseArgs("pause")
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"pause",
+		"pause",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("pauseArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestResumeArgs(t *testing.T) {
+	r := &runsc{
+		path:     "/usr/bin/runsc",
+		actorUID: "test-actor-123",
+	}
+
+	got := r.resumeArgs("pause")
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"resume",
+		"pause",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("resumeArgs() = %v, want %v", got, want)
+	}
+}
