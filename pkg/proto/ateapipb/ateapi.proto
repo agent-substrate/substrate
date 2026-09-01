@@ -1436,6 +1436,9 @@ message ActorAssignment {
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
 
+  // actor_template_ref names the substrate ActorTemplate resource the
+  // assigned actor uses.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
