@@ -39,6 +39,23 @@ import (
 // they mount inside it are visible to atelet.
 const ateomHostDir = "/var/lib/ateom-gvisor"
 
+// csiNFSStorageClass is the StorageClass the external volume demos provision
+// from.
+const csiNFSStorageClass = `
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-nfs-sc
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.default.svc.cluster.local
+  share: /
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
+`
+
 // SetupCSI installs the hostpath and NFS CSI drivers used by external volume
 // demos. Kind only: both drivers are patched for the single-node Kind layout
 // and reach into the node container over docker.
@@ -225,17 +242,9 @@ func (e *Env) setupCSINFS(ctx context.Context) error {
 
 	deployDir := e.Cfg.Path("hack", "third_party", "csi-driver-nfs", "deploy")
 
-	log.Infof("Deploying the sample NFS server...")
-	if err := e.Kube.ApplyPath(ctx, deployDir+"/example/nfs-provisioner/nfs-server.yaml"); err != nil {
+	log.Infof("Deploying the NFS server...")
+	if err := e.Kube.ApplyPath(ctx, e.Cfg.Path("hack", "csi", "nfs-server.yaml")); err != nil {
 		return err
-	}
-	// The upstream sample backs its export with a hostPath; an emptyDir keeps
-	// the Kind node's filesystem clean and is sufficient for demo volumes.
-	log.Infof("Patching the NFS server to use emptyDir...")
-	const nfsVolumePatch = `[{"op":"replace","path":"/spec/template/spec/volumes/0","value":{"name":"nfs-vol","emptyDir":{}}}]`
-	if _, err := e.Kube.Typed.AppsV1().Deployments("default").Patch(
-		ctx, "nfs-server", types.JSONPatchType, []byte(nfsVolumePatch), metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("while patching the nfs-server Deployment: %w", err)
 	}
 
 	log.Infof("Deploying the CSI NFS driver...")
@@ -323,21 +332,7 @@ spec:
 	// The driver resolves the server's DNS name at provisioning time, so the
 	// StorageClass can be created before the NFS server has an address.
 	log.Infof("Creating the csi-nfs-sc StorageClass...")
-	if err := e.applyInline(ctx, `
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: csi-nfs-sc
-provisioner: nfs.csi.k8s.io
-parameters:
-  server: nfs-server.default.svc.cluster.local
-  share: /
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
-mountOptions:
-  - nfsvers=3
-  - nolock
-`); err != nil {
+	if err := e.applyInline(ctx, csiNFSStorageClass); err != nil {
 		return err
 	}
 

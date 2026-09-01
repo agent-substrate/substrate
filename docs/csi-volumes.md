@@ -117,8 +117,7 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 mountOptions:
-  - nfsvers=3
-  - nolock
+  - nfsvers=4.1
 ```
 
 ### Step 2: Register the CSIDriverConfig
