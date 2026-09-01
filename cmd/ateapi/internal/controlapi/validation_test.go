@@ -826,11 +826,11 @@ func TestValidateExternalVolume(t *testing.T) {
 		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
 	}, {
 		name: "invalid storage volume id with C1 control U+0080",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "volid" }),
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\u0080id" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
 	}, {
 		name: "invalid storage volume id with C1 control U+009F",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "volid" }),
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\u009fid" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
 	}, {
 		name: "storage volume id too long",

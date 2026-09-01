@@ -241,10 +241,20 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(func(a *ateapipb.Actor) { a.ActorTemplate = nil }),
 		field.ErrorList{field.Invalid(field.NewPath("actor_template"), nil, "").WithOrigin("immutable")},
 	}, {
-		"change actor.actor_template",
-		validInput(withActorTemplate("as1", "nm1")),
-		validOutput(withActorTemplate("as2", "nm2")),
-		field.ErrorList{field.Invalid(field.NewPath("actor_template"), nil, "").WithOrigin("immutable")},
+		"add actor.source_snapshot_tag",
+		validInput(),
+		validOutput(withSourceSnapshotTag("as", "nm")),
+		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+	}, {
+		"clear actor.source_snapshot_tag",
+		validInput(withSourceSnapshotTag("as", "nm")),
+		validOutput(func(a *ateapipb.Actor) { a.SourceSnapshotTag = nil }),
+		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
+	}, {
+		"change actor.source_snapshot_tag",
+		validInput(withSourceSnapshotTag("as1", "nm1")),
+		validOutput(withSourceSnapshotTag("as2", "nm2")),
+		field.ErrorList{field.Invalid(field.NewPath("source_snapshot_tag"), nil, "").WithOrigin("immutable")},
 	}, {
 		"set valid worker_selector",
 		validInput(),
