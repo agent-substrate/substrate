@@ -31,15 +31,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
-
-// trustBundleResyncPeriod is the ClusterTrustBundle informer's resync: a
-// guard against missed watch events, not a retry mechanism — failed writes
-// redrive through the refresher's workqueue.
-const trustBundleResyncPeriod = 24 * time.Hour
 
 // systemInfoVolume is one system-info volume of a registered actor: its spec
 // plus where its files land on the host.
@@ -56,7 +52,7 @@ type systemInfoVolume struct {
 
 type registeredActor struct {
 	ref     resources.ActorRef
-	volumes []systemInfoVolume
+	volumes []*systemInfoVolume
 }
 
 // systemInfoVolumeRefresher owns the contents of system-info volumes, after
@@ -66,50 +62,51 @@ type registeredActor struct {
 // TODO(#802): adopt kubelet's whole-volume AtomicWriter swap if a source
 // ever needs multi-file atomicity.
 type systemInfoVolumeRefresher struct {
-	lister certlisters.ClusterTrustBundleLister
+	lister    certlisters.ClusterTrustBundleLister
+	hasSynced cache.InformerSynced
 
 	// queue carries bundle names from informer events to the run loop.
 	queue workqueue.TypedRateLimitingInterface[string]
 
-	// mu serializes registry mutations AND projection writes: Deregister
-	// returning only after an in-flight refresh finishes is what lets
-	// Checkpoint/Terminate wipe the actor's directories safely afterwards.
+	// mu covers actors.
 	mu     sync.Mutex
 	actors map[string]*registeredActor
 }
 
-func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister) *systemInfoVolumeRefresher {
-	return &systemInfoVolumeRefresher{
+// newSystemInfoVolumeRefresher builds the refresher and, when informer is
+// non-nil (unit tests pass nil), subscribes to ClusterTrustBundle events.
+func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, informer cache.SharedIndexInformer) *systemInfoVolumeRefresher {
+	r := &systemInfoVolumeRefresher{
 		lister: lister,
 		queue:  workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		actors: map[string]*registeredActor{},
 	}
+	if informer != nil {
+		informer.AddEventHandler(r.eventHandler())
+		r.hasSynced = informer.HasSynced
+	}
+	return r
 }
 
-// Register records actorUID's system-info volumes and writes their complete
-// contents from current cluster state, replacing any prior registration.
-// Fail-closed: an actor that declared a projection must not start without it.
-func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []systemInfoVolume) error {
+// Register records actorUID's system-info volumes — possibly none, every
+// actor is tracked — and writes their complete contents from current cluster
+// state, replacing any prior registration. Fail-closed: an actor that
+// declared a projection must not start without it.
+func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(volumes) == 0 {
-		delete(r.actors, actorUID)
-		return nil
-	}
-	actor := &registeredActor{ref: ref, volumes: volumes}
-	for i := range actor.volumes {
-		v := &actor.volumes[i]
+	for _, v := range volumes {
 		if err := r.write(ref, actorUID, v); err != nil {
 			return fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
 		}
 	}
-	r.actors[actorUID] = actor
+	r.actors[actorUID] = &registeredActor{ref: ref, volumes: volumes}
 	return nil
 }
 
 // Deregister drops actorUID's registration once the sandbox is down (or
-// never came up). Per the mu contract, it returns only after any in-flight
-// refresh finishes.
+// never came up). It returns only after any in-flight refresh finishes, so
+// Checkpoint/Terminate can wipe the actor's directories safely afterwards.
 func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -164,13 +161,18 @@ func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID
 func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID string, v *systemInfoVolume) error {
 	payload, bundleHashes, err := r.collectData(ref, actorUID, v.Spec)
 	if err != nil {
-		return err
+		return fmt.Errorf("while collecting volume contents: %w", err)
 	}
 	if err := os.MkdirAll(v.Root, 0o755); err != nil {
 		return fmt.Errorf("while creating %q: %w", v.Root, err)
 	}
+	root, err := os.OpenRoot(v.Root)
+	if err != nil {
+		return fmt.Errorf("while opening %q: %w", v.Root, err)
+	}
+	defer root.Close()
 	for _, relPath := range slices.Sorted(maps.Keys(payload)) {
-		if err := writeSystemInfoFile(v.Root, relPath, payload[relPath]); err != nil {
+		if err := writeSystemInfoFile(root, relPath, payload[relPath]); err != nil {
 			return err
 		}
 	}
@@ -178,10 +180,10 @@ func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID strin
 	return nil
 }
 
-// writeSystemInfoFile writes one projected file under rootPath via
-// temp-and-rename, skipping it if contents already match. relPath is
-// re-validated here: atelet is the last line before the host filesystem.
-func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
+// writeSystemInfoFile writes one projected file via temp-and-rename inside
+// root, skipping it if contents already match. relPath is re-validated here
+// and confined by root: atelet is the last line before the host filesystem.
+func writeSystemInfoFile(root *os.Root, relPath string, data []byte) error {
 	if relPath == "" || strings.HasPrefix(relPath, "/") {
 		return fmt.Errorf("invalid system-info path %q: must be a non-empty relative path", relPath)
 	}
@@ -190,17 +192,57 @@ func writeSystemInfoFile(rootPath, relPath string, data []byte) error {
 			return fmt.Errorf("invalid system-info path %q: must not contain empty, '.', or '..' segments", relPath)
 		}
 	}
-	dst := filepath.Join(rootPath, filepath.FromSlash(relPath))
-	if existing, err := os.ReadFile(dst); err == nil && bytes.Equal(existing, data) {
+	dst := filepath.FromSlash(relPath)
+	if existing, err := root.ReadFile(dst); err == nil && bytes.Equal(existing, data) {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("while creating parent of %q: %w", dst, err)
+	if dir := filepath.Dir(dst); dir != "." {
+		if err := root.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("while creating parent of %q under %q: %w", relPath, root.Name(), err)
+		}
 	}
-	if err := writeFileAtomic(dst, data, 0o644); err != nil {
-		return fmt.Errorf("while writing system-info file %q: %w", dst, err)
+	if err := writeFileAtomicRoot(root, dst, data, 0o644); err != nil {
+		return fmt.Errorf("while writing system-info file %q under %q: %w", relPath, root.Name(), err)
 	}
 	return nil
+}
+
+// writeFileAtomicRoot is writeFileAtomic confined to root. The fixed temp
+// name is safe under the single-writer mu contract.
+func writeFileAtomicRoot(root *os.Root, relPath string, data []byte, perm os.FileMode) error {
+	dir, base := filepath.Dir(relPath), filepath.Base(relPath)
+	tmp := filepath.Join(dir, "."+base+".tmp")
+	f, err := root.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Remove(tmp) }() // no-op once the rename succeeds
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := root.Rename(tmp, relPath); err != nil {
+		return err
+	}
+
+	d, err := root.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // eventHandler adapts the ClusterTrustBundle informer: events only enqueue,
@@ -226,46 +268,58 @@ func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 	}
 }
 
-// run drains the refresh queue until ctx ends, requeueing failed refreshes
-// with backoff.
+// run drains the refresh queue until ctx ends, in the repo's controller form
+// (signercontroller): a crashed worker restarts after a second, and failed
+// refreshes requeue with backoff. One worker: writes serialize under mu.
 func (r *systemInfoVolumeRefresher) run(ctx context.Context) {
-	go func() {
-		<-ctx.Done()
-		r.queue.ShutDown()
-	}()
-	for {
-		bundleName, shutdown := r.queue.Get()
-		if shutdown {
-			return
-		}
-		if err := r.refreshBundle(ctx, bundleName); err != nil {
-			r.queue.AddRateLimited(bundleName)
-		} else {
-			r.queue.Forget(bundleName)
-		}
-		r.queue.Done(bundleName)
+	defer r.queue.ShutDown()
+	if r.hasSynced != nil && !cache.WaitForCacheSync(ctx.Done(), r.hasSynced) {
+		return
 	}
+	go wait.UntilWithContext(ctx, r.runWorker, time.Second)
+	<-ctx.Done()
+}
+
+func (r *systemInfoVolumeRefresher) runWorker(ctx context.Context) {
+	for r.processNextWorkItem(ctx) {
+	}
+}
+
+func (r *systemInfoVolumeRefresher) processNextWorkItem(ctx context.Context) bool {
+	bundleName, shutdown := r.queue.Get()
+	if shutdown {
+		return false
+	}
+	defer r.queue.Done(bundleName)
+
+	if err := r.refreshBundle(ctx, bundleName); err != nil {
+		r.queue.AddRateLimited(bundleName)
+		return true
+	}
+	r.queue.Forget(bundleName)
+	return true
 }
 
 // refreshBundle rewrites every registered volume that projects bundleName
 // and has not applied its current contents, keeping last-good files on any
 // failure: resolution errors wait for the next event, write errors requeue.
+// A bundle no registered actor projects is not even resolved.
 func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.projectsLocked(bundleName) {
+		return nil
+	}
 	_, raw, err := rawTrustBundle(r.lister, bundleName)
 	if err != nil {
-		if r.projectsLocked(bundleName) {
-			slog.WarnContext(ctx, "Trust bundle unreadable; projected files keep their last contents", slog.String("bundle", bundleName), slog.Any("err", err))
-		}
+		slog.WarnContext(ctx, "Trust bundle unreadable; projected files keep their last contents", slog.String("bundle", bundleName), slog.Any("err", err))
 		return nil
 	}
 	h := trustBundleHash(raw)
 	var writeErr error
 	refreshed := 0
 	for actorUID, actor := range r.actors {
-		for i := range actor.volumes {
-			v := &actor.volumes[i]
+		for _, v := range actor.volumes {
 			if !projectsBundle(v.Spec, bundleName) || v.appliedHashes[bundleName] == h {
 				continue
 			}

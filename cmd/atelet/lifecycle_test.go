@@ -144,7 +144,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ateomDialer:       newAteomDialer(1),
 		imageCache:        newImageVolumeStore(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
-		systemInfoVolumes: newSystemInfoVolumeRefresher(nil),
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",

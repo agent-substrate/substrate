@@ -22,8 +22,8 @@ kind: Namespace
 metadata:
   name: ate-e2e-probe${FIXTURE_SUFFIX}
   labels:
-    # e2e.NamespaceLabel: a fixture retained by a failed test stays visible
-    # to hack/cleanup-e2e.sh's sweep.
+    # Lets hack/cleanup-e2e.sh find and delete this namespace when a failed
+    # test leaves the fixture behind for debugging.
     ate.dev/e2e: "true"
 
 ---
