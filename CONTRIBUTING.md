@@ -31,7 +31,8 @@ The [Quickstart (Development)](README.md#quickstart-development) in the README
 covers bringing up a local cluster with the default (gVisor) runtime. To run
 the microVM runtime locally — which needs `/dev/kvm`, or Lima nested
 virtualization on Apple Silicon — see
-[docs/dev/microvm-local.md](docs/dev/microvm-local.md).
+[docs/dev/microvm-local.md](docs/dev/microvm-local.md). To bring up an
+IPv6-only cluster, see [docs/dev/ipv6-local.md](docs/dev/ipv6-local.md).
 
 ## Contribution process
 
