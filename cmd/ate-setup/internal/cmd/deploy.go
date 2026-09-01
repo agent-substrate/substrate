@@ -63,6 +63,16 @@ var deployAPIServerCmd = &cobra.Command{
 	},
 }
 
+var deployControllerCmd = &cobra.Command{
+	Use:     "ate-controller",
+	Aliases: []string{"controller"},
+	Short:   "Deploy ate-controller only, with the CRDs it serves",
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.DeployAteController(cmd.Context())
+	},
+}
+
 var deployAtenetCmd = &cobra.Command{
 	Use:   "atenet",
 	Short: "Deploy the atenet dataplane only: router, egress, and DNS",
@@ -91,6 +101,7 @@ func init() {
 		deployAteSystemCmd,
 		deployAteletCmd,
 		deployAPIServerCmd,
+		deployControllerCmd,
 		deployAtenetCmd,
 		deployPostgresCmd,
 	)

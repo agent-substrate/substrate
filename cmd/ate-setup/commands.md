@@ -40,6 +40,7 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `deploy ate-system --setup-csi` | `--deploy-ate-system --setup-csi` |
 | `deploy atelet` | `--deploy-atelet` |
 | `deploy apiserver` | `--deploy-ate-apiserver` |
+| `deploy ate-controller` | (no shell equivalent) |
 | `deploy atenet` | `--deploy-atenet` |
 | `deploy postgres` | `--deploy-postgres` |
 
