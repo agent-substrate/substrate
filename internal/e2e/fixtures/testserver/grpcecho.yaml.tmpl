@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The gRPC Actor the ingress suite reaches through atenet-router, running the
-# same `testserver grpc` echo origin the egress suite deploys as a plain pod.
-# One binary for both directions, so what counts as a working RPC cannot differ
-# between them.
+# The k8s half of the grpcecho fixture; the ActorTemplate is the substrate
+# resource in grpcecho-template.yaml.tmpl, created through the ate API by
+# e2e.DeploySubstrateFixture.
 #
 # Rendered by e2e.RenderFixtureManifest, which fills the ${...} placeholders for
 # the sandbox class under test: one manifest serves both runtimes so the gVisor
@@ -42,38 +41,3 @@ spec:
   replicas: 2
   workerImage: ${ATEOM_IMAGE}
 ${WORKERPOOL_RUNTIME}
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: grpcecho
-  namespace: ate-e2e-grpcecho${FIXTURE_SUFFIX}
-spec:
-${TEMPLATE_SANDBOX_CLASS}
-  containers:
-  - name: grpcecho
-    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
-    command: ["/ko-app/testserver"]
-    # gRPC on the Actor's primary port, so the ingress test reaches it at the
-    # Actor's DNS name with no CONNECT and no port juggling -- the plain path
-    # every other ingress assertion in the suite uses.
-    args:
-    - "grpc"
-    - "--listen=:80"
-    - "--health-listen=:8080"
-    # readyz is an HTTP GET and nothing else, and a gRPC server answers one with
-    # a protocol error -- hence the fixture's second, HTTP-only port. Probing :80
-    # here would leave the Actor stuck out of PhaseReady forever.
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 8080
-      timeoutSeconds: 60
-${TEMPLATE_RESOURCES}
-  workerSelector:
-    matchLabels:
-      workload: grpcecho${FIXTURE_SUFFIX}
-  snapshotsConfig:
-    location: gs://${BUCKET_NAME}/ate-e2e-grpcecho${FIXTURE_SUFFIX}/

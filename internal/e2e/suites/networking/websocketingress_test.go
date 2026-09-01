@@ -18,7 +18,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,49 +27,33 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// deployWebsocketFixture renders and applies the websocket fixture for the sandbox class.
-func deployWebsocketFixture(t *testing.T) string {
+// deployWebsocketFixture installs the websocket fixture for the sandbox class
+// under test and waits for its golden snapshot.
+func deployWebsocketFixture(t *testing.T, ctx context.Context) e2e.SubstrateFixture {
 	t.Helper()
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
-	namespace := e2e.FixtureName("ate-e2e") + "-websocket"
-	bucket := env["BUCKET_NAME"]
-	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/testserver/websocket.yaml.tmpl", bucket, "websocket")
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), e2e.SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/testserver/websocket.yaml.tmpl",
+		Template: "internal/e2e/fixtures/testserver/websocket-template.yaml.tmpl",
+	}, env["BUCKET_NAME"], "websocket", false)
 
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
+	return e2e.SubstrateFixture{
+		Atespace:   atespace,
+		Name:       "websocket",
+		DeployWith: "the networking suite itself (see deployWebsocketFixture)",
 	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
-	t.Cleanup(func() {
-		delArgs := []string{"delete", "--ignore-not-found", "-f", manifest}
-		if e2e.KubeContext != "" {
-			delArgs = append([]string{"--context=" + e2e.KubeContext}, delArgs...)
-		}
-		e2e.RunCmd(t, "kubectl", delArgs...)
-	})
-
-	return namespace
 }
 
 func TestWebsocketIngressPing(t *testing.T) {
 	ctx := context.Background()
-	clients := e2e.GetClients()
 
-	namespace := deployWebsocketFixture(t)
+	fixture := deployWebsocketFixture(t, ctx)
 
-	// Wait for the websocket ActorTemplate golden snapshot to be ready
-	e2e.WaitForTemplateReady(ctx, t, clients, namespace, "websocket")
-
-	actorName, _ := createAndResumeActor(t, ctx, "websocket", e2e.Fixture{Namespace: namespace, Name: "websocket"})
+	actorName, _ := createAndResumeSubstrateActor(t, ctx, "websocket", fixture)
 
 	rc := mustRouterClient(t, ctx)
 	defer rc.Close()

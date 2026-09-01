@@ -12,25 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The k8s half of the websocket fixture; the ActorTemplate is the substrate
-# resource in websocket-template.yaml.tmpl, created through the ate API by
-# e2e.DeploySubstrateFixture.
+# The websocket fixture's ActorTemplate: a protojson-shaped
+# ateapipb.ActorTemplate (NOT the ate.dev/v1alpha1 CRD), created through the
+# ate API by e2e.DeploySubstrateFixture.
 
-apiVersion: v1
-kind: Namespace
 metadata:
-  name: ate-e2e${FIXTURE_SUFFIX}
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: WorkerPool
-metadata:
+  atespace: ate-e2e${FIXTURE_SUFFIX}
   name: websocket
-  namespace: ate-e2e${FIXTURE_SUFFIX}
-  labels:
+workerSelector:
+  matchLabels:
     workload: websocket${FIXTURE_SUFFIX}
-spec:
-  replicas: 1
-  workerImage: ${ATEOM_IMAGE}
-${WORKERPOOL_RUNTIME}
+containers:
+- name: websocket
+  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver
+  args: ["websocket"]
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 80
+    timeoutSeconds: 30
+${TEMPLATE_RESOURCES}
+${TEMPLATE_SANDBOX_CONFIG}
+snapshotsConfig:
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e-websocket${FIXTURE_SUFFIX}/

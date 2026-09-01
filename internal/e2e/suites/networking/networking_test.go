@@ -310,7 +310,7 @@ func accessLogField(line, key string) (string, bool) {
 
 func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture) (string, *ateapipb.Actor) {
 	t.Helper()
-	actor := &ateapipb.Actor{ActorTemplateNamespace: template.Namespace, ActorTemplateName: template.Name}
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
 	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith)
 }
 
