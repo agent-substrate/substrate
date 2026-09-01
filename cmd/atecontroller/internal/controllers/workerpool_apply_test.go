@@ -379,12 +379,12 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 		name     string
 		class    atev1alpha1.SandboxClass
 		wantCaps []corev1.Capability
-		// wantSeccompUnconfined is micro-VM only: virtiofsd's sandbox pivot_root()s,
-		// which the default profile denies.
+		// wantSeccompUnconfined holds for every class: both runsc's and
+		// virtiofsd's sandbox pivot_root(), which the default profile denies.
 		wantSeccompUnconfined bool
 	}{
-		{"gvisor default", "", ateomGvisorCapabilities, false},
-		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, ateomGvisorCapabilities, false},
+		{"gvisor default", "", ateomGvisorCapabilities, true},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, ateomGvisorCapabilities, true},
 		{"microvm", atev1alpha1.SandboxClassMicroVM, ateomMicroVMCapabilities, true},
 	}
 	for _, tt := range tests {
@@ -411,15 +411,12 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 				*sc.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
 				t.Errorf("AppArmorProfile = %v, want Unconfined", sc.AppArmorProfile)
 			}
-			// gVisor must keep the runtime default (an unset profile), so the
-			// micro-VM relaxation cannot leak to it.
+			// Every class declares Unconfined explicitly so it does not depend on
+			// the cluster leaving the seccomp profile unset.
 			gotSeccompUnconfined := sc.SeccompProfile != nil && sc.SeccompProfile.Type != nil &&
 				*sc.SeccompProfile.Type == corev1.SeccompProfileTypeUnconfined
 			if gotSeccompUnconfined != tt.wantSeccompUnconfined {
 				t.Errorf("seccomp Unconfined = %v, want %v", gotSeccompUnconfined, tt.wantSeccompUnconfined)
-			}
-			if !tt.wantSeccompUnconfined && sc.SeccompProfile != nil {
-				t.Errorf("SeccompProfile = %v, want unset so the runtime default applies", sc.SeccompProfile)
 			}
 		})
 	}
@@ -916,7 +913,9 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithDrop("ALL").
 					WithAdd(ateomGvisorCapabilities...)).
 				WithAppArmorProfile(corev1ac.AppArmorProfile().
-					WithType(corev1.AppArmorProfileTypeUnconfined))).
+					WithType(corev1.AppArmorProfileTypeUnconfined)).
+				WithSeccompProfile(corev1ac.SeccompProfile().
+					WithType(corev1.SeccompProfileTypeUnconfined))).
 			WithEnv(
 				corev1ac.EnvVar().
 					WithName("POD_UID").

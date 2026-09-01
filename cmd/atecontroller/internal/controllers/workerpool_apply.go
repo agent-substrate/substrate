@@ -277,8 +277,9 @@ var ateomMicroVMCapabilities = slices.Concat(ateomGvisorCapabilities, []corev1.C
 })
 
 // ateomSecurityContext returns the ateom container security context for a sandbox
-// class. Neither class runs privileged; they differ in their capability set and
-// in seccomp. An empty class defaults to gVisor.
+// class. Neither class runs privileged; they differ in their capability set.
+// Both declare seccomp Unconfined because their sandbox child pivot_root()s,
+// which the default profile denies. An empty class defaults to gVisor.
 func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
 	// Both runtimes mount inside the worker — runsc pivots root and the worker
 	// remounts /sys/fs/cgroup to nest per-actor cgroups; the micro-VM worker
@@ -310,11 +311,17 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 			WithSeccompProfile(corev1ac.SeccompProfile().
 				WithType(corev1.SeccompProfileTypeUnconfined))
 	}
-	// gVisor needs no such relaxation and keeps the runtime default.
+	// runsc's sandbox child also pivot_root()s, so it needs the same relaxation:
+	// a cluster that defaults seccomp to RuntimeDefault (an increasingly common
+	// baseline) denies the syscall whatever capabilities the worker holds, and the
+	// sandbox then dies during startup. Declare Unconfined explicitly so the
+	// worker does not depend on the cluster leaving the profile unset.
 	return sc.
 		WithCapabilities(corev1ac.Capabilities().
 			WithDrop("ALL").
-			WithAdd(ateomGvisorCapabilities...))
+			WithAdd(ateomGvisorCapabilities...)).
+		WithSeccompProfile(corev1ac.SeccompProfile().
+			WithType(corev1.SeccompProfileTypeUnconfined))
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
