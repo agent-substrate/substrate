@@ -158,10 +158,9 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 	created, err := s.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "template-a",
-		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -353,10 +352,9 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 	ctx := context.Background()
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
-		ActorTemplateNamespace: "ns1",
-		ActorTemplateName:      "tmpl1",
-		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)

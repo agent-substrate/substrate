@@ -264,24 +264,10 @@ message Actor {
   // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
-  // The template is named by the legacy CRD namespace/name pair below or by
-  // the substrate actor_template ref; actor_template takes precedence when
-  // set.
-  //
-  // TODO: delete both fields once we start using actor_template below.
-  // +k8s:optional
-  // +k8s:format=k8s-short-name
-  // +k8s:immutable
-  string actor_template_namespace = 2;
-  // +k8s:optional
-  // +k8s:format=k8s-long-name
-  // +k8s:immutable
-  string actor_template_name = 3;
-
   // TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
-  // +k8s:optional # TODO: this should be required?
+  // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
-  // +k8s:immutable # TODO: is this mutable?
+  // +k8s:mutable
   ObjectRef actor_template = 4;
 
   // worker_selector is the per-actor placement constraint. The scheduler
@@ -573,8 +559,6 @@ message ActorSnapshotStatus {
   ObjectRef source_actor = 1;
   string source_actor_uid = 2;
   int64 source_actor_version = 3;
-  string actor_template_namespace = 4;
-  string actor_template_name = 5;
   string actor_template_uid = 6;
   SnapshotContentScope content_scope = 7;
   string snapshot_uri = 8;
@@ -1625,15 +1609,6 @@ message WorkerCapacity {
 // ActorAssignment names the Actor currently bound to a Worker — the inverse of
 // WorkerAssignment.
 message ActorAssignment {
-  // The KubeNamespacedObjectRef actor_template names the CRD-backed template
-  // of an actor created with the legacy CRD path
-  // actor_template_ref names the substrate ActorTemplate resource.
-  // Exactly one is set.
-  //
-  // +k8s:optional
-  // +k8s:unionMember
-  KubeNamespacedObjectRef actor_template = 1;
-
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
@@ -1642,20 +1617,12 @@ message ActorAssignment {
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
 
-  // +k8s:optional
-  // +k8s:unionMember
+  // actor_template_ref names the substrate ActorTemplate resource the
+  // assigned actor uses.
+  //
+  // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
-}
-
-message KubeNamespacedObjectRef {
-  // +k8s:required
-  // +k8s:format=k8s-short-name
-  string namespace = 1;
-
-  // +k8s:required
-  // +k8s:format=k8s-long-name
-  string name = 2;
 }
 
 // Debug is the RPC interface for administrative and debugging operations

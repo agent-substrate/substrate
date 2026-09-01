@@ -47,8 +47,8 @@ func init() {
 		DemoName:       "demo-autoscaled-workerpool",
 		Short:          "A WorkerPool scaled by an HPA over custom metrics (Kind only)",
 		Template:       "demos/autoscaled-workerpool/autoscaled-workerpool.yaml.tmpl",
-		Deployments:    []steps.TemplateRef{{Namespace: namespace, Name: "counter"}},
-		ActorTemplates: []steps.TemplateRef{{Namespace: namespace, Name: "counter"}},
+		Deployments:    []steps.TemplateRef{{Atespace: namespace, Name: "counter"}},
+		ActorTemplates: []steps.TemplateRef{{Atespace: namespace, Name: "counter"}},
 	}})
 }
 

@@ -375,8 +375,8 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 		// Filter to the demo namespace when set — workers may live
 		// in their own pool namespace (worker_namespace) so we
 		// compare against actor_namespace too.
-		if tpl := wk.GetStatus().GetAssignment().GetActorTemplate(); tpl != nil {
-			if ns, wkns := namespace, tpl.GetNamespace(); ns != "" && wkns != "" && wkns != ns {
+		if ref := wk.GetStatus().GetAssignment().GetActorTemplateRef(); ref != nil {
+			if ns, wkns := namespace, ref.GetAtespace(); ns != "" && wkns != "" && wkns != ns {
 				continue
 			}
 		}
@@ -413,7 +413,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	actors := make([]actorSummary, 0, len(resp.GetActors()))
 	for _, a := range resp.GetActors() {
-		if namespace != "" && a.GetActorTemplateNamespace() != "" && a.GetActorTemplateNamespace() != namespace {
+		if namespace != "" && a.GetActorTemplate().GetAtespace() != "" && a.GetActorTemplate().GetAtespace() != namespace {
 			continue
 		}
 		// Carry the template name as the meta message so the UI's
@@ -422,7 +422,7 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 		// substrate Actors there's no equivalent, so the template
 		// name is the closest semantic match).
 		msg := ""
-		if t := a.GetActorTemplateName(); t != "" {
+		if t := a.GetActorTemplate().GetName(); t != "" {
 			msg = "template: " + t
 		}
 		actors = append(actors, actorSummary{

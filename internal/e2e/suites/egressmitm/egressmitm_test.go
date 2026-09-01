@@ -32,9 +32,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const probeTemplate = "probe"
@@ -87,8 +85,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// missing.)
 	e2e.EnsureEgressTrustBundle(t, ctx, clients)
 
-	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
-	waitForGolden(t, ctx, clients)
+	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
 
 	const id = "probe-mitm"
 	createAndResumeActor(t, ctx, clients, id)
@@ -172,37 +169,18 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 	}
 }
 
-// The helpers below mirror the identity suite's: fixture golden wait and a
-// self-healing actor lifecycle (actor records outlive the fixture namespace).
-
-func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) {
-	t.Helper()
-	deadline := time.Now().Add(e2e.TemplateReadyTimeout(t))
-	for time.Now().Before(deadline) {
-		at, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(probeNamespace).Get(ctx, probeTemplate, metav1.GetOptions{})
-		if err == nil {
-			switch at.Status.Phase {
-			case v1alpha1.PhaseReady:
-				return
-			case v1alpha1.PhaseFailed:
-				t.Fatalf("probe ActorTemplate entered PhaseFailed")
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("timed out waiting for probe ActorTemplate to be Ready")
-}
+// createAndResumeActor mirrors the identity suite's self-healing actor
+// lifecycle (actor records outlive the fixture namespace); DeployProbe has
+// already waited for the template's golden snapshot.
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: probeNamespace}}})
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplateNamespace: probeNamespace,
-		ActorTemplateName:      probeTemplate,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}

@@ -69,6 +69,7 @@ import (
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	serverv3 "github.com/envoyproxy/go-control-plane/pkg/server/v3"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
@@ -894,7 +895,7 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 }
 
 // authorityFilterStateFilter captures :authority into
-// ingress.AuthorityFilterStateKey filter state, so main_internal's HTTP leg
+// extproc.AuthorityFilterStateKey filter state, so main_internal's HTTP leg
 // can read it back across the internal-listener hop (see buildHcm,
 // ingress.HandleRequestHeaders). buildConnectTerminateHCM and buildHcm's
 // ingress listeners use it; main_internal itself must not, since that would
@@ -907,9 +908,9 @@ func authorityFilterStateFilter() *hcmv3.HttpFilter {
 				OnRequestHeaders: []*setfilterstatecommonv3.FilterStateValue{
 					{
 						Key: &setfilterstatecommonv3.FilterStateValue_ObjectKey{
-							ObjectKey: ingress.AuthorityFilterStateKey,
+							ObjectKey: extproc.AuthorityFilterStateKey,
 						},
-						// ingress.AuthorityFilterStateKey is a custom (non-well-known)
+						// extproc.AuthorityFilterStateKey is a custom (non-well-known)
 						// key, so the generic string factory is required.
 						FactoryKey: "envoy.string",
 						Value: &setfilterstatecommonv3.FilterStateValue_FormatString{
@@ -1046,10 +1047,10 @@ func (x *XdsServer) buildHcm(statPrefix string, captureAuthority bool) *anypb.An
 			ResponseTrailerMode: extprocv3filter.ProcessingMode_SKIP,
 		},
 		// Passes the resolved actor's authority as a request attribute (see
-		// ingress.AuthorityFilterStateAttribute, ingress.HandleRequestHeaders)
+		// extproc.AuthorityFilterStateAttribute, ingress.HandleRequestHeaders)
 		// and lets the response write the resolved worker address into
 		// ingress.OriginalDstMetadataKey.
-		RequestAttributes: []string{ingress.AuthorityFilterStateAttribute},
+		RequestAttributes: []string{extproc.AuthorityFilterStateAttribute},
 		MetadataOptions: &extprocv3filter.MetadataOptions{
 			ForwardingNamespaces: &extprocv3filter.MetadataOptions_MetadataNamespaces{
 				Untyped: []string{ingress.OriginalDstMetadataKey},

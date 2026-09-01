@@ -28,7 +28,7 @@ func init() {
 		DemoName:       "demo-egress",
 		Short:          "Egress policy enforcement through atenet",
 		Template:       "demos/egress/egress.yaml.tmpl",
-		Deployments:    []steps.TemplateRef{{Namespace: namespace, Name: "egress"}},
-		ActorTemplates: []steps.TemplateRef{{Namespace: namespace, Name: "egress"}},
+		Deployments:    []steps.TemplateRef{{Atespace: namespace, Name: "egress"}},
+		ActorTemplates: []steps.TemplateRef{{Atespace: namespace, Name: "egress"}},
 	})
 }

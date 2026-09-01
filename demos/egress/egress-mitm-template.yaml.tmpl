@@ -1,0 +1,74 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# MITM variant of the egress demo template: the same workload as
+# egress-template.yaml.tmpl, but trusting only the egress gateway
+# CA. The networking suite builds its egress actors from this fixture instead
+# of the plain one when E2E_EGRESS_MITM is set, because under an sdsmint
+# gateway TestActorEgressHTTPS's origin certificate is a per-SNI leaf the
+# gateway minted, which chains to no public CA.
+#
+# Kept in step with egress-template.yaml.tmpl; the deltas are the
+# names, the projected trust bundle, and the two SSL_CERT_* variables.
+
+metadata:
+  atespace: ate-demo-egress-mitm
+  name: egress-mitm
+workerSelector:
+  matchLabels:
+    workload: egress-mitm
+containers:
+- name: egress
+  image: ko://github.com/agent-substrate/substrate/demos/egress
+  command: ["/ko-app/egress"]
+  # The demo fetches with a stock net/http client, so its roots come from
+  # crypto/x509's system pool — which on Unix reads both of these.
+  #
+  # SSL_CERT_FILE alone is not enough to make the projected bundle the whole
+  # story: it replaces the default cert FILE list, but the default cert
+  # DIRECTORY list is still scanned, and the base image keeps its public
+  # roots in /etc/ssl/certs. Pointing SSL_CERT_DIR at the projection too
+  # makes the anchor set exactly the gateway CA, so a successful HTTPS fetch
+  # proves the projected bundle validated the minted leaf. Under sdsmint the
+  # public roots are useless anyway: every origin is fronted by the gateway.
+  env:
+  - name: SSL_CERT_FILE
+    value: /run/ate/trust-bundle.pem
+  - name: SSL_CERT_DIR
+    value: /run/ate
+  volumeMounts:
+  # the bundle lands at /run/ate/trust-bundle.pem
+  - name: system-info
+    mountPath: /run/ate
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 80
+volumes:
+- name: system-info
+  type: SystemInfo
+  systemInfo:
+    dataSources:
+    # The trust anchors for the per-SNI leaves the MITM egress gateway mints.
+    # Only allowlisted bundle names resolve; this is the one supported today.
+    - trustBundle:
+        name: egress-mitm.ate.dev
+        path: trust-bundle.pem
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-mitm/

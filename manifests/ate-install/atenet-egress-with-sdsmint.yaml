@@ -143,7 +143,7 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
                   on_request_headers:
-                  - object_key: ate.actor.identity
+                  - object_key: dev.ate.actor.identity
                     factory_key: envoy.string
                     shared_with_upstream: ONCE
                     skip_if_empty: true
@@ -295,7 +295,7 @@ data:
                     json_format:
                       leg: mitm
                       time: "%START_TIME%"
-                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
+                      actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
                       sni: "%REQUESTED_SERVER_NAME%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
@@ -427,7 +427,7 @@ data:
                     json_format:
                       leg: cleartext
                       time: "%START_TIME%"
-                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
+                      actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
                       path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
@@ -506,7 +506,7 @@ data:
         connect_timeout: 1s
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection. Two objects ride this hop,
-        # both set on the CONNECT leg above: ate.actor.identity, which the MITM
+        # both set on the CONNECT leg above: dev.ate.actor.identity, which the MITM
         # access logs and the optional ext_proc filter read, and
         # original_dst_address, which egress_tcp_passthrough dials.
         #

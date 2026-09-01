@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# The k8s half of the probe fixture: the namespace and the WorkerPool. The
+# ActorTemplate is the substrate resource in probe-template.yaml.tmpl, created
+# through the ate API by e2e.DeploySubstrateFixture.
+#
 # Rendered by e2e.RenderFixtureManifest, which fills the ${...} placeholders for
 # the sandbox class under test: one manifest serves both runtimes so the gVisor
 # and micro-VM variants cannot drift apart. A placeholder that has no value for
@@ -35,50 +39,3 @@ spec:
   replicas: 3
   workerImage: ${ATEOM_IMAGE}
 ${WORKERPOOL_RUNTIME}
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: probe
-  namespace: ate-e2e-probe${FIXTURE_SUFFIX}
-spec:
-${TEMPLATE_SANDBOX_CLASS}
-  volumes:
-  - name: system-info
-    systemInfo:
-      dataSources:
-      - actorMetadata:
-          items:
-          - field: name
-            path: actor-id
-          - field: atespace
-            path: atespace
-          - field: uid
-            path: actor-uid
-      # Only for suites that pass WithTrustBundle: the bundle is a cluster
-      # singleton, so a suite that merely needs a probe must not depend on it.
-${TEMPLATE_TRUST_BUNDLE}
-  containers:
-  - name: probe
-    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
-    command: ["/ko-app/probe"]
-    volumeMounts:
-    - name: system-info
-      mountPath: /run/ate   # the probe reads actor metadata and trust bundles under /run/ate
-    # The probe binary binds :80 immediately, so this gates actor start on a
-    # readiness signal rather than a guess, and carries a non-default
-    # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom
-    # instead of only the ateom's built-in default.
-    readyz:
-      httpGet:
-        path: /healthz
-        port: 80
-      timeoutSeconds: 60
-${TEMPLATE_RESOURCES}
-  workerSelector:
-    matchLabels:
-      workload: probe${FIXTURE_SUFFIX}
-  snapshotsConfig:
-    location: gs://${BUCKET_NAME}/ate-e2e-probe${FIXTURE_SUFFIX}/

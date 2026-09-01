@@ -12,19 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Micro-VM (kata + cloud-hypervisor) variant of the MITM egress demo, so the
-# networking suite's egress tests run against the sdsmint gateway on both
-# sandbox classes. Delivery of the projected bundle into the sandbox is what
-# differs by class — a read-only bind for gVisor, the unified virtio-fs share
-# for the guest here — so the projection is worth proving on both.
-#
-# As in egress-mitm.yaml.tmpl, this REQUIRES an sdsmint install
-# (--experimental-use-sdsmint).
-#
-# Kept in step with egress-microvm.yaml.tmpl; the deltas are the names, the
-# projected trust bundle, and the two SSL_CERT_* variables. The cluster-wide
-# `microvm` SandboxConfig referenced below by name is installed by
-# hack/install-microvm-deps.sh.
+# Worker pool for the micro-VM MITM variant of the egress demo, so
+# the networking suite's egress tests run against the sdsmint gateway on both
+# sandbox classes. As in egress-mitm.yaml.tmpl, this REQUIRES an
+# sdsmint install (--experimental-use-sdsmint). The cluster-wide `microvm`
+# SandboxConfig referenced by the pool is installed by
+# hack/install-microvm-deps.sh
 
 apiVersion: v1
 kind: Namespace
@@ -45,66 +38,9 @@ spec:
   sandboxClass: microvm
   sandboxConfigName: microvm
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
-  # No template.resources, unlike counter-microvm: an unlimited ateom container
-  # reports no capacity, which the scheduler reads as unconstrained, and the pod
-  # requests nothing so it stays placeable next to the counter-microvm pool's
-  # reservation on CI's single kind node. What actually bounds the memory here
-  # is the ActorTemplate's resources below, which size the guest.
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: egress-microvm-mitm
-  namespace: ate-demo-egress-microvm-mitm
-spec:
-  # Must match the WorkerPool's sandboxClass: a snapshot is not portable across
-  # sandbox classes, so only pools of the same class are eligible to run this
-  # template's actors.
-  sandboxClass: microvm
-  volumes:
-  - name: system-info
-    systemInfo:
-      dataSources:
-      # The trust anchors for the per-SNI leaves the MITM egress gateway mints.
-      # Only allowlisted bundle names resolve; this is the one supported today.
-      - trustBundle:
-          name: egress-mitm.ate.dev
-          path: trust-bundle.pem
-  containers:
-  - name: egress
-    image: ko://github.com/agent-substrate/substrate/demos/egress
-    command: ["/ko-app/egress"]
-    # Both variables, for the reason egress-mitm.yaml.tmpl spells out:
-    # SSL_CERT_FILE replaces the default cert file list but not the default cert
-    # DIRECTORY scan, so SSL_CERT_DIR has to point at the projection too for the
-    # anchor set to be exactly the gateway CA.
-    env:
-    - name: SSL_CERT_FILE
-      value: /run/ate/trust-bundle.pem
-    - name: SSL_CERT_DIR
-      value: /run/ate
-    volumeMounts:
-    - name: system-info
-      mountPath: /run/ate   # the bundle lands at /run/ate/trust-bundle.pem
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 80
-      # See counter-microvm.yaml.tmpl: a micro-VM guest needs more than
-      # readyz's 30s default once CI's single kind node is under load.
-      timeoutSeconds: 120
-  # Sandbox size: without these the guest boots at the kata config's default
-  # (2GiB). ateom applies them to the VM (see internal/sizing).
-  resources:
-    limits:
-      cpu: "1"
-      memory: 512Mi
-  workerSelector:
-    matchLabels:
-      workload: egress-microvm-mitm
-  snapshotsConfig:
-    onPause: Full
-    onCommit: Full
-    location: gs://${BUCKET_NAME}/ate-demo-egress-microvm-mitm/
+  # No template.resources, unlike counter-substrate-microvm: an unlimited
+  # ateom container reports no capacity, which the scheduler reads as
+  # unconstrained, and the pod requests nothing so it stays placeable next to
+  # the counter pool's reservation on CI's single kind node. What actually
+  # bounds the memory here is the ActorTemplate's resources, which size the
+  # guest.

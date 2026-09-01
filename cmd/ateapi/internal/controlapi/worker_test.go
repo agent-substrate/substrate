@@ -78,9 +78,9 @@ func withWorkerStatus(mods ...func(*ateapipb.WorkerStatus)) func(*ateapipb.Worke
 
 func newAPIAssignment(actorUID string) *ateapipb.ActorAssignment {
 	return &ateapipb.ActorAssignment{
-		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ate-system", Name: "tmpl"},
-		Actor:         &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid:      actorUID,
+		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ate-system", Name: "tmpl"},
+		Actor:            &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid:         actorUID,
 	}
 }
 
@@ -91,7 +91,7 @@ func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	impl := newServiceImpl(persistence, nil, nil)
+	impl := newServiceImpl(persistence, nil)
 	return &RPCService{impl: impl, workerWorkflow: NewWorkerWorkflow(impl)}, persistence
 }
 
@@ -823,41 +823,26 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		}))),
 		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "assignment", "actor", "atespace"), "")},
 	}, {
-		name: "assignment with a template resource ref passes",
-		req: validReq(validWorker(apiWorkerName, withStatus(func(s *ateapipb.WorkerStatus) {
-			s.Assignment = newAPIAssignment(apiOtherWorkerName)
-			s.Assignment.ActorTemplate = nil
-			s.Assignment.ActorTemplateRef = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl"}
-		}))),
-	}, {
 		name: "assignment template ref needs an atespace",
 		req: validReq(validWorker(apiWorkerName, withStatus(func(s *ateapipb.WorkerStatus) {
 			s.Assignment = newAPIAssignment(apiOtherWorkerName)
-			s.Assignment.ActorTemplate = nil
 			s.Assignment.ActorTemplateRef = &ateapipb.ObjectRef{Name: "tmpl"}
 		}))),
 		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "assignment", "actor_template_ref", "atespace"), "")},
 	}, {
-		name: "assignment must name its template exactly once: both set",
+		name: "assignment needs a template ref",
 		req: validReq(validWorker(apiWorkerName, withStatus(func(s *ateapipb.WorkerStatus) {
 			s.Assignment = newAPIAssignment(apiOtherWorkerName)
-			s.Assignment.ActorTemplateRef = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl"}
+			s.Assignment.ActorTemplateRef = nil
 		}))),
-		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment"), nil, "").WithOrigin("union")},
+		want: field.ErrorList{field.Required(field.NewPath("worker", "status", "assignment", "actor_template_ref"), "")},
 	}, {
-		name: "assignment must name its template exactly once: neither set",
+		name: "assignment template name must be a short name",
 		req: validReq(validWorker(apiWorkerName, withStatus(func(s *ateapipb.WorkerStatus) {
 			s.Assignment = newAPIAssignment(apiOtherWorkerName)
-			s.Assignment.ActorTemplate = nil
+			s.Assignment.ActorTemplateRef.Name = "TMPL_1"
 		}))),
-		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment"), nil, "").WithOrigin("union")},
-	}, {
-		name: "assignment template name must be a long name",
-		req: validReq(validWorker(apiWorkerName, withStatus(func(s *ateapipb.WorkerStatus) {
-			s.Assignment = newAPIAssignment(apiOtherWorkerName)
-			s.Assignment.ActorTemplate.Name = "TMPL_1"
-		}))),
-		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment", "actor_template", "name"), nil, "").WithOrigin("format=k8s-long-name")},
+		want: field.ErrorList{field.Invalid(field.NewPath("worker", "status", "assignment", "actor_template_ref", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -874,7 +859,7 @@ func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	impl := newServiceImpl(persistence, nil, nil)
+	impl := newServiceImpl(persistence, nil)
 
 	// Every case below is rejected, so nothing writes and this stays the
 	// current incarnation for all of them.
@@ -1083,7 +1068,7 @@ func TestServiceImplUpdateWorker_ValidatesAssignment(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	impl := newServiceImpl(persistence, nil, nil)
+	impl := newServiceImpl(persistence, nil)
 	created := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
 	// A malformed assignment must not land.

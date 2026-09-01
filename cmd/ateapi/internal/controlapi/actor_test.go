@@ -90,6 +90,10 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validReq(validActor(withActorTemplate("as", "tmpl"))),
 		nil,
 	}, {
+		"missing actor.actor_template",
+		validReq(validActor(func(a *ateapipb.Actor) { a.ActorTemplate = nil })),
+		field.ErrorList{field.Required(field.NewPath("actor", "actor_template"), "")},
+	}, {
 		"missing actor.actor_template.atespace",
 		validReq(validActor(withActorTemplate("", "tmpl"))),
 		field.ErrorList{field.Required(field.NewPath("actor", "actor_template", "atespace"), "")},
@@ -221,15 +225,15 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "invalid value" })),
 		field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("immutable")},
 	}, {
-		"change actor.actor_template",
+		"change actor.actor_template is allowed",
 		validInput(withActorTemplate("as1", "nm1")),
 		validOutput(withActorTemplate("as2", "nm2")),
-		field.ErrorList{field.Invalid(field.NewPath("actor_template"), nil, "").WithOrigin("immutable")},
+		nil,
 	}, {
 		"clear actor.actor_template",
 		validInput(withActorTemplate("as", "nm")),
 		validOutput(func(a *ateapipb.Actor) { a.ActorTemplate = nil }),
-		field.ErrorList{field.Invalid(field.NewPath("actor_template"), nil, "").WithOrigin("immutable")},
+		field.ErrorList{field.Required(field.NewPath("actor_template"), "")},
 	}, {
 		"add actor.source_snapshot_tag",
 		validInput(),
@@ -711,7 +715,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil, nil)}
+	svc := &RPCService{impl: newServiceImpl(racing, nil)}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -772,7 +776,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil, nil)}
+	svc := &RPCService{impl: newServiceImpl(racing, nil)}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
@@ -874,7 +878,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 	t.Cleanup(cleanup)
 
 	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
-	return &RPCService{impl: newServiceImpl(persistence, nil, nil)}, created
+	return &RPCService{impl: newServiceImpl(persistence, nil)}, created
 }
 
 func TestValidateDeleteActorRequest(t *testing.T) {

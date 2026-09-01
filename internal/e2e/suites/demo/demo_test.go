@@ -1070,7 +1070,7 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 	// The whole suite shares demoAtespace, so the per-test suffix keeps
 	// template names unique.
 	name := base + "-" + nsObj.Name
-	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateCounterTemplateOptions{
+	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace:     demoAtespace,
 		Name:         name,
 		PoolName:     base,

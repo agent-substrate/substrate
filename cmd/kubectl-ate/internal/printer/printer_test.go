@@ -66,8 +66,7 @@ func TestPrintActorsTo_Table(t *testing.T) {
 				Version:    2,
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "template-1",
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
 			Status: &ateapipb.ActorStatus{
 				State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 				WorkerAssignment: &ateapipb.WorkerAssignment{
@@ -156,9 +155,8 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 				Atespace:   "team-b",
 				CreateTime: timestamppb.New(now.Add(-72 * time.Hour)),
 			},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "template-1",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 		{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -166,9 +164,8 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 				Atespace:   "team-a",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 			},
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "template-1",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 		},
 		{
 			Metadata: &ateapipb.ResourceMetadata{
@@ -176,9 +173,8 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 				Atespace:   "team-a",
 				CreateTime: timestamppb.New(now.Add(-5 * time.Hour)),
 			},
-			ActorTemplateNamespace: "other",
-			ActorTemplateName:      "template-2",
-			Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "other", Name: "template-2"},
+			Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		},
 	}
 
@@ -247,9 +243,9 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			SandboxClass:    "gvisor",
 			Status: &ateapipb.WorkerStatus{
 				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-						Namespace: "default",
-						Name:      "template-1",
+					ActorTemplateRef: &ateapipb.ObjectRef{
+						Atespace: "default",
+						Name:     "template-1",
 					},
 					Actor: &ateapipb.ObjectRef{
 						Atespace: "space-1",
@@ -269,44 +265,6 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 default     pool-1   gvisor   pod-1   ASSIGNED   default/template-1/space-1/id-1
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
-		t.Errorf("output mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// A worker assigned to an actor created from a substrate ActorTemplate
-// carries only ActorTemplateRef; the printer must not dereference the legacy
-// CRD ref (regression test for a nil-pointer panic).
-func TestPrintWorkersTo_Table_TemplateRef(t *testing.T) {
-	var buf bytes.Buffer
-	workers := []*ateapipb.Worker{
-		{
-			WorkerNamespace: "default",
-			WorkerPool:      "pool-1",
-			WorkerPod:       "pod-1",
-			SandboxClass:    "gvisor",
-			Status: &ateapipb.WorkerStatus{
-				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplateRef: &ateapipb.ObjectRef{
-						Atespace: "ate-demo-counter-substrate",
-						Name:     "counter",
-					},
-					Actor: &ateapipb.ObjectRef{
-						Atespace: "space-1",
-						Name:     "id-1",
-					},
-				},
-			},
-		},
-	}
-
-	if err := PrintWorkersTo(&buf, workers, "table"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expected := `NAMESPACE   POOL     CLASS    POD     STATUS     ASSIGNED ACTOR
-default     pool-1   gvisor   pod-1   ASSIGNED   ate-demo-counter-substrate/counter/space-1/id-1
-`
-	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }

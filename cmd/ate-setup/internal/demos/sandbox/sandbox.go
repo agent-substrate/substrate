@@ -28,7 +28,7 @@ func init() {
 		DemoName:       "demo-sandbox",
 		Short:          "An on-demand sandbox actor driven by the sandbox client",
 		Template:       "demos/sandbox/sandbox.yaml.tmpl",
-		ActorTemplates: []steps.TemplateRef{{Namespace: namespace, Name: "sandbox-template"}},
+		ActorTemplates: []steps.TemplateRef{{Atespace: namespace, Name: "sandbox-template"}},
 		// There is no workload to come up, and the template is exercised on
 		// demand, so the install does not block on readiness.
 		SkipReadinessWait: true,

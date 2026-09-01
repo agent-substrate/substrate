@@ -24,22 +24,20 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -116,7 +114,10 @@ func buildFixtureImage(t *testing.T, repo string) string {
 	if err != nil {
 		t.Fatalf("parsing %q: %v", ref, err)
 	}
-	if err := remote.Write(tag, img); err != nil {
+	// The default keychain reads the local docker config, so the push works
+	// against an authenticated registry (a GKE dev cluster's gcr.io) as well
+	// as CI's anonymous kind registry.
+	if err := remote.Write(tag, img, remote.WithAuthFromKeychain(authn.DefaultKeychain)); err != nil {
 		t.Fatalf("pushing %q: %v", ref, err)
 	}
 
@@ -129,7 +130,9 @@ func buildFixtureImage(t *testing.T, repo string) string {
 
 // createTemplate builds a probe ActorTemplate with the fixture attached as an
 // image volume, copying the resolved runtime from the shared probe template.
-func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage string) *v1alpha1.ActorTemplate {
+// The template's name is suffixed per test run: it lives in the suite's
+// shared atespace, which outlives the per-test k8s namespace.
+func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns *e2e.Namespace, fixtureImage string) *ateapipb.ActorTemplate {
 	t.Helper()
 
 	env, err := e2e.CheckEnv("BUCKET_NAME")
@@ -138,60 +141,36 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	}
 
 	// The probe supplies this suite's container image and resolved runtime.
-	probeNamespace := e2e.DeployProbe(t, env["BUCKET_NAME"], "imagevolume")
-
-	srcPool, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(probeNamespace).Get(ctx, probeName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting WorkerPool %s/%s: %v", probeNamespace, probeName, err)
-	}
-	srcTemplate, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(probeNamespace).Get(ctx, probeName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("getting ActorTemplate %s/%s: %v", probeNamespace, probeName, err)
+	probeAtespace, _ := e2e.DeployProbe(t, env["BUCKET_NAME"], "imagevolume")
+	src := e2e.SubstrateFixture{
+		Atespace:      probeAtespace,
+		Name:          probeName,
+		PoolNamespace: probeAtespace,
+		PoolName:      probeName,
+		DeployWith:    "the imagevolume suite's own DeployProbe",
 	}
 
-	// The pool is labeled uniquely to this namespace so the cluster-wide
-	// scheduler cannot hand its workers to another suite's actors.
-	poolLabels := map[string]string{"imagevolume": ns.Name}
-	pool := &v1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: probeName, Namespace: ns.Name, Labels: poolLabels},
-		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:          2,
-			WorkerImage:       srcPool.Spec.WorkerImage,
-			SandboxClass:      srcPool.Spec.SandboxClass,
-			SandboxConfigName: srcPool.Spec.SandboxConfigName,
+	return e2e.CreateSubstrateTemplateFrom(ctx, t, clients, ns.Name, src, e2e.SubstrateTemplateOptions{
+		Atespace:     atespace,
+		Name:         "probe-" + ns.Name,
+		PoolName:     probeName,
+		PoolReplicas: 2,
+		// The pool is labeled uniquely to this namespace so the cluster-wide
+		// scheduler cannot hand its workers to another suite's actors.
+		Labels: map[string]string{"imagevolume": ns.Name},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
 		},
-	}
-	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(ns.Name).Create(ctx, pool, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("creating WorkerPool: %v", err)
-	}
-
-	container := srcTemplate.Spec.Containers[0]
-	container.VolumeMounts = append(container.VolumeMounts, v1alpha1.VolumeMount{Name: "fixture", MountPath: mountPath})
-
-	volumes := append(slices.Clone(srcTemplate.Spec.Volumes), v1alpha1.Volume{
-		Name:         "fixture",
-		VolumeSource: v1alpha1.VolumeSource{Image: &v1alpha1.ImageVolumeSource{Reference: fixtureImage}},
+		Modify: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts,
+				&ateapipb.VolumeMount{Name: "fixture", MountPath: mountPath})
+			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
+				Name:  "fixture",
+				Type:  "Image",
+				Image: &ateapipb.ImageVolumeSource{Reference: fixtureImage},
+			})
+		},
 	})
-
-	at := &v1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: probeName, Namespace: ns.Name},
-		Spec: v1alpha1.ActorTemplateSpec{
-			Containers:     []v1alpha1.Container{container},
-			WorkerSelector: &metav1.LabelSelector{MatchLabels: poolLabels},
-			SandboxClass:   srcTemplate.Spec.SandboxClass,
-			Volumes:        volumes,
-			SnapshotsConfig: v1alpha1.SnapshotsConfig{
-				Location: fmt.Sprintf("gs://%s/%s/", env["BUCKET_NAME"], ns.Name),
-			},
-		},
-	}
-	created, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(ns.Name).Create(ctx, at, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("creating ActorTemplate: %v", err)
-	}
-
-	e2e.WaitForTemplateReady(ctx, t, clients, ns.Name, probeName)
-	return created
 }
 
 // probeJSON calls a probe endpoint through the router and decodes its reply.
@@ -227,20 +206,13 @@ func TestImageVolume(t *testing.T) {
 
 	fixtureImage := buildFixtureImage(t, repo)
 	t.Logf("fixture image: %s", fixtureImage)
-	createTemplate(ctx, t, clients, ns, fixtureImage)
-
-	if _, err := clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: atespace}},
-	}); err != nil {
-		t.Logf("CreateAtespace (may already exist): %v", err)
-	}
+	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage)
 
 	actorRef := resources.ActorRef{Atespace: atespace, Name: "iv-" + ns.Name}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-			ActorTemplateNamespace: ns.Name,
-			ActorTemplateName:      probeName,
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			ActorTemplate: e2e.TemplateRef(tmpl),
 		},
 	}); err != nil {
 		t.Fatalf("CreateActor: %v", err)

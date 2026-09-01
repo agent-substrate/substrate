@@ -191,9 +191,8 @@ func (u *durDirUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplateNamespace: templateNS,
-				ActorTemplateName:      u.templateName,
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: u.templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err

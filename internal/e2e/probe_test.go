@@ -15,17 +15,18 @@
 package e2e
 
 import (
+	"os"
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestRenderProbeManifest_TrustBundle pins the opt-in. The bundle is derived
-// from one cluster-wide Secret, so a probe suite that does not ask for the
+// TestProbeTemplate_TrustBundle pins the opt-in. The bundle is derived from
+// one cluster-wide Secret, so a probe suite that does not ask for the
 // projection must not carry it: it would otherwise fail whenever the suite
 // that owns the pool finishes and takes the bundle with it.
-func TestRenderProbeManifest_TrustBundle(t *testing.T) {
+func TestProbeTemplate_TrustBundle(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, tc := range []struct {
 		name string
@@ -37,18 +38,23 @@ func TestRenderProbeManifest_TrustBundle(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Strict decoding is what proves the fragment landed at the right
-			// depth: misindented, it would parse as some other field.
-			_, template := decodeFixture(t, probeManifest,
-				renderProbeManifest(t, "test-bucket", "render", tc.cfg))
+			// depth: misindented, it would fail the protojson decode or parse
+			// as some other field.
+			inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", tc.cfg.trustBundle)
+			rendered, err := os.ReadFile(renderManifest(t, probeManifests.Template, inline, blocks))
+			if err != nil {
+				t.Fatalf("reading rendered manifest: %v", err)
+			}
+			templates := decodeSubstrateTemplates(t, rendered)
+			if len(templates) != 1 {
+				t.Fatalf("probe template manifest yields %d documents, want 1", len(templates))
+			}
 
-			var source *v1alpha1.TrustBundleDataSource
-			for _, vol := range template.Spec.Volumes {
-				if vol.SystemInfo == nil {
-					continue
-				}
-				for _, ds := range vol.SystemInfo.DataSources {
-					if ds.TrustBundle != nil {
-						source = ds.TrustBundle
+			var source *ateapipb.TrustBundleDataSource
+			for _, vol := range templates[0].GetVolumes() {
+				for _, ds := range vol.GetSystemInfo().GetDataSources() {
+					if ds.GetTrustBundle() != nil {
+						source = ds.GetTrustBundle()
 					}
 				}
 			}
@@ -60,10 +66,10 @@ func TestRenderProbeManifest_TrustBundle(t *testing.T) {
 			}
 			// The projected name must select the bundle atecontroller
 			// publishes, or actors fail closed on a name atelet rejects.
-			if !strings.HasPrefix(EgressTrustBundleObjectName, source.Name+":") {
-				t.Errorf("trustBundle name = %q, want the bundle backing %q", source.Name, EgressTrustBundleObjectName)
+			if !strings.HasPrefix(EgressTrustBundleObjectName, source.GetName()+":") {
+				t.Errorf("trustBundle name = %q, want the bundle backing %q", source.GetName(), EgressTrustBundleObjectName)
 			}
-			if source.Path == "" {
+			if source.GetPath() == "" {
 				t.Error("trustBundle projection has no path")
 			}
 		})

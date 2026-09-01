@@ -125,13 +125,6 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 					wass.GetActor().GetAtespace(),
 					wass.GetActor().GetName(),
 				)
-			} else if tpl := wass.GetActorTemplate(); tpl != nil && tpl.GetNamespace() != "" {
-				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
-					tpl.GetNamespace(),
-					tpl.GetName(),
-					wass.GetActor().GetAtespace(),
-					wass.GetActor().GetName(),
-				)
 			} else {
 				assignedActor = fmt.Sprintf("%s/%s",
 					wass.GetActor().GetAtespace(),

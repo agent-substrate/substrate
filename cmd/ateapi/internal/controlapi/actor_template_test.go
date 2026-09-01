@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -177,7 +178,7 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil, nil)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil)}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -207,7 +208,7 @@ func TestCreateActorTemplate(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil, nil)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil)}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -913,6 +914,88 @@ func TestValidateActorTemplate(t *testing.T) {
 	}
 }
 
+// seedSubstrateTemplate stores a minimal substrate ActorTemplate in team-a.
+func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.Interface, name string) *ateapipb.ActorTemplate {
+	t.Helper()
+	stored, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			StorageLocation: "gs://ate-snapshots/team-a/",
+		},
+		SandboxConfig: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "gvisor",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate: %v", err)
+	}
+	return stored
+}
+
+// TestResolveActorTemplate verifies the resolver reads the substrate resource
+// the actor's actor_template reference names.
+func TestResolveActorTemplate(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	stored := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+
+	t.Run("ref reads the store", func(t *testing.T) {
+		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}
+		got, err := resolveActorTemplate(ctx, persistence, actor)
+		if err != nil {
+			t.Fatalf("resolveActorTemplate: %v", err)
+		}
+		if got.GetMetadata().GetUid() != stored.GetMetadata().GetUid() {
+			t.Errorf("template uid = %q, want the stored substrate template %q", got.GetMetadata().GetUid(), stored.GetMetadata().GetUid())
+		}
+	})
+
+	t.Run("ref to a missing template is FailedPrecondition", func(t *testing.T) {
+		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "absent"}}
+		_, err := resolveActorTemplate(ctx, persistence, actor)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("status.Code = %v, want FailedPrecondition (err: %v)", got, err)
+		}
+	})
+}
+
+// TestResolveActorTemplate_NotFound verifies a vanished template and an actor
+// naming no template at all surface errActorTemplateNotFound, so callers like
+// delete can tolerate them.
+func TestResolveActorTemplate_NotFound(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	stored := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+
+	tests := []struct {
+		name         string
+		actor        *ateapipb.Actor
+		wantNotFound bool
+	}{
+		{"ref resolves", &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}, false},
+		{"ref to deleted template", &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone"}}, true},
+		{"no template named at all", &ateapipb.Actor{}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveActorTemplate(ctx, persistence, tc.actor)
+			if tc.wantNotFound {
+				if !errors.Is(err, errActorTemplateNotFound) {
+					t.Fatalf("resolveActorTemplate err = %v, want errActorTemplateNotFound", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveActorTemplate: %v", err)
+			}
+			if got.GetMetadata().GetUid() != stored.GetMetadata().GetUid() {
+				t.Errorf("template uid = %q, want %q", got.GetMetadata().GetUid(), stored.GetMetadata().GetUid())
+			}
+		})
+	}
+}
+
 // TestUpdateActorTemplateMetadata pins the store's update behavior: the
 // server-assigned metadata is recomputed in place, and metadata identity is
 // immutable.
@@ -965,5 +1048,21 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	}
 	if got, want := reverted.GetMetadata().GetUid(), created.GetMetadata().GetUid(); got != want {
 		t.Errorf("uid after update = %q, want %q", got, want)
+	}
+}
+
+// TestActorTemplateObjectRef pins that snapshot and assignment records get a
+// fresh copy of the reference, never the actor's own message.
+func TestActorTemplateObjectRef(t *testing.T) {
+	if got := actorTemplateObjectRef(&ateapipb.Actor{}); got != nil {
+		t.Errorf("actorTemplateObjectRef(no ref) = %v, want nil", got)
+	}
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl1"}}
+	got := actorTemplateObjectRef(actor)
+	if got == actor.GetActorTemplate() {
+		t.Error("actorTemplateObjectRef aliases the actor's reference")
+	}
+	if got.GetAtespace() != "team-a" || got.GetName() != "tmpl1" {
+		t.Errorf("actorTemplateObjectRef = %v, want team-a/tmpl1", got)
 	}
 }
