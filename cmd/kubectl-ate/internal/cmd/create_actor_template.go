@@ -32,8 +32,7 @@ var createActorTemplateFilenameFlag string
 var createActorTemplateCmd = &cobra.Command{
 	Use:   "actor-template -f <manifest>",
 	Short: "Create an actor template from a manifest",
-	Long: `Create an actor template (substrate resource, not the ActorTemplate CRD)
-from a manifest file.
+	Long: `Create an actor template from a manifest file.
 
 The manifest is a single YAML (or JSON) document holding one ateapipb.ActorTemplate
 message in its protojson form, exactly as printed by

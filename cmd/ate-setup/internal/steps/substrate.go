@@ -85,8 +85,7 @@ func CreateActorTemplate(ctx context.Context, client *ateclient.Client, template
 }
 
 // WaitActorTemplateGolden blocks until the template's golden snapshot is
-// built, the substrate counterpart of the ActorTemplate CRD's Ready
-// condition. It fails fast when the template reconciler reports an error.
+// built. It fails fast when the template reconciler reports an error.
 func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref resources.ActorTemplateRef, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	// The last Get error rides along in the timeout error: a wait that spent

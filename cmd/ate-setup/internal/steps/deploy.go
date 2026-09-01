@@ -39,7 +39,6 @@ var crdGVK = schema.GroupVersionKind{
 // ateCRDs are the custom resources the control plane and demos depend on.
 var ateCRDs = []string{
 	"workerpools.ate.dev",
-	"actortemplates.ate.dev",
 	"sandboxconfigs.ate.dev",
 }
 

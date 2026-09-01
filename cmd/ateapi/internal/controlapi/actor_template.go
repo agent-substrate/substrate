@@ -179,9 +179,9 @@ func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resou
 	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
 }
 
-// httpGetPathRE mirrors the ActorTemplate CRD's pattern for readyz paths:
-// RFC 3986 path-segment characters only, with well-formed percent-escapes,
-// and no query string or fragment.
+// httpGetPathRE constrains readyz paths to RFC 3986 path-segment
+// characters only, with well-formed percent-escapes, and no query string
+// or fragment.
 var httpGetPathRE = regexp.MustCompile(`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`)
 
 func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
@@ -194,10 +194,9 @@ func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation,
 // mountPathBadSegmentRE matches '.' or '..' path segments.
 var mountPathBadSegmentRE = regexp.MustCompile(`(^|/)[.][.]?(/|$)`)
 
-// ValidateCustom_VolumeMount_MountPath mirrors the ActorTemplate CRD's CEL
-// rule: a clean absolute Unix path that starts with '/', is not '/', and
-// contains no ':', '.' or '..' segments, '//', trailing '/', or control
-// characters.
+// ValidateCustom_VolumeMount_MountPath requires a clean absolute Unix path
+// that starts with '/', is not '/', and contains no ':', '.' or '..'
+// segments, '//', trailing '/', or control characters.
 func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	p := *value
 	bad := !strings.HasPrefix(p, "/") || len(p) == 1 ||
@@ -217,9 +216,9 @@ func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operati
 	return nil
 }
 
-// ValidateCustom_ImageVolumeSource_Reference mirrors the ActorTemplate CRD's
-// CEL rule: image references must be pinned by digest, because changing the
-// image content under a fixed reference invalidates snapshots.
+// ValidateCustom_ImageVolumeSource_Reference requires image references to
+// be pinned by digest, because changing the image content under a fixed
+// reference invalidates snapshots.
 func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if !strings.Contains(*value, "@") {
 		return field.ErrorList{field.Invalid(fldPath, *value, "must be pinned by digest (changing the image invalidates snapshots)")}
@@ -234,14 +233,13 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 	return nil
 }
 
-// cpuLimitMax mirrors the ActorTemplate CRD's bound: cpu limits must be less
-// than 1000 cores.
+// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
 var cpuLimitMax = resource.MustParse("1k")
 
-// ValidateCustom_Resources_Limits mirrors the ActorTemplate CRD's CEL rules
-// on ContainerResources: only cpu and memory limits are supported, each
-// quantity must be greater than zero, and the cpu limit must be less than
-// 1000 cores. Presence and uniqueness of names are enforced by tags.
+// ValidateCustom_Resources_Limits validates the resource limits: only cpu
+// and memory limits are supported, each quantity must be greater than zero,
+// and the cpu limit must be less than 1000 cores. Presence and uniqueness
+// of names are enforced by tags.
 func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.Limits) field.ErrorList {
 	var errs field.ErrorList
 	for i, limit := range value {
@@ -270,9 +268,9 @@ func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, f
 	return errs
 }
 
-// ValidateCustom_ActorTemplate_SnapshotsConfig mirrors the ActorTemplate
-// CRD's CEL rule: on_commit must be a subset of on_pause. UNSPECIFIED means
-// FULL, so an unset on_commit over a DATA on_pause is rejected too.
+// ValidateCustom_ActorTemplate_SnapshotsConfig requires on_commit to be a
+// subset of on_pause. UNSPECIFIED means FULL, so an unset on_commit over a
+// DATA on_pause is rejected too.
 func ValidateCustom_ActorTemplate_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
 	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
@@ -281,8 +279,8 @@ func ValidateCustom_ActorTemplate_SnapshotsConfig(_ context.Context, _ operation
 	return nil
 }
 
-// envVarNameRE mirrors the ActorTemplate CRD's pattern for env var names:
-// any printable ASCII character except '='.
+// envVarNameRE constrains env var names to any printable ASCII character
+// except '='.
 var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)
 
 func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
@@ -292,9 +290,9 @@ func ValidateCustom_EnvVar_Name(_ context.Context, _ operation.Operation, fldPat
 	return nil
 }
 
-// capabilityRE mirrors the ActorTemplate CRD's pattern for Linux capability
-// names: uppercase, without the "CAP_" prefix (which is added when the OCI
-// spec is written; the prefixed spelling would silently grant nothing).
+// capabilityRE constrains Linux capability names: uppercase, without the
+// "CAP_" prefix (which is added when the OCI spec is written; the prefixed
+// spelling would silently grant nothing).
 var capabilityRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 func validateCapabilities(fldPath *field.Path, caps []string, allowAll bool) field.ErrorList {

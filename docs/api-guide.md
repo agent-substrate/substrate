@@ -360,36 +360,38 @@ If `readyz` is omitted from a container, the prior "started == ready" behavior i
 
 ### Example
 
+A protojson-shaped `ateapipb.ActorTemplate`, created through the ate API with
+`kubectl ate create actor-template -f secret-agent.yaml` (the `ate-demo`
+atespace must exist):
+
 ```yaml
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
 metadata:
+  atespace: ate-demo
   name: secret-agent
-  namespace: ate-demo
-spec:
-  # No sandbox config here — the binaries and pause image come from the
-  # WorkerPool's SandboxConfig (see section 3).
-  containers:
-  - name: agent
-    image: gcr.io/my-project/my-agent:latest
-    # Optional: gate Run/Restore on the agent's HTTP readiness endpoint.
-    # See "Container Readiness Probe (readyz)" above.
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 80
-  # sandboxClass defaults to gvisor; set to microvm to require micro-VM pools.
-  sandboxClass: gvisor
-  workerSelector:
-    matchLabels:
-      workload: secret-agent
-  snapshotsConfig:
-    location: gs://my-bucket/secret-agent
+containers:
+- name: agent
+  image: gcr.io/my-project/my-agent:latest
+  # Optional: gate Run/Restore on the agent's HTTP readiness endpoint.
+  # See "Container Readiness Probe (readyz)" above.
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 80
+workerSelector:
+  matchLabels:
+    workload: secret-agent
+# The sandbox binaries and pause image are not configured here — they come
+# from the WorkerPool's SandboxConfig (see section 3). sandboxClass defaults
+# to gvisor; set SANDBOX_CLASS_MICROVM to require micro-VM pools.
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+snapshotsConfig:
+  storageLocation: gs://my-bucket/secret-agent
 ```
 
 ### Snapshot Storage Layout
 
-`snapshotsConfig.location` is a **base prefix**, not the address of any one snapshot. Every snapshot taken from the template lands at:
+`snapshotsConfig.storageLocation` is a **base prefix**, not the address of any one snapshot. Every snapshot taken from the template lands at:
 
 ```
 <location>/snapshots/<atespace>/<snapshot name>
@@ -399,7 +401,7 @@ and the objects of that snapshot (its manifest, memory image, durable-data tar) 
 
 Each `ActorSnapshot` reports its own address in the server-managed `status.snapshotUri` field. It is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. Do not send it on input; parse it only against the scheme above.
 
-An `ActorTemplate` is namespaced but an atespace is the global isolation boundary, so one `location` holds snapshots for many atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
+An `ActorTemplate` is namespaced but an atespace is the global isolation boundary, so one `storageLocation` holds snapshots for many atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
 ```yaml
 # Read-only on team-a's snapshots for this template, and nothing else.

@@ -592,7 +592,7 @@ create_api_authentication_config() {
 
 ensure_crds() {
   log_step "ensure_crds"
-  if run_kubectl get crd workerpools.ate.dev actortemplates.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
+  if run_kubectl get crd workerpools.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
     return
   fi
 
@@ -870,8 +870,8 @@ delete_demo_actors() {
 
 # delete_demo_actors_substrate is delete_demo_actors for actors created from a
 # substrate ActorTemplate resource: those reference their template via the
-# actorTemplate {atespace, name} ref instead of the legacy CRD namespace/name
-# pair. Arguments are alternating atespace and template name.
+# actorTemplate {atespace, name} ref. Arguments are alternating atespace and
+# template name.
 delete_demo_actors_substrate() {
   if ! command -v jq &>/dev/null; then
     echo "jq is required to delete demo actors" >&2
