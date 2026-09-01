@@ -85,7 +85,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 
 	// The podcertificate controller goes first so it starts signing and
 	// publishing trust bundles immediately.
-	if err := e.KoApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
 		return err
 	}
 	if err := e.applyPodcertWorkersOverride(ctx); err != nil {
@@ -228,7 +228,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	if err := e.KoApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-api-server", e.Cfg.RolloutTimeout)
@@ -247,7 +247,7 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	if err := e.KoApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-controller", e.Cfg.RolloutTimeout)
@@ -276,7 +276,7 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		// The kind overlay patches the DaemonSet for the local node layout.
 		manifest, err = e.KustomizeResolve(ctx, installDir+"/kind/atelet")
 	} else {
-		manifest, err = e.KoResolve(ctx, e.Cfg.Manifest("atelet.yaml"))
+		manifest, err = e.ResolveManifest(ctx, e.Cfg.Manifest("atelet.yaml"))
 	}
 	if err != nil {
 		return err
@@ -322,7 +322,7 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err := e.applyAtenetEgress(ctx); err != nil {
 		return err
 	}
-	if err := e.KoApply(ctx, e.Cfg.Manifest("atenet-dns.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("atenet-dns.yaml")); err != nil {
 		return err
 	}
 
@@ -359,7 +359,7 @@ func (e *Env) EnsureCRDs(ctx context.Context) error {
 // DeployCRDs applies the generated CRDs and RBAC, waiting for them to reach Established condition.
 func (e *Env) DeployCRDs(ctx context.Context) error {
 	log.Step("deploy_crds")
-	if err := e.KoApply(ctx, e.Cfg.Manifest("generated")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("generated")); err != nil {
 		return err
 	}
 	for _, name := range ateCRDs {

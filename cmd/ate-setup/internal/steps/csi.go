@@ -75,7 +75,7 @@ func (e *Env) SetupCSI(ctx context.Context) error {
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
-	if err := e.KoApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
 		return err
 	}
 	if err := e.applyPodcertWorkersOverride(ctx); err != nil {

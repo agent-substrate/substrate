@@ -110,7 +110,7 @@ func (d *Simple) DeployWorkload(ctx context.Context, e *steps.Env) error {
 	if err != nil {
 		return err
 	}
-	return e.KoApplyBytes(ctx, manifest)
+	return e.ResolveAndApplyBytes(ctx, manifest)
 }
 
 // WaitReady blocks until the demo's Deployments are rolled out.

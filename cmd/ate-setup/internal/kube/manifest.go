@@ -75,12 +75,63 @@ func DecodeManifestBytes(data []byte) ([]*unstructured.Unstructured, error) {
 // comments there call out specific filename-ordering hazards, so recursing or
 // reordering here would change install behavior.
 func LoadPath(path string) ([]*unstructured.Unstructured, error) {
+	files, err := manifestFiles(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var objs []*unstructured.Unstructured
+	for _, file := range files {
+		fileObjs, err := loadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		objs = append(objs, fileObjs...)
+	}
+	return objs, nil
+}
+
+// ReadPath concatenates the same files LoadPath would read into a single
+// multi-document stream, leaving them unparsed.
+//
+// This is the input the pre-built image resolver takes, and sharing
+// manifestFiles keeps it reading exactly what an apply applies. ko is handed
+// the path and enumerates it itself, accepting only .yaml and .json where this
+// also accepts .yml; nothing in the tree uses that extension, and a manifest
+// that did would reach an apply with its ko:// references unresolved.
+func ReadPath(path string) ([]byte, error) {
+	files, err := manifestFiles(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var out bytes.Buffer
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("while reading %s: %w", file, err)
+		}
+		// A separator before every document, including the first: a leading
+		// empty document decodes to nothing, whereas a file that does not end
+		// in a newline would otherwise run into the next one.
+		out.WriteString("---\n")
+		out.Write(data)
+		if !bytes.HasSuffix(data, []byte("\n")) {
+			out.WriteString("\n")
+		}
+	}
+	return out.Bytes(), nil
+}
+
+// manifestFiles lists the files a manifest path covers: the file itself, or
+// every manifest directly inside a directory, in lexical order.
+func manifestFiles(path string) ([]string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("while reading %s: %w", path, err)
 	}
 	if !info.IsDir() {
-		return loadFile(path)
+		return []string{path}, nil
 	}
 
 	entries, err := os.ReadDir(path)
@@ -95,19 +146,10 @@ func LoadPath(path string) ([]*unstructured.Unstructured, error) {
 		if !manifestExtensions[strings.ToLower(filepath.Ext(entry.Name()))] {
 			continue
 		}
-		names = append(names, entry.Name())
+		names = append(names, filepath.Join(path, entry.Name()))
 	}
 	sort.Strings(names)
-
-	var objs []*unstructured.Unstructured
-	for _, name := range names {
-		fileObjs, err := loadFile(filepath.Join(path, name))
-		if err != nil {
-			return nil, err
-		}
-		objs = append(objs, fileObjs...)
-	}
-	return objs, nil
+	return names, nil
 }
 
 func loadFile(path string) ([]*unstructured.Unstructured, error) {

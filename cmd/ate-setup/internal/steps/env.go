@@ -48,15 +48,24 @@ const (
 	NamespacePodCert   = "podcertificate-controller-system"
 )
 
+// imageResolver turns a manifest whose image references are ko:// import paths
+// into one whose references are pullable. *ko.Runner builds and publishes them
+// from source; *images.Prebuilt maps them onto an already-published release.
+type imageResolver interface {
+	ResolvePath(ctx context.Context, path string) ([]byte, error)
+	ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error)
+}
+
 // Env is the shared execution context for every step: resolved configuration
 // plus the clients needed to act on the cluster.
 type Env struct {
 	Cfg  *config.Config
 	Kube *kube.Client
 
-	// ko is created lazily. Steps that only apply static manifests must work
-	// on a machine with no container registry credentials configured.
-	ko *ko.Runner
+	// resolver is created lazily. Steps that only apply static manifests must
+	// work on a machine with no container registry credentials configured, and
+	// the build-from-source resolver fails at construction without them.
+	resolver imageResolver
 
 	// substrateVersion caches the derived build version and its object-name
 	// suffix; see SubstrateVersion.
@@ -73,51 +82,52 @@ func NewEnv(cfg *config.Config) (*Env, error) {
 	return &Env{Cfg: cfg, Kube: client}, nil
 }
 
-// Ko returns the ko runner, creating it on first use.
-func (e *Env) Ko() (*ko.Runner, error) {
-	if e.ko != nil {
-		return e.ko, nil
+// imageResolver returns the image resolver, creating it on first use.
+func (e *Env) imageResolver() (imageResolver, error) {
+	if e.resolver != nil {
+		return e.resolver, nil
 	}
 	runner, err := ko.New(e.Cfg.Root, e.Cfg.KoEnv())
 	if err != nil {
 		return nil, err
 	}
-	e.ko = runner
-	return e.ko, nil
+	e.resolver = runner
+	return e.resolver, nil
 }
 
-// KoApply resolves a manifest path with ko and applies the result. This is the
-// run_ko apply of the shell scripts, split into its two real steps.
-func (e *Env) KoApply(ctx context.Context, path string) error {
-	manifest, err := e.KoResolve(ctx, path)
+// ResolveAndApply resolves the images in a manifest path and applies the
+// result. This is the run_ko apply of the shell scripts, split into its two
+// real steps.
+func (e *Env) ResolveAndApply(ctx context.Context, path string) error {
+	manifest, err := e.ResolveManifest(ctx, path)
 	if err != nil {
 		return err
 	}
 	return e.Kube.ApplyBytes(ctx, manifest)
 }
 
-// KoResolve builds and publishes the images in a manifest path, returning the
-// digest-pinned manifest.
-func (e *Env) KoResolve(ctx context.Context, path string) ([]byte, error) {
-	runner, err := e.Ko()
+// ResolveManifest turns the ko:// references in a manifest path into pullable
+// image references.
+func (e *Env) ResolveManifest(ctx context.Context, path string) ([]byte, error) {
+	resolver, err := e.imageResolver()
 	if err != nil {
 		return nil, err
 	}
-	return runner.ResolvePath(ctx, path)
+	return resolver.ResolvePath(ctx, path)
 }
 
-// KoResolveBytes resolves an in-memory manifest, such as kustomize output.
-func (e *Env) KoResolveBytes(ctx context.Context, manifest []byte) ([]byte, error) {
-	runner, err := e.Ko()
+// ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
+func (e *Env) ResolveManifestBytes(ctx context.Context, manifest []byte) ([]byte, error) {
+	resolver, err := e.imageResolver()
 	if err != nil {
 		return nil, err
 	}
-	return runner.ResolveBytes(ctx, manifest)
+	return resolver.ResolveBytes(ctx, manifest)
 }
 
-// KoApplyBytes resolves an in-memory manifest with ko and applies the result.
-func (e *Env) KoApplyBytes(ctx context.Context, manifest []byte) error {
-	resolved, err := e.KoResolveBytes(ctx, manifest)
+// ResolveAndApplyBytes resolves an in-memory manifest and applies the result.
+func (e *Env) ResolveAndApplyBytes(ctx context.Context, manifest []byte) error {
+	resolved, err := e.ResolveManifestBytes(ctx, manifest)
 	if err != nil {
 		return err
 	}
@@ -129,14 +139,14 @@ func (e *Env) Kustomize(overlay string) ([]byte, error) {
 	return kustomize.Build(e.Cfg.Path(overlay))
 }
 
-// KustomizeResolve renders an overlay and pipes it through ko, the
+// KustomizeResolve renders an overlay and resolves its images, the
 // `kubectl kustomize ... | run_ko resolve -f -` pipeline.
 func (e *Env) KustomizeResolve(ctx context.Context, overlay string) ([]byte, error) {
 	built, err := e.Kustomize(overlay)
 	if err != nil {
 		return nil, err
 	}
-	return e.KoResolveBytes(ctx, built)
+	return e.ResolveManifestBytes(ctx, built)
 }
 
 // EnsureAteSystemNamespace applies the ate-system namespace manifest and waits

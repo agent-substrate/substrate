@@ -116,7 +116,7 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 	if err != nil {
 		return err
 	}
-	if err := e.KoApplyBytes(ctx, manifest); err != nil {
+	if err := e.ResolveAndApplyBytes(ctx, manifest); err != nil {
 		return err
 	}
 	for _, ref := range d.Deployments {
@@ -145,7 +145,7 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 		// ko resolve replaces the ko:// image references with pushed digests
 		// before the manifest is parsed; manifests without ko:// references
 		// pass through unchanged.
-		resolved, err := e.KoResolveBytes(ctx, manifest)
+		resolved, err := e.ResolveManifestBytes(ctx, manifest)
 		if err != nil {
 			return err
 		}
