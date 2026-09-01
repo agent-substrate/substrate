@@ -35,7 +35,6 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
 
 	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -72,6 +71,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"github.com/agent-substrate/substrate/internal/atunnel"
 )
 
 const (
@@ -107,11 +107,6 @@ const (
 	WildcardIP         = "0.0.0.0"
 	ConnectUpgradeType = "CONNECT"
 	MainInternalName   = "main_internal"
-
-	// dynamicMetadataPortFormat is the %DYNAMIC_METADATA(...)% header-value
-	// command operator (see buildRoutes) that derives atunnel.TargetPortHeader
-	// from ingress.OriginalDstMetadataKey/ingress.OriginalDstPortKey.
-	dynamicMetadataPortFormat = "%DYNAMIC_METADATA(" + ingress.OriginalDstMetadataKey + ":" + ingress.OriginalDstPortKey + ")%"
 
 	// httpExtProcFilterName is envoy.filters.http.ext_proc's own well-known
 	// name, used as the HttpFilter.Name in buildHcm.
@@ -840,15 +835,12 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								IdleTimeout: durationpb.New(x.routeIdleTimeout()),
 							},
 						},
-						// atunnel reads the actor's target port from a header, since
-						// it can't see Envoy's dynamic metadata; this derives it
-						// declaratively from the same metadata ext_proc wrote (see
-						// ingress.OriginalDstPortKey).
 						RequestHeadersToAdd: []*corev3.HeaderValueOption{
 							{
 								Header: &corev3.HeaderValue{
-									Key:   atunnel.TargetPortHeader,
-									Value: dynamicMetadataPortFormat,
+									Key: atunnel.TargetPortHeader,
+									Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
+										ingress.OriginalDstMetadataKey, ingress.OriginalDstPortKey),
 								},
 								AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 							},
@@ -894,16 +886,20 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 	}
 }
 
-// actorRoutingFilterStateFilter captures actor routing headers and the target
-// authority so main_internal can read them across the CONNECT internal-listener
-// hop. The authority supplies only the target port, never the actor reference.
-func actorRoutingFilterStateFilter() *hcmv3.HttpFilter {
+// actorRoutingFilterStateFilter captures actor routing headers so
+// main_internal can read them across the CONNECT internal-listener hop.
+func actorRoutingFilterStateFilter(captureAuthority bool) *hcmv3.HttpFilter {
 	values := make([]*setfilterstatecommonv3.FilterStateValue, 0, 3)
-	for _, routingField := range []struct{ key, header string }{
+	routingFields := []struct{ key, header string }{
 		{extproc.ActorNameFilterStateKey, atenet.ActorNameHeader},
 		{extproc.AtespaceFilterStateKey, atenet.AtespaceHeader},
-		{extproc.ConnectAuthorityFilterStateKey, extproc.AuthorityHeader},
-	} {
+	}
+	if captureAuthority {
+		routingFields = append(routingFields, struct{ key, header string }{
+			extproc.ConnectAuthorityFilterStateKey, extproc.AuthorityHeader,
+		})
+	}
+	for _, routingField := range routingFields {
 		values = append(values, &setfilterstatecommonv3.FilterStateValue{
 			Key: &setfilterstatecommonv3.FilterStateValue_ObjectKey{
 				ObjectKey: routingField.key,
@@ -962,7 +958,7 @@ func (x *XdsServer) buildConnectTerminateHCM(statPrefix string) *anypb.Any {
 		},
 		CodecType: hcmv3.HttpConnectionManager_AUTO,
 		HttpFilters: []*hcmv3.HttpFilter{
-			actorRoutingFilterStateFilter(),
+			actorRoutingFilterStateFilter(true),
 			{
 				Name: "envoy.filters.http.router",
 				ConfigType: &hcmv3.HttpFilter_TypedConfig{
@@ -1065,7 +1061,7 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 
 	httpFilters := []*hcmv3.HttpFilter{}
 	if captureActorRouting {
-		httpFilters = append(httpFilters, actorRoutingFilterStateFilter())
+		httpFilters = append(httpFilters, actorRoutingFilterStateFilter(false))
 	}
 	httpFilters = append(httpFilters,
 		&hcmv3.HttpFilter{

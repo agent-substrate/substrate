@@ -86,10 +86,7 @@ func dynamicMetadataTarget(dynamicMetadata *structpb.Struct) string {
 }
 
 // dynamicMetadataPort extracts the target port HandleRequestHeaders reports
-// via OriginalDstMetadataKey/OriginalDstPortKey. xds.go's buildRoutes derives
-// a real atunnel.TargetPortHeader from this at the route level via a
-// %DYNAMIC_METADATA(...)% format string; HandleRequestHeaders also sets that
-// same header directly (see its own doc comment for why).
+// via OriginalDstMetadataKey/OriginalDstPortKey.
 func dynamicMetadataPort(dynamicMetadata *structpb.Struct) string {
 	return dynamicMetadata.GetFields()[OriginalDstMetadataKey].GetStructValue().GetFields()[OriginalDstPortKey].GetStringValue()
 }
@@ -296,16 +293,16 @@ func TestHandleRequestHeaders(t *testing.T) {
 			}
 
 			mutation := res.Response.GetResponse().GetHeaderMutation()
-			if len(mutation.GetSetHeaders()) != 3 {
-				t.Fatalf("expected actor routing and target port headers, found: %v", mutation.GetSetHeaders())
+			if len(mutation.GetSetHeaders()) != 2 {
+				t.Fatalf("expected actor routing headers, found: %v", mutation.GetSetHeaders())
 			}
 
 			gotMutations := map[string]string{}
 			for _, headerOption := range mutation.GetSetHeaders() {
 				gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
 			}
-			if got := gotMutations[strings.ToLower(atunnel.TargetPortHeader)]; got != tc.expectedTargetPort {
-				t.Errorf("target port mutation = %q, want %q", got, tc.expectedTargetPort)
+			if _, ok := gotMutations[strings.ToLower(atunnel.TargetPortHeader)]; ok {
+				t.Errorf("target port must be emitted only as dynamic metadata")
 			}
 			if got := gotMutations[strings.ToLower(atenet.ActorNameHeader)]; got != testUUID {
 				t.Errorf("actor name mutation = %q, want %q", got, testUUID)
@@ -328,9 +325,8 @@ func TestHandleRequestHeaders(t *testing.T) {
 // travels in :authority, e.g. "<actor-dns>:9090") resolves the actor,
 // produces the same "<workerIP>:443" original-dst mutation as an ordinary
 // request (the router only ever dials the worker's atunnel server), and
-// reports the arbitrary port itself via
-// OriginalDstMetadataKey/OriginalDstPortKey, which xds.go's buildRoutes turns
-// into atunnel.TargetPortHeader for atunnel.
+// reports the arbitrary port itself in dynamic metadata for Envoy to write to
+// atunnel.TargetPortHeader.
 func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev:9090"

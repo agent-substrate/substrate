@@ -169,7 +169,6 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	for _, header := range []struct{ name, value string }{
 		{atenet.ActorNameHeader, actorRef.Name},
 		{atenet.AtespaceHeader, actorRef.Atespace},
-		{atunnel.TargetPortHeader, strconv.Itoa(targetPort)},
 	} {
 		mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
 			Header: &corev3.HeaderValue{
