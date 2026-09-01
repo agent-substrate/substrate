@@ -693,6 +693,220 @@ func rotateProjectedVolume(t *testing.T, dir, newTsDir, oldTsDir string, bundle 
 	}
 }
 
+// TestUpstreamTransportSocket_DeliversCertsOverSds guards the actor-facing
+// mTLS socket against inline file DataSources. Envoy reads those once, as the
+// ORIGINAL_DST cluster warms, and caches the bytes for the process lifetime:
+// with the certs inlined the 24h podidentity leaf expires in place and every
+// actor dial fails the atunnel handshake, and a rotated ClusterTrustBundle is
+// likewise never picked up.
+func TestUpstreamTransportSocket_DeliversCertsOverSds(t *testing.T) {
+	const (
+		credPath     = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+		trustPath    = "/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+		spiffePrefix = "spiffe://cluster.local/"
+	)
+
+	server := NewXdsServer(18000)
+	server.SetUpstreamTls(credPath, trustPath, spiffePrefix)
+
+	ts := server.buildUpstreamTransportSocket()
+	if ts == nil {
+		t.Fatal("Expected an upstream transport socket when the credential bundle is configured")
+	}
+	utc := &tlsv3.UpstreamTlsContext{}
+	if err := ts.GetTypedConfig().UnmarshalTo(utc); err != nil {
+		t.Fatalf("Failed to unmarshal UpstreamTlsContext: %v", err)
+	}
+	common := utc.GetCommonTlsContext()
+
+	if got := common.GetTlsCertificates(); len(got) != 0 {
+		t.Errorf("Expected no inline TlsCertificates, got %d", len(got))
+	}
+	sds := common.GetTlsCertificateSdsSecretConfigs()
+	if len(sds) != 1 {
+		t.Fatalf("Expected 1 client cert SDS secret config, got %d", len(sds))
+	}
+	if got := sds[0].GetName(); got != UpstreamCertSecretName {
+		t.Errorf("Expected SDS secret name '%s', got '%s'", UpstreamCertSecretName, got)
+	}
+	if sds[0].GetSdsConfig().GetAds() == nil {
+		t.Error("Expected the client cert SDS config to use the ADS config source")
+	}
+
+	if common.GetValidationContext() != nil {
+		t.Error("Expected no inline ValidationContext; the trusted CA must arrive over SDS")
+	}
+	combined := common.GetCombinedValidationContext()
+	if combined == nil {
+		t.Fatal("Expected a combined validation context carrying the SDS trust bundle")
+	}
+	if got := combined.GetDefaultValidationContext().GetTrustedCa().GetFilename(); got != "" {
+		t.Errorf("Expected no inline TrustedCa filename, got '%s'", got)
+	}
+	if got := combined.GetValidationContextSdsSecretConfig().GetName(); got != UpstreamTrustSecretName {
+		t.Errorf("Expected trust bundle SDS secret name '%s', got '%s'", UpstreamTrustSecretName, got)
+	}
+	if combined.GetValidationContextSdsSecretConfig().GetSdsConfig().GetAds() == nil {
+		t.Error("Expected the trust bundle SDS config to use the ADS config source")
+	}
+
+	// The SPIFFE SAN matcher has to survive the move into the combined
+	// context's default half. Losing it silently downgrades validation to a
+	// SAN check against the dialed pod IP, which the SPIFFE-only atunnel
+	// server cert never carries.
+	sans := combined.GetDefaultValidationContext().GetMatchTypedSubjectAltNames()
+	if len(sans) != 1 {
+		t.Fatalf("Expected 1 SAN matcher, got %d", len(sans))
+	}
+	if got := sans[0].GetSanType(); got != tlsv3.SubjectAltNameMatcher_URI {
+		t.Errorf("Expected a URI SAN matcher, got %v", got)
+	}
+	if got := sans[0].GetMatcher().GetPrefix(); got != spiffePrefix {
+		t.Errorf("Expected SAN prefix '%s', got '%s'", spiffePrefix, got)
+	}
+}
+
+// TestXdsServer_UpdateSnapshot_UpstreamSecrets checks the secrets the upstream
+// socket references are actually published: an SDS reference to a secret
+// missing from the snapshot leaves Envoy warming the cluster forever.
+func TestXdsServer_UpdateSnapshot_UpstreamSecrets(t *testing.T) {
+	const (
+		credPath  = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+		trustPath = "/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+		bundleDir = "/run/podidentity.podcert.ate.dev"
+	)
+
+	t.Run("PublishedWhenConfigured", func(t *testing.T) {
+		server := NewXdsServer(18000)
+		server.SetConfig(8085, 50053, "127.0.0.1")
+		server.SetUpstreamTls(credPath, trustPath, "spiffe://cluster.local/")
+
+		secrets := snapshotSecrets(t, server)
+		if len(secrets) != 2 {
+			t.Fatalf("Expected 2 secrets, got %d", len(secrets))
+		}
+
+		cert, exists := secrets[UpstreamCertSecretName]
+		if !exists {
+			t.Fatalf("Secret '%s' is missing from snapshot secrets", UpstreamCertSecretName)
+		}
+		tlsCert := cert.GetTlsCertificate()
+		if got := tlsCert.GetCertificateChain().GetFilename(); got != credPath {
+			t.Errorf("Expected certificate chain filename '%s', got '%s'", credPath, got)
+		}
+		if got := tlsCert.GetPrivateKey().GetFilename(); got != credPath {
+			t.Errorf("Expected private key filename '%s', got '%s'", credPath, got)
+		}
+		if got := tlsCert.GetWatchedDirectory().GetPath(); got != bundleDir {
+			t.Errorf("Expected client cert watched directory '%s', got '%s'", bundleDir, got)
+		}
+
+		trust, exists := secrets[UpstreamTrustSecretName]
+		if !exists {
+			t.Fatalf("Secret '%s' is missing from snapshot secrets", UpstreamTrustSecretName)
+		}
+		validation := trust.GetValidationContext()
+		if got := validation.GetTrustedCa().GetFilename(); got != trustPath {
+			t.Errorf("Expected trusted CA filename '%s', got '%s'", trustPath, got)
+		}
+		if got := validation.GetWatchedDirectory().GetPath(); got != bundleDir {
+			t.Errorf("Expected trust bundle watched directory '%s', got '%s'", bundleDir, got)
+		}
+	})
+
+	t.Run("AbsentWhenUpstreamMtlsDisabled", func(t *testing.T) {
+		server := NewXdsServer(18000)
+		server.SetConfig(8085, 50053, "127.0.0.1")
+
+		if got := len(snapshotSecrets(t, server)); got != 0 {
+			t.Fatalf("Expected no secrets when upstream mTLS is disabled, got %d", got)
+		}
+	})
+
+	t.Run("TrustSecretOmittedWithoutTrustBundle", func(t *testing.T) {
+		server := NewXdsServer(18000)
+		server.SetConfig(8085, 50053, "127.0.0.1")
+		server.SetUpstreamTls(credPath, "", "")
+
+		secrets := snapshotSecrets(t, server)
+		if len(secrets) != 1 {
+			t.Fatalf("Expected only the client cert secret, got %d", len(secrets))
+		}
+		if _, exists := secrets[UpstreamCertSecretName]; !exists {
+			t.Errorf("Secret '%s' is missing from snapshot secrets", UpstreamCertSecretName)
+		}
+	})
+}
+
+// TestUpstreamCertSecret_ProjectedVolumeRotation is the client-cert twin of
+// TestTlsSecret_ProjectedVolumeRotation: the podidentity bundle rotates the
+// same way the servicedns one does, and the upstream secret has to follow it.
+func TestUpstreamCertSecret_ProjectedVolumeRotation(t *testing.T) {
+	dir := t.TempDir()
+	certA := "upstream-client-cert-a"
+	certB := "upstream-client-cert-b"
+	credPath := filepath.Join(dir, "credential-bundle.pem")
+	bundleA := makeServingBundle(t, certA)
+	bundleB := makeServingBundle(t, certB)
+
+	const tsDirA = "..2026_07_25_00_00_00.0000000001"
+	const tsDirB = "..2026_07_25_00_00_00.0000000002"
+	writeProjectedVolume(t, dir, tsDirA, bundleA)
+
+	server := NewXdsServer(18000)
+	server.SetUpstreamTls(credPath, "", "")
+	tlsCert := server.buildUpstreamCertSecret().GetTlsCertificate()
+
+	chainPath := tlsCert.GetCertificateChain().GetFilename()
+	if got := readServingCN(t, chainPath); got != certA {
+		t.Fatalf("Expected initial bundle to present %q, got %q", certA, got)
+	}
+
+	swapPath := filepath.Join(tlsCert.GetWatchedDirectory().GetPath(), dataDirName)
+	before, err := os.Readlink(swapPath)
+	if err != nil {
+		t.Fatalf("The rotation symlink is not a direct child of WatchedDirectory: %v", err)
+	}
+
+	rotateProjectedVolume(t, dir, tsDirB, tsDirA, bundleB)
+
+	after, err := os.Readlink(swapPath)
+	if err != nil {
+		t.Fatalf("The rotation symlink left WatchedDirectory after rotation: %v", err)
+	}
+	if after == before {
+		t.Fatalf("Rotation did not retarget the %s symlink (still %q); an in-place write would not trigger Envoy's reload", dataDirName, after)
+	}
+	if got := readServingCN(t, chainPath); got != certB {
+		t.Fatalf("Expected rotated bundle to present %q, got %q", certB, got)
+	}
+}
+
+// snapshotSecrets publishes a snapshot and returns its SDS secrets by name.
+func snapshotSecrets(t *testing.T, server *XdsServer) map[string]*tlsv3.Secret {
+	t.Helper()
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap, ok := res.(*cachev3.Snapshot)
+	if !ok {
+		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
+	}
+	secrets := make(map[string]*tlsv3.Secret)
+	for name, raw := range snap.GetResources(resourcev3.SecretType) {
+		secret, ok := raw.(*tlsv3.Secret)
+		if !ok {
+			t.Fatalf("Secret '%s' doesn't conform to type *tlsv3.Secret, got %T", name, raw)
+		}
+		secrets[name] = secret
+	}
+	return secrets
+}
+
 func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 	t.Run("DefaultCoversLotPlusHeadroom", func(t *testing.T) {
 		x := NewXdsServer(0)

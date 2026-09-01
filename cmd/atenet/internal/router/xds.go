@@ -81,6 +81,15 @@ const (
 	OtlpClusterName      = "otel_collector_cluster"
 	HTTPSCertSecretName  = "https_serving_cert"
 
+	// UpstreamCertSecretName and UpstreamTrustSecretName are the SDS secrets
+	// backing the actor-facing mTLS transport socket: the podidentity client
+	// cert the router presents to atunnel, and the CA bundle it validates
+	// atunnel with. Both are delivered over SDS rather than inlined into the
+	// transport socket so that Envoy re-reads them after kubelet rotates the
+	// projected volume (see buildCertSecret).
+	UpstreamCertSecretName  = "upstream_client_cert"
+	UpstreamTrustSecretName = "upstream_trust_bundle"
+
 	// httpProtocolOptionsName is the well-known extension key Envoy looks for in
 	// a cluster's typed_extension_protocol_options. It must match the message's
 	// full proto type name exactly; a typo is silently ignored rather than
@@ -460,6 +469,15 @@ func (x *XdsServer) UpdateSnapshot() error {
 	if needsCert {
 		secrets = append(secrets, x.buildTlsSecret())
 	}
+	// Mirrors buildUpstreamTransportSocket's gating: the actor-facing socket
+	// exists only when the credential bundle is configured, and it references
+	// the trust secret only when the trust bundle is too.
+	if x.upstreamCredentialBundlePath != "" {
+		secrets = append(secrets, x.buildUpstreamCertSecret())
+		if x.upstreamTrustBundlePath != "" {
+			secrets = append(secrets, x.buildUpstreamTrustSecret())
+		}
+	}
 
 	// Snapshot
 	snapshot, err := cachev3.NewSnapshot(ver, map[resourcev3.Type][]types.Resource{
@@ -623,35 +641,37 @@ func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
 // client cert and validates the atunnel ingress server against the trust
 // bundle. Validation is by the SPIFFE URI SAN prefix (see upstreamSpiffePrefix)
 // rather than the dialed pod IP.
+//
+// Both the client cert and the trust bundle are referenced as SDS secrets
+// served by this same control plane over ADS, never inlined as file
+// DataSources: Envoy reads an inline file once when the cluster warms and
+// caches the bytes for the process lifetime, so an inlined podidentity leaf
+// goes stale at its 24h expiry and every actor dial then fails the handshake.
 func (x *XdsServer) buildUpstreamTransportSocket() *corev3.TransportSocket {
 	if x.upstreamCredentialBundlePath == "" {
 		return nil
 	}
 
 	commonTls := &tlsv3.CommonTlsContext{
-		TlsCertificates: []*tlsv3.TlsCertificate{
+		TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
 			{
-				CertificateChain: &corev3.DataSource{
-					Specifier: &corev3.DataSource_Filename{Filename: x.upstreamCredentialBundlePath},
-				},
-				PrivateKey: &corev3.DataSource{
-					Specifier: &corev3.DataSource_Filename{Filename: x.upstreamCredentialBundlePath},
-				},
+				Name:      UpstreamCertSecretName,
+				SdsConfig: adsConfigSource(),
 			},
 		},
 	}
 	if x.upstreamTrustBundlePath != "" {
-		validationCtx := &tlsv3.CertificateValidationContext{
-			TrustedCa: &corev3.DataSource{
-				Specifier: &corev3.DataSource_Filename{Filename: x.upstreamTrustBundlePath},
-			},
-		}
+		// The trusted CA arrives over SDS (see buildUpstreamTrustSecret) so it
+		// tracks ClusterTrustBundle rotation, while the SAN matcher stays
+		// inline in the default context. Envoy merges the two, which is why
+		// this is a combined rather than a plain SDS validation context.
+		defaultCtx := &tlsv3.CertificateValidationContext{}
 		// Validate the atunnel server by its SPIFFE URI SAN (trust-domain
 		// prefix) rather than the dialed pod IP. Without this, Envoy checks the
 		// cert SAN against the ephemeral pod IP, which the SPIFFE-only cert
 		// never matches.
 		if x.upstreamSpiffePrefix != "" {
-			validationCtx.MatchTypedSubjectAltNames = []*tlsv3.SubjectAltNameMatcher{
+			defaultCtx.MatchTypedSubjectAltNames = []*tlsv3.SubjectAltNameMatcher{
 				{
 					SanType: tlsv3.SubjectAltNameMatcher_URI,
 					Matcher: &matcherv3.StringMatcher{
@@ -660,8 +680,14 @@ func (x *XdsServer) buildUpstreamTransportSocket() *corev3.TransportSocket {
 				},
 			}
 		}
-		commonTls.ValidationContextType = &tlsv3.CommonTlsContext_ValidationContext{
-			ValidationContext: validationCtx,
+		commonTls.ValidationContextType = &tlsv3.CommonTlsContext_CombinedValidationContext{
+			CombinedValidationContext: &tlsv3.CommonTlsContext_CombinedCertificateValidationContext{
+				DefaultValidationContext: defaultCtx,
+				ValidationContextSdsSecretConfig: &tlsv3.SdsSecretConfig{
+					Name:      UpstreamTrustSecretName,
+					SdsConfig: adsConfigSource(),
+				},
+			},
 		}
 	}
 
@@ -1185,13 +1211,8 @@ func buildDownstreamTlsTransportSocket(alpnProtocols []string) *corev3.Transport
 			AlpnProtocols: alpnProtocols,
 			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
 				{
-					Name: HTTPSCertSecretName,
-					SdsConfig: &corev3.ConfigSource{
-						ConfigSourceSpecifier: &corev3.ConfigSource_Ads{
-							Ads: &corev3.AggregatedConfigSource{},
-						},
-						ResourceApiVersion: corev3.ApiVersion_V3,
-					},
+					Name:      HTTPSCertSecretName,
+					SdsConfig: adsConfigSource(),
 				},
 			},
 		},
@@ -1313,9 +1334,22 @@ func (x *XdsServer) buildConnectTerminateTLSListener() *listenerv3.Listener {
 	}
 }
 
-func (x *XdsServer) buildTlsSecret() *tlsv3.Secret {
+// adsConfigSource points an SDS secret reference at this control plane's own
+// ADS stream, which the Envoy bootstrap already establishes.
+func adsConfigSource() *corev3.ConfigSource {
+	return &corev3.ConfigSource{
+		ConfigSourceSpecifier: &corev3.ConfigSource_Ads{
+			Ads: &corev3.AggregatedConfigSource{},
+		},
+		ResourceApiVersion: corev3.ApiVersion_V3,
+	}
+}
+
+// buildCertSecret returns the SDS secret named name, serving the credential
+// bundle at path.
+func buildCertSecret(name, path string) *tlsv3.Secret {
 	return &tlsv3.Secret{
-		Name: HTTPSCertSecretName,
+		Name: name,
 		Type: &tlsv3.Secret_TlsCertificate{
 			TlsCertificate: &tlsv3.TlsCertificate{
 				// The pod certificate is projected as a single PEM bundle
@@ -1323,18 +1357,52 @@ func (x *XdsServer) buildTlsSecret() *tlsv3.Secret {
 				// DataSources point at the same file.
 				CertificateChain: &corev3.DataSource{
 					Specifier: &corev3.DataSource_Filename{
-						Filename: x.certPath,
+						Filename: path,
 					},
 				},
 				PrivateKey: &corev3.DataSource{
 					Specifier: &corev3.DataSource_Filename{
-						Filename: x.certPath,
+						Filename: path,
 					},
 				},
 				// By specifying WatchedDirectory, we tell envoy to watch changes to the mounted pod certificate file.
 				// See documentation in https://pkg.go.dev/github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3#:~:text=This%20only%20applies%20when%20a%20%E2%80%9CTlsCertificate%E2%80%9C%20is%20delivered%20by%20SDS
 				WatchedDirectory: &corev3.WatchedDirectory{
-					Path: filepath.Dir(x.certPath),
+					Path: filepath.Dir(path),
+				},
+			},
+		},
+	}
+}
+
+func (x *XdsServer) buildTlsSecret() *tlsv3.Secret {
+	return buildCertSecret(HTTPSCertSecretName, x.certPath)
+}
+
+// buildUpstreamCertSecret serves the podidentity credential bundle the router
+// presents to the actor's atunnel ingress server.
+func (x *XdsServer) buildUpstreamCertSecret() *tlsv3.Secret {
+	return buildCertSecret(UpstreamCertSecretName, x.upstreamCredentialBundlePath)
+}
+
+// buildUpstreamTrustSecret serves the CA bundle the router validates the
+// atunnel ingress server against. WatchedDirectory applies to a validation
+// context for the same reason it does to a certificate: the podidentity
+// ClusterTrustBundle is a projected volume, and without the watch Envoy keeps
+// the CA set it read at cluster warm-up and rejects certificates issued by a
+// rotated CA with "unknown CA".
+func (x *XdsServer) buildUpstreamTrustSecret() *tlsv3.Secret {
+	return &tlsv3.Secret{
+		Name: UpstreamTrustSecretName,
+		Type: &tlsv3.Secret_ValidationContext{
+			ValidationContext: &tlsv3.CertificateValidationContext{
+				TrustedCa: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{
+						Filename: x.upstreamTrustBundlePath,
+					},
+				},
+				WatchedDirectory: &corev3.WatchedDirectory{
+					Path: filepath.Dir(x.upstreamTrustBundlePath),
 				},
 			},
 		},

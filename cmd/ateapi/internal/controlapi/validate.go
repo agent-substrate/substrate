@@ -113,3 +113,14 @@ func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operatio
 	}
 	return nil
 }
+
+// maxCSRBytes bounds MintCertRequest's CSR. Real CSRs are a few KB; this is
+// a guardrail, applied here because maxLength does not support bytes fields.
+const maxCSRBytes = 16384
+
+func ValidateCustom_MintCertRequest_CertificateSigningRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []byte) field.ErrorList {
+	if len(value) > maxCSRBytes {
+		return field.ErrorList{field.TooLong(fldPath, nil, maxCSRBytes)}
+	}
+	return nil
+}
