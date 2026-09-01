@@ -561,11 +561,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Worker.labels",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Worker.node_name",
     "message": "field has no doc comment"
   },
@@ -582,16 +577,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.Worker.worker_pool",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.WorkerCapacity.cpu_milli",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.WorkerCapacity.memory_bytes",
     "message": "field has no doc comment"
   },
   {

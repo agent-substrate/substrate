@@ -102,7 +102,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, actor_template_name) (rate({\"atenet.router.route.duration_bucket\", top_level_controller_name=\"atenet-router\", outcome=\"ok\"}[5m])))",
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, \"ate.template.name\") (rate({\"atenet.router.route.duration_bucket\", top_level_controller_name=\"atenet-router\", \"ate.router.outcome\"=\"ok\"}[5m])))",
                   "unitOverride": "s"
                 },
                 "plotType": "LINE",
@@ -127,7 +127,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (outcome) (rate({\"atenet.router.route.duration_count\", top_level_controller_name=\"atenet-router\"}[5m]))",
+                  "prometheusQuery": "sum by (\"ate.router.outcome\") (rate({\"atenet.router.route.duration_count\", top_level_controller_name=\"atenet-router\"}[5m]))",
                   "unitOverride": "1/s"
                 },
                 "plotType": "LINE",

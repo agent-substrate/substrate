@@ -1368,10 +1368,16 @@ message DeleteActorSnapshotTagRequest {
 // DeleteWorkerRequest carries it so far.
 message DeleteOptions {
   // If non-zero, delete only if the server's current version matches.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int64 version = 1;
 
   // If non-empty, delete only if the server's current uid matches. Guards
   // against name reuse across lifecycles.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
   string uid = 2;
 }
 
@@ -1379,10 +1385,16 @@ message ListWorkersRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 1;
 
   // Pagination token from a previous ListWorkers response.
   // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 2;
 }
 
@@ -1400,12 +1412,16 @@ message ListWorkersResponse {
 
 message GetWorkerRequest {
   // The Worker to fetch. atespace is always empty; Workers are global-scoped.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 }
 
 message CreateWorkerRequest {
   // The Worker to register.
+  //
+  // +k8s:required
   Worker worker = 1;
 }
 
@@ -1421,21 +1437,32 @@ message UpdateWorkerRequest {
   // send the whole thing back. A request that alters an immutable field, by
   // changing it or by omitting it, returns INVALID_ARGUMENT naming the field.
   // status is output-only and whatever it carries is ignored.
+  //
+  // +k8s:required
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, forbid metadata.atespace
   Worker worker = 1;
 }
 
 message DeleteWorkerRequest {
   // The Worker to deregister.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 
   // Optional per-delete preconditions.
+  //
+  // +k8s:optional
   DeleteOptions options = 2;
 }
 
 message DrainWorkerRequest {
   // The Worker to mark as terminating.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
 }
 
@@ -1476,28 +1503,70 @@ message ListActorsResponse {
 message Worker {
   // Output-only: name, uid, version and timestamps are all server-assigned.
   // uid and version are echoed back on UpdateWorker as preconditions.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ResourceMetadata metadata = 1;
 
   // Kubernetes coordinates. Immutable, set at creation.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string worker_namespace = 2;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string worker_pool = 3;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string worker_pod = 4;
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  // +k8s:immutable
   string worker_pod_uid = 5;
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  // +k8s:immutable
   string node_name = 6;
+  // +k8s:required
+  // +k8s:customValidation # until `format=k8s-ip` is supported
+  // +k8s:immutable
   string ip = 7;
 
-  // Mutable.
+  // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
+  // CRD's own vocabulary, so it is only bounded, not validated. Mutable.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=63
   string sandbox_class = 8;
+
+  // labels mirror the WorkerPool object's Kubernetes labels, which selectors
+  // match against.
+  // Kubernetes does not cap an object's label count, so the bound below is
+  // a generous guardrail, not a mirror of an upstream limit.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=64
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> labels = 9;
 
   // The compute capacity this worker can give an actor sandbox. Immutable, set
-  // at creation: a worker pod's limits are fixed for its lifetime.
+  // at creation: a worker pod's limits are fixed for its lifetime. An update
+  // replaces the worker rather than patching it, so a request that omits
+  // capacity is asking to clear it, which the immutability rule rejects.
+  //
+  // +k8s:optional
+  // +k8s:immutable
   WorkerCapacity capacity = 10;
 
   // Output-only server-managed state. Absent from Create/Update request
   // payloads; whatever a request carries here is ignored. DrainWorker is the
   // only way a client moves state, and assignment is the scheduler's.
+  //
+  // +k8s:optional
   WorkerStatus status = 11;
 }
 
@@ -1507,12 +1576,18 @@ enum WorkerState {
   WORKER_STATE_ACTIVE = 1;
   // Pod terminating. Not schedulable.
   WORKER_STATE_DRAINING = 2;
+  // Keep this in sync with WorkerStatus.state's maximum.
 }
 
 message WorkerStatus {
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the WorkerState enum
   WorkerState state = 1;
 
   // The Actor currently bound to this Worker, if any.
+  //
+  // +k8s:optional
   ActorAssignment assignment = 2;
 }
 
@@ -1523,8 +1598,17 @@ message WorkerStatus {
 // "unknown/unset" for that dimension: treated as unconstrained so placement is
 // not blocked (matching the pre-capacity behavior).
 message WorkerCapacity {
-  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
-  int64 memory_bytes = 2; // Memory capacity in bytes.
+  // CPU capacity in millicores (1000 = one core).
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 cpu_milli = 1;
+
+  // Memory capacity in bytes.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int64 memory_bytes = 2;
 }
 
 // ActorAssignment names the Actor currently bound to a Worker — the inverse of
@@ -1534,16 +1618,32 @@ message ActorAssignment {
   // of an actor created with the legacy CRD path
   // actor_template_ref names the substrate ActorTemplate resource.
   // Exactly one is set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
   KubeNamespacedObjectRef actor_template = 1;
-  // +k8s:opaqueType
+
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string actor_uid = 3;
-  // +k8s:opaqueType
+
+  // +k8s:optional
+  // +k8s:unionMember
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
 }
 
 message KubeNamespacedObjectRef {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string namespace = 1;
+
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string name = 2;
 }
 
@@ -1586,10 +1686,25 @@ service ActorIdentity {
 }
 
 message MintJWTRequest {
+  // The audiences the minted JWT is bound to. Tokens are only issued with
+  // audience bindings, so at least one is required.
+  //
+  // +k8s:required
+  // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
   repeated string audience = 1;
 
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 2;
+
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_name = 3;
+
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
   string actor_uid = 4;
 }
 
@@ -1625,24 +1740,36 @@ message MintCertRequest {
   // This is the one caller that recovers a Worker name from a pod certificate:
   // the atelet has only the worker Pod's identity to go on. Everywhere else the
   // name is opaque and must be carried, not reconstructed.
-  // +k8s:opaqueType
+  //
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  // +k8s:required
   ObjectRef worker = 1;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
   // subject public key.
+  //
+  // +k8s:required
+  // +k8s:customValidation # size bound; maxLength is string-only
   bytes certificate_signing_request = 2;
 
   // Actor incarnation expected by the activation. This is only a stale-request
   // guard: ateapi derives the actor and its identity from the worker assignment.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
   string expected_actor_uid = 3;
 
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=1 # keep this in sync with the ActorCertificatePurpose enum
   ActorCertificatePurpose purpose = 4;
 }
 
 enum ActorCertificatePurpose {
   ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
   ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
+  // Keep this in sync with MintCertRequest.purpose's maximum.
 }
 
 message MintCertResponse {

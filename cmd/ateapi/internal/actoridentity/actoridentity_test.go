@@ -21,9 +21,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"net/url"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,7 +41,13 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
+	t.Helper()
+	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
+}
 
 const (
 	testAtespace  = "team-alpha"
@@ -777,7 +785,7 @@ func TestMintCertActorUID(t *testing.T) {
 		wantCode   codes.Code
 	}{
 		"Matching": {requestUID: func(actorUID string) string { return actorUID }, wantCode: codes.OK},
-		"Stale":    {requestUID: func(string) string { return "uid-of-a-previous-incarnation" }, wantCode: codes.FailedPrecondition},
+		"Stale":    {requestUID: func(string) string { return "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63" }, wantCode: codes.FailedPrecondition},
 	} {
 		t.Run(name, func(t *testing.T) {
 			leaf, actorUID, err := mintCertFor(t, func(actorUID string) *ateapipb.MintCertRequest {
@@ -922,5 +930,156 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 	_, err = srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), req)
 	if got := status.Code(err); got != codes.PermissionDenied {
 		t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, codes.PermissionDenied)
+	}
+}
+
+func TestValidateMintJWTRequest(t *testing.T) {
+	// This test verifies validation of user input for minting a JWT.
+	validReq := func(mods ...func(req *ateapipb.MintJWTRequest)) *ateapipb.MintJWTRequest {
+		req := &ateapipb.MintJWTRequest{
+			Audience:  []string{"aud1"},
+			Atespace:  "as1",
+			ActorName: "actor1",
+			ActorUid:  "01234567-89ab-cdef-0123-456789abcdef",
+		}
+		for _, m := range mods {
+			m(req)
+		}
+		return req
+	}
+
+	tests := []struct {
+		name string
+		req  *ateapipb.MintJWTRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		validReq(),
+		nil,
+	}, {
+		"missing audience",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.Audience = nil }),
+		field.ErrorList{field.Required(field.NewPath("audience"), "")},
+	}, {
+		"too many audiences",
+		validReq(func(r *ateapipb.MintJWTRequest) {
+			r.Audience = make([]string, 17)
+			for i := range r.Audience {
+				r.Audience[i] = fmt.Sprintf("https://svc-%d.example.com", i)
+			}
+		}),
+		field.ErrorList{field.TooMany(field.NewPath("audience"), 17, 16).WithOrigin("maxItems")},
+	}, {
+		"duplicate audience entry",
+		validReq(func(r *ateapipb.MintJWTRequest) {
+			r.Audience = []string{"https://a.example.com", "https://a.example.com"}
+		}),
+		field.ErrorList{field.Duplicate(field.NewPath("audience").Index(1), nil)},
+	}, {
+		"audience entry too long",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.Audience = []string{strings.Repeat("a", 513)} }),
+		field.ErrorList{field.TooLong(field.NewPath("audience").Index(0), nil, 512).WithOrigin("maxLength")},
+	}, {
+		"missing atespace",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.Atespace = "" }),
+		field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		"invalid atespace",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.Atespace = "AS1" }),
+		field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"missing actor_name",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.ActorName = "" }),
+		field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		"invalid actor_name",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.ActorName = "invalid value" }),
+		field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"unspecified actor_uid",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.ActorUid = "" }),
+		nil,
+	}, {
+		"invalid actor_uid",
+		validReq(func(r *ateapipb.MintJWTRequest) { r.ActorUid = "not a uid" }),
+		field.ErrorList{field.Invalid(field.NewPath("actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateMintJWTRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateMintCertRequest(t *testing.T) {
+	// This test verifies validation of user input for minting a certificate.
+	validReq := func(mods ...func(req *ateapipb.MintCertRequest)) *ateapipb.MintCertRequest {
+		req := &ateapipb.MintCertRequest{
+			Worker:                    &ateapipb.ObjectRef{Name: "worker1"},
+			CertificateSigningRequest: []byte{0x01},
+			ExpectedActorUid:          "01234567-89ab-cdef-0123-456789abcdef",
+			Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
+		}
+		for _, m := range mods {
+			m(req)
+		}
+		return req
+	}
+
+	tests := []struct {
+		name string
+		req  *ateapipb.MintCertRequest
+		want field.ErrorList
+	}{{
+		"valid",
+		validReq(),
+		nil,
+	}, {
+		"oversized certificate_signing_request",
+		validReq(func(r *ateapipb.MintCertRequest) { r.CertificateSigningRequest = make([]byte, 16385) }),
+		field.ErrorList{field.TooLong(field.NewPath("certificate_signing_request"), nil, 16384)},
+	}, {
+		"missing worker",
+		validReq(func(r *ateapipb.MintCertRequest) { r.Worker = nil }),
+		field.ErrorList{field.Required(field.NewPath("worker"), "")},
+	}, {
+		"worker.atespace must be empty",
+		validReq(func(r *ateapipb.MintCertRequest) { r.Worker.Atespace = "as1" }),
+		field.ErrorList{field.Forbidden(field.NewPath("worker", "atespace"), "")},
+	}, {
+		"missing worker.name",
+		validReq(func(r *ateapipb.MintCertRequest) { r.Worker.Name = "" }),
+		field.ErrorList{field.Required(field.NewPath("worker", "name"), "")},
+	}, {
+		"invalid worker.name",
+		validReq(func(r *ateapipb.MintCertRequest) { r.Worker.Name = "invalid value" }),
+		field.ErrorList{field.Invalid(field.NewPath("worker", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"missing certificate_signing_request",
+		validReq(func(r *ateapipb.MintCertRequest) { r.CertificateSigningRequest = nil }),
+		field.ErrorList{field.Required(field.NewPath("certificate_signing_request"), "")},
+	}, {
+		"missing expected_actor_uid",
+		validReq(func(r *ateapipb.MintCertRequest) { r.ExpectedActorUid = "" }),
+		field.ErrorList{field.Required(field.NewPath("expected_actor_uid"), "")},
+	}, {
+		"invalid expected_actor_uid",
+		validReq(func(r *ateapipb.MintCertRequest) { r.ExpectedActorUid = "not a uid" }),
+		field.ErrorList{field.Invalid(field.NewPath("expected_actor_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		"unspecified purpose",
+		validReq(func(r *ateapipb.MintCertRequest) {
+			r.Purpose = ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED
+		}),
+		field.ErrorList{field.Required(field.NewPath("purpose"), "")},
+	}, {
+		"out-of-range purpose",
+		validReq(func(r *ateapipb.MintCertRequest) { r.Purpose = ateapipb.ActorCertificatePurpose(99) }),
+		field.ErrorList{field.Invalid(field.NewPath("purpose"), nil, "").WithOrigin("maximum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateMintCertRequest(context.Background(), tt.req), tt.want)
+		})
 	}
 }
