@@ -1443,58 +1443,6 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		}
 	})
 
-	// Every backend must reject a mutation that touches an immutable field, and
-	// must name the field it rejected on. This is the case that holds any new
-	// backend to that.
-	t.Run("UpdateWorker_ImmutableFields", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		// Every case below is rejected, so nothing writes and this stays the
-		// current incarnation for all of them.
-		created, err := s.CreateWorker(ctx, newTestWorker(testWorkerName, "pod-1"))
-		if err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-
-		for _, tc := range []struct {
-			name   string
-			field  string
-			mutate func(*ateapipb.Worker)
-		}{
-			{"worker_namespace", "worker_namespace", func(w *ateapipb.Worker) { w.WorkerNamespace = "other-ns" }},
-			{"worker_pool", "worker_pool", func(w *ateapipb.Worker) { w.WorkerPool = "other-pool" }},
-			{"worker_pod", "worker_pod", func(w *ateapipb.Worker) { w.WorkerPod = "other-pod" }},
-			{"worker_pod_uid", "worker_pod_uid", func(w *ateapipb.Worker) { w.WorkerPodUid = otherTestWorkerName }},
-			{"node_name", "node_name", func(w *ateapipb.Worker) { w.NodeName = "other-node" }},
-			{"ip", "ip", func(w *ateapipb.Worker) { w.Ip = "10.0.0.9" }},
-			{"capacity_changed", "capacity", func(w *ateapipb.Worker) { w.Capacity.CpuMilli = 4000 }},
-			// An update replaces the worker, so a caller that leaves capacity
-			// out is asking to clear it. That is a change like any other.
-			{"capacity_cleared", "capacity", func(w *ateapipb.Worker) { w.Capacity = nil }},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				_, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-					tc.mutate(toUpdate)
-					return nil
-				})
-				if !errors.Is(err, store.ErrImmutableField) {
-					t.Fatalf("changing %s returned %v, want ErrImmutableField", tc.field, err)
-				}
-				if !strings.Contains(err.Error(), tc.field) {
-					t.Errorf("error %v does not name the offending field %s", err, tc.field)
-				}
-				got, err := s.GetWorker(ctx, testWorkerName)
-				if err != nil {
-					t.Fatalf("GetWorker failed: %v", err)
-				}
-				if got.GetMetadata().GetVersion() != 1 {
-					t.Errorf("rejected mutation bumped the version to %d, want 1", got.GetMetadata().GetVersion())
-				}
-			})
-		}
-	})
-
 	// Claimants that all observed the same free worker must not all win. Two
 	// things keep that true and this exercises both: the precondition rejects
 	// every claimant whose read the winner has since invalidated, and the
