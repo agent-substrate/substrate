@@ -965,7 +965,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		TemplateAtespace: req.GetActorTemplateAtespace(),
 		TemplateName:     req.GetActorTemplateName(),
 	}
+	completed := false
 	defer func() {
+		// A panic unwinds through here with the named err still nil, so without
+		// this the last thing atelet reports before dying is a fast success.
+		outcome := err
+		if outcome == nil && !completed {
+			outcome = errRestoreUnwound
+		}
 		// One slice feeds both signals, so the metric and the log cannot disagree
 		// about how long the restore took.
 		phases := []phase{
@@ -977,9 +984,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			{ateattr.SnapshotPhaseAteomRestore, dAteom},
 			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
 		}
-		s.instruments.recordRestore(ctx, op, err, phases...)
+		s.instruments.recordRestore(ctx, op, outcome, phases...)
 		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown",
-			snapshotLogAttrs(attribution, op, restoreDurationMetric, err, phases)...)
+			snapshotLogAttrs(attribution, op, restoreDurationMetric, outcome, phases)...)
 	}()
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
@@ -1172,7 +1179,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			dDownload = 0
 		}
 		if isCollateral(err, prepErr) {
-			dAssets, dBundles = 0, 0
+			dAssets, dBundles = assetsAfterCollateral(prepFailedPhase, dAssets), 0
 		}
 		return nil, err
 	}
@@ -1227,6 +1234,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
 	}
 
+	completed = true
 	return &ateletpb.RestoreResponse{}, nil
 }
 

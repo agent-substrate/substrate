@@ -15,11 +15,16 @@
 package main
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
+
+// errRestoreUnwound stands in for a restore that left through a panic, where the
+// named error is still nil. Carries no reason, so it reports as UNKNOWN.
+var errRestoreUnwound = errors.New("restore did not run to completion")
 
 // snapshotLogAttrs renders what recordPhases measures as a per-actor record. The
 // histograms cannot be one: actor identity is barred from metric labels

@@ -205,6 +205,21 @@ func TestSnapshotLogAttrs(t *testing.T) {
 			},
 		},
 		{
+			// A restore that panicked leaves the named err nil, so the defer
+			// substitutes this. Without a reason on the record it would read as a
+			// fast success right before atelet dies.
+			name:   "a restore that unwound reports as a failure, not a fast success",
+			op:     fullOp,
+			err:    errRestoreUnwound,
+			phases: []phase{{ateattr.SnapshotPhaseVolumeMount, 4 * time.Millisecond}, {ateattr.SnapshotPhaseTotal, 9 * time.Millisecond}},
+			wantStrings: map[string]string{
+				"ate.failure.reason": ateattr.ReasonUnknown,
+			},
+			wantNumbers: map[string]float64{
+				"ate.actor.restore.duration.total": 0.009,
+			},
+		},
+		{
 			name: "a sandbox class the manifest invented is bounded, not passed through",
 			op: snapshotOp{
 				templateNamespace: testTemplateNamespace,
