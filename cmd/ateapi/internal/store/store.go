@@ -160,8 +160,8 @@ type Interface interface {
 	DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
-	// metadata (uid, version, timestamps). The input is not mutated. Returns
-	// ErrAlreadyExists if the name is taken.
+	// metadata (uid, version, timestamps). The input may be mutated in place.
+	// Returns ErrAlreadyExists if the name is taken.
 	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
 
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
@@ -176,8 +176,8 @@ type Interface interface {
 	DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 
 	// Stores a new ActorTemplate and returns the stored resource with
-	// server-assigned metadata (uid, version, timestamps). The input is not
-	// mutated. Returns ErrAlreadyExists if the (atespace, name) is taken.
+	// server-assigned metadata (uid, version, timestamps). The input may be
+	// mutated in place. Returns ErrAlreadyExists if the (atespace, name) is taken.
 	CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error)
 
 	// Fetches an ActorTemplate by reference. Returns ErrNotFound if missing.
@@ -200,8 +200,8 @@ type Interface interface {
 	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 
 	// Registers a new idle worker and returns the stored resource with
-	// server-assigned metadata (uid, version, timestamps). The input is not
-	// mutated. Returns ErrAlreadyExists if already registered.
+	// server-assigned metadata (uid, version, timestamps). The input may be
+	// mutated in place. Returns ErrAlreadyExists if already registered.
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
 
 	// Fetches worker state by name. Returns ErrNotFound if missing.

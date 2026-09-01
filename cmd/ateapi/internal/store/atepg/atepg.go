@@ -250,7 +250,8 @@ func pgErrConstraint(err error) string {
 func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
 	name := atespace.GetMetadata().GetName()
 
-	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
+	// The atespace is mutated in place: callers pass a dedicated object.
+	dbAtespace := atespace
 	if dbAtespace.Metadata == nil {
 		dbAtespace.Metadata = &ateapipb.ResourceMetadata{}
 	}
@@ -367,7 +368,8 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 
 func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
 	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
-	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
+	// The template is mutated in place: callers pass a dedicated object.
+	dbTemplate := template
 	if dbTemplate.Metadata == nil {
 		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
 	}
@@ -830,7 +832,8 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 // --- Actor egress policies ---
 
 func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
-	dbPolicy := proto.Clone(policy).(*ateapipb.EgressPolicy)
+	// The policy is mutated in place: callers pass a dedicated object.
+	dbPolicy := policy
 	if dbPolicy.Metadata == nil {
 		dbPolicy.Metadata = &ateapipb.ResourceMetadata{}
 	}
@@ -1286,7 +1289,8 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, tagRef resourc
 // --- Workers ---
 
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error) {
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
+	// The worker is mutated in place: callers pass a dedicated object.
+	dbWorker := worker
 	if dbWorker.Metadata == nil {
 		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
 	}
