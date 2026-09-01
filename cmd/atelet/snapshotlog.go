@@ -45,7 +45,7 @@ func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey s
 		if _, dup := seen[string(kv.Key)]; dup {
 			continue
 		}
-		attrs = append(attrs, slog.String(string(kv.Key), kv.Value.Emit()))
+		attrs = append(attrs, slog.String(string(kv.Key), kv.Value.String()))
 	}
 
 	// Absence means success, as on the instruments. There is no ate.snapshot.phase:
