@@ -184,7 +184,8 @@ for a complete manifest example.
 | `ATESPACE` | The atespace the template belongs to. |
 | `NAME` | The template's name. |
 | `SANDBOX CLASS` | The sandbox runtime family (`SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`). |
-| `STATUS` | `Ready` once the golden snapshot exists (actors can be created), `Failed` otherwise. |
+| `GOLDEN SNAPSHOT` | The golden snapshot's name once it exists (actors can be created); empty while the golden build is still running. |
+| `ERROR` | `ERROR` when the golden build failed; `-o yaml` shows the full message. |
 | `AGE` | Time elapsed since the template was created. |
 
 ### Actor Lifecycle

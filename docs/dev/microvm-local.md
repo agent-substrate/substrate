@@ -77,9 +77,14 @@ Expected:
 NAMESPACE                  NAME                                 DESIRED  READY  AVAILABLE
 ate-demo-counter-microvm   workerpool.ate.dev/counter-microvm   1        1      1
 
-NAME              STATUS  AGE
-counter-microvm   Ready   1m
+ATESPACE                   NAME              SANDBOX CLASS           GOLDEN SNAPSHOT                        ERROR   AGE
+ate-demo-counter-microvm   counter-microvm   SANDBOX_CLASS_MICROVM   b9f6bd93-3c5a-4b64-9d5e-2f8a1c7d0e42           1m
 ```
+
+The template is ready once the GOLDEN SNAPSHOT column is non-empty (the
+value is a UUID); ERROR means the golden build failed, and `-o yaml` shows
+the full error message. An empty GOLDEN SNAPSHOT with no ERROR means the
+golden build — a full guest boot plus checkpoint — is still running.
 
 ## Option B: Apple Silicon macOS via Lima
 
@@ -176,7 +181,7 @@ round-tripped. The flow is the same as the
 [README Quickstart](../../README.md#quickstart-development), just with the
 microVM template; see the
 [counter demo's micro-VM variant](../../demos/counter/README.md#micro-vm-variant)
-for background. Note that an actor template reporting `Ready` in the
+for background. Note that an actor template showing a GOLDEN SNAPSHOT in the
 verify step already exercises the runtime end-to-end — the golden snapshot
 requires a full guest boot and checkpoint.
 

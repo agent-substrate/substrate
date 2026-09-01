@@ -263,21 +263,18 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 		return printProto(out, &ateapipb.ListActorTemplatesResponse{ActorTemplates: templates}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tSTATUS\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tGOLDEN SNAPSHOT\tERROR\tAGE")
 		for _, t := range templates {
-			// An empty golden snapshot ref without an error means the golden
-			// snapshot is still being built, not that the template failed.
-			status := "Pending"
 			gss := t.GetStatus().GetGoldenSnapshotStatus()
-			switch {
-			case gss.GetGoldenSnapshot() != nil:
-				status = "Ready"
-			case gss.GetErrorMessage() != "":
-				status = "Failed"
+			// Error messages are too long for a table cell.
+			errFlag := ""
+			if gss.GetErrorMessage() != "" {
+				errFlag = "ERROR"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
-				t.GetSandboxConfig().GetSandboxClass(), status,
+				t.GetSandboxConfig().GetSandboxClass(),
+				gss.GetGoldenSnapshot().GetName(), errFlag,
 				formatAge(t.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
