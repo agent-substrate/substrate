@@ -19,6 +19,18 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+# _log_elapsed prints wall time since ${1} (an epoch-nanoseconds timestamp
+# from `date +%s%N`) to stderr, so wrapping a command in a pipeline does not
+# corrupt whatever downstream stage consumes its stdout. Defined here rather
+# than with the other helpers below because the gcloud auth block underneath
+# uses it.
+_log_elapsed() {
+  local start_ns="$1" label="$2"
+  local elapsed_ms=$(( ( $(date +%s%N) - start_ns ) / 1000000 ))
+  printf '  (%s took %d.%03ds)\n' "${label}" \
+    "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))" >&2
+}
+
 # Source the environment variables if configured
 # TODO: this pattern makes it difficult to switch environments.
 # Developers will likely want to target both cloud and local depending on what they're working on.
@@ -30,7 +42,10 @@ fi
 if [[ -z "${KUBECTL_CONTEXT:-}" ]]; then
   # If PROJECT_ID is set, ensure kubeconfig is configured before running any kubectl commands.
   if [[ -n "${PROJECT_ID:-}" ]]; then
+    _gcloud_start_ns=$(date +%s%N)
     gcloud container clusters get-credentials "${CLUSTER_NAME}" --location "${CLUSTER_LOCATION}" --project="${PROJECT_ID}"
+    _log_elapsed "${_gcloud_start_ns}" "gcloud get-credentials"
+    unset _gcloud_start_ns
   fi
 fi
 # otherwise just use the current cluster in KUBECONFIG ...
@@ -152,9 +167,14 @@ function usage() {
 }
 
 run_kubectl() {
+  local _start_ns
+  _start_ns=$(date +%s%N)
+  local _status=0
   kubectl \
     ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}} \
-    "$@"
+    "$@" || _status=$?
+  _log_elapsed "${_start_ns}" "kubectl ${1:-}"
+  return "${_status}"
 }
 
 # run_kubectl_fatal runs kubectl and aborts the install if it fails. Demo
@@ -190,12 +210,20 @@ wait_for_pool_rollout_fatal() {
 }
 
 run_kubectl_ate() {
+  local _start_ns
+  _start_ns=$(date +%s%N)
+  local _status=0
   go run ./cmd/kubectl-ate \
     ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}} \
-    "$@"
+    "$@" || _status=$?
+  _log_elapsed "${_start_ns}" "kubectl-ate ${1:-}"
+  return "${_status}"
 }
 
 run_ko() {
+  local _start_ns
+  _start_ns=$(date +%s%N)
+  local _status=0
   # Build up a set of ldflags to pass to ko.
   local ldflags=()
   while IFS= read -r line || [[ -n "${line}" ]]; do
@@ -209,13 +237,17 @@ run_ko() {
     apply|create|delete|run)
       ./hack/run-tool.sh ko "$@" \
           "${ldflags[@]}" \
-          ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
+          ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"} \
+        || _status=$?
       ;;
     *)
       ./hack/run-tool.sh ko "$@" \
-          "${ldflags[@]}"
+          "${ldflags[@]}" \
+        || _status=$?
       ;;
   esac
+  _log_elapsed "${_start_ns}" "ko ${1:-}"
+  return "${_status}"
 }
 
 atenet_router() {
