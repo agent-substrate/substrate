@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -44,14 +45,6 @@ var ErrWorkerPodNotFound = errors.New("worker pod not found")
 // Distinct from ErrWorkerPodNotFound, which callers treat as crash-worthy;
 // this one is retryable.
 var ErrNoAteletOnNode = errors.New("no atelet pod found on node")
-
-// The SPIFFE identity that atelet serving certs carry, as minted by the
-// podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
-// The namespace part is the dialer's ateletNamespace.
-const (
-	trustDomainName = "cluster.local"
-	ateletSA        = "atelet"
-)
 
 // AteletDialer handles gRPC connections to Atelet pods.
 type AteletDialer struct {
@@ -192,15 +185,15 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 }
 
 func buildTLSConfig(ateletNamespace, clientBundlePath, serverCAPath, expectedPodUID string) (*tls.Config, error) {
-	trustDomain, err := spiffeid.TrustDomainFromString(trustDomainName)
+	trustDomain, err := spiffeid.TrustDomainFromString(installdefaults.AteletTrustDomain)
 	if err != nil {
-		return nil, fmt.Errorf("while parsing trust domain %q: %w", trustDomainName, err)
+		return nil, fmt.Errorf("while parsing trust domain %q: %w", installdefaults.AteletTrustDomain, err)
 	}
 	bundle, err := x509bundle.Load(trustDomain, serverCAPath)
 	if err != nil {
 		return nil, fmt.Errorf("while loading CA bundle from %s: %w", serverCAPath, err)
 	}
-	expectedID, err := spiffeid.FromSegments(trustDomain, "ns", ateletNamespace, "sa", ateletSA)
+	expectedID, err := spiffeid.FromSegments(trustDomain, "ns", ateletNamespace, "sa", installdefaults.AteletServiceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("while building expected atelet SPIFFE ID: %w", err)
 	}

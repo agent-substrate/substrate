@@ -52,6 +52,10 @@ type WorkerPoolReconciler struct {
 	// OTelTracesSamplerArg is the OTEL_TRACES_SAMPLER_ARG propagated to ateom
 	// pods. Ignored unless OTelTracesSampler is set.
 	OTelTracesSamplerArg string
+	// SystemNamespace is the namespace substrate's control plane runs in. It
+	// names the atenet-router and atelet SPIFFE identities that atunnel
+	// authenticates inside each worker.
+	SystemNamespace string
 
 	desiredWorkers metric.Int64ObservableUpDownCounter
 	readyWorkers   metric.Int64ObservableUpDownCounter
@@ -116,7 +120,7 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 		MetricExportTimeout:  r.OTelMetricExportTimeout,
 		TracesSampler:        r.OTelTracesSampler,
 		TracesSamplerArg:     r.OTelTracesSamplerArg,
-	})
+	}, r.SystemNamespace)
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
 	}
