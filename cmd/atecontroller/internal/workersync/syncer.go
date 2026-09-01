@@ -23,6 +23,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -332,12 +333,15 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 const ateomContainerName = "ateom"
 
 // workerCapacity returns the worker pod's capacity for hosting an actor — CPU
-// in millicores and memory in bytes — taken from the ateom container's resource
-// limits. A dimension the pod does not limit reports 0, which the scheduler
-// treats as "unknown" (unconstrained); a pod that limits neither reports nil
-// rather than an all-zero message that says the same thing. The actor sandbox
-// runs nested in the ateom container's cgroup, so that container's limits — not
-// the pod total — are the relevant envelope.
+// in millicores, memory in bytes, and any extended-resource devices — taken from
+// the ateom container's resource limits. A CPU or memory dimension the pod does
+// not limit reports 0, which the scheduler treats as "unknown" (unconstrained);
+// a device the pod does not limit is simply absent from the map, which the
+// scheduler treats as zero-and-unsatisfiable. A pod that limits nothing reports
+// nil rather than an empty message that says the same thing. Every dimension,
+// devices included, comes from the ateom container's own limits, not the pod
+// total: the actor sandbox runs nested in that container's cgroup, and a device
+// the pool attaches to a different container is not visible to the sandbox.
 func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
 	var capacity ateapipb.WorkerCapacity
 	for i := range pod.Spec.Containers {
@@ -351,9 +355,18 @@ func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
 		if v := c.Resources.Limits.Memory(); v != nil {
 			capacity.MemoryBytes = v.Value()
 		}
+		for name, q := range c.Resources.Limits {
+			if !resources.IsDeviceResource(string(name)) {
+				continue
+			}
+			if capacity.Devices == nil {
+				capacity.Devices = map[string]int64{}
+			}
+			capacity.Devices[string(name)] = q.Value()
+		}
 		break
 	}
-	if capacity.CpuMilli == 0 && capacity.MemoryBytes == 0 {
+	if capacity.CpuMilli == 0 && capacity.MemoryBytes == 0 && len(capacity.Devices) == 0 {
 		return nil
 	}
 	return &capacity

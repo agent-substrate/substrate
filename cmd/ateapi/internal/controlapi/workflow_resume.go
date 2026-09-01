@@ -582,28 +582,41 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 	}
 }
 
-// actorResourceLimits returns the actor's declared CPU (millicores) and memory
-// (bytes) limits from its ActorTemplate, or 0 for a dimension the template did
-// not set. These size the sandbox (supplied over the actor RPCs) and gate
-// scheduling (a worker must have >= capacity).
-func actorResourceLimits(tmpl *ateapipb.ActorTemplate) (cpuMilli, memBytes int64, err error) {
+// actorResourceLimits returns the actor's declared CPU (millicores), memory
+// (bytes), and extended-resource device limits from its ActorTemplate, or the
+// zero value for a dimension the template did not set. These size the sandbox
+// (supplied over the actor RPCs) and gate scheduling (a worker must have >=
+// capacity). Device counts must be whole numbers, so a fractional one is an
+// error rather than a silent round at placement time.
+func actorResourceLimits(tmpl *ateapipb.ActorTemplate) (cpuMilli, memBytes int64, devices map[string]int64, err error) {
 	for _, limit := range tmpl.GetResources().GetLimits() {
 		q, perr := resource.ParseQuantity(limit.GetQuantity())
 		if perr != nil {
-			return 0, 0, fmt.Errorf("invalid template resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), perr)
+			return 0, 0, nil, fmt.Errorf("invalid template resource limit %s=%q: %w", limit.GetName(), limit.GetQuantity(), perr)
 		}
-		switch limit.GetName() {
-		case "cpu":
+		switch {
+		case limit.GetName() == "cpu":
 			cpuMilli = q.MilliValue()
-		case "memory":
+		case limit.GetName() == "memory":
 			memBytes = q.Value()
+		case resources.IsDeviceResource(limit.GetName()):
+			// MilliValue is the count times 1000, so a non-zero remainder is a
+			// fractional device count. "1000m" is one whole unit and passes;
+			// "500m" does not.
+			if q.MilliValue()%1000 != 0 {
+				return 0, 0, nil, fmt.Errorf("device %q limit %q is not a whole number", limit.GetName(), limit.GetQuantity())
+			}
+			if devices == nil {
+				devices = map[string]int64{}
+			}
+			devices[limit.GetName()] = q.Value()
 		}
 	}
-	return cpuMilli, memBytes, nil
+	return cpuMilli, memBytes, devices, nil
 }
 
 func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) (scheduling.Constraints, error) {
-	cpuMilli, memBytes, err := actorResourceLimits(tmpl)
+	cpuMilli, memBytes, devices, err := actorResourceLimits(tmpl)
 	if err != nil {
 		return scheduling.Constraints{}, err
 	}
@@ -613,6 +626,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		RequiredNodes: actor.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(),
 		CPUMilli:      cpuMilli,
 		MemoryBytes:   memBytes,
+		Devices:       devices,
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
@@ -672,8 +686,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	egressGateway := w.egressGateway()
 
 	// The actor's declared limits ride the RPC down to the sandbox so it is sized
-	// to the actor (replacing the worker-pod downward-API approach).
-	cpuMilli, memBytes, err := actorResourceLimits(actorTemplate)
+	// to the actor (replacing the worker-pod downward-API approach). Devices do
+	// not ride the RPC yet; they only gate placement.
+	cpuMilli, memBytes, _, err := actorResourceLimits(actorTemplate)
 	if err != nil {
 		return tele, err
 	}

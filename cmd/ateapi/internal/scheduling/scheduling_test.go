@@ -162,6 +162,37 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-tiny",
 		},
 		{
+			name: "only the worker with the device is picked",
+			fleet: fleet{
+				worker("w-plain", "gvisor", "node-a", tierTwo),
+				worker("w-device", "gvisor", "node-a", tierTwo, withDevices(map[string]int64{"example.com/device": 1})),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Devices: map[string]int64{"example.com/device": 1}},
+			wantPod:     "w-device",
+		},
+		{
+			name: "no worker has the device yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-plain", "gvisor", "node-a", tierTwo),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Devices: map[string]int64{"example.com/device": 1}},
+		},
+		{
+			name: "actor needs no device; device worker still eligible",
+			fleet: fleet{
+				worker("w-device", "gvisor", "node-a", tierTwo, withDevices(map[string]int64{"example.com/device": 1})),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-device",
+		},
+		{
+			name: "worker has fewer devices than needed yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-device", "gvisor", "node-a", tierTwo, withDevices(map[string]int64{"example.com/device": 2})),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", Devices: map[string]int64{"example.com/device": 4}},
+		},
+		{
 			name:        "empty fleet",
 			fleet:       fleet{},
 			constraints: Constraints{SandboxClass: "gvisor"},
@@ -265,6 +296,18 @@ func TestApplies(t *testing.T) {
 			constraints: Constraints{SandboxClass: "gvisor"},
 			want:        false,
 		},
+		{
+			name:        "worker without the required device is excluded",
+			worker:      worker("w", "gvisor", "node-a", nil),
+			constraints: Constraints{SandboxClass: "gvisor", Devices: map[string]int64{"example.com/device": 1}},
+			want:        false,
+		},
+		{
+			name:        "worker with enough of the device is eligible",
+			worker:      worker("w", "gvisor", "node-a", nil, withDevices(map[string]int64{"example.com/device": 2})),
+			constraints: Constraints{SandboxClass: "gvisor", Devices: map[string]int64{"example.com/device": 1}},
+			want:        true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -315,6 +358,15 @@ func assigned(atespace, name string) func(*ateapipb.Worker) {
 func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
 		w.Capacity = &ateapipb.WorkerCapacity{CpuMilli: cpuMilli, MemoryBytes: memBytes}
+	}
+}
+
+func withDevices(devices map[string]int64) func(*ateapipb.Worker) {
+	return func(w *ateapipb.Worker) {
+		if w.Capacity == nil {
+			w.Capacity = &ateapipb.WorkerCapacity{}
+		}
+		w.Capacity.Devices = devices
 	}
 }
 

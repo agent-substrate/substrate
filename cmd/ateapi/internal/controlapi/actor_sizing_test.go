@@ -15,6 +15,7 @@
 package controlapi
 
 import (
+	"maps"
 	"testing"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -22,14 +23,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// TestActorResourceLimits covers the actor-side extraction: the CPU/memory limits
-// an ActorTemplate declares become the sandbox size and the scheduling floor.
+// TestActorResourceLimits covers the actor-side extraction: the CPU/memory/device
+// limits an ActorTemplate declares become the sandbox size and the scheduling floor.
 func TestActorResourceLimits(t *testing.T) {
 	tests := []struct {
-		name       string
-		res        *corev1.ResourceRequirements
-		wantCPU    int64
-		wantMemory int64
+		name        string
+		res         *corev1.ResourceRequirements
+		wantCPU     int64
+		wantMemory  int64
+		wantDevices map[string]int64
+		wantErr     bool
 	}{
 		{
 			name:       "nil resources yields zero",
@@ -67,16 +70,61 @@ func TestActorResourceLimits(t *testing.T) {
 			wantCPU:    0,
 			wantMemory: 0,
 		},
+		{
+			name: "device limits are read and do not vanish",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:   resource.MustParse("2"),
+					"example.com/device": resource.MustParse("2"),
+				},
+			},
+			wantCPU:     2000,
+			wantDevices: map[string]int64{"example.com/device": 2},
+		},
+		{
+			name: "a whole device count in milli form is accepted",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{"example.com/device": resource.MustParse("1000m")},
+			},
+			wantDevices: map[string]int64{"example.com/device": 1},
+		},
+		{
+			name: "fractional device quantity is an error",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{"example.com/device": resource.MustParse("500m")},
+			},
+			wantErr: true,
+		},
+		{
+			name: "native non-cpu/memory resources are not devices",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:              resource.MustParse("2"),
+					corev1.ResourceEphemeralStorage: resource.MustParse("1Gi"),
+					"hugepages-2Mi":                 resource.MustParse("512Mi"),
+				},
+			},
+			wantCPU: 2000,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{Resources: tc.res}})
-			cpu, mem, err := actorResourceLimits(tmpl)
+			cpu, mem, devices, err := actorResourceLimits(tmpl)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("actorResourceLimits() = (%d, %d, %v), want error", cpu, mem, devices)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("actorResourceLimits() error: %v", err)
 			}
 			if cpu != tc.wantCPU || mem != tc.wantMemory {
 				t.Fatalf("actorResourceLimits() = (%d, %d), want (%d, %d)", cpu, mem, tc.wantCPU, tc.wantMemory)
+			}
+			if !maps.Equal(devices, tc.wantDevices) {
+				t.Fatalf("actorResourceLimits() devices = %v, want %v", devices, tc.wantDevices)
 			}
 		})
 	}

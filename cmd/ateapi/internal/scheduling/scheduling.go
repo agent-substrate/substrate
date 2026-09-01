@@ -50,6 +50,13 @@ type Constraints struct {
 	// data (matching the pre-capacity behavior).
 	CPUMilli    int64
 	MemoryBytes int64
+
+	// Devices are the actor's declared extended-resource limits, keyed by
+	// resource name. Unlike CPUMilli and MemoryBytes, these are matched strictly
+	// (see Applies): absent worker capacity means zero, which cannot satisfy a
+	// non-zero requirement. Empty for every current template, since no actor
+	// device limit reaches the scheduler yet.
+	Devices map[string]int64
 }
 
 // ErrNoCapacity is returned by Schedule when no free worker satisfies the
@@ -155,6 +162,20 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 	}
 	if constraints.MemoryBytes > 0 && capacity.GetMemoryBytes() > 0 && capacity.GetMemoryBytes() < constraints.MemoryBytes {
 		return false
+	}
+
+	// Devices are gated strictly, unlike CPU and memory above: a zero or absent
+	// device capacity means the worker has none of that device, not "unknown", so
+	// it cannot satisfy a non-zero requirement. Treating it as unconstrained would
+	// place device-requiring actors on workers without the device — the bug this
+	// dimension exists to prevent.
+	for name, need := range constraints.Devices {
+		if need <= 0 {
+			continue
+		}
+		if capacity.GetDevices()[name] < need {
+			return false
+		}
 	}
 
 	return len(constraints.RequiredNodes) == 0 || slices.Contains(constraints.RequiredNodes, worker.GetNodeName())

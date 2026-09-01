@@ -1439,6 +1439,21 @@ message WorkerCapacity {
   // +k8s:optional
   // +k8s:minimum=1
   int64 memory_bytes = 2;
+
+  // Device capacity keyed by Kubernetes extended-resource name (e.g.
+  // "nvidia.com/gpu"), taken from the ateom container's limits. Unlike
+  // cpu_milli and memory_bytes, an absent or zero entry means the worker has
+  // none of that device and cannot host an actor that requires it: devices are
+  // discrete and cannot be treated as "unknown, therefore unconstrained".
+  //
+  // Field 3 is intentionally skipped so the pending multi-actor change can take
+  // it for an actor count without colliding.
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:eachVal=+k8s:minimum=1
+  map<string, int64> devices = 4;
 }
 
 // ActorAssignment names the Actor currently bound to a Worker — the inverse of
