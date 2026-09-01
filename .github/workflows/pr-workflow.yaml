@@ -40,7 +40,7 @@ jobs:
         go-version-file: 'go.mod'
     - name: Verify immutable PostgreSQL migrations
       if: github.event_name == 'pull_request'
-      run: hack/verify/postgresql-migrations.sh "${{ github.event.pull_request.base.sha }}"
+      run: hack/verify/postgresql-migrations.sh
     - run: go test -race -v ./...
     # tools/apitool has its own module so we need to run it explicitly.
     - name: apitool tests

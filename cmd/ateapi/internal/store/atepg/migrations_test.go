@@ -21,53 +21,43 @@ import (
 	"testing"
 )
 
-type migrationGuard struct {
-	name string
-	re   *regexp.Regexp
-}
+var transactionControl = regexp.MustCompile(`(?im)^\s*(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK)\s*;`)
 
-var upMigrationGuards = []migrationGuard{
-	{"CREATE TABLE", regexp.MustCompile(`(?i)\bCREATE\s+(?:UNLOGGED\s+)?TABLE\s+(\w+)`)},
-	{"CREATE INDEX", regexp.MustCompile(`(?i)\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(\w+)`)},
-	{"CREATE EXTENSION", regexp.MustCompile(`(?i)\bCREATE\s+EXTENSION\s+(\w+)`)},
-	{"ADD COLUMN", regexp.MustCompile(`(?i)\bADD\s+COLUMN\s+(\w+)`)},
-}
-
-var downMigrationGuards = []migrationGuard{
-	{"DROP TABLE", regexp.MustCompile(`(?i)\bDROP\s+TABLE\s+(\w+)`)},
-	{"DROP INDEX", regexp.MustCompile(`(?i)\bDROP\s+INDEX\s+(\w+)`)},
-	{"DROP EXTENSION", regexp.MustCompile(`(?i)\bDROP\s+EXTENSION\s+(\w+)`)},
-	{"DROP COLUMN", regexp.MustCompile(`(?i)\bDROP\s+COLUMN\s+(\w+)`)},
-}
-
-func TestMigrationGuards(t *testing.T) {
+func TestMigrationPolicy(t *testing.T) {
 	err := fs.WalkDir(migrationFiles, "migrations", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
 		}
-		var guards []migrationGuard
-		switch {
-		case strings.HasSuffix(path, ".up.sql"):
-			guards = upMigrationGuards
-		case strings.HasSuffix(path, ".down.sql"):
-			guards = downMigrationGuards
-		default:
+		if !strings.HasSuffix(path, ".sql") {
 			return nil
 		}
 		data, err := fs.ReadFile(migrationFiles, path)
 		if err != nil {
 			return err
 		}
-		for _, guard := range guards {
-			for _, match := range guard.re.FindAllStringSubmatch(string(data), -1) {
-				if !strings.EqualFold(match[1], "if") {
-					t.Errorf("%s requires an existence guard in %s: %q", guard.name, path, match[0])
-				}
-			}
+		sql := string(data)
+		upperSQL := strings.ToUpper(sql)
+		if strings.Count(sql, "-- +goose Up") != 1 {
+			t.Errorf("%s must contain exactly one Goose Up annotation", path)
+		}
+		if strings.Contains(upperSQL, "-- +GOOSE DOWN") {
+			t.Errorf("%s must not contain a Goose Down migration", path)
+		}
+		if strings.Contains(upperSQL, "-- +GOOSE NO TRANSACTION") {
+			t.Errorf("%s must run in a PostgreSQL transaction", path)
+		}
+		if strings.Contains(upperSQL, "IF NOT EXISTS") {
+			t.Errorf("%s must not contain an IF NOT EXISTS guard", path)
+		}
+		if strings.Contains(upperSQL, "-- +GOOSE ENVSUB") {
+			t.Errorf("%s must not use Goose environment substitution", path)
+		}
+		if transactionControl.MatchString(sql) {
+			t.Errorf("%s must let Goose control the PostgreSQL transaction", path)
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walking PostgreSQL migrations: %v", err)
+		t.Fatalf("check PostgreSQL migrations: %v", err)
 	}
 }

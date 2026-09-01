@@ -23,12 +23,15 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	migratepgx "github.com/golang-migrate/migrate/v4/database/pgx/v5"
-	"github.com/golang-migrate/migrate/v4/source"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
+)
+
+const (
+	migrationTableName = "schema_migrations"
+	migrationLockName  = "agent-substrate:atepg:migrations"
 )
 
 //go:embed migrations/*.sql
@@ -40,60 +43,69 @@ func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	// The schema needs PostgreSQL 13+ (xid8, pg_current_xact_id,
-	// pg_current_snapshot); fail with a clear message rather than an
+	// pg_current_snapshot). Report a clear error before PostgreSQL reports an
 	// opaque DDL or function error.
 	var version int
 	if err := pool.QueryRow(ctx, `SELECT current_setting('server_version_num')::int`).Scan(&version); err != nil {
-		return fmt.Errorf("reading PostgreSQL version: %w", err)
+		return fmt.Errorf("get PostgreSQL version: %w", err)
 	}
 	if version < 130000 {
-		return fmt.Errorf("atepg requires PostgreSQL 13 or newer (xid8 and pg_current_snapshot); server_version_num is %d", version)
+		return fmt.Errorf("atepg requires PostgreSQL 13 or newer for xid8 and pg_current_snapshot. server_version_num is %d", version)
 	}
 	if err := rejectUnversionedSubstrateSchema(ctx, pool); err != nil {
 		return err
 	}
 
-	migrator, latestVersion, err := openMigrator(pool)
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		return fmt.Errorf("open embedded PostgreSQL migrations: %w", err)
+	}
+	provider, err := openMigrationProvider(ctx, pool, migrations)
 	if err != nil {
 		return err
 	}
-
-	migrationErr := migrateToLatest(ctx, migrator, latestVersion)
-	sourceErr, databaseErr := migrator.Close()
-	return errors.Join(migrationErr, sourceErr, databaseErr)
+	return errors.Join(migrateToLatest(ctx, provider), provider.Close())
 }
 
-func openMigrator(pool *pgxpool.Pool) (*migrate.Migrate, uint, error) {
+func openMigrationProvider(ctx context.Context, pool *pgxpool.Pool, migrations fs.FS) (*goose.Provider, error) {
+	lockID, err := migrationLockID(ctx, pool)
+	if err != nil {
+		return nil, err
+	}
+	locker, err := lock.NewPostgresSessionLocker(
+		lock.WithLockID(lockID),
+		lock.WithLockTimeout(1, 300),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create PostgreSQL migration locker: %w", err)
+	}
 	db := stdlib.OpenDBFromPool(pool)
-	databaseDriver, err := migratepgx.WithInstance(db, &migratepgx.Config{})
+	provider, err := goose.NewProvider(
+		goose.DialectPostgres,
+		db,
+		migrations,
+		goose.WithTableName(migrationTableName),
+		goose.WithSessionLocker(locker),
+	)
 	if err != nil {
 		_ = db.Close()
-		return nil, 0, fmt.Errorf("opening PostgreSQL migration database: %w", err)
+		return nil, fmt.Errorf("create PostgreSQL migration provider: %w", err)
 	}
-	sourceDriver, err := iofs.New(migrationFiles, "migrations")
-	if err != nil {
-		_ = databaseDriver.Close()
-		return nil, 0, fmt.Errorf("opening embedded PostgreSQL migrations: %w", err)
-	}
-	latestVersion, err := latestMigrationVersion(sourceDriver)
-	if err != nil {
-		_ = sourceDriver.Close()
-		_ = databaseDriver.Close()
-		return nil, 0, err
-	}
-	migrator, err := migrate.NewWithInstance("iofs", sourceDriver, "pgx5", databaseDriver)
-	if err != nil {
-		_ = sourceDriver.Close()
-		_ = databaseDriver.Close()
-		return nil, 0, fmt.Errorf("creating PostgreSQL migrator: %w", err)
-	}
-	return migrator, latestVersion, nil
+	return provider, nil
 }
 
-// rejectUnversionedSubstrateSchema prevents golang-migrate from creating
-// metadata and dirtying a database built by pre-migration ateapi versions.
-// The table list is the frozen pre-migration schema; later tables always have
-// migration metadata and do not belong here.
+func migrationLockID(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
+	var lockID int64
+	if err := pool.QueryRow(ctx, `SELECT hashtextextended($1 || ':' || current_schema(), 0)`, migrationLockName).Scan(&lockID); err != nil {
+		return 0, fmt.Errorf("get PostgreSQL migration lock ID: %w", err)
+	}
+	return lockID, nil
+}
+
+// rejectUnversionedSubstrateSchema stops Goose before it creates a migration
+// ledger in a database from a pre-migration ateapi version.
+// The list contains all tables in the pre-migration schema. Goose creates the
+// migration ledger before it creates a later table.
 func rejectUnversionedSubstrateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	var hasMetadata, hasSubstrateTables bool
 	err := pool.QueryRow(ctx, `
@@ -110,49 +122,30 @@ func rejectUnversionedSubstrateSchema(ctx context.Context, pool *pgxpool.Pool) e
 				)
 			)`).Scan(&hasMetadata, &hasSubstrateTables)
 	if err != nil {
-		return fmt.Errorf("checking PostgreSQL migration metadata: %w", err)
+		return fmt.Errorf("check PostgreSQL migration ledger: %w", err)
 	}
 	if hasSubstrateTables && !hasMetadata {
-		return errors.New("unsupported PostgreSQL schema: Substrate tables exist without migration metadata")
+		return errors.New("unsupported PostgreSQL schema: Substrate tables exist without a migration ledger")
 	}
 	return nil
 }
 
-func latestMigrationVersion(driver source.Driver) (uint, error) {
-	latest, err := driver.First()
-	if err != nil {
-		return 0, fmt.Errorf("reading first PostgreSQL migration: %w", err)
-	}
-	for {
-		next, err := driver.Next(latest)
-		if errors.Is(err, fs.ErrNotExist) {
-			return latest, nil
-		}
-		if err != nil {
-			return 0, fmt.Errorf("reading PostgreSQL migration after version %d: %w", latest, err)
-		}
-		latest = next
-	}
-}
-
-func migrateToLatest(ctx context.Context, migrator *migrate.Migrate, latest uint) (migrationErr error) {
+func migrateToLatest(ctx context.Context, provider *goose.Provider) (migrationErr error) {
 	started := time.Now()
-	current, dirty, err := migrator.Version()
-	if errors.Is(err, migrate.ErrNilVersion) {
-		current, dirty, err = 0, false, nil
-	}
+	current, latest, err := provider.GetVersions(ctx)
 	if err != nil {
-		return fmt.Errorf("reading PostgreSQL migration state: %w", err)
+		return fmt.Errorf("get PostgreSQL migration versions: %w", err)
 	}
+	starting := current
 
 	applied := 0
 	defer func() {
 		attributes := []any{
-			slog.Uint64("current_version", uint64(current)),
-			slog.Uint64("latest_version", uint64(latest)),
+			slog.Int64("starting_version", starting),
+			slog.Int64("current_version", current),
+			slog.Int64("latest_version", latest),
 			slog.Int("applied_migrations", applied),
 			slog.Duration("duration", time.Since(started)),
-			slog.Bool("dirty", dirty),
 		}
 		if migrationErr != nil {
 			attributes = append(attributes, slog.Any("err", migrationErr))
@@ -162,78 +155,24 @@ func migrateToLatest(ctx context.Context, migrator *migrate.Migrate, latest uint
 		slog.InfoContext(ctx, "PostgreSQL migrations ready", attributes...)
 	}()
 
-	if !dirty && current >= latest {
-		return nil
-	}
-	if dirty && current > latest {
-		return fmt.Errorf("dirty PostgreSQL migration version %d is ahead of this binary's latest version %d, so an operator must recover it: %w", current, latest, migrate.ErrDirty{Version: int(current)})
-	}
-
-	previous := current
-	if err := migrator.Up(); errors.Is(err, migrate.ErrNoChange) {
-		newCurrent, newDirty, stateErr := migrator.Version()
-		if stateErr != nil {
-			return fmt.Errorf("reading PostgreSQL migration state after lock wait: %w", stateErr)
-		}
-		current, dirty = newCurrent, newDirty
-		return nil
-	} else if err != nil {
-		applyErr := fmt.Errorf("applying PostgreSQL migrations: %w", err)
-		recoveredCurrent, recoveredDirty, recovered, rollbackErr := rollbackToVersion(migrator, previous, latest)
-		current, dirty = recoveredCurrent, recoveredDirty
-		if rollbackErr != nil {
-			return errors.Join(applyErr, rollbackErr)
-		}
-		if !recovered {
-			if !dirty && current >= latest {
-				return nil
-			}
-			return applyErr
-		}
-		return fmt.Errorf("rolled back PostgreSQL migrations to pre-run version %d: %w", current, applyErr)
-	}
-	current = latest
-	dirty = false
-	applied = int(latest - previous)
-	return nil
-}
-
-// rollbackToVersion clears a known dirty migration and runs down migrations for
-// each migration that completed after target.
-func rollbackToVersion(migrator *migrate.Migrate, target, latest uint) (current uint, dirty, recovered bool, err error) {
-	current, dirty, err = migrator.Version()
-	if errors.Is(err, migrate.ErrNilVersion) {
-		return 0, false, false, nil
-	}
+	results, err := provider.Up(ctx)
 	if err != nil {
-		return 0, false, false, fmt.Errorf("reading PostgreSQL migration state for rollback: %w", err)
+		var partial *goose.PartialError
+		if errors.As(err, &partial) {
+			applied = len(partial.Applied)
+		}
+		applyErr := fmt.Errorf("apply PostgreSQL migrations: %w", err)
+		failedCurrent, _, versionErr := provider.GetVersions(ctx)
+		if versionErr != nil {
+			return errors.Join(applyErr, fmt.Errorf("get PostgreSQL migration versions after a failure: %w", versionErr))
+		}
+		current = failedCurrent
+		return applyErr
 	}
-	if !dirty {
-		return current, false, false, nil
+	applied = len(results)
+	current, _, err = provider.GetVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("get PostgreSQL migration versions after migration: %w", err)
 	}
-	if current > latest {
-		return current, true, false, fmt.Errorf("dirty PostgreSQL migration version %d is ahead of this binary's latest version %d, so an operator must recover it: %w", current, latest, migrate.ErrDirty{Version: int(current)})
-	}
-
-	cleanVersion := int(current) - 1
-	forceTarget := cleanVersion
-	if forceTarget < 1 {
-		forceTarget = -1
-	}
-	if err := migrator.Force(forceTarget); err != nil {
-		return current, true, false, fmt.Errorf("clearing dirty PostgreSQL migration version %d: %w", current, err)
-	}
-	if forceTarget < 0 {
-		return 0, false, true, nil
-	}
-	current = uint(cleanVersion)
-
-	steps := int(current) - int(target)
-	if steps <= 0 {
-		return current, false, true, nil
-	}
-	if err := migrator.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return current, false, true, fmt.Errorf("rolling back %d PostgreSQL migration(s) to version %d: %w", steps, target, err)
-	}
-	return target, false, true, nil
+	return nil
 }
