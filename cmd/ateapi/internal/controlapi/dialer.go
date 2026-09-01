@@ -44,7 +44,7 @@ var ErrNoAteletOnNode = errors.New("no atelet pod found on node")
 
 // The SPIFFE identity that atelet serving certs carry, as minted by the
 // podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
-// The namespace part is ateletNamespace, declared in informer.go.
+// The namespace part is the dialer's ateletNamespace.
 const (
 	trustDomainName = "cluster.local"
 	ateletSA        = "atelet"
@@ -71,13 +71,15 @@ func WithDialCredentials(build func(expectedPodUID string) (credentials.Transpor
 }
 
 // NewAteletDialer creates a new AteletDialer. clientBundlePath and serverCAPath
-// are used to build the per-atelet mTLS credentials used for every atelet connection.
-func NewAteletDialer(ateletIndexer cache.Indexer, clientBundlePath, serverCAPath string, opts ...DialerOption) *AteletDialer {
+// are used to build the per-atelet mTLS credentials used for every atelet
+// connection, and ateletNamespace is the namespace segment of the SPIFFE ID
+// those credentials expect on the atelet serving cert.
+func NewAteletDialer(ateletIndexer cache.Indexer, ateletNamespace, clientBundlePath, serverCAPath string, opts ...DialerOption) *AteletDialer {
 	d := &AteletDialer{
 		ateletIndexer: ateletIndexer,
 		ateletConns:   newAteletConnCache(1024),
 		dialCredentials: func(expectedPodUID string) (credentials.TransportCredentials, error) {
-			tlsConfig, err := buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID)
+			tlsConfig, err := buildTLSConfig(ateletNamespace, clientBundlePath, serverCAPath, expectedPodUID)
 			if err != nil {
 				return nil, err
 			}
@@ -155,7 +157,7 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 	return ateletConn, nil
 }
 
-func buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID string) (*tls.Config, error) {
+func buildTLSConfig(ateletNamespace, clientBundlePath, serverCAPath, expectedPodUID string) (*tls.Config, error) {
 	trustDomain, err := spiffeid.TrustDomainFromString(trustDomainName)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing trust domain %q: %w", trustDomainName, err)
