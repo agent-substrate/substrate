@@ -88,6 +88,16 @@ func createSnapshotBucket(ctx context.Context, cfg *Config) error {
 	return nil
 }
 
+// snapshotBucketRoles are the roles every Substrate component that touches the
+// snapshot bucket needs: objectAdmin to read, write and delete the objects a
+// snapshot is made of, and bucketViewer to resolve the bucket itself.
+var snapshotBucketRoles = []string{"roles/storage.objectAdmin", "roles/storage.bucketViewer"}
+
+// snapshotBucketSubjects are the Kubernetes service accounts granted those
+// roles. atelet writes and reads external snapshots; ate-api-server copies
+// them for tags and deletes the ones nothing refers to any more.
+var snapshotBucketSubjects = []string{"atelet", "ate-api-server"}
+
 func createIamPolicyBindings(ctx context.Context, cfg *Config) error {
 	client, err := storage.NewClient(ctx)
 	if err != nil {
@@ -101,33 +111,21 @@ func createIamPolicyBindings(ctx context.Context, cfg *Config) error {
 		return fmt.Errorf("get bucket iam policy: %w", err)
 	}
 
-	member := fmt.Sprintf("principal://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s.svc.id.goog/subject/ns/ate-system/sa/atelet", cfg.ProjectNumber, cfg.ProjectID)
-
-	hasStorageAdmin := false
-	hasBucketViewer := false
-	for _, b := range policy.InternalProto.Bindings {
-		if b.Condition != nil {
-			continue
-		}
-		if b.Role == "roles/storage.objectAdmin" && slices.Contains(b.Members, member) {
-			hasStorageAdmin = true
-		}
-		if b.Role == "roles/storage.bucketViewer" && slices.Contains(b.Members, member) {
-			hasBucketViewer = true
-		}
-		if hasStorageAdmin && hasBucketViewer {
-			slog.Info("IAM policy is already correct", slog.String("bucket", cfg.BucketName), slog.String("member", member))
-			return nil
+	changed := false
+	for _, subject := range snapshotBucketSubjects {
+		member := fmt.Sprintf("principal://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s.svc.id.goog/subject/ns/ate-system/sa/%s", cfg.ProjectNumber, cfg.ProjectID, subject)
+		for _, role := range snapshotBucketRoles {
+			if hasUnconditionalBinding(policy, role, member) {
+				continue
+			}
+			slog.Info("Adding role to member", slog.String("bucket", cfg.BucketName), slog.String("role", role), slog.String("member", member))
+			policy.Add(member, iam.RoleName(role))
+			changed = true
 		}
 	}
-
-	if !hasStorageAdmin {
-		slog.Info("Adding storage.objectAdmin role to member", slog.String("bucket", cfg.BucketName), slog.String("member", member))
-		policy.Add(member, iam.RoleName("roles/storage.objectAdmin"))
-	}
-	if !hasBucketViewer {
-		slog.Info("Adding storage.bucketViewer role to member", slog.String("bucket", cfg.BucketName), slog.String("member", member))
-		policy.Add(member, iam.RoleName("roles/storage.bucketViewer"))
+	if !changed {
+		slog.Info("IAM policy is already correct", slog.String("bucket", cfg.BucketName))
+		return nil
 	}
 
 	slog.Info("Setting IAM policy for bucket", slog.String("bucket", cfg.BucketName))
@@ -137,6 +135,18 @@ func createIamPolicyBindings(ctx context.Context, cfg *Config) error {
 	}
 
 	return nil
+}
+
+// hasUnconditionalBinding reports whether the policy already grants role to
+// member without a condition. Conditional bindings are ignored: they may not
+// apply to the objects Substrate touches.
+func hasUnconditionalBinding(policy *iam.Policy, role, member string) bool {
+	for _, b := range policy.InternalProto.Bindings {
+		if b.Condition == nil && b.Role == role && slices.Contains(b.Members, member) {
+			return true
+		}
+	}
+	return false
 }
 
 var bucketCmd = &cobra.Command{

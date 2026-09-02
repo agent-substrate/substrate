@@ -146,27 +146,27 @@ go run ./tools/setup-gcp create iam [flags]
 | `--bucket` | GCS bucket name. | `BUCKET_NAME` | None (Required for bucket bindings*) |
 | `--gke-nodes` | Grant GKE nodes permission to pull images. | - | `true` |
 | `--atelet` | Grant atelet project-level permissions. | - | `true` |
-| `--bucket-bindings` | Grant atelet access to the snapshot bucket. | - | `true` |
+| `--bucket-bindings` | Grant atelet and ate-api-server access to the snapshot bucket. | - | `true` |
 
 *\*Note: Required for bucket bindings unless the `BUCKET_NAME` environment variable is set.*
 
 #### What `create iam` actually grants
 
 On a fresh GCP project these bindings do not exist, and nothing else creates
-them — without them atelet cannot read or write snapshots (`403` from GCS on
-the first suspend/resume) and nodes cannot pull images. `bootstrap` and
-`create iam` apply them for you; the table below is the reference for auditing
-them, or for applying them by hand in projects where you cannot run the tool
-with project-level IAM permissions.
+them — without them atelet cannot read or write external snapshots (`403` from
+GCS on the first suspend/resume), ate-api cannot copy or collect them, and
+nodes cannot pull images. `bootstrap` and `create iam` apply them for you; the
+table below is the reference for auditing them, or for applying them by hand in
+projects where you cannot run the tool with project-level IAM permissions.
 
-atelet authenticates via [GKE Workload Identity
+atelet and ate-api authenticate via [GKE Workload Identity
 Federation](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity):
-its Kubernetes ServiceAccount (`ate-system/atelet`, created by
-`install-ate.sh`) is addressed directly as an IAM principal — no Google
-service account is created or impersonated. This only works on a cluster with
-Workload Identity enabled (`create cluster` enables the
-`PROJECT_ID.svc.id.goog` pool; a pre-existing cluster must have it enabled
-too, or atelet's GCS calls fail with `401`).
+their Kubernetes ServiceAccounts (`ate-system/atelet` and
+`ate-system/ate-api-server`, created by `install-ate.sh`) are addressed
+directly as IAM principals — no Google service account is created or
+impersonated. This only works on a cluster with Workload Identity enabled
+(`create cluster` enables the `PROJECT_ID.svc.id.goog` pool; a pre-existing
+cluster must have it enabled too, or their GCS calls fail with `401`).
 
 | Member | Role | Resource | Why |
 | :--- | :--- | :--- | :--- |
@@ -174,26 +174,32 @@ too, or atelet's GCS calls fail with `401`).
 | atelet WI principal¹ | `roles/artifactregistry.reader` | project² | Pull sandbox runtime assets |
 | atelet WI principal¹ | `roles/storage.objectAdmin` | snapshot bucket | Read/write snapshot objects |
 | atelet WI principal¹ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
+| ate-api-server WI principal¹ | `roles/storage.objectAdmin` | snapshot bucket | Copy external snapshots for tags, delete the ones nothing refers to |
+| ate-api-server WI principal¹ | `roles/storage.bucketViewer` | snapshot bucket | List/stat the snapshot bucket |
 | default compute SA³ | `roles/storage.objectViewer` | project² | Nodes pull images from GCS-backed registries |
 | default compute SA³ | `roles/artifactregistry.reader` | project² | Nodes pull images from Artifact Registry |
 
-¹ `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/ate-system/sa/atelet` — note it is keyed to the **project number**, not the ID.
+¹ `principal://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/PROJECT_ID.svc.id.goog/subject/ns/ate-system/sa/SERVICE_ACCOUNT` — note it is keyed to the **project number**, not the ID.
 ² Project-level today; scoping these down is tracked in the TODOs in `cmd/iam.go`.
 ³ `PROJECT_NUMBER-compute@developer.gserviceaccount.com` (least-privileged node SA is #76).
 
 Manual equivalent:
 
 ```bash
-ATELET="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa/atelet"
+WI="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa"
+ATELET="${WI}/atelet"
+ATE_API="${WI}/ate-api-server"
 
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="${ATELET}" --role=roles/storage.objectAdmin
 gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --member="${ATELET}" --role=roles/artifactregistry.reader
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-  --member="${ATELET}" --role=roles/storage.objectAdmin
-gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
-  --member="${ATELET}" --role=roles/storage.bucketViewer
+for MEMBER in "${ATELET}" "${ATE_API}"; do
+  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+    --member="${MEMBER}" --role=roles/storage.objectAdmin
+  gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_NAME}" \
+    --member="${MEMBER}" --role=roles/storage.bucketViewer
+done
 ```
 
 ### 5. Create Dashboards
