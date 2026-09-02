@@ -743,6 +743,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			EgressGateway:     egressGateway,
 			CpuMilli:          cpuMilli,
 			MemoryBytes:       memBytes,
+			// TODO: Add sandbox assets to RestoreRequest as well.
 		}
 		_, err = client.Restore(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
@@ -750,10 +751,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
-		// Booting from scratch: resolve the sandbox binaries from the pool's
-		// SandboxConfig and send them so atelet can fetch and record them.
-		// (Restores above are self-describing via the snapshot manifest.)
-		sandboxAssets, err := resolveSandboxAssets(w.workerPoolLister, w.sandboxConfigLister, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
+		// Booting from scratch: send the sandbox binaries so atelet can fetch
+		// and record them.
+		// In the long term, we'll use the ones frozen into the ActorTemplate
+		// SandboxConfig. For now, older actors created using ActorTemplate
+		// CRD use the ones resolved from the pool's SandboxConfig.
+		// Restores above are self-describing via the snapshot manifest.
+		sandboxAssets, err := w.resolveSandboxAssets(ctx, actor, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
 		if err != nil {
 			return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
 		}
