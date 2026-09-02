@@ -667,8 +667,8 @@ func TestUpdateActor_Success(t *testing.T) {
 
 // TestUpdateActor_RepointTemplate verifies UpdateActor can point an actor at
 // a different substrate ActorTemplate (effective on the next ResumeActor),
-// and that a ref to an absent template, or to one with different volumes or
-// volume mounts, is rejected.
+// and that a ref to an absent template, to one with different volumes or
+// volume mounts, or to a FULL-commit gVisor template, is rejected.
 func TestUpdateActor_RepointTemplate(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -678,6 +678,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		{name: "absent-template", template: "absent", wantCode: codes.FailedPrecondition},
 		{name: "different-mounts", template: "tmpl-c", wantCode: codes.FailedPrecondition},
 		{name: "different-volumes", template: "tmpl-d", wantCode: codes.FailedPrecondition},
+		{name: "gvisor-full-commit", template: "tmpl-e", wantCode: codes.FailedPrecondition},
 		{name: "same-volumes", template: "tmpl-b", wantCode: codes.OK},
 	}
 	for _, tt := range tests {
@@ -688,17 +689,20 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 
 			ctx := context.Background()
 			// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data
-			// volume elsewhere and tmpl-d declares an extra volume.
+			// volume elsewhere, tmpl-d declares an extra volume, and tmpl-e
+			// commits FULL snapshots, which gVisor cannot restore data-only.
 			dataVolume := &ateapipb.Volume{Name: "data", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 			scratchVolume := &ateapipb.Volume{Name: "scratch", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 			templates := map[string]struct {
 				mountPath string
 				volumes   []*ateapipb.Volume
+				onCommit  ateapipb.SnapshotContentScope
 			}{
-				"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}},
-				"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}},
-				"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}},
-				"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}},
+				"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+				"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+				"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+				"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+				"tmpl-e": {"/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			}
 			for name, tmpl := range templates {
 				if _, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
@@ -710,7 +714,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 							VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 						}},
 						Volumes:         tmpl.volumes,
-						SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+						SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots", OnCommit: tmpl.onCommit},
 						SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 					},
 				}); err != nil {
@@ -758,7 +762,28 @@ func TestUpdateActor(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	tmpl := createTemplate(t, tc, ns)
+	// Created directly rather than via createTemplate: the repoint below runs
+	// under gVisor, which refuses to repoint actors whose templates commit
+	// FULL snapshots, so this template needs a DATA commit scope. Nothing
+	// resumes here, so no pool or golden snapshot is required.
+	tmpl, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl1"},
+			Containers: []*ateapipb.Container{{
+				Name:    "main",
+				Image:   "main@sha256:abc",
+				Command: []string{"/main"},
+			}},
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{
+				StorageLocation: "gs://fake-fake-fake",
+				OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
 
 	created, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},

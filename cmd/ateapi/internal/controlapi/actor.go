@@ -281,8 +281,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// Update actor template is only allowed while the actor is suspended.
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
-		// cleanly), and the replacement's volumes and volume mounts must match
-		// the old template's.
+		// cleanly), the replacement's volumes and volume mounts must match
+		// the old template's, and both templates' snapshot scopes must
+		// support the data-only restore a repoint forces.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return status.Errorf(codes.FailedPrecondition,
@@ -297,6 +298,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 				return err
 			}
 			if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
+				return err
+			}
+			if err := validateTemplateSnapshotScopes(oldTemplate, newTemplate); err != nil {
 				return err
 			}
 		}
@@ -356,6 +360,30 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 			return status.Errorf(codes.FailedPrecondition,
 				"volume mounts of container %q differ between the current and the new actor template; volume mounts must be identical to repoint an actor", oldC.GetName())
 		}
+	}
+	return nil
+}
+
+// validateTemplateSnapshotScopes rejects an actor template update unless
+// both gVisor templates commit DATA-scope snapshots: the update forces a
+// data-only resume, which gVisor cannot yet do from a FULL snapshot.
+func validateTemplateSnapshotScopes(oldTemplate, newTemplate *ateapipb.ActorTemplate) error {
+	if err := validateGvisorCommitScope(oldTemplate); err != nil {
+		return err
+	}
+	return validateGvisorCommitScope(newTemplate)
+}
+
+// validateGvisorCommitScope rejects a gVisor template that commits FULL-scope
+// snapshots.
+func validateGvisorCommitScope(template *ateapipb.ActorTemplate) error {
+	if template.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR {
+		return nil
+	}
+	if scope := effectiveContentScope(template.GetSnapshotsConfig().GetOnCommit()); scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+		return status.Errorf(codes.FailedPrecondition,
+			"actor template %q commits %s snapshots on gVisor, which does not support the data-only restore a repoint forces; both templates must set on_commit to %s",
+			template.GetMetadata().GetName(), scope, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA)
 	}
 	return nil
 }
