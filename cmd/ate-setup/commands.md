@@ -173,6 +173,7 @@ The demo list is not hard-coded here — it is built from the registry in
 `go run ./cmd/ate-setup deploy demo --help` is authoritative for both the list
 and the per-demo flags.
 
-Each demo previously had its own `hack/install-demo-*.sh`, sourced by the
-installer, which registered the flags above. Those scripts are gone; the demos
-now live in [`internal/demos`](internal/demos).
+The demos also each have a `hack/install-demo-*.sh`, sourced by
+`hack/install-ate.sh`, which registers `--deploy-demo-NAME` /
+`--delete-demo-NAME` flags on that installer. ate-setup does not use those
+scripts; its demos live in [`internal/demos`](internal/demos).
