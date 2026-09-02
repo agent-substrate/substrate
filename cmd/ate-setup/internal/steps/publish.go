@@ -38,7 +38,7 @@ func (e *Env) PublishWorkerImages(ctx context.Context, w io.Writer) error {
 		return err
 	}
 	log.Stepf("publish_worker_images (%s)", version)
-	runner, err := e.Ko()
+	runner, err := e.koRunner()
 	if err != nil {
 		return err
 	}

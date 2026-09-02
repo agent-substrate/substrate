@@ -104,6 +104,27 @@ func (e *Env) imageResolver() (imageResolver, error) {
 	return e.resolver, nil
 }
 
+// koRunner returns the resolver as the ko runner it is, for the steps that
+// build an image rather than only resolve a reference to one. Building is not
+// part of imageResolver because the pre-built resolver cannot do it:
+// --image-repo names images someone else published, and the tag it installs
+// need not correspond to anything in this checkout.
+func (e *Env) koRunner() (*ko.Runner, error) {
+	if e.Cfg.Images.IsPrebuilt() {
+		return nil, fmt.Errorf("publishing images builds them from source, which --image-repo does not do; " +
+			"drop it to build and push from this checkout")
+	}
+	resolver, err := e.imageResolver()
+	if err != nil {
+		return nil, err
+	}
+	runner, ok := resolver.(*ko.Runner)
+	if !ok {
+		return nil, fmt.Errorf("image resolver is %T, not a ko runner", resolver)
+	}
+	return runner, nil
+}
+
 // ResolveAndApply resolves the images in a manifest path and applies the
 // result. This is the run_ko apply of the shell scripts, split into its two
 // real steps.
