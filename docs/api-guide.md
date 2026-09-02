@@ -333,6 +333,8 @@ and the objects of that snapshot (its manifest, memory image, durable-data tar) 
 
 A tag's copy sits beside the actor snapshots, in the atespace of the actor that was tagged, under a `tag-` prefixed UUID: `gs://my-bucket/secret-agent/snapshots/team-a/tag-f47ac10b-…`. 
 
+Every external snapshot has exactly one owner — the actor that took it, or the tag that copied it — and is deleted when that owner releases it. See [Snapshot lifetime](#snapshot-lifetime).
+
 An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot`, an `ActorSnapshotTag` in `status.snapshot`, and an `ActorTemplate` its golden one in `status.goldenSnapshotStatus.goldenSnapshot` — each an `ExternalSnapshot` carrying `snapshotUri` and the `contentScope` it captured. The URI is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. All three are server-owned: do not send them on input, and parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
@@ -455,6 +457,22 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.externalSnapshot`.
+*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateActorSnapshotTag` while the actor is still suspended.
+
+#### Snapshot lifetime
+
+Every external snapshot has exactly one owner, and the control plane deletes it when that owner lets go:
+
+| Owner | Released when |
+| :--- | :--- |
+| The actor that took it (`status.externalSnapshot`) | The actor's next successful suspend replaces it, or the actor is deleted. |
+| The tag that copied it (`status.snapshot`) | The tag is deleted. |
+
+An actor created from a tag borrows the tag's copy instead of taking one of its own, which `status.current_snapshot_tag` records. While that ref is set the actor owns nothing, so neither suspending nor deleting it touches object storage; its first own suspend clears the ref and it starts owning its snapshots from then on.
+
+Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry with the same arguments: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
+
+> **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (`status.current_snapshot_tag` says whether it still is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
 
 #### `DeleteActor`
 Removes an actor from the registry and cleans up associated resources.
@@ -462,6 +480,7 @@ Removes an actor from the registry and cleans up associated resources.
     *   `actor`: `ObjectRef` of the actor to delete. Delete takes no preconditions today, so it is last-writer-wins.
     *   `any_state`: (Optional) If `true`, allows deleting the actor from any state (e.g. `RUNNING`, `PAUSED`), terminating active workloads, detaching volumes, and releasing worker allocations. By default (`false`), only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` (or already `ACTOR_STATE_DELETING`) can be deleted.
 *   **Response:** the deleted `Actor`, as it was immediately before removal.
+*   Deleting an actor also deletes the external snapshot it owns, along with one an interrupted suspend left behind. Snapshots it only borrows from a tag are left alone, and its tags are unaffected — they hold their own copies.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.

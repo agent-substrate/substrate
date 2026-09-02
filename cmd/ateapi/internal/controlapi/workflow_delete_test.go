@@ -198,3 +198,92 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestEnsureExternalSnapshotsReleased covers what a delete collects on its way
+// out: the external snapshot the actor owns, and any snapshot an abandoned
+// suspend left in flight, but never one the actor is only borrowing from a tag.
+func TestEnsureExternalSnapshotsReleased(t *testing.T) {
+	// inFlightSnapshotName names a snapshot written during a suspend operation
+	// that never finalized.
+	const inFlightSnapshotName = "2026-01-01t00-00-00z-abandoned"
+
+	tests := []struct {
+		name string
+		// mutate adjusts the seeded actor's status, which starts out owning
+		// its external snapshot outright with no suspend in flight.
+		mutate func(*ateapipb.ActorStatus)
+		// inFlight, when set, names a snapshot an abandoned suspend left
+		// behind. It must always be collected by the delete.
+		inFlight            string
+		wantCurrentReleased bool
+	}{
+		{
+			name:                "releases the external snapshot the actor owns",
+			wantCurrentReleased: true,
+		},
+		{
+			// The actor can't delete a snapshot it only borrows from a tag:
+			// that snapshot goes away with the tag.
+			name: "leaves an external snapshot borrowed from a tag in place",
+			mutate: func(s *ateapipb.ActorStatus) {
+				s.CurrentSnapshotTag = &ateapipb.ObjectRef{Atespace: "team-a", Name: "v1"}
+			},
+			wantCurrentReleased: false,
+		},
+		{
+			name:                "collects the external snapshot an abandoned suspend left in flight",
+			inFlight:            inFlightSnapshotName,
+			wantCurrentReleased: true,
+		},
+		{
+			name: "collects an in-flight external snapshot even while borrowing",
+			mutate: func(s *ateapipb.ActorStatus) {
+				s.CurrentSnapshotTag = &ateapipb.ObjectRef{Atespace: "team-a", Name: "v1"}
+			},
+			inFlight:            inFlightSnapshotName,
+			wantCurrentReleased: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+			w, objects := newFinalizeWorkflow(persistence)
+
+			current := mustSnapshotURI(t, template, "team-a", "current")
+			objects.PutSnapshot(t, current, "manifest.json")
+
+			actorStatus := &ateapipb.ActorStatus{
+				State:            ateapipb.ActorState_ACTOR_STATE_DELETING,
+				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: current.String()},
+			}
+			if tt.inFlight != "" {
+				actorStatus.InProgressSnapshotName = tt.inFlight
+				objects.PutSnapshot(t, mustSnapshotURI(t, template, "team-a", tt.inFlight), "manifest.json")
+			}
+			if tt.mutate != nil {
+				tt.mutate(actorStatus)
+			}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        actorStatus,
+			})
+
+			if err := w.ensureExternalSnapshotsReleased(ctx, actor, template); err != nil {
+				t.Fatalf("ensureExternalSnapshotsReleased: %v", err)
+			}
+			if released := len(objects.Snapshot(t, current)) == 0; released != tt.wantCurrentReleased {
+				t.Errorf("current external snapshot released = %v, want %v", released, tt.wantCurrentReleased)
+			}
+			if tt.inFlight != "" {
+				inFlight := mustSnapshotURI(t, template, "team-a", tt.inFlight)
+				if len(objects.Snapshot(t, inFlight)) != 0 {
+					t.Errorf("in-flight external snapshot %v was not released", inFlight)
+				}
+			}
+		})
+	}
+}

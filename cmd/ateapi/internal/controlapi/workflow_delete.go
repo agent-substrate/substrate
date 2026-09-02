@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -84,6 +85,10 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 
 	if err := w.ensureVolumesDeleted(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while deleting volumes: %w", err))
+	}
+
+	if err := w.ensureExternalSnapshotsReleased(ctx, actor, actorTemplate); err != nil {
+		errs = append(errs, fmt.Errorf("while releasing external snapshots: %w", err))
 	}
 
 	if len(errs) > 0 {
@@ -357,6 +362,68 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 
 	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetActorVolumes()); err != nil {
 		return status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
+	}
+	return nil
+}
+
+// ensureExternalSnapshotsReleased collects the external snapshots this actor
+// owns. It runs before the actor is removed, so a failed attempt is still
+// rediscoverable on the retry.
+//
+// A snapshot borrowed from a tag is left alone: the tag owns it and outlives
+// the actor.
+func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
+	defer func() { err = done(err) }()
+
+	if w.objectStore == nil {
+		markSkipped(ctx, "no object store configured")
+		return nil
+	}
+
+	status := actor.GetStatus()
+	var uris []resources.SnapshotURI
+	switch {
+	// Snapshot is owned by a tag, leave it alone.
+	case status.GetCurrentSnapshotTag() != nil:
+		slog.InfoContext(ctx, "Leaving the actor's external snapshot in place, it is owned by a tag",
+			slog.Any("actor", actor.GetMetadata().GetName()),
+			slog.String("tag", status.GetCurrentSnapshotTag().GetName()))
+	// Snapshot owned by the actor. It qualifies for garbage collection.
+	case status.GetExternalSnapshot().GetSnapshotUri() != "":
+		uri, err := resources.ParseSnapshotURI(status.GetExternalSnapshot().GetSnapshotUri())
+		if err != nil {
+			return fmt.Errorf("while parsing the external snapshot %q: %w", status.GetExternalSnapshot().GetSnapshotUri(), err)
+		}
+		uris = append(uris, uri)
+	}
+	// In-progress snapshot name may be populated if SuspendActor failed.
+	// We need to clean it too, because objects may have been stored in the external store.
+	if name := status.GetInProgressSnapshotName(); name != "" {
+		// The template's storage location is the only place the in-progress
+		// URI can be derived from. Without it the actor would be stuck
+		// DELETING forever.
+		// TODO: prevent this from leaking objects in the external storage.
+		if actorTemplate == nil {
+			slog.WarnContext(ctx, "Leaking an in-progress external snapshot, the actor's template no longer resolves",
+				slog.String("actor", actor.GetMetadata().GetName()),
+				slog.String("in_progress_snapshot_name", name))
+		} else {
+			uri, err := inProgressSnapshotURI(actorTemplate, actor.GetMetadata().GetAtespace(), name)
+			if err != nil {
+				return err
+			}
+			uris = append(uris, uri)
+		}
+	}
+	if len(uris) == 0 {
+		markSkipped(ctx, "the actor owns no external snapshot")
+		return nil
+	}
+	for _, uri := range uris {
+		if err := objectstore.DeletePrefix(ctx, w.objectStore, uri); err != nil {
+			return err
+		}
 	}
 	return nil
 }

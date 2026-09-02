@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -352,7 +353,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// that stalls and then fails still reports where the time went; steps not
 	// reached (or skipped) log zero.
 	start := time.Now()
-	var dGetActor, dReleaseWorker, dRefetchActor, dUpdateActor time.Duration
+	var dGetActor, dReleaseWorker, dRefetchActor, dReleaseSnapshot, dUpdateActor time.Duration
 	defer func() {
 		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
 			slog.Any("actor", actorRef),
@@ -360,6 +361,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			slog.Duration("get_actor", dGetActor),
 			slog.Duration("release_worker", dReleaseWorker),
 			slog.Duration("refetch_actor", dRefetchActor),
+			slog.Duration("release_snapshot", dReleaseSnapshot),
 			slog.Duration("update_actor", dUpdateActor))
 	}()
 
@@ -405,6 +407,17 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			ContentScope: commitSnapshotScope(actorRef.Atespace, actorTemplate),
 		}
 	}
+
+	// 3. Release the external snapshot this suspend replaces (latestActor.externalSnapshot)
+	// before it's overwritten by externalSnapshot in the commit phase below.
+	t = time.Now()
+	err = w.releaseReplacedSnapshot(ctx, latestActor, externalSnapshot)
+	dReleaseSnapshot = time.Since(t)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. Commit the actor.
 	t = time.Now()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
@@ -427,4 +440,36 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		return nil, err
 	}
 	return storedActor, nil
+}
+
+// releaseReplacedSnapshot releases the external snapshot the actor held before
+// this suspend.
+// It runs while the actor record still points at the old snapshot, so an
+// interrupted release is rediscoverable: the retry deletes whatever is left.
+// An actor that borrowed its current snapshot from a tag releases nothing —
+// the tag owns that snapshot and outlives the actor.
+func (w *ActorWorkflow) releaseReplacedSnapshot(ctx context.Context, actor *ateapipb.Actor, nextSnapshot *ateapipb.ExternalSnapshot) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseReplacedSnapshot")
+	defer func() { err = done(err) }()
+
+	previous := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	switch {
+	case w.objectStore == nil:
+		markSkipped(ctx, "no object store configured")
+		return nil
+	case previous == "":
+		markSkipped(ctx, "the actor held no external snapshot")
+		return nil
+	case previous == nextSnapshot.GetSnapshotUri():
+		markSkipped(ctx, "the actor's external snapshot is unchanged")
+		return nil
+	case actor.GetStatus().GetCurrentSnapshotTag() != nil:
+		markSkipped(ctx, "the replaced external snapshot is owned by a tag")
+		return nil
+	}
+	uri, err := resources.ParseSnapshotURI(previous)
+	if err != nil {
+		return fmt.Errorf("while parsing the replaced external snapshot %q: %w", previous, err)
+	}
+	return objectstore.DeletePrefix(ctx, w.objectStore, uri)
 }

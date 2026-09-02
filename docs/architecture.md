@@ -453,7 +453,11 @@ Triggered by an explicit `SuspendActor` call.
 
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
-  4. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
+  4. **Release**: The external snapshot the Actor held before this suspend is
+     deleted from object storage. An Actor owns one snapshot at a time; one it
+     borrowed from a tag is left alone, since the tag owns it.
+
+  5. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
      `status.externalSnapshot` names the external snapshot it resumes from.
 
 Snapshots may be given tags owned and addressed by an Atespace. The same tag 
@@ -467,7 +471,7 @@ tags cannot be deleted until they are.
 
 By default, only actors in `ACTOR_STATE_SUSPENDED` or `ACTOR_STATE_CRASHED` state can be deleted from the Control Plane. With the `any_state` flag enabled, an actor in any state (such as `ACTOR_STATE_RUNNING` or `ACTOR_STATE_PAUSED`) can be deleted directly; the workflow terminates the running containers on the worker, detaches mounted volumes, and frees the worker assignment before deleting the record.
 
-After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected. The garbage collection process is not implemented yet.
+After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage collected.
 
 ## State Management & Persistence
 
