@@ -49,6 +49,9 @@ type resumeSnapshotSource struct {
 	// selects the golden snapshot as the boot source for the pending restore:
 	// restore then combines the golden snapshot with the actor's data.
 	GoldenSnapshotURI resources.SnapshotURI
+	// TemplateReplaced is true when the snapshot's recorded template UID
+	// differs from the actor's current template.
+	TemplateReplaced bool
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -188,6 +191,11 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, status.Errorf(codes.DataLoss, "ActorSnapshot %s/%s: %v", ref.GetAtespace(), ref.GetName(), err)
 		}
 		src.Scope = snapshot.GetStatus().GetContentScope()
+		// The snapshot records the template it was captured under; a
+		// different UID on the actor's current template means the actor was
+		// repointed since the capture.
+		snapshotTemplateUID := snapshot.GetStatus().GetActorTemplateUid()
+		src.TemplateReplaced = snapshotTemplateUID != "" && snapshotTemplateUID != actorTemplate.GetMetadata().GetUid()
 	} else if goldenRef := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot(); goldenRef != nil && !boot {
 		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(goldenRef))
 		if errors.Is(err, store.ErrNotFound) {
@@ -671,12 +679,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, err
 	}
 
-	// A snapshot taken under a since-replaced template holds guest state that
-	// cannot be layered onto the new template's golden snapshot, so the
-	// restore is forced to data-only.
-	templateReplaced := actor.GetStatus().GetCurrentActorTemplate() != nil &&
-		actor.GetStatus().GetCurrentActorTemplateUid() != actorTemplate.GetMetadata().GetUid()
-
 	if local := actor.GetStatus().GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
@@ -701,7 +703,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		// loadActorForResume resolved a golden URI per the template's onResume
 		// configuration, else what the pause captured.
 		switch {
-		case templateReplaced:
+		case src.TemplateReplaced:
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
@@ -724,7 +726,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		var scope ateletpb.SnapshotScope
 		var goldenSnapshotURI string
 		switch {
-		case templateReplaced:
+		case src.TemplateReplaced:
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		case !src.GoldenSnapshotURI.IsZero():
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
