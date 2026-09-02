@@ -225,13 +225,12 @@ func main() {
 		log.Fatalf("invalid --platform %q", *platform)
 	}
 
-	auth, err := googlecontainerauth.NewEnvAuthenticator(ctx)
-	if err != nil {
-		log.Fatalf("creating GCP authenticator (need application-default credentials): %v", err)
-	}
-
+	// This tool runs on a developer's machine, not a node, so it has no kubelet
+	// credential provider to borrow. googlecontainerauth.Keychain authenticates
+	// GCR and Artifact Registry from application-default credentials and
+	// declines everything else.
 	store, err := newStore(
-		imagecache.WithAuthenticator(auth),
+		imagecache.WithKeychain(googlecontainerauth.Keychain),
 		imagecache.WithPlatform(v1.Platform{OS: osName, Architecture: arch}),
 	)
 	if err != nil {

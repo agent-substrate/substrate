@@ -102,9 +102,8 @@ const (
 type Store struct {
 	root string
 
-	// authenticator, when set, is attached to pulls from registries that use
-	// GCP credentials (gcr.io / pkg.dev). See remoteOpts.
-	authenticator authn.Authenticator
+	// keychain, when set, supplies credentials for pulls. See remoteOpts.
+	keychain authn.Keychain
 
 	localhostRegistryReplacement string
 
@@ -145,10 +144,11 @@ type Store struct {
 // Option configures a Store.
 type Option func(*Store)
 
-// WithAuthenticator attaches an authenticator used for gcr.io / pkg.dev
-// registries. A nil authenticator is ignored.
-func WithAuthenticator(a authn.Authenticator) Option {
-	return func(s *Store) { s.authenticator = a }
+// WithKeychain attaches a keychain consulted for every pull, whatever the
+// registry — the keychain itself decides which registries it has credentials
+// for. A nil keychain is ignored.
+func WithKeychain(k authn.Keychain) Option {
+	return func(s *Store) { s.keychain = k }
 }
 
 // WithLocalhostRegistryReplacement rewrites localhost/loopback registry refs
@@ -679,16 +679,10 @@ func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference) []remo
 		remote.WithContext(ctx),
 		remote.WithPlatform(platform),
 	}
-	registry := parsedRef.Context().Registry.RegistryStr()
-	if s.authenticator != nil && registryUsesGCPAuth(registry) {
-		opts = append(opts, remote.WithAuth(s.authenticator))
+	if s.keychain != nil {
+		opts = append(opts, remote.WithAuthFromKeychain(s.keychain))
 	}
 	return opts
-}
-
-func registryUsesGCPAuth(registry string) bool {
-	return registry == "gcr.io" || strings.HasSuffix(registry, ".gcr.io") ||
-		registry == "pkg.dev" || strings.HasSuffix(registry, ".pkg.dev")
 }
 
 // parseRef applies the localhost-registry rewrite (kind local registries) and

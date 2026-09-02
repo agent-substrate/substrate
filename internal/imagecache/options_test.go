@@ -22,48 +22,22 @@ import (
 )
 
 func TestOptionsApply(t *testing.T) {
-	auth := authn.FromConfig(authn.AuthConfig{Username: "u"})
+	kc := authn.NewKeychainFromHelper(nil)
 	s, err := New(t.TempDir(),
-		WithAuthenticator(auth),
+		WithKeychain(kc),
 		WithLocalhostRegistryReplacement("kind-registry:5000"),
 		WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if s.authenticator != auth {
-		t.Errorf("WithAuthenticator not applied")
+	if s.keychain != kc {
+		t.Errorf("WithKeychain not applied")
 	}
 	if s.localhostRegistryReplacement != "kind-registry:5000" {
 		t.Errorf("WithLocalhostRegistryReplacement not applied: %q", s.localhostRegistryReplacement)
 	}
 	if s.platform == nil || s.platform.Architecture != "amd64" || s.platform.OS != "linux" {
 		t.Errorf("WithPlatform not applied: %+v", s.platform)
-	}
-}
-
-func TestRegistryUsesGCPAuth(t *testing.T) {
-	tests := []struct {
-		registry string
-		want     bool
-	}{
-		{"gcr.io", true},
-		{"us.gcr.io", true},
-		{"eu.gcr.io", true},
-		{"pkg.dev", true},
-		{"us-docker.pkg.dev", true},
-		{"docker.io", false},
-		{"index.docker.io", false},
-		{"quay.io", false},
-		{"notgcr.io", false},
-		{"gcr.io.evil.example", false},
-		{"pkg.dev.evil.example", false},
-		{"kind-registry:5000", false},
-		{"", false},
-	}
-	for _, tc := range tests {
-		if got := registryUsesGCPAuth(tc.registry); got != tc.want {
-			t.Errorf("registryUsesGCPAuth(%q) = %v, want %v", tc.registry, got, tc.want)
-		}
 	}
 }

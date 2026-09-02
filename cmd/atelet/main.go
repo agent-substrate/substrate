@@ -61,8 +61,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/google/go-containerregistry/pkg/authn"
-	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -97,7 +95,13 @@ var (
 	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
 
-	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
+	// The kubelet already knows how to authenticate to its node's cloud
+	// registry, via an exec plugin the node ships. Pointing atelet at the same
+	// config and bin dir (mounted read-only from the host) lets it pull with
+	// no cloud SDK compiled in, on any cloud whose nodes configure a provider.
+	imageCredentialProviderConfig = pflag.String("image-credential-provider-config", "", "Path to a kubelet CredentialProviderConfig. Its exec plugins supply image pull credentials; without it, pulls are anonymous.")
+	imageCredentialProviderBinDir = pflag.String("image-credential-provider-bin-dir", "", "Directory holding the credential provider executables named by --image-credential-provider-config. Required when that flag is set.")
+
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 	imageCacheDir                = pflag.String("image-cache-dir", ateompath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
@@ -188,19 +192,16 @@ func main() {
 
 	ateomDialer := newAteomDialer(256)
 
-	var gcpRegistryAuthn authn.Authenticator
-	if *gcpAuthForImagePulls {
-		gcpRegistryAuthn, err = googlecontainerauth.NewEnvAuthenticator(ctx)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to create GCP registry authenticator", err)
-		}
+	imageCredsKeychain, err := newImagePullCredentials()
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to configure image pull credentials", err)
 	}
 
 	if err := validateImageCacheGCFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid image cache GC flags", err)
 	}
 	imageCache, err := imagecache.New(*imageCacheDir,
-		imagecache.WithAuthenticator(gcpRegistryAuthn),
+		imagecache.WithKeychain(imageCredsKeychain),
 		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
 		imagecache.WithActorsDir(ateompath.ActorsDir),
 		imagecache.WithMinAge(*imageCacheMinAge),
