@@ -18,6 +18,7 @@
 package ateomnet
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
@@ -221,10 +223,46 @@ func EnableIPv4Forwarding() error {
 	return nil
 }
 
+// readDNSResolver returns the first IPv4 nameserver from /etc/resolv.conf,
+// or an empty string if the file is missing or contains no nameserver line.
+// Only IPv4 addresses are returned; IPv6 resolvers are skipped because the
+// actor network is currently IPv4-only.
+func readDNSResolver() string {
+	f, err := os.Open("/etc/resolv.conf")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "nameserver") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		ip := net.ParseIP(fields[1])
+		if ip == nil {
+			continue
+		}
+		if ip.To4() != nil {
+			return ip.To4().String()
+		}
+	}
+	return ""
+}
+
 // InstallActorNftablesRules configures the NAT and filtering rules for the
 // actor. egressPort, when non-zero, is the local atunnel egress listener actor
 // TCP egress is redirected to; zero leaves the redirect uninstalled.
-func InstallActorNftablesRules(egressPort uint16) error {
+// dnsResolver is the cluster DNS resolver IP (e.g. from /etc/resolv.conf);
+// when non-empty, postrouting masquerade is restricted to UDP traffic destined
+// for this address on port 53, and all other non-tunneled actor egress is
+// dropped. When empty, the legacy broad masquerade is preserved for backward
+// compatibility.
+func InstallActorNftablesRules(egressPort uint16, dnsResolver string) error {
 	// Install a dedicated nftables table for the active actor. Keeping all
 	// rules in an ateom-owned table makes cleanup simple and avoids mutating
 	// Kubernetes or CNI-managed chains directly.
@@ -271,11 +309,40 @@ func InstallActorNftablesRules(egressPort uint16) error {
 		Hooknum:  nftables.ChainHookPostrouting,
 		Priority: nftables.ChainPriorityNATSource,
 	})
-	c.AddRule(&nftables.Rule{
-		Table: table,
-		Chain: postrouting,
-		Exprs: append(IPSourceEqual(ActorVethIP), &expr.Masq{}),
-	})
+	if dnsResolver != "" {
+		// Restricted mode: masquerade only UDP DNS traffic from the actor
+		// veth to the cluster resolver on port 53. All four conditions
+		// (source, protocol, destination, port) must match in a single rule
+		// so that non-DNS actor egress is NOT masqueraded and will be
+		// dropped by the kernel's default forward policy.
+		c.AddRule(&nftables.Rule{
+			Table: table,
+			Chain: postrouting,
+			Exprs: append(IPSourceEqual(ActorVethIP),
+				append(UDPProtocol(),
+					append(IPDestEqual(dnsResolver),
+						&expr.Payload{
+							DestRegister: 1,
+							Base:         expr.PayloadBaseTransportHeader,
+							Offset:       2, // dst port
+							Len:          2,
+						},
+						&expr.Cmp{
+							Op:       expr.CmpOpEq,
+							Register: 1,
+							Data:     binaryutil.BigEndian.PutUint16(53),
+						},
+						&expr.Masq{})...,
+				)...),
+		})
+	} else {
+		// Legacy broad masquerade (backward compatibility when resolver unknown).
+		c.AddRule(&nftables.Rule{
+			Table: table,
+			Chain: postrouting,
+			Exprs: append(IPSourceEqual(ActorVethIP), &expr.Masq{}),
+		})
+	}
 
 	acceptPolicy := nftables.ChainPolicyAccept
 	forward := c.AddChain(&nftables.Chain{
@@ -352,6 +419,21 @@ func TCPProtocol() []expr.Any {
 			Data:     []byte{unix.IPPROTO_TCP},
 		},
 	}
+}
+
+func UDPProtocol() []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.IPPROTO_UDP},
+		},
+	}
+}
+
+func IPDestEqual(ip string) []expr.Any {
+	return IPPayloadEqual(16, ip)
 }
 
 // ActorEgressRedirectRule returns the prerouting rule that redirects actor TCP
@@ -568,7 +650,8 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	if err := EnableIPv4Forwarding(); err != nil {
 		return err
 	}
-	if err := InstallActorNftablesRules(cfg.EgressRedirectPort); err != nil {
+	dnsResolver := readDNSResolver()
+	if err := InstallActorNftablesRules(cfg.EgressRedirectPort, dnsResolver); err != nil {
 		return err
 	}
 
