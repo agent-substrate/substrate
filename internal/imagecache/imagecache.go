@@ -96,6 +96,67 @@ const (
 	layerPullConcurrency = 4
 )
 
+// Pull retry backoffs, chosen per registry by retryBackoffFor. Both replace
+// go-containerregistry's default (3 attempts over ~4s, jitter 0.1), which is
+// tuned for a single flaky client, and both apply to every request of a pull,
+// including the /v2/ auth ping. The retryable status codes stay at the
+// library default, which already includes 429. Vars so tests can shrink the
+// waits.
+var (
+	// dedicatedRegistryBackoff covers registries where the deployment has
+	// its own quota (Artifact Registry, ECR, Harbor, self-hosted, …): the
+	// server absorbs retry bursts and nobody else competes for the limit,
+	// and pulls sit on the Run/Restore critical path, so retries start fast
+	// and come often — more attempts in less total wall clock, still quick
+	// enough to surface a real outage to the RPC-level retry.
+	dedicatedRegistryBackoff = remote.Backoff{
+		Duration: 200 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   1.0,
+		Steps:    4,
+		Cap:      2 * time.Second,
+	}
+	// sharedRegistryBackoff covers communal registries (registry.k8s.io,
+	// Docker Hub, …), where pulls are anonymous and rate limits are shared:
+	// a whole fleet can be throttled at once, so retries must outlast the
+	// throttling wave and full jitter must de-synchronize the herd rather
+	// than replay it.
+	sharedRegistryBackoff = remote.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+		Jitter:   1.0,
+		Steps:    4,
+		Cap:      10 * time.Second,
+	}
+)
+
+// sharedRegistries are the well-known communal registries whose rate limits
+// are shared across all anonymous clients. Everything not listed here is
+// assumed dedicated: fleet-scale pulls realistically hit either the pause
+// image (registry.k8s.io) or the customer's own registry, and enumerating
+// the small stable set of communal hosts beats guessing at every private
+// registry vendor.
+var sharedRegistries = map[string]bool{
+	"registry.k8s.io":      true,
+	"docker.io":            true,
+	"index.docker.io":      true, // name.ParseReference normalizes docker.io to this
+	"registry-1.docker.io": true,
+	"quay.io":              true,
+	"ghcr.io":              true,
+	"public.ecr.aws":       true,
+	"mcr.microsoft.com":    true,
+	"registry.gitlab.com":  true,
+	"cgr.dev":              true,
+}
+
+// retryBackoffFor picks the pull retry backoff for a registry host.
+func retryBackoffFor(registry string) remote.Backoff {
+	if sharedRegistries[registry] {
+		return sharedRegistryBackoff
+	}
+	return dedicatedRegistryBackoff
+}
+
 // Store is atelet's handle to the on-disk layer pool. It is safe for
 // concurrent use; concurrent pulls of the same image or layer are collapsed.
 // The store assumes it is the only writer on the node (one atelet per node).
@@ -672,14 +733,15 @@ func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference) []remo
 	if s.platform != nil {
 		platform = *s.platform
 	}
+	registry := parsedRef.Context().Registry.RegistryStr()
 	opts := []remote.Option{
 		// Propagate caller ctx into go-containerregistry so cancellation tears
 		// down in-flight layer-blob HTTP requests instead of letting them run
 		// to completion in background goroutines.
 		remote.WithContext(ctx),
 		remote.WithPlatform(platform),
+		remote.WithRetryBackoff(retryBackoffFor(registry)),
 	}
-	registry := parsedRef.Context().Registry.RegistryStr()
 	if s.authenticator != nil && registryUsesGCPAuth(registry) {
 		opts = append(opts, remote.WithAuth(s.authenticator))
 	}
