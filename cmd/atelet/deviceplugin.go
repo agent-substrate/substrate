@@ -36,6 +36,12 @@ const hostDevRoot = "/host/dev"
 // nodes where the device exists. Device presence is therefore the earliest
 // reliable eligibility signal — known at atelet startup, before any WorkerPool
 // schedules here.
+//
+// TODO(https://github.com/agent-substrate/substrate/pull/1207): /dev/kvm is
+// not the only micro-VM hypervisor device; once /dev/mshv support lands, an
+// mshv-only node would be wrongly reported incapable here. Treat presence of
+// any micro-VM hypervisor device in SandboxDevices as capability, not KVM
+// alone.
 func microvmNodeCapable(devRoot string) bool {
 	for _, d := range deviceplugin.SandboxDevices {
 		if d.ResourceName == deviceplugin.ResourceKVM {
