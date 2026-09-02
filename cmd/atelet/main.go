@@ -318,7 +318,7 @@ func main() {
 	// binary): the reflector retries in the background and prewarm stays cold
 	// until it recovers.
 	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, microvmNodeCapable(hostDevRoot)); err != nil {
+	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
 	// The factory only runs informers that exist when Start is called: the

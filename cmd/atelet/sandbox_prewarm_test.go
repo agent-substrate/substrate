@@ -123,7 +123,7 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 	gvisor := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
 
 	t.Run("node without KVM", func(t *testing.T) {
-		p := newSandboxPrewarmer(nil, nil, false)
+		p := newSandboxPrewarmer(nil, nil, nil, false)
 
 		p.enqueue(ctx, "not a sandbox config")
 		p.enqueue(ctx, microvm)
@@ -147,7 +147,7 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 	})
 
 	t.Run("node with KVM", func(t *testing.T) {
-		p := newSandboxPrewarmer(nil, nil, true)
+		p := newSandboxPrewarmer(nil, nil, nil, true)
 		p.enqueue(ctx, microvm)
 		p.enqueue(ctx, gvisor)
 		if p.queue.Len() != 2 {
@@ -174,7 +174,7 @@ func TestPrewarmProcessRetries(t *testing.T) {
 		t.Fatalf("indexer.Add: %v", err)
 	}
 	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
-	p := newSandboxPrewarmer(herder, listersv1alpha1.NewSandboxConfigLister(indexer), false)
+	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
 	name, _ := p.queue.Get()
@@ -236,10 +236,10 @@ func TestPrewarmPauseImage(t *testing.T) {
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
 	cfg.Spec.PauseImage = pauseRef
 
-	p := &sandboxPrewarmer{herder: &AteomHerder{
-		anonGCSClient: fakeObjectStorage{data: content},
-		imageCache:    okStore,
-	}}
+	p := &sandboxPrewarmer{
+		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}},
+		images: okStore,
+	}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
@@ -249,10 +249,10 @@ func TestPrewarmPauseImage(t *testing.T) {
 	// pause image from being pulled.
 	failCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc"))))
 	failCfg.Spec.PauseImage = pauseRef
-	p = &sandboxPrewarmer{herder: &AteomHerder{
-		anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")},
-		imageCache:    failStore,
-	}}
+	p = &sandboxPrewarmer{
+		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
+		images: failStore,
+	}
 	if err := p.prewarm(ctx, failCfg); err == nil {
 		t.Error("prewarm returned nil despite the asset fetch failing")
 	}
@@ -264,7 +264,7 @@ func TestPrewarmPauseImage(t *testing.T) {
 		"other-arch": {runscAssetName: archCfg.Spec.Assets[runtime.GOARCH][runscAssetName]},
 	}
 	archCfg.Spec.PauseImage = pauseRef
-	p = &sandboxPrewarmer{herder: &AteomHerder{imageCache: archStore}}
+	p = &sandboxPrewarmer{images: archStore}
 	if err := p.prewarm(ctx, archCfg); err == nil {
 		t.Error("prewarm returned nil despite the config having no assets for the local architecture")
 	}
@@ -301,7 +301,7 @@ func TestPrewarmTimeout(t *testing.T) {
 
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
 	cfg.Spec.PauseImage = ""
-	p := &sandboxPrewarmer{herder: &AteomHerder{anonGCSClient: hangingObjectStorage{}}}
+	p := &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: hangingObjectStorage{}}}
 
 	done := make(chan error, 1)
 	go func() { done <- p.prewarm(context.Background(), cfg) }()
@@ -342,11 +342,11 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("imagecache.New: %v", err)
 	}
-	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, imageCache: store}
+	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.
-	if err := startSandboxAssetPrewarm(ctx, informer, herder, false); err != nil {
+	if err := startSandboxAssetPrewarm(ctx, informer, herder, store, false); err != nil {
 		t.Fatalf("startSandboxAssetPrewarm: %v", err)
 	}
 	stopCh := make(chan struct{})

@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 )
@@ -56,12 +57,20 @@ var prewarmTimeout = 5 * time.Minute
 // permanently broken config forever.
 const prewarmMaxRetries = 8
 
+// sandboxAssetFetcher is the one slice of AteomHerder the prewarmer needs.
+// Prewarming through the same method as the Run/Restore path keeps the two
+// fetches from ever diverging on cache layout or validation.
+type sandboxAssetFetcher interface {
+	ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error)
+}
+
 // sandboxPrewarmer downloads SandboxConfig assets into the node's
 // content-addressed static-files cache before any actor asks for them, so the
 // fetch inside the first Run/Restore on the node is a cache hit instead of a
 // download+extract on the critical path.
 type sandboxPrewarmer struct {
-	herder *AteomHerder
+	assets sandboxAssetFetcher
+	images *imagecache.Store
 	// lister resolves a queued config name to its latest revision at
 	// processing time, so coalesced events never prewarm a stale spec.
 	lister listersv1alpha1.SandboxConfigLister
@@ -78,9 +87,10 @@ type sandboxPrewarmer struct {
 	microvmCapable bool
 }
 
-func newSandboxPrewarmer(herder *AteomHerder, lister listersv1alpha1.SandboxConfigLister, microvmCapable bool) *sandboxPrewarmer {
+func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, lister listersv1alpha1.SandboxConfigLister, microvmCapable bool) *sandboxPrewarmer {
 	return &sandboxPrewarmer{
-		herder: herder,
+		assets: assets,
+		images: images,
 		lister: lister,
 		// Downloads fail on the scale of network timeouts, not API conflicts,
 		// so back off in seconds and cap in minutes rather than the
@@ -101,8 +111,8 @@ func newSandboxPrewarmer(herder *AteomHerder, lister listersv1alpha1.SandboxConf
 // TODO: the static-files cache is never pruned, and prewarming every config
 // revision makes stale releases accumulate faster. Add a GC that removes
 // assets referenced by no current SandboxConfig and no on-node actor record.
-func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, herder *AteomHerder, microvmCapable bool) error {
-	p := newSandboxPrewarmer(herder, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
+func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) error {
+	p := newSandboxPrewarmer(assets, images, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
 	// Atelet startup never waits for this informer to sync: prewarm is
 	// best-effort, so a failing list/watch (e.g. Forbidden while an RBAC
 	// rollout lags the binary) must degrade prewarm, not hang the node. The
@@ -221,7 +231,7 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	// schedule prewarm pause image if provided
 	if cfg.Spec.PauseImage != "" {
 		wg.Go(func() {
-			if _, err := p.herder.imageCache.EnsureImage(ctx, cfg.Spec.PauseImage); err != nil {
+			if _, err := p.images.EnsureImage(ctx, cfg.Spec.PauseImage); err != nil {
 				imageErr = fmt.Errorf("while prewarming pause image %q: %w", cfg.Spec.PauseImage, err)
 			}
 		})
@@ -230,7 +240,7 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	rec, assetErr := recordFromSandboxConfig(cfg)
 	if assetErr == nil {
 		wg.Go(func() {
-			_, assetErr = p.herder.ensureSandboxAssets(ctx, rec)
+			_, assetErr = p.assets.ensureSandboxAssets(ctx, rec)
 		})
 	}
 	wg.Wait()
