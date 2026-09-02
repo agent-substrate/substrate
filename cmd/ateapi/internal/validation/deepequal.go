@@ -12,12 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Kubernetes codegen tools required this to be in doc.go, no other name will
-// work.
+package validation
 
-// +k8s:validation-gen=TypesWithSuffix=Request
-// +k8s:validation-gen-input=github.com/agent-substrate/substrate/pkg/proto/ateapipb
-// +k8s:validation-gen-scheme-registry=nil
-// +k8s:validation-gen-deep-equal-func=ateDeepEqual
+import (
+	"reflect"
 
-package controlapi
+	"google.golang.org/protobuf/proto"
+)
+
+// ateDeepEqual compares two values of any type, using proto.Equal if both are
+// proto messages, and reflect.DeepEqual otherwise.  This is called by
+// declarative validation's generated code.
+func ateDeepEqual[T any](a, b T) bool {
+	asProto := func(x any) proto.Message {
+		pm, ok := x.(proto.Message)
+		if !ok {
+			return nil
+		}
+		return pm
+	}
+
+	if pa, pb := asProto(a), asProto(b); pa != nil && pb != nil {
+		return proto.Equal(pa, pb)
+	}
+	return reflect.DeepEqual(a, b)
+}
