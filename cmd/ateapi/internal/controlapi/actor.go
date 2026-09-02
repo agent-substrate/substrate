@@ -281,8 +281,8 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// Update actor template is only allowed while the actor is suspended.
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
-		// cleanly), and the replacement's volumes and volume mounts must match
-		// the old template's.
+		// cleanly), and the replacement's sandbox class, volumes, and volume
+		// mounts must match the old template's.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return status.Errorf(codes.FailedPrecondition,
@@ -294,6 +294,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
 			if err == nil {
+				if err := validateTemplateSandboxClassUnchanged(oldTemplate, newTemplate); err != nil {
+					return err
+				}
 				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
 					return err
 				}
@@ -326,6 +329,20 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
 	return storedActor, nil
+}
+
+// validateTemplateSandboxClassUnchanged rejects a template repoint that
+// changes the sandbox class: snapshots are not portable across sandbox
+// runtime families, so the actor's saved state could not be restored under
+// the new template.
+func validateTemplateSandboxClassUnchanged(oldTemplate, newTemplate *ateapipb.ActorTemplate) error {
+	oldClass := oldTemplate.GetSandboxConfig().GetSandboxClass()
+	newClass := newTemplate.GetSandboxConfig().GetSandboxClass()
+	if oldClass != newClass {
+		return status.Errorf(codes.FailedPrecondition,
+			"sandbox class differs between the current (%s) and the new (%s) actor template; the sandbox class must be identical to repoint an actor", oldClass, newClass)
+	}
+	return nil
 }
 
 // validateTemplateVolumesUnchanged rejects a template repoint that changes
