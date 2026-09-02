@@ -12,20 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package controlapi
+// Kubernetes codegen tools required this to be in doc.go, no other name will
+// work.
 
-import (
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/testing/protocmp"
-)
+// +k8s:validation-gen=TypesWithSuffix=Request
+// +k8s:validation-gen-input=github.com/agent-substrate/substrate/pkg/proto/ateapipb
+// +k8s:validation-gen-scheme-registry=nil
+// +k8s:validation-gen-deep-equal-func=ateDeepEqual
 
-// Helpers shared by the unit tests in this package.
-const (
-	testAtespace = "test-atespace"
-	testActorID  = "id1"
-)
-
-var (
-	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
-	ignoreTimestamps = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "create_time", "update_time")
-)
+package validation

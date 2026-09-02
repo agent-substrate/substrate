@@ -28,8 +28,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/validation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -41,8 +41,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // Server implements ateapipb.ActorIdentityServer
@@ -96,7 +94,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor JWTs")
 	}
 
-	if errs := validateMintJWTRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateMintJWTRequest(ctx, req); len(errs) > 0 {
 		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 
@@ -152,7 +150,7 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	if errs := validateMintCertRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateMintCertRequest(ctx, req); len(errs) > 0 {
 		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	// Validation bounds purpose to the enum's range; which purposes this
@@ -284,18 +282,6 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 	}
 
 	return &ateletCaller{podName: identity.PodName, nodeName: identity.NodeName}, nil
-}
-
-func validateMintJWTRequest(ctx context.Context, req *ateapipb.MintJWTRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return controlapi.Validate_MintJWTRequest(ctx, op, nil, req, nil)
-}
-
-func validateMintCertRequest(ctx context.Context, req *ateapipb.MintCertRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return controlapi.Validate_MintCertRequest(ctx, op, nil, req, nil)
 }
 
 // authorizeActor resolves the actor from the authenticated worker and verifies

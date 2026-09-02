@@ -20,18 +20,16 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/validation"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/api/validate"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
-	if errs := validateListWorkersRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateListWorkersRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
@@ -49,14 +47,8 @@ func (s *ServiceImpl) ListWorkers(ctx context.Context, opts store.ListOptions) (
 	return s.store.ListWorkers(ctx, opts)
 }
 
-func validateListWorkersRequest(ctx context.Context, req *ateapipb.ListWorkersRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_ListWorkersRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest) (*ateapipb.Worker, error) {
-	if errs := validateGetWorkerRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateGetWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	name := req.GetWorker().GetName()
@@ -75,12 +67,6 @@ func (s *ServiceImpl) GetWorker(ctx context.Context, name string) (*ateapipb.Wor
 	return s.store.GetWorker(ctx, name)
 }
 
-func validateGetWorkerRequest(ctx context.Context, req *ateapipb.GetWorkerRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_GetWorkerRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorkerRequest) (*ateapipb.Worker, error) {
 	// First scrub any fields that callers are not allowed to set. status is
 	// output-only, so whatever the request carried there is replaced rather
@@ -92,7 +78,7 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 	}
 
 	// Validate the request, including the object within it.
-	if errs := validateCreateWorkerRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateCreateWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
@@ -107,7 +93,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 	outWorker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
 
 	// Verify that the result is properly valid before storing it.
-	if errs := validateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
+	if errs := validation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
 	}
 
@@ -120,12 +106,6 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 		return nil, fmt.Errorf("while creating worker: %w", err)
 	}
 	return created, nil
-}
-
-func validateCreateWorkerRequest(ctx context.Context, req *ateapipb.CreateWorkerRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_CreateWorkerRequest(ctx, op, nil, req, nil)
 }
 
 // UpdateWorker replaces the stored Worker with the one the request carries.
@@ -142,7 +122,7 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorke
 	}
 
 	// Validate the request.
-	if errs := validateUpdateWorkerRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateUpdateWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 
@@ -171,14 +151,14 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 		// Validate the mutated value before doing any further work. This is
 		// what enforces the immutable fields, since only the stored worker
 		// gives declarative validation an old value to compare against.
-		if errs := validateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, false); len(errs) > 0 {
+		if errs := validation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, false); len(errs) > 0 {
 			return toGRPCStatusError(errs)
 		}
 
 		// Do any further work on the resource.
 
 		// Validate the final value before storing it.
-		if errs := validateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, true); len(errs) > 0 {
+		if errs := validation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, true); len(errs) > 0 {
 			return toGRPCInternalError(errs)
 		}
 
@@ -186,18 +166,8 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 	})
 }
 
-func validateUpdateWorkerRequest(ctx context.Context, req *ateapipb.UpdateWorkerRequest) field.ErrorList {
-	// Call the generated validation.
-	// We model this as a create rather than an update because updates assume
-	// the existence of a "current" value, which we do not have yet.  This is
-	// validating the request itself. The result will be validated later, after
-	// we have a current value to compare against.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_UpdateWorkerRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
-	if errs := validateDeleteWorkerRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateDeleteWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	// The delete releases the Actor bound to this Worker before removing the
@@ -212,16 +182,8 @@ func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, pre store.D
 	return s.store.DeleteWorker(ctx, name, pre)
 }
 
-func validateDeleteWorkerRequest(ctx context.Context, req *ateapipb.DeleteWorkerRequest) field.ErrorList {
-	// Call the generated validation. The preconditions in options are each
-	// optional: a zero value waives that guard, so only non-zero values are
-	// checked for shape.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_DeleteWorkerRequest(ctx, op, nil, req, nil)
-}
-
 func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
-	if errs := validateDrainWorkerRequest(ctx, req); len(errs) > 0 {
+	if errs := validation.ValidateDrainWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	name := req.GetWorker().GetName()
@@ -249,12 +211,6 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 		// only stops the scheduler routing new Actors here.
 		return nil
 	})
-}
-
-func validateDrainWorkerRequest(ctx context.Context, req *ateapipb.DrainWorkerRequest) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Create}
-	return Validate_DrainWorkerRequest(ctx, op, nil, req, nil)
 }
 
 // mutateWorker runs mutate against the named Worker and translates what comes
@@ -294,44 +250,6 @@ type workerUnchanged struct {
 
 func (u *workerUnchanged) Error() string { return "worker is already in the requested state" }
 
-// validateWorkerUpdate validates a Worker against the previous stored value.
-// It is what enforces the immutable fields, which need an old value to compare
-// against.
-func validateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Worker, requireStatus bool) field.ErrorList {
-	// Call the generated validation.
-	op := operation.Operation{Type: operation.Update}
-	errs := Validate_Worker(ctx, op, fldPath, newVal, oldVal)
-	if requireStatus {
-		// Status is optional in the schema, but is actually required to be set
-		// by the server.  If it was specified, it was already validated above,
-		// but if it was not specified we need to flag that as an error.
-		errs = append(errs, validate.RequiredPointer(ctx, op, fldPath.Child("status"), newVal.GetStatus(), nil)...)
-	}
-	return errs
-}
-
 func (s *ServiceImpl) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
 	return s.store.WatchWorkers(ctx)
-}
-
-// This is needed because DV doesn't have a standard format for IP addresses yet.
-func ValidateCustom_Worker_Ip(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validation.IsValidIP(fldPath, *value)
-}
-
-// This exists only because nested subfield tags are not supported yet.
-func ValidateCustom_UpdateWorkerRequest_Worker(ctx context.Context, op operation.Operation, fldPath *field.Path, worker, _ *ateapipb.Worker) field.ErrorList {
-	if worker == nil || worker.Metadata == nil {
-		return nil // handled by DV
-	}
-
-	// Updates are validated in 2 steps: first the update request and then the
-	// resource itself. DV for the request doesn't descend into the resource
-	// metadata.  Once DV supports nested subfield tags, this can be changed to
-	// something like:
-	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:forbidden
-	// Workers are global-scoped, so metadata.atespace must be empty.
-	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), worker.Metadata, nil)
-	errs = append(errs, validate.ForbiddenValue(ctx, op, fldPath.Child("metadata", "atespace"), &worker.Metadata.Atespace, nil)...)
-	return errs
 }

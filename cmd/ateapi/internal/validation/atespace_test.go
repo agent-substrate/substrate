@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package controlapi
+package validation
 
 import (
 	"context"
@@ -67,7 +67,7 @@ func TestValidateCreateAtespaceRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateCreateAtespaceRequest(context.Background(), tt.req), tt.want)
+			assertValidateErr(t, ValidateCreateAtespaceRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -111,7 +111,7 @@ func TestValidateGetAtespaceRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateGetAtespaceRequest(context.Background(), tt.req), tt.want)
+			assertValidateErr(t, ValidateGetAtespaceRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -153,7 +153,7 @@ func TestValidateListAtespacesRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateListAtespacesRequest(context.Background(), tt.req), tt.want)
+			assertValidateErr(t, ValidateListAtespacesRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
@@ -197,7 +197,7 @@ func TestValidateDeleteAtespaceRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateDeleteAtespaceRequest(context.Background(), tt.req), tt.want)
+			assertValidateErr(t, ValidateDeleteAtespaceRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
