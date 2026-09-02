@@ -41,6 +41,11 @@ type ObjectStorage interface {
 }
 
 func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]byte, error) {
+	content, err := fetchFromGCS(ctx, client, gsURL)
+	return content, tagTransientErr(err)
+}
+
+func fetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]byte, error) {
 	ctx, span := tracer.Start(ctx, "fetchFromGCS")
 	defer span.End()
 
@@ -66,6 +71,11 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 // Open streams the object at gsURL; the caller must Close the returned reader.
 // Unlike FetchFromGCS it does not buffer the whole object in memory.
 func Open(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadCloser, error) {
+	rc, err := openObject(ctx, client, gsURL)
+	return rc, tagTransientErr(err)
+}
+
+func openObject(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadCloser, error) {
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
 		return nil, fmt.Errorf("%w: while parsing url: %w", ateerrors.ReasonInvalidObjectURL, err)
@@ -74,12 +84,18 @@ func Open(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadClose
 	if err != nil {
 		return nil, fmt.Errorf("while getting object bucket=%q object=%q: %w", bucket, object, err)
 	}
-	return rc, nil
+	// Mid-stream failures surface from the caller's reads, not from this
+	// function, so the reader carries its own tagging.
+	return transientReader{rc}, nil
 }
 
 // SendBytesToGCS uploads the given bytes (uncompressed) to gsURL. Intended for
 // small objects such as the snapshot manifest.
 func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {
+	return tagTransientErr(sendBytesToGCS(ctx, client, gsURL, content))
+}
+
+func sendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {
 	ctx, span := tracer.Start(ctx, "sendBytesToGCS")
 	defer span.End()
 
@@ -93,7 +109,11 @@ func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, con
 	return nil
 }
 
-func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {
+func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) error {
+	return tagTransientErr(sendLocalFileToGCSWithZstd(ctx, client, gsURL, localFilePath))
+}
+
+func sendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {
 	ctx, span := tracer.Start(ctx, "sendLocalFileToGCSWithZstd")
 	defer span.End()
 
@@ -297,7 +317,11 @@ func plainZstd(w io.Writer, src io.Reader) (int64, error) {
 	return n, zw.Close()
 }
 
-func FetchLocalFileFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {
+func FetchLocalFileFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) error {
+	return tagTransientErr(fetchLocalFileFromGCSWithZstd(ctx, client, gsURL, localFilePath))
+}
+
+func fetchLocalFileFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {
 	ctx, span := tracer.Start(ctx, "fetchLocalFileFromGCSWithZstd")
 	defer span.End()
 

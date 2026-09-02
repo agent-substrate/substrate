@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -44,6 +46,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/pflag"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -52,6 +55,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/lru"
 )
 
 const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
@@ -658,15 +662,20 @@ func TestFetchAssetRejectsBadHash(t *testing.T) {
 
 // fakeObjectStorage serves fixed bytes for GetObject so fetchAsset can be tested.
 type fakeObjectStorage struct {
-	data []byte
-	err  error
+	data    []byte
+	err     error
+	readErr error // when set, Read fails with it after serving data
 }
 
 func (f fakeObjectStorage) GetObject(_ context.Context, _, _ string) (io.ReadCloser, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return io.NopCloser(bytes.NewReader(f.data)), nil
+	r := io.Reader(bytes.NewReader(f.data))
+	if f.readErr != nil {
+		r = io.MultiReader(r, iotest.ErrReader(f.readErr))
+	}
+	return io.NopCloser(r), nil
 }
 
 func (fakeObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
@@ -743,8 +752,8 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
 			t.Errorf("missing-object error wrongly tagged ReasonInvalidSandboxAsset: %v", err)
 		}
-		// The extracted (outermost) Reason drives CrashIfReason's ErrorInfo;
-		// it must be the client tag, not a fetchAsset blanket wrap.
+		// The extracted (outermost) Reason drives the crash boundary's
+		// ErrorInfo; it must be the client tag, not a fetchAsset blanket wrap.
 		if r, ok := errors.AsType[ateerrors.Reason](err); !ok || r != ateerrors.ReasonFailedGetExternalObject {
 			t.Errorf("extracted reason = %v (ok=%v), want ReasonFailedGetExternalObject", r, ok)
 		}
@@ -762,31 +771,56 @@ func TestFetchAssetStreaming(t *testing.T) {
 		}
 	})
 
-	t.Run("network error stays untagged (retriable)", func(t *testing.T) {
+	t.Run("transient open failure carries the transient-storage fact", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted a failing open")
 		}
-		// A transient open failure must carry no Reason at all: any tag here
-		// is claimed by CrashIfReason in Checkpoint/Restore and would mark a
-		// recoverable actor CRASHED instead of letting the control plane retry.
-		if r, ok := errors.AsType[ateerrors.Reason](err); ok {
-			t.Errorf("network error wrongly tagged with reason %v: %v", r, err)
+		// ategcs tags the fact; the RPC handler's call site decides the retry,
+		// so the helper must not mark the failure retriable itself.
+		if !errors.Is(err, ateerrors.ReasonTransientObjectStorage) {
+			t.Errorf("storage open failure not tagged transient: %v", err)
+		}
+		if ateerrors.IsRetriableError(err) {
+			t.Errorf("helper marked the failure retriable; that decision belongs to the handler: %v", err)
 		}
 		if !strings.Contains(err.Error(), "while fetching") {
 			t.Errorf("open failure lost its context wrap: %v", err)
 		}
 	})
+
+	t.Run("mid-stream read failure carries the transient-storage fact", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		// The GET succeeded but the stream died mid-copy: ategcs's reader
+		// tags the read error, or the crash boundary would mark a
+		// recoverable actor CRASHED.
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{
+			data:    content[:4],
+			readErr: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET},
+		}}
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if err == nil {
+			t.Fatal("fetchAsset accepted a truncated download")
+		}
+		if !errors.Is(err, ateerrors.ReasonTransientObjectStorage) {
+			t.Errorf("mid-stream read failure not tagged transient: %v", err)
+		}
+		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("failed download left a file at the cache path (stat err = %v)", err)
+		}
+	})
 }
 
-// TestRPCBoundariesReject confirms each of the three RPCs validates path inputs
-// before touching its (here nil) dependencies. A traversal value must be
-// rejected as InvalidArgument rather than panicking or surfacing as
-// Internal. Guards against a future removal or reordering of the validation
-// call at any boundary.
+// TestRPCBoundariesReject confirms each RPC validates path inputs before
+// touching its (here nil) dependencies: a traversal value must be rejected as
+// InvalidArgument — which the crash boundary passes through as a
+// request-level rejection — rather than panicking or surfacing as Internal.
+// Guards against a future removal or reordering of the validation call at any
+// boundary.
 func TestRPCBoundariesReject(t *testing.T) {
 	s := &AteomHerder{}
 	ctx := context.Background()
@@ -844,6 +878,369 @@ func TestRPCBoundariesReject(t *testing.T) {
 			wantInvalidArgument(t, "Terminate", err)
 		})
 	})
+}
+
+// TestCrashOnUnknownBoundary exercises the crash-on-unknown defer in the
+// state-changing RPC handlers end to end: any failure past validation
+// escalates to a DataLoss status carrying the actor-crash directive and the
+// Reason from the chain (UNKNOWN when untagged), while storage failures —
+// retriable unless classified as absence/bad URL — pass through.
+func TestCrashOnUnknownBoundary(t *testing.T) {
+	ctx := context.Background()
+	origActors := ateompath.ActorsDir
+	t.Cleanup(func() { ateompath.ActorsDir = origActors })
+
+	wantCrash := func(t *testing.T, err error, reason ateerrors.Reason) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("handler succeeded, want error")
+		}
+		if got := status.Code(err); got != codes.DataLoss {
+			t.Errorf("status.Code = %v (err %v), want DataLoss", got, err)
+		}
+		if !ateerrors.ActorCrashRequested(err) {
+			t.Errorf("ActorCrashRequested(%v) = false, want true", err)
+		}
+		if got := ateerrors.ExtractReason(err); got != string(reason) {
+			t.Errorf("reason = %q (err %v), want %q", got, err, reason)
+		}
+	}
+	wantRetriable := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("handler succeeded, want error")
+		}
+		if got := status.Code(err); got != codes.Unavailable {
+			t.Errorf("status.Code = %v (err %v), want Unavailable for a transient failure", got, err)
+		}
+		if ateerrors.ActorCrashRequested(err) {
+			t.Errorf("ActorCrashRequested(%v) = true, want false for a transient failure", err)
+		}
+	}
+
+	t.Run("Checkpoint tagged terminal error crashes", func(t *testing.T) {
+		// No sandbox record on disk: readSandboxRecord fails with ErrNotExist,
+		// which wrapFileSystemErr tags ReasonTerminalFileSystemError.
+		ateompath.ActorsDir = t.TempDir()
+		s := &AteomHerder{}
+		_, err := s.Checkpoint(ctx, validCheckpointRequest())
+		wantCrash(t, err, ateerrors.ReasonTerminalFileSystemError)
+	})
+
+	t.Run("Restore absent manifest crashes with its tagged reason", func(t *testing.T) {
+		ateompath.ActorsDir = t.TempDir()
+		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
+		_, err := s.Restore(ctx, validRestoreRequest())
+		wantCrash(t, err, ateerrors.ReasonFailedGetExternalObject)
+	})
+
+	t.Run("Restore transient manifest fetch failure stays retriable", func(t *testing.T) {
+		ateompath.ActorsDir = t.TempDir()
+		s := &AteomHerder{gcsClient: fakeObjectStorage{err: &googleapi.Error{Code: 503, Message: "backend error"}}}
+		_, err := s.Restore(ctx, validRestoreRequest())
+		wantRetriable(t, err)
+	})
+
+	t.Run("Restore unclassified manifest fetch failure crashes as UNKNOWN", func(t *testing.T) {
+		ateompath.ActorsDir = t.TempDir()
+		s := &AteomHerder{gcsClient: fakeObjectStorage{err: errors.New("backend returned garbage")}}
+		_, err := s.Restore(ctx, validRestoreRequest())
+		wantCrash(t, err, ateerrors.ReasonUnknown)
+	})
+
+	t.Run("UploadPausedCheckpoint transient upload failure stays retriable", func(t *testing.T) {
+		ateompath.ActorsDir = t.TempDir()
+		req := validUploadPausedCheckpointRequest()
+		writeLocalSnapshot(t, ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName()), sandboxAssetsRecord{
+			SandboxClass:  "microvm",
+			PauseImage:    testPauseImage,
+			SnapshotFiles: []string{"config.json"},
+			Scope:         ateattr.SnapshotScopeFull,
+		}, map[string]string{"config.json": "cfg"})
+		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: &googleapi.Error{Code: 503, Message: "backend error"}}}
+		_, err := s.UploadPausedCheckpoint(ctx, req)
+		wantRetriable(t, err)
+	})
+}
+
+// fakeAteomServer answers CheckpointWorkload like a real ateom: it writes the
+// snapshot files it reports into the actor's checkpoint-state dir.
+type fakeAteomServer struct {
+	ateompb.UnimplementedAteomServer
+	snapshotFiles []string
+	actorUID      string
+}
+
+func (f *fakeAteomServer) CheckpointWorkload(_ context.Context, _ *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+	dir := ateompath.CheckpointStateDir(f.actorUID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	for _, name := range f.snapshotFiles {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("snapshot-bytes"), 0o600); err != nil {
+			return nil, err
+		}
+	}
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: f.snapshotFiles}, nil
+}
+
+// fakeAteomConn serves srv on a loopback listener and returns a client conn
+// to it, for pre-seeding the dialer's cache (the real socket path lives under
+// the unwritable const ateompath.BasePath).
+func fakeAteomConn(t *testing.T, srv ateompb.AteomServer) *grpc.ClientConn {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvGRPC := grpc.NewServer()
+	ateompb.RegisterAteomServer(srvGRPC, srv)
+	go srvGRPC.Serve(lis) //nolint:errcheck // Stop() ends Serve; its error is meaningless here.
+	t.Cleanup(srvGRPC.Stop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+// TestCheckpointExternalUploadFailureCrashes drives Checkpoint through a
+// successful ateom CheckpointWorkload into an upload failure. The workload is
+// gone by then, so a retry cannot succeed: every upload fault must crash the
+// actor classified FAILED_SAVE_SNAPSHOT — not pass through retriable into a
+// doomed retry that ends as UNKNOWN. The timeout case pins the crash directive
+// against the boundary's context pass-through: an http.Client timeout matches
+// errors.Is(err, context.DeadlineExceeded) even while the RPC's own context is
+// alive.
+func TestCheckpointExternalUploadFailureCrashes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		putErr error
+	}{
+		{
+			name:   "transient backend error",
+			putErr: &googleapi.Error{Code: 503, Message: "backend error"},
+		},
+		{
+			name: "upload timeout",
+			putErr: fmt.Errorf("Put %q: %w (Client.Timeout exceeded while awaiting headers)",
+				"https://storage.googleapis.com/upload/storage/v1/b/bucket/o", context.DeadlineExceeded),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			origActors, origStatic := ateompath.ActorsDir, ateompath.StaticFilesDir
+			t.Cleanup(func() { ateompath.ActorsDir, ateompath.StaticFilesDir = origActors, origStatic })
+			ateompath.ActorsDir = t.TempDir()
+			ateompath.StaticFilesDir = t.TempDir()
+
+			req := validCheckpointRequest()
+			if err := writeSandboxRecord(req.GetActorUid(), &sandboxAssetsRecord{
+				SandboxClass: "microvm",
+				PauseImage:   testPauseImage,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			dialer := &AteomDialer{conns: lru.New(4)}
+			dialer.conns.Add(req.GetTargetAteomUid(), fakeAteomConn(t, &fakeAteomServer{
+				snapshotFiles: []string{"config.json", "memory-ranges"},
+				actorUID:      req.GetActorUid(),
+			}))
+
+			s := &AteomHerder{
+				gcsClient:   &recordingObjectStorage{putErr: tc.putErr},
+				ateomDialer: dialer,
+			}
+			_, err := s.Checkpoint(context.Background(), req)
+			if err == nil {
+				t.Fatal("Checkpoint succeeded, want a crash error")
+			}
+			if got := status.Code(err); got != codes.DataLoss {
+				t.Errorf("status.Code = %v (err %v), want DataLoss", got, err)
+			}
+			if !ateerrors.ActorCrashRequested(err) {
+				t.Errorf("ActorCrashRequested(%v) = false, want true", err)
+			}
+			if got := ateerrors.ExtractReason(err); got != string(ateerrors.ReasonFaileSaveSnapshot) {
+				t.Errorf("reason = %q (err %v), want %q", got, err, ateerrors.ReasonFaileSaveSnapshot)
+			}
+			if ateerrors.IsRetriableError(err) {
+				t.Errorf("IsRetriableError(%v) = true, want false past the point of no return", err)
+			}
+		})
+	}
+}
+
+// TestCheckpointTransientAssetFailureStaysRetriable is the counterpart:
+// before CheckpointWorkload the workload is untouched, so the same transient
+// class of storage fault stays retriable.
+func TestCheckpointTransientAssetFailureStaysRetriable(t *testing.T) {
+	origActors, origStatic := ateompath.ActorsDir, ateompath.StaticFilesDir
+	t.Cleanup(func() { ateompath.ActorsDir, ateompath.StaticFilesDir = origActors, origStatic })
+	ateompath.ActorsDir = t.TempDir()
+	ateompath.StaticFilesDir = t.TempDir()
+
+	req := validCheckpointRequest()
+	sum := sha256.Sum256([]byte("runsc-bytes"))
+	if err := writeSandboxRecord(req.GetActorUid(), &sandboxAssetsRecord{
+		SandboxClass: "microvm",
+		PauseImage:   testPauseImage,
+		Assets: map[string]assetEntry{
+			"runsc": {URL: "gs://bucket/assets/runsc", SHA256: fmt.Sprintf("%x", sum)},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: &googleapi.Error{Code: 503, Message: "backend error"}}}
+	_, err := s.Checkpoint(context.Background(), req)
+	if err == nil {
+		t.Fatal("Checkpoint succeeded, want a transient error")
+	}
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Errorf("status.Code = %v (err %v), want Unavailable", got, err)
+	}
+	if ateerrors.ActorCrashRequested(err) {
+		t.Errorf("ActorCrashRequested(%v) = true, want false for a transient failure", err)
+	}
+}
+
+// refusedAteomConn returns a client conn to a socket nothing listens on, so
+// every RPC fails with a transport-level Unavailable — what atelet sees while
+// the ateom container restarts (grpc.NewClient dials lazily, so the conn
+// itself is created without error).
+func refusedAteomConn(t *testing.T) *grpc.ClientConn {
+	t.Helper()
+	conn, err := grpc.NewClient(
+		"unix://"+filepath.Join(t.TempDir(), "no-ateom.sock"),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+// TestCheckpointAteomUnreachableStaysRetriable pins the rollout case: a
+// restarting ateom surfaces as a transport-level Unavailable on the workload
+// RPC, which must stay retriable — the workload never saw the request, so
+// crashing would lose a healthy actor on every ateom rollout.
+func TestCheckpointAteomUnreachableStaysRetriable(t *testing.T) {
+	origActors, origStatic := ateompath.ActorsDir, ateompath.StaticFilesDir
+	t.Cleanup(func() { ateompath.ActorsDir, ateompath.StaticFilesDir = origActors, origStatic })
+	ateompath.ActorsDir = t.TempDir()
+	ateompath.StaticFilesDir = t.TempDir()
+
+	req := validCheckpointRequest()
+	if err := writeSandboxRecord(req.GetActorUid(), &sandboxAssetsRecord{
+		SandboxClass: "microvm",
+		PauseImage:   testPauseImage,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dialer := &AteomDialer{conns: lru.New(4)}
+	dialer.conns.Add(req.GetTargetAteomUid(), refusedAteomConn(t))
+
+	s := &AteomHerder{ateomDialer: dialer}
+	_, err := s.Checkpoint(context.Background(), req)
+	if err == nil {
+		t.Fatal("Checkpoint succeeded, want a transient error")
+	}
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Errorf("status.Code = %v (err %v), want Unavailable", got, err)
+	}
+	if ateerrors.ActorCrashRequested(err) {
+		t.Errorf("ActorCrashRequested(%v) = true, want false while ateom restarts", err)
+	}
+}
+
+// failingAteomServer fails every CheckpointWorkload with the given error.
+type failingAteomServer struct {
+	ateompb.UnimplementedAteomServer
+	err error
+}
+
+func (f *failingAteomServer) CheckpointWorkload(context.Context, *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+	return nil, f.err
+}
+
+// TestCheckpointAteomFailureCrashesAsUnknown is the counterpart: an error
+// ateom's handler returns is not transport trouble, so it crashes via the
+// boundary classified UNKNOWN, keeping ateom's own code.
+func TestCheckpointAteomFailureCrashesAsUnknown(t *testing.T) {
+	origActors, origStatic := ateompath.ActorsDir, ateompath.StaticFilesDir
+	t.Cleanup(func() { ateompath.ActorsDir, ateompath.StaticFilesDir = origActors, origStatic })
+	ateompath.ActorsDir = t.TempDir()
+	ateompath.StaticFilesDir = t.TempDir()
+
+	req := validCheckpointRequest()
+	if err := writeSandboxRecord(req.GetActorUid(), &sandboxAssetsRecord{
+		SandboxClass: "microvm",
+		PauseImage:   testPauseImage,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dialer := &AteomDialer{conns: lru.New(4)}
+	dialer.conns.Add(req.GetTargetAteomUid(), fakeAteomConn(t, &failingAteomServer{
+		err: status.Error(codes.Internal, "runsc checkpoint failed"),
+	}))
+
+	s := &AteomHerder{ateomDialer: dialer}
+	_, err := s.Checkpoint(context.Background(), req)
+	if err == nil {
+		t.Fatal("Checkpoint succeeded, want a crash error")
+	}
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("status.Code = %v (err %v), want Internal", got, err)
+	}
+	if !ateerrors.ActorCrashRequested(err) {
+		t.Errorf("ActorCrashRequested(%v) = false, want true", err)
+	}
+	if got := ateerrors.ExtractReason(err); got != string(ateerrors.ReasonUnknown) {
+		t.Errorf("reason = %q (err %v), want %q", got, err, ateerrors.ReasonUnknown)
+	}
+}
+
+// TestResetActorDirsBestEffortSwallowsFailure verifies the post-persist
+// cleanup in Checkpoint cannot fail the RPC: a resetActorDirs failure is
+// logged and swallowed, so the crash boundary never sees it and the
+// already-persisted snapshot survives.
+func TestResetActorDirsBestEffortSwallowsFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not bind as root; cannot force a reset failure")
+	}
+	origActors := ateompath.ActorsDir
+	t.Cleanup(func() { ateompath.ActorsDir = origActors })
+	ateompath.ActorsDir = t.TempDir()
+
+	// A read-only actor dir makes removing the bundle dir beneath it fail.
+	const actorUID = "123e4567-e89b-12d3-a456-426614174000"
+	bundleDir := ateompath.OCIBundleDir(actorUID)
+	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	actorPath := ateompath.ActorPath(actorUID)
+	if err := os.Chmod(actorPath, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(actorPath, 0o700) })
+
+	if err := resetActorDirs(actorUID); err == nil {
+		t.Fatal("resetActorDirs succeeded; setup no longer forces a failure")
+	}
+
+	var logs bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	resetActorDirsBestEffort(context.Background(), actorUID)
+
+	if !strings.Contains(logs.String(), actorUID) {
+		t.Errorf("swallowed reset failure was not logged with the actor UID; logs:\n%s", logs.String())
+	}
 }
 
 func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
@@ -1822,6 +2219,12 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
+		if !errors.Is(err, ateerrors.ReasonLocalSnapshotGone) {
+			t.Fatalf("err = %v, want tagged %v", err, ateerrors.ReasonLocalSnapshotGone)
+		}
+		// The helper only tags the reason; UploadPausedCheckpoint's boundary
+		// escalates it to the crash.
+		err = ateerrors.CrashUnlessRetriable(ctx, err)
 		if got := status.Code(err); got != codes.DataLoss {
 			t.Fatalf("status.Code = %v (err %v), want DataLoss", got, err)
 		}
@@ -1833,8 +2236,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
-	t.Run("upload failure is a plain retryable error", func(t *testing.T) {
-		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: errors.New("boom")}}
+	t.Run("transient upload failure carries the transient-storage fact", func(t *testing.T) {
+		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: &googleapi.Error{Code: 503, Message: "backend error"}}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
 			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
@@ -1843,6 +2246,14 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
 		if err == nil {
 			t.Fatal("uploadLocalCheckpointDir succeeded, want error")
+		}
+		// ategcs tags the fact; UploadPausedCheckpoint's call site decides
+		// the retry, so the helper must not mark the failure itself.
+		if !errors.Is(err, ateerrors.ReasonTransientObjectStorage) {
+			t.Errorf("upload failure not tagged transient: %v", err)
+		}
+		if ateerrors.IsRetriableError(err) {
+			t.Errorf("helper marked the failure retriable; that decision belongs to the handler: %v", err)
 		}
 		if ateerrors.ActorCrashRequested(err) {
 			t.Error("upload failure requests an actor crash; must stay retryable")

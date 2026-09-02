@@ -25,8 +25,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	gzip "github.com/klauspost/compress/gzip"
-	"github.com/klauspost/compress/zstd"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -36,6 +34,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	gzip "github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -448,7 +449,7 @@ func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser,
 	}
 	rc, mainErr := ategcs.Open(ctx, s.gcsClient, url)
 	if mainErr != nil {
-		return nil, fmt.Errorf("anonymous open failed (%v); main client open failed: %w", anonErr, mainErr)
+		return nil, fmt.Errorf("anonymous open failed (%w); main client open failed: %w", anonErr, mainErr)
 	}
 	return rc, nil
 }
