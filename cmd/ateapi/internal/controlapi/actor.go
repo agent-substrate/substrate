@@ -293,10 +293,12 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 				return err
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
-			if err != nil {
-				return err
-			}
-			if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
+			if err == nil {
+				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
+					return err
+				}
+			} else if !errors.Is(err, errActorTemplateNotFound) {
+				// Skip the validation if old template is not found
 				return err
 			}
 		}
