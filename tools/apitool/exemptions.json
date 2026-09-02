@@ -136,11 +136,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Container.env",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.Container.name",
     "message": "field has no doc comment"
   },

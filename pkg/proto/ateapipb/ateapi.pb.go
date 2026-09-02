@@ -2691,6 +2691,9 @@ type Container struct {
 	// +k8s:listType=atomic
 	// +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
 	Args []string `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`
+	// Env variables to set in the container's process environment. Unlike
+	// Kubernetes, $(VAR_NAME) references are NOT expanded in this field.
+	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=map # each variable is set at most once
