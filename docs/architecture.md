@@ -456,11 +456,12 @@ Triggered by an explicit `SuspendActor` call.
   4. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
      `status.externalSnapshot` names the external snapshot it resumes from.
 
-Snapshots may be given tags owned and addressed by an Atespace. The same tag
-name may exist in different Atespaces. A tag is an immutable alias and retention
-pin: publishing it permits reuse from other Atespaces without changing its
-`atespace/name` address. Deleting the owning Atespace deletes all of its tags,
-including published tags, but leaves snapshot cleanup to garbage collection.
+Snapshots may be given tags owned and addressed by an Atespace. The same tag 
+name may exist in different Atespaces. A tag is an immutable alias and retention pin:
+it holds its own copy of the external snapshot, made at creation, so it outlives the 
+Actor that took it, and publishing it permits reuse from other Atespaces without changing its
+`atespace/name` address. Deleting a tag deletes that copy; an Atespace with
+tags cannot be deleted until they are.
 
 ### Phase 4: Deletion
 

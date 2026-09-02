@@ -62,6 +62,19 @@ func NewSnapshotURI(location, atespace, name string) (SnapshotURI, error) {
 	return SnapshotURI{uri: uri, location: location, atespace: atespace, name: name}, nil
 }
 
+// tagSnapshotPrefix separates the snapshots ActorSnapshotTags own from the
+// ones actors own. Actor snapshots are named by NewSnapshotName, which returns
+// a UUID, so no actor can ever be handed a name a tag holds.
+const tagSnapshotPrefix = "tag-"
+
+// NewSnapshotNameForTag returns a unique name for the snapshot an
+// ActorSnapshotTag owns. Nothing derives it from the tag name: the destination
+// is minted once, recorded on the tag row, and only ever read back afterwards,
+// so no later operation can compute its way onto another tag's objects.
+func NewSnapshotNameForTag() string {
+	return tagSnapshotPrefix + uuid.NewString()
+}
+
 // ParseSnapshotURI parses a given snapshot URI.
 func ParseSnapshotURI(uri string) (SnapshotURI, error) {
 	u, err := url.Parse(uri)

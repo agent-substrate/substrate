@@ -215,6 +215,9 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	// Call Reset on global mock
 	fakeAtelet.Reset()
+	// A checkpoint writes its external snapshot into this test's own store, so
+	// the copy and release steps have something to act on.
+	fakeAtelet.SetObjectStore(objectStore)
 
 	// Create namespace
 	_, err = k8sClient.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{
@@ -258,6 +261,36 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		ateletIndexer:       ateletInformer.GetIndexer(),
 		metricReader:        metricReader,
 		objectStore:         objectStore,
+	}
+}
+
+// snapshotObjectNames returns the names, relative to snapshotURI, of the
+// objects the external snapshot there is made of. Empty means the snapshot is
+// not in object storage — either never written, or collected.
+func snapshotObjectNames(t *testing.T, tc *testContext, snapshotURI string) []string {
+	t.Helper()
+	uri, err := resources.ParseSnapshotURI(snapshotURI)
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI(%q) = %v", snapshotURI, err)
+	}
+	return tc.objectStore.Snapshot(t, uri)
+}
+
+// assertSnapshotPresent fails when the external snapshot at snapshotURI is not
+// in object storage.
+func assertSnapshotPresent(t *testing.T, tc *testContext, snapshotURI string) {
+	t.Helper()
+	if names := snapshotObjectNames(t, tc, snapshotURI); len(names) == 0 {
+		t.Errorf("external snapshot %s is not in object storage, want it present", snapshotURI)
+	}
+}
+
+// assertSnapshotCollected fails when anything is left of the external snapshot
+// at snapshotURI.
+func assertSnapshotCollected(t *testing.T, tc *testContext, snapshotURI string) {
+	t.Helper()
+	if names := snapshotObjectNames(t, tc, snapshotURI); len(names) != 0 {
+		t.Errorf("external snapshot %s still holds %v, want it collected", snapshotURI, names)
 	}
 }
 

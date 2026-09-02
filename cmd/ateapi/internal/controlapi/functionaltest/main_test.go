@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/testenv"
 	"google.golang.org/grpc"
@@ -125,6 +126,32 @@ type FakeAteletServer struct {
 	UploadCalled  bool
 	UploadRequest *ateletpb.UploadPausedCheckpointRequest
 	FailUpload    error
+
+	// objectStore, when set, receives the objects a checkpoint or an upload
+	// writes, so the control plane's copy and release steps have real external
+	// snapshots to act on. setupTest points it at the test's own store.
+	objectStore *objectstoretest.Fake
+}
+
+// snapshotObjects names the objects a checkpoint leaves behind. The names are
+// arbitrary: nothing in the control plane reads them, it only copies and
+// deletes whatever shares the snapshot's prefix.
+var snapshotObjects = []string{"manifest.json", "memory.zst"}
+
+// SetObjectStore points the fake at the store a checkpoint should write to.
+func (f *FakeAteletServer) SetObjectStore(store *objectstoretest.Fake) {
+	f.Lock.Lock()
+	defer f.Lock.Unlock()
+	f.objectStore = store
+}
+
+// writeSnapshot records the external snapshot a checkpoint or an upload would
+// have written at snapshotURI. Called with Lock held.
+func (f *FakeAteletServer) writeSnapshot(snapshotURI string) error {
+	if f.objectStore == nil || snapshotURI == "" {
+		return nil
+	}
+	return f.objectStore.WriteSnapshot(snapshotURI, snapshotObjects...)
 }
 
 func (f *FakeAteletServer) Reset() {
@@ -146,6 +173,8 @@ func (f *FakeAteletServer) Reset() {
 	f.UploadCalled = false
 	f.UploadRequest = nil
 	f.FailUpload = nil
+
+	f.objectStore = nil
 }
 
 func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
@@ -156,6 +185,9 @@ func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *atel
 	f.UploadRequest = proto.Clone(req).(*ateletpb.UploadPausedCheckpointRequest)
 	if f.FailUpload != nil {
 		return nil, f.FailUpload
+	}
+	if err := f.writeSnapshot(req.GetDestinationSnapshotUri()); err != nil {
+		return nil, err
 	}
 	return &ateletpb.UploadPausedCheckpointResponse{}, nil
 }
@@ -180,6 +212,9 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 	f.CheckpointCalled = true
 	f.CheckpointRequest = proto.Clone(req).(*ateletpb.CheckpointRequest)
 
+	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
+		return nil, err
+	}
 	return &ateletpb.CheckpointResponse{}, nil
 }
 

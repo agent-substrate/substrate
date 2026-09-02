@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -66,6 +67,39 @@ func TestNewSnapshotURI(t *testing.T) {
 				t.Errorf("NewSnapshotURI(%q, %q, %q) returned %q alongside an error, want the zero value", tc.location, tc.atespace, tc.snapshot, got)
 			}
 		})
+	}
+}
+
+// TestNewSnapshotNameForTag covers what a tag's snapshot name has to be: a
+// usable resource name, prefixed so it cannot be confused with an actor's, and
+// fresh on every call. Freshness is the property the tag workflow relies on —
+// a destination nobody can compute their way onto, so a recreated tag never
+// inherits objects its predecessor stranded.
+func TestNewSnapshotNameForTag(t *testing.T) {
+	seen := make(map[string]bool, 100)
+	for range 100 {
+		name := NewSnapshotNameForTag()
+		if !strings.HasPrefix(name, tagSnapshotPrefix) {
+			t.Fatalf("NewSnapshotNameForTag() = %q, want the %q prefix", name, tagSnapshotPrefix)
+		}
+		if !IsValidResourceName(name) {
+			t.Fatalf("NewSnapshotNameForTag() = %q, which is not a valid resource name", name)
+		}
+		if seen[name] {
+			t.Fatalf("NewSnapshotNameForTag() returned %q twice", name)
+		}
+		seen[name] = true
+	}
+}
+
+// TestSnapshotNameForTagNeverCollidesWithAnActor guards the invariant the
+// tag prefix exists for: an actor's snapshot name is a UUID, so it can never
+// be handed a name a tag owns.
+func TestSnapshotNameForTagNeverCollidesWithAnActor(t *testing.T) {
+	for range 100 {
+		if name := NewSnapshotName(); strings.HasPrefix(name, tagSnapshotPrefix) {
+			t.Fatalf("NewSnapshotName() = %q, which collides with the tag snapshot namespace %q", name, tagSnapshotPrefix)
+		}
 	}
 }
 
