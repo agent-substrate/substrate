@@ -142,9 +142,9 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 		if err != nil {
 			return err
 		}
-		// ko resolve replaces the ko:// image references with pushed digests
-		// before the manifest is parsed; manifests without ko:// references
-		// pass through unchanged.
+		// The ko:// image references become digest-pinned ones before the
+		// manifest is parsed, which is what the ActorTemplate schema requires;
+		// manifests without ko:// references pass through unchanged.
 		resolved, err := e.ResolveManifestBytes(ctx, manifest)
 		if err != nil {
 			return err

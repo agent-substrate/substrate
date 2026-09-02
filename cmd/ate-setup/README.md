@@ -23,7 +23,8 @@ ate-setup deploy ate-system \
 ```
 
 Nothing is built and no registry is pushed to; the manifests still come from the
-checkout.
+checkout. Each reference is pinned to the digest its tag names, so the registry
+has to be readable from here as well as from the cluster.
 
 - [`commands.md`](commands.md) — every command with its `hack/install-ate.sh`
   equivalent.

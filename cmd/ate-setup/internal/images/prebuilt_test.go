@@ -16,8 +16,12 @@ package images_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -28,6 +32,31 @@ import (
 
 // testSource is the repo/tag every rewrite test resolves against.
 var testSource = images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+
+// What a resolved reference carries beyond its tag. Fixed rather than derived
+// from the reference so the expected output below reads as a literal.
+const (
+	testDigest   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	digestSuffix = "@" + testDigest
+)
+
+// stubRegistry stands in for the registry the installer would query: it answers
+// every lookup with testDigest, or with err, and records what was asked for.
+type stubRegistry struct {
+	calls map[string]int
+	err   error
+}
+
+func newStubRegistry() *stubRegistry { return &stubRegistry{calls: make(map[string]int)} }
+
+// digest is the [images.Digester] a test passes to [images.NewPrebuilt].
+func (s *stubRegistry) digest(_ context.Context, ref string) (string, error) {
+	s.calls[ref]++
+	if s.err != nil {
+		return "", fmt.Errorf("resolving %s to a digest: %w", ref, s.err)
+	}
+	return testDigest, nil
+}
 
 func TestPrebuiltResolveBytes(t *testing.T) {
 	tests := []struct {
@@ -40,39 +69,39 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 		{
 			name: "bare scalar",
 			in:   "        image: ko://github.com/agent-substrate/substrate/cmd/ateapi\n",
-			want: "        image: example.com/substrate/ateapi:v1.2.3\n",
+			want: "        image: example.com/substrate/ateapi:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			name: "double quoted",
 			in:   `image: "ko://github.com/agent-substrate/substrate/cmd/atelet"`,
-			want: `image: "example.com/substrate/atelet:v1.2.3"`,
+			want: `image: "example.com/substrate/atelet:v1.2.3` + digestSuffix + `"`,
 		},
 		{
 			name: "single quoted",
 			in:   `image: 'ko://github.com/agent-substrate/substrate/cmd/atenet'`,
-			want: `image: 'example.com/substrate/atenet:v1.2.3'`,
+			want: `image: 'example.com/substrate/atenet:v1.2.3` + digestSuffix + `'`,
 		},
 		{
 			name: "flow sequence",
 			in:   `images: [ko://github.com/agent-substrate/substrate/demos/counter, other]`,
-			want: `images: [example.com/substrate/counter:v1.2.3, other]`,
+			want: `images: [example.com/substrate/counter:v1.2.3` + digestSuffix + `, other]`,
 		},
 		{
 			// The reference is a plain CRD field here, not a pod spec, which is
 			// why the rewrite cannot be driven off a Kubernetes schema.
 			name: "CRD field",
 			in:   "spec:\n  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor\n",
-			want: "spec:\n  workerImage: example.com/substrate/ateom-gvisor:v1.2.3\n",
+			want: "spec:\n  workerImage: example.com/substrate/ateom-gvisor:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			name: "nested package maps to its image name",
 			in:   "image: ko://github.com/agent-substrate/substrate/demos/multi-template/fspersist\n",
-			want: "image: example.com/substrate/fspersist:v1.2.3\n",
+			want: "image: example.com/substrate/fspersist:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			name: "two references on one line",
 			in:   "a: ko://github.com/agent-substrate/substrate/cmd/ateapi, b: ko://github.com/agent-substrate/substrate/demos/egress\n",
-			want: "a: example.com/substrate/ateapi:v1.2.3, b: example.com/substrate/egress:v1.2.3\n",
+			want: "a: example.com/substrate/ateapi:v1.2.3" + digestSuffix + ", b: example.com/substrate/egress:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			// The demo templates carry "# ko:// image reference" as prose. The
@@ -154,7 +183,8 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			if src.Repo == "" {
 				src = testSource
 			}
-			got, err := images.NewPrebuilt(src).ResolveBytes(context.Background(), []byte(tc.in))
+			got, err := images.NewPrebuilt(src, newStubRegistry().digest).
+				ResolveBytes(context.Background(), []byte(tc.in))
 
 			if tc.error != "" {
 				if err == nil {
@@ -182,7 +212,8 @@ func TestPrebuiltReportsEveryFailure(t *testing.T) {
 		"b: ko://github.com/example/other/cmd/thing\n" +
 		"c: ko://github.com/agent-substrate/substrate/cmd/nope\n"
 
-	_, err := images.NewPrebuilt(testSource).ResolveBytes(context.Background(), []byte(in))
+	_, err := images.NewPrebuilt(testSource, newStubRegistry().digest).
+		ResolveBytes(context.Background(), []byte(in))
 	if err == nil {
 		t.Fatal("ResolveBytes() = nil error, want failures for all three references")
 	}
@@ -196,7 +227,8 @@ func TestPrebuiltReportsEveryFailure(t *testing.T) {
 // A repeated bad reference is one problem, not one per occurrence.
 func TestPrebuiltDeduplicatesFailures(t *testing.T) {
 	ref := "image: ko://github.com/agent-substrate/substrate/cmd/nope\n"
-	_, err := images.NewPrebuilt(testSource).ResolveBytes(context.Background(), []byte(ref+ref+ref))
+	_, err := images.NewPrebuilt(testSource, newStubRegistry().digest).
+		ResolveBytes(context.Background(), []byte(ref+ref+ref))
 	if err == nil {
 		t.Fatal("ResolveBytes() = nil error, want a failure")
 	}
@@ -204,6 +236,58 @@ func TestPrebuiltDeduplicatesFailures(t *testing.T) {
 		t.Errorf("reported the same reference %d times, want 1:\n%v", n, err)
 	}
 }
+
+// A tag is resolved once per image, however many manifests name it, and the
+// answer is reused across calls: an install applies several manifests through
+// one resolver, and a registry round trip each time would be waste.
+func TestPrebuiltLooksUpEachImageOnce(t *testing.T) {
+	registry := newStubRegistry()
+	resolver := images.NewPrebuilt(testSource, registry.digest)
+
+	in := "a: ko://github.com/agent-substrate/substrate/cmd/ateapi\n" +
+		"b: ko://github.com/agent-substrate/substrate/cmd/atelet\n" +
+		"c: ko://github.com/agent-substrate/substrate/cmd/ateapi\n"
+	for range 2 {
+		if _, err := resolver.ResolveBytes(context.Background(), []byte(in)); err != nil {
+			t.Fatalf("ResolveBytes() error = %v", err)
+		}
+	}
+
+	want := map[string]int{
+		"example.com/substrate/ateapi:v1.2.3": 1,
+		"example.com/substrate/atelet:v1.2.3": 1,
+	}
+	if !maps.Equal(registry.calls, want) {
+		t.Errorf("registry lookups = %v, want %v", registry.calls, want)
+	}
+}
+
+// A registry that cannot answer fails the install, and says so for every image
+// it was asked about. Falling back to the bare tag would produce manifests that
+// admission rejects, and a partially pinned manifest would be worse still.
+func TestPrebuiltReportsDigestFailures(t *testing.T) {
+	registry := newStubRegistry()
+	registry.err = errors.New("UNAUTHORIZED")
+
+	in := "a: ko://github.com/agent-substrate/substrate/cmd/ateapi\n" +
+		"b: ko://github.com/agent-substrate/substrate/cmd/atelet\n"
+	got, err := images.NewPrebuilt(testSource, registry.digest).
+		ResolveBytes(context.Background(), []byte(in))
+	if err == nil {
+		t.Fatalf("ResolveBytes() = %q, want an error", got)
+	}
+	for _, want := range []string{
+		"resolving example.com/substrate/ateapi:v1.2.3 to a digest: UNAUTHORIZED",
+		"resolving example.com/substrate/atelet:v1.2.3 to a digest: UNAUTHORIZED",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error is missing %q:\n%v", want, err)
+		}
+	}
+}
+
+// resolvedRef matches a rewritten reference in testSource's repository.
+var resolvedRef = regexp.MustCompile(regexp.QuoteMeta(testSource.Repo) + `/[^\s"',\]}]+`)
 
 // Resolving the control plane manifests must produce a manifest that still
 // parses and holds no unresolved reference. This is the closest a unit test
@@ -220,7 +304,7 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 		t.Fatalf("listing %s: %v", installDir, err)
 	}
 
-	resolver := images.NewPrebuilt(testSource)
+	resolver := images.NewPrebuilt(testSource, newStubRegistry().digest)
 
 	// The directory as a whole is what a plain GKE install applies.
 	paths := []string{installDir}
@@ -238,6 +322,15 @@ func TestResolveEveryInstallManifest(t *testing.T) {
 			}
 			if refs := koRefPattern.FindAllString(string(out), -1); len(refs) > 0 {
 				t.Errorf("unresolved references survived: %v", refs)
+			}
+			// Every reference has to name a digest. ActorTemplate images,
+			// image volume references, and a SandboxConfig's pauseImage all
+			// carry the CEL rule self.contains('@'), so an unpinned reference
+			// is not applied at all, it is rejected by admission.
+			for _, ref := range resolvedRef.FindAllString(string(out), -1) {
+				if !strings.Contains(ref, "@sha256:") {
+					t.Errorf("%s is not pinned to a digest", ref)
+				}
 			}
 			if _, err := kube.DecodeManifestBytes(out); err != nil {
 				t.Errorf("the resolved manifest no longer parses: %v", err)

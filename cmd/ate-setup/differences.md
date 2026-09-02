@@ -107,6 +107,17 @@ published — `ateapi`, `atelet`, `atenet`, `ateom-gvisor`, and the rest.
 no repository to pull from would be dropped, leaving a build from source that
 looks like the release the tag names.
 
+The rewritten reference then keeps that tag and adds the digest it names, as
+`<repo>/<image>:<tag>@sha256:...`, which is the shape ko itself produces for a
+tagged release. Resolving the digest is one HEAD request per image, cached for
+the install, so `--image-repo` needs read access to the registry from wherever
+`ate-setup` runs rather than only from the cluster. It is not optional: an
+ActorTemplate's container image, an image volume's reference, and a
+SandboxConfig's `pauseImage` each carry the CEL rule `self.contains('@')`, so an
+unpinned reference is rejected by admission and every demo fails to deploy.
+Pinning also gives a pre-built install the property a `ko` install had for free,
+that a tag moving afterwards cannot change what is running.
+
 That tag also becomes the substrate version, which names the atelet DaemonSet
 and sets the node label partitioning nodes across coexisting versions. It has
 to: that label must describe the atelet actually running, which came from the
@@ -127,7 +138,9 @@ once, rather than an unpullable image reaching the cluster and failing as
 replacing the listed ones is what makes that hold: a reference extending a
 listed package would otherwise inherit its image. `images.Components` is checked
 against the real manifests by a test, so adding a component fails a test rather
-than an install.
+than an install — though only the list is checked that way. The release also has
+to publish the new image under the same repository and tag as the rest, and
+until it does, the component can only be installed by building it.
 
 ## Cluster access
 

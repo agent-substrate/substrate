@@ -53,6 +53,13 @@ installs published images instead, and never invokes `ko`. The manifests still
 come from the checkout, so this needs one; what it removes is the build, the Go
 toolchain, and write access to a registry.
 
+`REPO` has to hold every component image the manifests reference, all under the
+same tag, which is how a release publishes them. A release that adds a component
+has to publish it alongside the others before a pre-built install can use it.
+Each reference is then pinned to the digest its tag names, which takes one HEAD
+request per image, so the installer needs read access to `REPO` and not only the
+cluster does.
+
 ## Deploy
 
 | `ate-setup` | `hack/install-ate.sh` |

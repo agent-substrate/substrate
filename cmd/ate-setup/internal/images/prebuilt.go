@@ -18,8 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
@@ -48,25 +49,32 @@ var imageByRef = func() map[string]string {
 
 // Prebuilt rewrites ko:// references to point at already-published images.
 //
-// It is the drop-in counterpart to ko.Runner: same two methods, no registry
-// writes, no builds, and no repository checkout beyond the manifests
-// themselves.
+// It is the drop-in counterpart to ko.Runner: same two methods, no builds, no
+// registry writes, and no repository checkout beyond the manifests themselves.
+// What it does need is read access to the registry, to pin each tag to a
+// digest.
 type Prebuilt struct {
-	src Source
+	src    Source
+	digest Digester
+
+	// pinned caches a resolved reference by its tagged form, so a component
+	// several manifests name costs one registry lookup per install.
+	pinned map[string]string
 }
 
-// NewPrebuilt returns a resolver for an already-published image set.
-func NewPrebuilt(src Source) *Prebuilt {
-	return &Prebuilt{src: src}
+// NewPrebuilt returns a resolver for an already-published image set. digest
+// turns a tag into the image it names; callers outside tests pass RemoteDigest.
+func NewPrebuilt(src Source, digest Digester) *Prebuilt {
+	return &Prebuilt{src: src, digest: digest, pinned: make(map[string]string)}
 }
 
 // ResolvePath rewrites the manifests a path covers.
-func (p *Prebuilt) ResolvePath(_ context.Context, path string) ([]byte, error) {
+func (p *Prebuilt) ResolvePath(ctx context.Context, path string) ([]byte, error) {
 	manifest, err := kube.ReadPath(path)
 	if err != nil {
 		return nil, err
 	}
-	out, err := p.rewrite(manifest)
+	out, err := p.rewrite(ctx, manifest)
 	if err != nil {
 		return nil, fmt.Errorf("in %s: %w", path, err)
 	}
@@ -74,8 +82,32 @@ func (p *Prebuilt) ResolvePath(_ context.Context, path string) ([]byte, error) {
 }
 
 // ResolveBytes rewrites an in-memory manifest, such as kustomize output.
-func (p *Prebuilt) ResolveBytes(_ context.Context, manifest []byte) ([]byte, error) {
-	return p.rewrite(manifest)
+func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error) {
+	return p.rewrite(ctx, manifest)
+}
+
+// pin returns the reference to install an image by: its tag, and the digest
+// that tag currently names.
+//
+// The digest is not decoration. An ActorTemplate's container image, an image
+// volume's reference, and a SandboxConfig's pauseImage each carry the CEL rule
+// self.contains('@'), so a tag on its own is rejected by admission and every
+// demo would fail to deploy. Pinning also restores what ko gave the control
+// plane deployments for free: an install that cannot shift under a tag someone
+// moves later. Keeping the tag alongside the digest is ko's own output shape,
+// and leaves the reference legible in `kubectl get`.
+func (p *Prebuilt) pin(ctx context.Context, image string) (string, error) {
+	tagged := p.src.Repo + "/" + image + ":" + p.src.Tag
+	if ref, ok := p.pinned[tagged]; ok {
+		return ref, nil
+	}
+	digest, err := p.digest(ctx, tagged)
+	if err != nil {
+		return "", err
+	}
+	ref := tagged + "@" + digest
+	p.pinned[tagged] = ref
+	return ref, nil
 }
 
 // rewrite replaces every ko:// reference with the image it maps to.
@@ -86,10 +118,13 @@ func (p *Prebuilt) ResolveBytes(_ context.Context, manifest []byte) ([]byte, err
 // would need to know every such field, and rewriting the bytes leaves
 // everything else -- the multi-kilobyte Envoy configuration blocks in
 // particular -- exactly as committed.
-func (p *Prebuilt) rewrite(manifest []byte) ([]byte, error) {
-	// Report every unmappable reference at once. Fixing them one install
-	// attempt at a time is slow, and the failures are usually related.
+func (p *Prebuilt) rewrite(ctx context.Context, manifest []byte) ([]byte, error) {
+	// Collect the failures rather than stopping at the first. Diagnosing them
+	// one install attempt at a time is slow, and they are usually related: a
+	// registry that is unreachable or a tag that was never pushed fails for
+	// every component at once.
 	unknown := make(map[string]bool)
+	unpinned := make(map[string]error)
 
 	out := koRef.ReplaceAllFunc(manifest, func(match []byte) []byte {
 		image, ok := imageByRef[string(match)]
@@ -97,25 +132,29 @@ func (p *Prebuilt) rewrite(manifest []byte) ([]byte, error) {
 			unknown[string(match)] = true
 			return match
 		}
-		return []byte(p.src.Repo + "/" + image + ":" + p.src.Tag)
+		ref, err := p.pin(ctx, image)
+		if err != nil {
+			unpinned[image] = err
+			return match
+		}
+		return []byte(ref)
 	})
 
+	var errs []error
 	if len(unknown) > 0 {
-		refs := make([]string, 0, len(unknown))
-		for ref := range unknown {
-			refs = append(refs, ref)
-		}
-		sort.Strings(refs)
-
 		// One line per reference, then the package list once. Repeating the
 		// list per reference buries the references themselves.
-		errs := make([]error, 0, len(refs)+1)
-		for _, ref := range refs {
+		for _, ref := range slices.Sorted(maps.Keys(unknown)) {
 			errs = append(errs, fmt.Errorf("%s has no published image", ref))
 		}
 		errs = append(errs, fmt.Errorf("installable packages under %s are %s; a reference that is "+
 			"templated has to be rendered before it can be resolved",
 			ModulePath, strings.Join(Components, ", ")))
+	}
+	for _, image := range slices.Sorted(maps.Keys(unpinned)) {
+		errs = append(errs, unpinned[image])
+	}
+	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
 	return out, nil

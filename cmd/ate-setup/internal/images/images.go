@@ -36,7 +36,9 @@ const ModulePath = "github.com/agent-substrate/substrate"
 // The list is closed on purpose. A reference that is not in it names something
 // this build has no published image for, and failing beats guessing at a name
 // that was never pushed. TestComponentsCoverTheManifests keeps it in step with
-// the manifests.
+// the manifests, which is half of it: a new component also has to be published
+// under the same repository and tag as the rest before a pre-built install can
+// use it.
 var Components = []string{
 	"cmd/ateapi",
 	"cmd/atecontroller",

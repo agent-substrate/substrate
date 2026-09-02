@@ -92,7 +92,7 @@ func (e *Env) imageResolver() (imageResolver, error) {
 
 	log.Stepf("images: %s", e.Cfg.Images.Describe())
 	if e.Cfg.Images.IsPrebuilt() {
-		e.resolver = images.NewPrebuilt(e.Cfg.Images)
+		e.resolver = images.NewPrebuilt(e.Cfg.Images, images.RemoteDigest)
 		return e.resolver, nil
 	}
 
