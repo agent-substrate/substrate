@@ -16,29 +16,35 @@
 
 set -o errexit -o nounset -o pipefail
 
-# Source the environment variables
+# Source the environment variables. The file is optional: an installer (or a
+# user pasting a one-liner) can pass the same variables through the
+# environment instead, which also makes teardown possible on a machine that
+# never had a dev-env file.
 if [ -f .ate-dev-env.sh ]; then
   source .ate-dev-env.sh
-else
-  echo "Please create .ate-dev-env.sh from the example file in hack"
-  exit 1
 fi
-
-# Precheck for cluster-admin permissions
-kubectl auth can-i delete crd 2>/dev/null | grep -q yes || {
-    echo "teardown requires cluster-admin on the GKE cluster" >&2
+for var in PROJECT_ID PROJECT_NUMBER CLUSTER_NAME CLUSTER_LOCATION BUCKET_NAME NODE_POOL_NAME; do
+  if [ -z "${!var:-}" ]; then
+    echo "${var} is not set; export it or create .ate-dev-env.sh from the example file in hack" >&2
     exit 1
-}
+  fi
+done
+
+# No cluster-admin precheck here: every step below talks to GCP, not to the
+# cluster, and requiring a live kubectl context would block tearing down a
+# cluster that is already half-gone.
 
 # --- Helper Functions ---
 function usage() {
   echo "Usage: $0 [options]"
   echo "Options:"
   echo "  --revoke-gke-node-permissions         Revoke GKE nodes permission to pull images"
+  echo "  --revoke-atelet-permissions           Revoke atelet's project-level IAM bindings"
   echo "  --delete-iam-policy-bindings          Delete IAM policy bindings for atelet"
   echo "  --delete-snapshot-bucket              Delete snapshot bucket"
   echo "  --delete-gvisor-node-pool             Delete gVisor node pool"
   echo "  --delete-cluster                      Delete GKE cluster"
+  echo "  --delete-dashboards                   Delete the Substrate monitoring dashboards"
   echo "  --all                                 Run all teardown steps (reverse order of setup)"
   exit 1
 }
@@ -58,6 +64,43 @@ revoke_gke_node_permissions() {
     --role="roles/artifactregistry.reader" \
     --condition=None \
     --quiet || true
+}
+
+# Revoke Atelet's project-level bindings (Reverse of grant_atelet_permissions)
+revoke_atelet_permissions() {
+  echo "Revoking atelet project-level permissions..."
+  local member="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa/atelet"
+  gcloud projects remove-iam-policy-binding "${PROJECT_ID}" \
+    --member="${member}" \
+    --role="roles/storage.objectAdmin" \
+    --condition=None \
+    --quiet || true
+  gcloud projects remove-iam-policy-binding "${PROJECT_ID}" \
+    --member="${member}" \
+    --role="roles/artifactregistry.reader" \
+    --condition=None \
+    --quiet || true
+}
+
+# Delete Monitoring Dashboards (Reverse of create_monitoring_dashboards)
+delete_dashboards() {
+  echo "Deleting Substrate monitoring dashboards..."
+  # Matched by display name, since setup only records names in its JSON.
+  local names=(
+    "Substrate Snapshot Size & QPS"
+    "Substrate Routing & E2E Latency"
+    "Substrate gRPC Server — latency / QPS / errors"
+  )
+  for display_name in "${names[@]}"; do
+    for dashboard in $(gcloud monitoring dashboards list \
+        --project="${PROJECT_ID}" \
+        --filter="displayName=\"${display_name}\"" \
+        --format="value(name)" 2>/dev/null); do
+      gcloud monitoring dashboards delete "${dashboard}" \
+        --project="${PROJECT_ID}" \
+        --quiet || true
+    done
+  done
 }
 
 # Delete IAM Policy Bindings for Bucket (Reverse of create_iam_policy_bindings)
@@ -107,13 +150,17 @@ fi
 while [[ "$#" -gt 0 ]]; do
   case $1 in
     --revoke-gke-node-permissions) revoke_gke_node_permissions ;;
+    --revoke-atelet-permissions) revoke_atelet_permissions ;;
     --delete-iam-policy-bindings) delete_iam_policy_bindings ;;
     --delete-snapshot-bucket) delete_snapshot_bucket ;;
     --delete-gvisor-node-pool) delete_gvisor_node_pool ;;
     --delete-cluster) delete_cluster ;;
+    --delete-dashboards) delete_dashboards ;;
     --all)
-      revoke_gke_node_permissions
+      delete_dashboards
       delete_iam_policy_bindings
+      revoke_atelet_permissions
+      revoke_gke_node_permissions
       delete_snapshot_bucket
       delete_gvisor_node_pool
       delete_cluster
