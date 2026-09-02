@@ -45,6 +45,7 @@ func (g *gcsClient) uploadClient(ctx context.Context, i int) *storage.Client {
 				slog.WarnContext(ctx, "Falling back to one client for part uploads", slog.Any("err", err))
 				return
 			}
+			setRetry(c)
 			g.pool = append(g.pool, c)
 		}
 	})

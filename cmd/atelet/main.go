@@ -35,7 +35,6 @@ import (
 
 	"sync"
 
-	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -213,13 +212,12 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
-	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
+	wrappedAnonGCS, err := ategcs.NewGCSClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
 	}
 
-	var gcsClient *storage.Client
-	var s3Client *s3.Client
+	var wrappedGCS ategcs.ObjectStorage
 	storageBackend := os.Getenv("ATE_STORAGE_BACKEND")
 	switch storageBackend {
 	case "s3":
@@ -230,29 +228,17 @@ func main() {
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
-		s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+		wrappedGCS = ategcs.NewS3Client(s3.NewFromConfig(cfg, func(o *s3.Options) {
 			if usePathStyle := os.Getenv("AWS_S3_USE_PATH_STYLE"); usePathStyle == "true" {
 				o.UsePathStyle = true
 			}
-		})
+		}))
 	// GCS is currently the default, TODO: we assume workload identity / ADC
 	default:
-		gcsClient, err = storage.NewClient(ctx)
+		wrappedGCS, err = ategcs.NewGCSClient(ctx)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to create GCS client", err)
 		}
-	}
-
-	var wrappedAnonGCS ategcs.ObjectStorage
-	if anonGCSClient != nil {
-		wrappedAnonGCS = ategcs.NewGCSClient(anonGCSClient, option.WithoutAuthentication())
-	}
-
-	var wrappedGCS ategcs.ObjectStorage
-	if s3Client != nil {
-		wrappedGCS = ategcs.NewS3Client(s3Client)
-	} else if gcsClient != nil {
-		wrappedGCS = ategcs.NewGCSClient(gcsClient)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginWorkerPlane)
