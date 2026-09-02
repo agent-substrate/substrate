@@ -3123,15 +3123,7 @@ type Volume struct {
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	Image *ImageVolumeSource `protobuf:"bytes,6,opt,name=image,proto3" json:"image,omitempty"`
-	// type discriminates the source union: "DurableDir",
-	// "ExternalVolumeTemplate", "Image" or "SystemInfo".
-	//
-	// +k8s:optional
-	// +k8s:maxLength=63
-	// TODO: enforce that type matches the populated source, either with a
-	// unionDiscriminator tag or in the service layer.
-	Type          string `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	Image         *ImageVolumeSource `protobuf:"bytes,6,opt,name=image,proto3" json:"image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3199,13 +3191,6 @@ func (x *Volume) GetImage() *ImageVolumeSource {
 		return x.Image
 	}
 	return nil
-}
-
-func (x *Volume) GetType() string {
-	if x != nil {
-		return x.Type
-	}
-	return ""
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
@@ -6707,7 +6692,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x05R\x04port\"\xbd\x02\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\"\xa9\x02\n" +
 	"\x06Volume\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12?\n" +
 	"\vdurable_dir\x18\x02 \x01(\v2\x1e.ateapi.DurableDirVolumeSourceR\n" +
@@ -6715,8 +6700,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x18external_volume_template\x18\x03 \x01(\v2\x1e.ateapi.ExternalVolumeTemplateR\x16externalVolumeTemplate\x12?\n" +
 	"\vsystem_info\x18\x05 \x01(\v2\x1e.ateapi.SystemInfoVolumeSourceR\n" +
 	"systemInfo\x12/\n" +
-	"\x05image\x18\x06 \x01(\v2\x19.ateapi.ImageVolumeSourceR\x05image\x12\x12\n" +
-	"\x04type\x18\x04 \x01(\tR\x04type\"1\n" +
+	"\x05image\x18\x06 \x01(\v2\x19.ateapi.ImageVolumeSourceR\x05image\"1\n" +
 	"\x11ImageVolumeSource\x12\x1c\n" +
 	"\treference\x18\x01 \x01(\tR\treference\"\x18\n" +
 	"\x16DurableDirVolumeSource\"b\n" +

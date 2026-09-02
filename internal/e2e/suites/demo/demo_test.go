@@ -1133,7 +1133,6 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 		if !hasExtVol {
 			at.Volumes = append(at.Volumes, &ateapipb.Volume{
 				Name: "external-data",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					Capacity:         "1Gi",
 					StorageClassName: scName,
@@ -1170,7 +1169,6 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 		}
 		at.Volumes = append(at.Volumes, &ateapipb.Volume{
 			Name:       secondDurableDirVolume,
-			Type:       "DurableDir",
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
 		})
 	}

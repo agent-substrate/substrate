@@ -54,7 +54,6 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "data-vol-1",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
 				},
@@ -64,12 +63,10 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 			},
 			{
 				Name:       "durable-vol",
-				Type:       "DurableDir",
 				DurableDir: &ateapipb.DurableDirVolumeSource{},
 			},
 			{
 				Name: "data-vol-2",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "fast",
 				},
@@ -118,7 +115,6 @@ func TestCreateActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "data-vol",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
 				},
@@ -130,21 +126,18 @@ func TestCreateActorVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "vol1",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
 				},
 			},
 			{
 				Name: "vol2",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
 				},
 			},
 			{
 				Name: "vol3",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
 				},

@@ -6130,37 +6130,6 @@ func Validate_Volume(
 		errs = append(errs, fn(fldPath.Child("image"), obj.Image, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.Volume.Type
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.Volume) *string {
-				return &oldObj.Type
-			})
-		errs = append(errs, fn(fldPath.Child("type"), &obj.Type, oldVal, oldObj != nil)...)
-	}
-
 	return errs
 }
 

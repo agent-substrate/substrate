@@ -57,7 +57,6 @@ sandboxConfig:
   configName: gvisor-default
 volumes:
 - name: data
-  type: DurableDir
   durableDir: {}
 `
 
@@ -94,7 +93,6 @@ func TestActorTemplateFromManifest(t *testing.T) {
 		},
 		Volumes: []*ateapipb.Volume{{
 			Name:       "data",
-			Type:       "DurableDir",
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
 		}},
 	}

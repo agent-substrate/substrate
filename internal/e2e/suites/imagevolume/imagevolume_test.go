@@ -166,7 +166,6 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 				&ateapipb.VolumeMount{Name: "fixture", MountPath: mountPath})
 			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
 				Name:  "fixture",
-				Type:  "Image",
 				Image: &ateapipb.ImageVolumeSource{Reference: fixtureImage},
 			})
 		},

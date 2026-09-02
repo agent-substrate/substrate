@@ -72,7 +72,7 @@ demo-counter_render() {
 
     validate_cmd=("-e" "s|\${VALIDATE_EXISTING_FILE_PATH_ARG}|  - --validate-existing-file-path=/external-data/test.txt|g")
     ext_vol_mount_cmd=("-e" "s|\${EXTERNAL_VOLUME_MOUNTS}|  - name: external-data\n    mountPath: /external-data|g")
-    ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|- name: external-data\n  type: ExternalVolumeTemplate\n  externalVolumeTemplate:\n    capacity: 1Gi\n    storageClassName: ${storage_class}|g")
+    ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|- name: external-data\n  externalVolumeTemplate:\n    capacity: 1Gi\n    storageClassName: ${storage_class}|g")
   fi
 
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \

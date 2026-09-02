@@ -34,7 +34,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			template: &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
 				Volumes: []*ateapipb.Volume{
-					{Name: "home", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
 				},
 				Containers: []*ateapipb.Container{
 					{
@@ -73,7 +73,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateapipb.Volume{
 					{
 						Name: "system-info",
-						Type: "SystemInfo",
 						SystemInfo: &ateapipb.SystemInfoVolumeSource{
 							DataSources: []*ateapipb.SystemInfoDataSource{
 								{ActorMetadata: &ateapipb.ActorMetadataDataSource{
@@ -134,8 +133,8 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			template: &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
 				Volumes: []*ateapipb.Volume{
-					{Name: "home", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}},
-					{Name: "agent", Type: "Image", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}},
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+					{Name: "agent", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}},
 				},
 				Containers: []*ateapipb.Container{
 					{
@@ -178,7 +177,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateapipb.Volume{
 					{
 						Name: "system-info",
-						Type: "SystemInfo",
 						SystemInfo: &ateapipb.SystemInfoVolumeSource{
 							DataSources: []*ateapipb.SystemInfoDataSource{
 								{TrustBundle: &ateapipb.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"}},
@@ -230,7 +228,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
 				Volumes: []*ateapipb.Volume{
 					{Name: "unsupported"},
-					{Name: "home", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
 				},
 				Containers: []*ateapipb.Container{
 					{
@@ -265,7 +263,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			template: &ateapipb.ActorTemplate{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
 				Volumes: []*ateapipb.Volume{
-					{Name: "home", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
 				},
 				Containers: []*ateapipb.Container{
 					{Name: "main", Image: "main"},
@@ -400,19 +398,16 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Volumes: []*ateapipb.Volume{
 			{
 				Name: "vol-1",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "pd-standard",
 				},
 			},
 			{
 				Name:       "vol-2",
-				Type:       "DurableDir",
 				DurableDir: &ateapipb.DurableDirVolumeSource{},
 			},
 			{
 				Name: "unmounted-vol",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "pd-standard",
 				},

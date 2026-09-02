@@ -77,7 +77,6 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 		Volumes: []*ateapipb.Volume{{
 			Name:       "data",
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
-			Type:       "DurableDir",
 		}, {
 			Name: "system-info",
 			SystemInfo: &ateapipb.SystemInfoVolumeSource{
@@ -94,7 +93,6 @@ func newTestActorTemplate(atespace, name string) *ateapipb.ActorTemplate {
 					}},
 				},
 			},
-			Type: "SystemInfo",
 		}},
 	}
 }

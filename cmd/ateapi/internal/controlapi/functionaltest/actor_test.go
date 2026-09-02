@@ -103,7 +103,6 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	volumes := []*ateapipb.Volume{
 		{
 			Name: "ext-vol-1",
-			Type: "ExternalVolumeTemplate",
 			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "standard",
 				Capacity:         "10Gi",
@@ -327,7 +326,6 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			}},
 			Volumes: []*ateapipb.Volume{{
 				Name: "data",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					Capacity: "1Gi", StorageClassName: "standard",
 				},
@@ -1235,7 +1233,6 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	volumes := []*ateapipb.Volume{
 		{
 			Name: "data-vol",
-			Type: "ExternalVolumeTemplate",
 			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "fast",
 				Capacity:         "20Gi",
@@ -1377,7 +1374,6 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	volumes := []*ateapipb.Volume{
 		{
 			Name: "succ-vol1",
-			Type: "ExternalVolumeTemplate",
 			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "standard",
 				Capacity:         "10Gi",
@@ -1385,7 +1381,6 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 		},
 		{
 			Name: "fail-vol2",
-			Type: "ExternalVolumeTemplate",
 			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "standard",
 				Capacity:         "10Gi",
@@ -1521,7 +1516,6 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	volumes := []*ateapipb.Volume{
 		{
 			Name: "succ-vol1",
-			Type: "ExternalVolumeTemplate",
 			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "standard",
 				Capacity:         "10Gi",
@@ -1529,7 +1523,6 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		},
 		{
 			Name: "retry-vol2",
-			Type: "ExternalVolumeTemplate",
 			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 				StorageClassName: "standard",
 				Capacity:         "10Gi",

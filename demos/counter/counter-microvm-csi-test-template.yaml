@@ -43,7 +43,6 @@ sandboxConfig:
   configName: microvm
 volumes:
 - name: data
-  type: ExternalVolumeTemplate
   externalVolumeTemplate:
     capacity: 1Gi
     storageClassName: csi-hostpath-sc

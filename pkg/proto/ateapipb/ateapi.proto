@@ -1044,15 +1044,6 @@ message Volume {
   // +k8s:optional
   // +k8s:unionMember
   ImageVolumeSource image = 6;
-
-  // type discriminates the source union: "DurableDir",
-  // "ExternalVolumeTemplate", "Image" or "SystemInfo".
-  //
-  // +k8s:optional
-  // +k8s:maxLength=63
-  // TODO: enforce that type matches the populated source, either with a
-  // unionDiscriminator tag or in the service layer.
-  string type = 4;
 }
 
 // ImageVolumeSource mounts the contents of an OCI image, read-only. The
