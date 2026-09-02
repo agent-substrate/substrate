@@ -37,7 +37,7 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 	// The StatefulSet's projected serving certificate is issued by this
 	// controller. Applying it here makes `deploy postgres` usable on a fresh
 	// cluster as well as after `deploy ate-system`.
-	if err := e.KoApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
 		return err
 	}
 	if err := e.applyPodcertWorkersOverride(ctx); err != nil {

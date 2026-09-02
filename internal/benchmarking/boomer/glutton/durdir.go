@@ -24,12 +24,12 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
@@ -93,7 +93,7 @@ func (r *durDirRuntime) dynamicWait() time.Duration {
 }
 
 func (r *durDirRuntime) iterate() {
-	gid := goroutineID()
+	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
 		dynCfg := r.cfg.Dyn.Load()
@@ -191,9 +191,8 @@ func (u *durDirUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplateNamespace: templateNS,
-				ActorTemplateName:      u.templateName,
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: u.templateName},
 			},
 		}, grpc.Trailer(tr))
 		return err
@@ -252,11 +251,11 @@ func (u *durDirUser) tracedCall(ctx context.Context, name string, do func(contex
 	err := do(ctx, &tr)
 	clientLatency := time.Since(start)
 
-	latency, source := elapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
-	if source == sourceServer {
-		span.SetAttributes(attribute.Float64("server.elapsed_ms", msFloat(latency)))
+	latency, source := boomerutil.ElapsedFromMD(tr, ateinterceptors.ServerElapsedTrailer, clientLatency)
+	if source == boomerutil.SourceServer {
+		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(latency)))
 	}
-	logSampledTrace(span, name, latency, source, err)
+	boomerutil.LogSampledTrace(span, name, latency, source, err)
 	if err != nil {
 		bmetrics.RecordFailure("grpc", name, u.userClass, latency, err.Error())
 		return err
@@ -433,39 +432,27 @@ func (u *durDirUser) httpProtoCall(ctx context.Context, metricName, route string
 		return nil, readErr
 	}
 
-	serverLatency, source := elapsedFromHeader(resp.Header, ateinterceptors.ServerElapsedTrailer, clientLatency)
-	if source == sourceServer {
-		span.SetAttributes(attribute.Float64("server.elapsed_ms", msFloat(serverLatency)))
+	serverLatency, source := boomerutil.ElapsedFromHeader(resp.Header, ateinterceptors.ServerElapsedTrailer, clientLatency)
+	if source == boomerutil.SourceServer {
+		span.SetAttributes(attribute.Float64("server.elapsed_ms", boomerutil.MsFloat(serverLatency)))
 	}
 
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-		logSampledTrace(span, metricName, clientLatency, sourceClient, httpErr)
+		boomerutil.LogSampledTrace(span, metricName, clientLatency, boomerutil.SourceClient, httpErr)
 		bmetrics.RecordFailure("http", metricName, u.userClass, clientLatency, httpErr.Error())
 		return nil, httpErr
 	}
 
 	if validate != nil {
 		if err := validate(respBody); err != nil {
-			logSampledTrace(span, metricName, clientLatency, sourceClient, err)
+			boomerutil.LogSampledTrace(span, metricName, clientLatency, boomerutil.SourceClient, err)
 			bmetrics.RecordFailure("http", metricName, u.userClass, clientLatency, err.Error())
 			return nil, err
 		}
 	}
 
-	logSampledTrace(span, metricName, clientLatency, sourceClient, nil)
+	boomerutil.LogSampledTrace(span, metricName, clientLatency, boomerutil.SourceClient, nil)
 	bmetrics.RecordSuccess("http", metricName, u.userClass, clientLatency, int64(len(respBody)))
 	return respBody, nil
-}
-
-func elapsedFromHeader(h http.Header, key string, fallback time.Duration) (time.Duration, string) {
-	val := h.Get(key)
-	if val == "" {
-		return fallback, sourceClient
-	}
-	us, err := strconv.ParseInt(val, 10, 64)
-	if err != nil {
-		return fallback, sourceClient
-	}
-	return time.Duration(us) * time.Microsecond, sourceServer
 }

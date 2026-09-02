@@ -26,9 +26,10 @@ import (
 )
 
 var (
-	RunE2E      bool
-	KubeConfig  string
-	KubeContext string
+	RunE2E       bool
+	KubeConfig   string
+	KubeContext  string
+	StorageClass string
 )
 
 var (
@@ -58,6 +59,7 @@ func bindFlags() {
 	pflag.BoolVar(&NoColor, "no-color", false, "disable colors in output")
 	pflag.StringVar(&KubeConfig, "kube-config", "", "Location of the kubeconfig")
 	pflag.StringVar(&KubeContext, "kube-context", "", "Kubernetes context to use")
+	pflag.StringVar(&StorageClass, "storage-class", "csi-nfs-sc", "StorageClass to use for external volume tests")
 }
 
 // RunTestMain should be used to run your e2e test suite.

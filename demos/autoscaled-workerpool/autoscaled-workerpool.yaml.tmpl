@@ -15,7 +15,9 @@
 # This demo demonstrates autoscaling an Agent Substrate WorkerPool using a
 # HorizontalPodAutoscaler (HPA) and an External Metric (ate_workerpool_workers).
 # The pool runs capacity for the "counter" workload; the HPA scales the pool
-# dynamically based on the number of assigned workers.
+# dynamically based on the number of assigned workers. The ActorTemplate
+# lives in autoscaled-workerpool-template.yaml.tmpl and is created through
+# the ate API with `kubectl ate create actor-template`.
 #
 # See hpa-workerpool-autoscaling.md for the design and math details.
 
@@ -36,37 +38,3 @@ metadata:
 spec:
   replicas: 5
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: counter
-  namespace: ate-demo-autoscaled-workerpool
-spec:
-  containers:
-  - name: counter
-    image: ko://github.com/agent-substrate/substrate/demos/counter
-    command:
-    - /ko-app/counter
-${VALIDATE_EXISTING_FILE_PATH_ARG}
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 80
-    volumeMounts:
-    - name: data
-      mountPath: /home/counter
-${EXTERNAL_VOLUME_MOUNTS}
-  workerSelector:
-    matchLabels:
-      workload: counter-autoscaled
-  snapshotsConfig:
-    onPause: Full
-    onCommit: Data
-    location: gs://${BUCKET_NAME}/ate-demo-autoscaled-workerpool/
-  volumes:
-  - name: data
-    durableDir: {}
-${EXTERNAL_VOLUMES}

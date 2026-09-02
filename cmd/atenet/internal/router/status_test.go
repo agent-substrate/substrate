@@ -50,13 +50,10 @@ func TestStatuszEndpoint(t *testing.T) {
 	httpPort := l1.Addr().(*net.TCPAddr).Port
 	l1.Close()
 
-	// Pre-configure local yaml mockup
-	tmpFile, err := os.CreateTemp("", "templates-*.yaml")
-	if err != nil {
-		t.Fatalf("Unable creating temp files: %v", err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.Close()
+	// NewRouterServer builds a Kubernetes clientset for an ingress-serving
+	// instance; point it at a kubeconfig whose server is never contacted so the
+	// test stays off any real cluster.
+	t.Setenv("KUBECONFIG", writeTestKubeconfig(t))
 
 	// Run() dials ateapi in mtls mode, which requires real TLS material; generate it.
 	caPath, clientCertPath := writeTestTLSMaterial(t)
@@ -68,7 +65,6 @@ func TestStatuszEndpoint(t *testing.T) {
 		XdsPort:            18000,
 		ExtprocPort:        50051,
 		ExtProcMaxRequests: defaultExtProcMaxRequests,
-		TemplatesFile:      tmpFile.Name(),
 		MetricsAddr:        "127.0.0.1:0",
 		ParkedRequest:      ingress.DefaultParkedRequestConfig(),
 		Auth: authConfig{
@@ -170,6 +166,34 @@ func TestStatuszEndpoint(t *testing.T) {
 	if dashboard.Parking.MaxParked != ingress.DefaultParkedRequestMax {
 		t.Errorf("expected parking max_parked %d, got %d", ingress.DefaultParkedRequestMax, dashboard.Parking.MaxParked)
 	}
+}
+
+// writeTestKubeconfig writes a kubeconfig pointing at an unreachable local
+// server and returns its path. It satisfies client construction; any request
+// made through the resulting clientset fails with a connection error.
+func writeTestKubeconfig(t *testing.T) string {
+	t.Helper()
+	const kubeconfig = `apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://127.0.0.1:1
+  name: test
+contexts:
+- context:
+    cluster: test
+    user: test
+  name: test
+current-context: test
+users:
+- name: test
+  user: {}
+`
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(path, []byte(kubeconfig), 0o600); err != nil {
+		t.Fatalf("writing kubeconfig: %v", err)
+	}
+	return path
 }
 
 // writeTestTLSMaterial generates a self-signed certificate and writes a CA trust

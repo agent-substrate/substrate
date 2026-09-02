@@ -53,7 +53,7 @@ func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRe
 // set the header too, since RequestMetadata still logs it.
 func authorityAttributes(t *testing.T, authority string) map[string]*structpb.Struct {
 	t.Helper()
-	s, err := structpb.NewStruct(map[string]any{AuthorityFilterStateAttribute: authority})
+	s, err := structpb.NewStruct(map[string]any{extproc.AuthorityFilterStateAttribute: authority})
 	if err != nil {
 		t.Fatalf("build authority attributes: %v", err)
 	}

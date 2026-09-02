@@ -919,20 +919,15 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 // full checkpoint is monolithic until split checkpoints land.
 func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 	switch atev1alpha1.SandboxClass(rec.SandboxClass) {
-	case atev1alpha1.SandboxClassMicroVM:
+	case atev1alpha1.SandboxClassMicroVM, atev1alpha1.SandboxClassGvisor:
 		if !slices.Contains(rec.SnapshotFiles, ateompath.DurableDirTarFile) {
 			// No durable-dir volumes were attached at pause: this snapshot
 			// holds no data, and never will — not retryable.
-			return status.Errorf(codes.FailedPrecondition, "full micro-VM capture has no %s; the actor has no durable data to upload as %s", ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
+			return status.Errorf(codes.FailedPrecondition, "full %s capture has no %s; the actor has no durable data to upload as %s", rec.SandboxClass, ateompath.DurableDirTarFile, ateattr.SnapshotScopeData)
 		}
 		rec.SnapshotFiles = []string{ateompath.DurableDirTarFile}
 		rec.Scope = ateattr.SnapshotScopeData
 		return nil
-
-	case atev1alpha1.SandboxClassGvisor:
-		// TODO(#790): split-checkpoint runsc will let a full gVisor checkpoint
-		// yield its durable data; implement this branch when it lands.
-		return status.Errorf(codes.Unimplemented, "gVisor cannot extract durable data from a full checkpoint yet (see #790)")
 
 	default:
 		// The manifest's class is unvalidated input from disk/object storage.
@@ -949,9 +944,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 
 	// Per-step timing so we can attribute resume latency between the rustfs
-	// download/decompress, the OCI image unpack, and ateom's own work. Logged at
-	// the end, and recorded per phase on the way out so a failed restore still
-	// reports the phases it completed. Phases left at zero never ran.
+	// download/decompress, the OCI image unpack, and ateom's own work. Reported on
+	// the way out, so a failed restore still accounts for the phases it completed.
+	// Phases left at zero never ran.
 	tStart := time.Now()
 	var dMount, dManifest, dAssets, dDownload, dBundles, dAteom time.Duration
 	op := snapshotOp{
@@ -959,15 +954,34 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		templateName:      req.GetActorTemplateName(),
 		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
 	}
+	attribution := resources.ActorAttribution{
+		Ref:              actorRef,
+		UID:              actorUID,
+		TemplateAtespace: req.GetActorTemplateAtespace(),
+		TemplateName:     req.GetActorTemplateName(),
+	}
+	completed := false
 	defer func() {
-		s.instruments.recordRestore(ctx, op, err,
-			phase{ateattr.SnapshotPhaseVolumeMount, dMount},
-			phase{ateattr.SnapshotPhaseManifestFetch, dManifest},
-			phase{ateattr.SnapshotPhaseSandboxAssets, dAssets},
-			phase{ateattr.SnapshotPhaseDownload, dDownload},
-			phase{ateattr.SnapshotPhaseOCIUnpack, dBundles},
-			phase{ateattr.SnapshotPhaseAteomRestore, dAteom},
-			phase{ateattr.SnapshotPhaseTotal, time.Since(tStart)})
+		// A panic unwinds through here with the named err still nil, so without
+		// this the last thing atelet reports before dying is a fast success.
+		outcome := err
+		if outcome == nil && !completed {
+			outcome = errRestoreUnwound
+		}
+		// One slice feeds both signals, so the metric and the log cannot disagree
+		// about how long the restore took.
+		phases := []phase{
+			{ateattr.SnapshotPhaseVolumeMount, dMount},
+			{ateattr.SnapshotPhaseManifestFetch, dManifest},
+			{ateattr.SnapshotPhaseSandboxAssets, dAssets},
+			{ateattr.SnapshotPhaseDownload, dDownload},
+			{ateattr.SnapshotPhaseOCIUnpack, dBundles},
+			{ateattr.SnapshotPhaseAteomRestore, dAteom},
+			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
+		}
+		s.instruments.recordRestore(ctx, op, outcome, phases...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown",
+			snapshotLogAttrs(attribution, op, restoreDurationMetric, outcome, phases)...)
 	}()
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
@@ -1160,7 +1174,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			dDownload = 0
 		}
 		if isCollateral(err, prepErr) {
-			dAssets, dBundles = 0, 0
+			dAssets, dBundles = assetsAfterCollateral(prepFailedPhase, dAssets), 0
 		}
 		return nil, err
 	}
@@ -1177,6 +1191,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
 	}
 
+	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
+	// this call as "Actor restore phases".
 	tAteom := time.Now()
 	_, err = client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
 		Atespace:              actorRef.Atespace,
@@ -1213,11 +1229,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
 	}
 
-	slog.InfoContext(ctx, "Restore timing breakdown", slog.Any("actor", actorRef),
-		slog.Duration("download", dDownload),   // rustfs/GCS fetch + decompress (or local copy)
-		slog.Duration("oci_unpack", dBundles),  // prepareOCIBundles: unpack the OCI image to the bundle
-		slog.Duration("ateom_restore", dAteom), // ateom.RestoreWorkload (see its own breakdown)
-		slog.Duration("total", time.Since(tStart)))
+	completed = true
 	return &ateletpb.RestoreResponse{}, nil
 }
 

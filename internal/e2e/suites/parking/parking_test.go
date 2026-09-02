@@ -197,7 +197,7 @@ func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Client
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
-	return e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateCounterTemplateOptions{
+	return e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace: parkingAtespace,
 		// Unique within the suite-shared atespace.
 		Name:         "parking-" + nsObj.Name,

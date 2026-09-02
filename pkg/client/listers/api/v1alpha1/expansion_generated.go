@@ -16,14 +16,6 @@
 
 package v1alpha1
 
-// ActorTemplateListerExpansion allows custom methods to be added to
-// ActorTemplateLister.
-type ActorTemplateListerExpansion interface{}
-
-// ActorTemplateNamespaceListerExpansion allows custom methods to be added to
-// ActorTemplateNamespaceLister.
-type ActorTemplateNamespaceListerExpansion interface{}
-
 // CSIDriverConfigListerExpansion allows custom methods to be added to
 // CSIDriverConfigLister.
 type CSIDriverConfigListerExpansion interface{}

@@ -15,7 +15,7 @@
 """Stub GluttonUser declaration.
 
 The real load implementation lives in the boomer-Go worker at
-cmd/boomer-glutton/; this Python class is declared only so the master's
+cmd/benchmarking/boomer-worker/; this Python class is declared only so the master's
 --class-picker enumerates the name. The Python worker container sets
 LOCUST_NO_GLUTTON_USER=1 to skip loading this file, leaving boomer as the
 sole owner of GluttonUser load.
@@ -27,7 +27,7 @@ if os.environ.get("LOCUST_NO_GLUTTON_USER") != "1":
     from locust import User, task
     from common.boomer_config import init_boomer_config
 
-    # Master serves /boomer-config so the boomer-glutton workers can fetch
+    # Master serves /boomer-config so the boomer-worker workers can fetch
     # runtime flag values (trace probability, wait times) the operator set
     # in the web UI form. No-op on workers without a web UI.
     init_boomer_config()

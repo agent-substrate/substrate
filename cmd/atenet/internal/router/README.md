@@ -12,7 +12,6 @@ Router has several responsibilities:
   * Make sure the interface with ATE API is pluggable so that we can test with a mock ATE API.
 * Runs an xDS server for the Envoy deployment that defines the Cluster information for the ATEs.
   * the xDS configuration will configure Envoy to send traffic to ext_proc
-* Watches the ActorTemplates to get out the definitions for how to route the actor IDs.
 * Parks requests whose actor cannot be served immediately due to transient
   worker-pool saturation, retrying the resume until the actor is routable or a
   bounded wait elapses, instead of failing fast. See
@@ -61,11 +60,53 @@ request (`xds.filter_chain_name`, an Envoy attribute the egress gateway is
 configured to send), never by anything in the request itself, so a client
 cannot pick the egress path by crafting one. `router` itself does the wiring.
 
+## adding a dataplane attribute
+
+The filter-state objects and request attributes a proxy carries alongside
+a request are declared once, in `extproc/attributes.go`. 
+
+### name it
+
+A new key substrate owns is rooted at `dev.ate.`, then a dotted path naming the
+thing it carries: `dev.ate.<area>.<thing>`, or `dev.ate.<thing>` when there is
+no area to disambiguate. These keys live in a namespace owned by the proxy that
+carries them — Envoy filter state, agentgateway CEL — and shared with whatever
+else a deployment configures alongside substrate, so the reverse-DNS root is
+what keeps them from colliding.
+
+A key someone else owns keeps *their* reverse-DNS root; do not re-home it under
+`dev.ate.` to make the set look uniform. `xds.filter_chain_name` is Envoy's own
+attribute and stays in Envoy's namespace. A key defined by a vendor's extension
+or by an additional ext_proc service a deployment splices in belongs under that
+vendor's own root, on the same reasoning that gives substrate `dev.ate.`. The
+prefix is a claim about who may rename the key, so getting it wrong means
+substrate is renaming something it does not own, or holding a name it never
+reserved.
+
+### wire it up
+
+1. **Declare the constant** in `extproc/attributes.go`.
+2. **Set it in the dataplane.**
+3. **Ask for it.** ext_proc only receives the attributes named in its filter's
+   `request_attributes`. A key that is set but not requested arrives as nothing
+   at all, which reads the same as a key that was never set.
+4. **Read it** through `RequestMetadata.Attribute`.
+
+### keep it trustworthy
+
+An attribute is only as trustworthy as the thing that set it. Every value here
+comes from something the dataplane itself derived — a peer certificate Envoy
+verified against the actor-identity CA, an `:authority` captured before the
+request entered a tunnel — never from a client header, which an actor controls
+end to end. That is what makes filter state a sound carrier across the
+CONNECT/MITM boundary in the first place, and a new attribute sourced from a
+header gives the property back.
+
 ## modes
 
 One binary serves both directions. `--mode` selects which:
 
-| `--mode` | ext_proc handlers | xDS server + ActorTemplate controller | Kubernetes access |
+| `--mode` | ext_proc handlers | xDS server | Kubernetes access |
 | --- | --- | --- | --- |
 | `ingress` | ingress | yes | yes |
 | `egress` | egress | no | none |

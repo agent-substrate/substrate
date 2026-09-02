@@ -13,29 +13,19 @@
 # limitations under the License.
 
 # This demo shows that two ActorTemplates running two different binaries can
-# share a single WorkerPool, even when all three live in different namespaces.
-# A WorkerPool is image-agnostic capacity (its pods only run the ateom
-# supervisor); each ActorTemplate carries its own workload image and gates on
-# the pool via workerSelector, a label selector matched against the pool's
-# labels (no namespace scoping involved: pool selection is cluster-wide).
-# Below, the "counter" and "fspersist" templates each sit in their own namespace
-# and both select the one "shared-pool" in a third namespace via the same
-# workload label.
+# share a single WorkerPool, even from different atespaces. A WorkerPool is
+# image-agnostic capacity (its pods only run the ateom supervisor); each
+# ActorTemplate carries its own workload image and gates on the pool via
+# workerSelector, a label selector matched against the pool's labels (no
+# atespace or namespace scoping involved: pool selection is cluster-wide).
+# The "counter" and "fspersist" templates each sit in their own atespace
+# (counter-template.yaml.tmpl, fspersist-template.yaml.tmpl) and both select
+# this one "shared-pool" via the same workload label.
 
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ate-demo-multi-template-pool
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ate-demo-multi-template-counter
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ate-demo-multi-template-fspersist
 ---
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
@@ -47,33 +37,3 @@ metadata:
 spec:
   replicas: 3
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
----
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: counter
-  namespace: ate-demo-multi-template-counter
-spec:
-  containers:
-  - name: counter
-    image: ko://github.com/agent-substrate/substrate/demos/counter
-  workerSelector:
-    matchLabels:
-      workload: multi-template-shared
-  snapshotsConfig:
-    location: gs://${BUCKET_NAME}/ate-demo-multi-template-counter/
----
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: fspersist
-  namespace: ate-demo-multi-template-fspersist
-spec:
-  containers:
-  - name: fspersist
-    image: ko://github.com/agent-substrate/substrate/demos/multi-template/fspersist
-  workerSelector:
-    matchLabels:
-      workload: multi-template-shared
-  snapshotsConfig:
-    location: gs://${BUCKET_NAME}/ate-demo-multi-template-fspersist/

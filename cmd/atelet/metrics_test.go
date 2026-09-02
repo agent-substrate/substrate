@@ -351,6 +351,43 @@ func TestIsCollateral(t *testing.T) {
 	}
 }
 
+// TestAssetsAfterCollateral covers the other half of the collateral rule: a leg
+// cancelled during the unpack had already finished fetching its assets, and
+// since absence means "never ran", zeroing that reports a step that completed
+// as one that never started.
+func TestAssetsAfterCollateral(t *testing.T) {
+	const assets = 1200 * time.Millisecond
+
+	tests := []struct {
+		name            string
+		prepFailedPhase string
+		want            time.Duration
+	}{
+		{
+			name:            "cancelled during the asset fetch truncates it",
+			prepFailedPhase: ateattr.SnapshotPhaseSandboxAssets,
+			want:            0,
+		},
+		{
+			name:            "cancelled during the unpack keeps the completed asset fetch",
+			prepFailedPhase: ateattr.SnapshotPhaseOCIUnpack,
+			want:            assets,
+		},
+		{
+			name:            "an unattributed prep failure keeps it rather than guessing",
+			prepFailedPhase: "",
+			want:            assets,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := assetsAfterCollateral(tt.prepFailedPhase, assets); got != tt.want {
+				t.Errorf("assetsAfterCollateral() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRestoreSnapshotKind(t *testing.T) {
 	tests := []struct {
 		name string

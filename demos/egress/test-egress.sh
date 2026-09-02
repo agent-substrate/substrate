@@ -33,9 +33,11 @@
 set -o errexit -o nounset -o pipefail
 
 CTX="${KUBECTL_CONTEXT:-kind-kind}"
-ATESPACE="${ATESPACE:-demo}"
+# The actor lives in the demo's atespace: --template-ref resolves the
+# template by name within the actor's own atespace.
+ATESPACE="${ATESPACE:-ate-demo-egress}"
 ACTOR="${ACTOR:-egress-demo}"
-TEMPLATE="${TEMPLATE:-ate-demo-egress/egress}"
+TEMPLATE="${TEMPLATE:-egress}"
 TARGET_NS="${TARGET_NS:-egress-target}"
 PROBE_POD="egress-identity-probe"
 
@@ -78,7 +80,7 @@ info "target ClusterIP = ${TARGET_IP}"
 
 log "create + resume Actor ${ATESPACE}/${ACTOR}"
 ${KATE} create atespace "${ATESPACE}" >/dev/null 2>&1 || true
-${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
+${KATE} create actor "${ACTOR}" -a "${ATESPACE}" --template-ref "${TEMPLATE}" >/dev/null 2>&1 || true
 ${KATE} resume actor "${ACTOR}" -a "${ATESPACE}" >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do
   ${KATE} get actors -a "${ATESPACE}" 2>/dev/null | grep -q "ACTOR_STATE_RUNNING" && break

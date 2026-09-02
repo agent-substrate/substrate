@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,7 +29,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
@@ -66,6 +66,7 @@ var (
 
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
+	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 
 	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
@@ -151,7 +152,6 @@ func main() {
 	}
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
@@ -187,7 +187,7 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	controlSrv := controlapi.NewRPCService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	controlSrv := controlapi.NewRPCService(persistence, workerCache, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
 	// Drive stored ActorTemplates through the golden actor flow.
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, sandboxConfigLister)
@@ -199,7 +199,6 @@ func main() {
 	}
 
 	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, actorIDCAPool, persistence, workerCache)
-	debugSrv := debugapi.NewService(persistence)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -234,7 +233,6 @@ func main() {
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
 	ateapipb.RegisterActorIdentityServer(mux, actorIdentitySrv)
-	ateapipb.RegisterDebugServer(mux, debugSrv)
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
@@ -287,6 +285,7 @@ func loadFlagsFromEnv() {
 		env  string
 	}{
 		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
+		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -301,6 +300,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("postgres-connection-string", *postgresConnectionString),
+		slog.String("postgres-schema", *postgresSchema),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -334,9 +334,12 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
 		if err == nil {
 			return persistence, nil
+		}
+		if !errors.Is(err, atepg.ErrUnavailable) {
+			return nil, err
 		}
 		connectErr = err
 		slog.WarnContext(ctx, "Failed to connect to PostgreSQL, retrying...", slog.Int("attempt", attempt), slog.Any("err", err))

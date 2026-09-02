@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
 // loadEnv isolates Load from the ambient environment.
@@ -41,6 +43,8 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_CONNECTION_STRING",
 		"ATE_ATENET_ROUTER",
 		"ATE_EXPERIMENTAL_USE_SDSMINT",
+		"ATE_IMAGE_REPO",
+		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
 		"ATE_OTLP_ENDPOINT",
@@ -339,5 +343,91 @@ func TestSourceShellEnvReportsFailure(t *testing.T) {
 
 	if _, err := sourceShellEnv(path, dir); err == nil {
 		t.Fatal("sourceShellEnv() succeeded, want an error")
+	}
+}
+
+func TestLoadImageSource(t *testing.T) {
+	tests := []struct {
+		name      string
+		env       map[string]string
+		opts      Options
+		want      images.Source
+		wantError string
+	}{
+		{
+			name: "unset builds from source",
+			want: images.Source{},
+		},
+		{
+			name: "flags",
+			opts: Options{ImageRepo: "example.com/substrate", ImageTag: "v1.2.3"},
+			want: images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"},
+		},
+		{
+			name: "environment",
+			env:  map[string]string{"ATE_IMAGE_REPO": "example.com/env", "ATE_IMAGE_TAG": "v9"},
+			want: images.Source{Repo: "example.com/env", Tag: "v9"},
+		},
+		{
+			name: "flags beat the environment",
+			env:  map[string]string{"ATE_IMAGE_REPO": "example.com/env", "ATE_IMAGE_TAG": "v9"},
+			opts: Options{ImageRepo: "example.com/flag", ImageTag: "v1"},
+			want: images.Source{Repo: "example.com/flag", Tag: "v1"},
+		},
+		{
+			// A repo pasted from a registry UI often carries one, and it would
+			// otherwise produce a double slash in every reference.
+			name: "trailing slash is trimmed",
+			opts: Options{ImageRepo: "example.com/substrate/", ImageTag: "v1"},
+			want: images.Source{Repo: "example.com/substrate", Tag: "v1"},
+		},
+		{
+			name:      "a repo needs a tag",
+			opts:      Options{ImageRepo: "example.com/substrate"},
+			wantError: "--image-repo (or ATE_IMAGE_REPO) requires --image-tag",
+		},
+		{
+			name:      "a tag needs a repo",
+			opts:      Options{ImageTag: "v1"},
+			wantError: "--image-tag (or ATE_IMAGE_TAG) requires --image-repo",
+		},
+		{
+			// The environment reaches validation the same way the flags do.
+			name:      "a tag from the environment needs a repo",
+			env:       map[string]string{"ATE_IMAGE_TAG": "v1"},
+			wantError: "--image-tag (or ATE_IMAGE_TAG) requires --image-repo",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+
+			cfg, err := Load(tc.opts)
+			if tc.wantError != "" {
+				if err == nil {
+					t.Fatalf("Load() = nil error, want one containing %q", tc.wantError)
+				}
+				if !strings.Contains(err.Error(), tc.wantError) {
+					t.Errorf("Load() error = %v, want it to contain %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Images.Repo != tc.want.Repo {
+				t.Errorf("Images.Repo = %q, want %q", cfg.Images.Repo, tc.want.Repo)
+			}
+			if cfg.Images.Tag != tc.want.Tag {
+				t.Errorf("Images.Tag = %q, want %q", cfg.Images.Tag, tc.want.Tag)
+			}
+			if cfg.Images.IsPrebuilt() != (tc.want.Repo != "") {
+				t.Errorf("Images.IsPrebuilt() = %v, want %v", cfg.Images.IsPrebuilt(), tc.want.Repo != "")
+			}
+		})
 	}
 }

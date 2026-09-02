@@ -63,6 +63,16 @@ var deployAPIServerCmd = &cobra.Command{
 	},
 }
 
+var deployControllerCmd = &cobra.Command{
+	Use:     "ate-controller",
+	Aliases: []string{"controller"},
+	Short:   "Deploy ate-controller only, with the CRDs it serves",
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.DeployAteController(cmd.Context())
+	},
+}
+
 var deployAtenetCmd = &cobra.Command{
 	Use:   "atenet",
 	Short: "Deploy the atenet dataplane only: router, egress, and DNS",
@@ -91,10 +101,12 @@ func init() {
 		deployAteSystemCmd,
 		deployAteletCmd,
 		deployAPIServerCmd,
+		deployControllerCmd,
 		deployAtenetCmd,
 		deployPostgresCmd,
 	)
 
-	deployAteSystemCmd.Flags().BoolVar(&deployOpts.SetupCSI, "setup-csi", false,
-		"Also install the hostpath and NFS CSI drivers (Kind only)")
+	deployAteSystemCmd.Flags().StringVar(&deployOpts.SetupCSI, "setup-csi", "none",
+		"Also install CSI driver (nfs, hostpath, both, none; default: none)")
+	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
 }

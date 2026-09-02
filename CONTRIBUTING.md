@@ -86,6 +86,8 @@ for this purpose.
 All code changes should be accompanied by tests. We will not merge code that
 does not have tests, and we will not merge code that causes tests to fail.
 
+Follow the [PostgreSQL schema evolution rules](docs/dev/postgresql-schema-evolution.md) for each application schema change.
+
 ### Root-gated tests
 
 Tests that need root (overlay mounts, mknod, `trusted.*` xattrs, ...) call

@@ -23,7 +23,7 @@ rules:
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
-  resources: ["actortemplates", "workerpools", "sandboxconfigs", "csidriverconfigs"]
+  resources: ["workerpools", "sandboxconfigs", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
@@ -90,6 +90,7 @@ spec:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
           - --postgres-connection-string=@env
+          - --postgres-schema=@env
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -36,11 +35,14 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// grpcEchoFixtureManifest is the ActorTemplate this suite installs to get a
+// grpcEchoFixtureManifests name the fixture this suite installs to get a
 // gRPC-speaking Actor. It runs the same `testserver grpc` echo origin
 // grpcegress_test.go deploys as a plain pod; see
 // internal/e2e/fixtures/testserver.
-const grpcEchoFixtureManifest = "internal/e2e/fixtures/testserver/grpcecho.yaml.tmpl"
+var grpcEchoFixtureManifests = e2e.SubstrateFixtureManifests{
+	Pool:     "internal/e2e/fixtures/testserver/grpcecho.yaml.tmpl",
+	Template: "internal/e2e/fixtures/testserver/grpcecho-template.yaml.tmpl",
+}
 
 // TestIngressProtocolDowngrade pins the ingress protocol contract end to end:
 // a client that negotiates HTTP/2 with the router must still be able to reach
@@ -137,7 +139,7 @@ func TestIngressGRPC(t *testing.T) {
 	ctx := context.Background()
 
 	fixture := deployGRPCEchoTemplate(t, ctx, env["BUCKET_NAME"])
-	actorName, _ := createAndResumeActor(t, ctx, "grpcingress", fixture)
+	actorName, _ := createAndResumeSubstrateActor(t, ctx, "grpcingress", fixture)
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 
 	// Cleartext h2c to the router's HTTP port, with the Actor's DNS name as the
@@ -251,45 +253,17 @@ func TestIngressGRPC(t *testing.T) {
 }
 
 // deployGRPCEchoTemplate installs the gRPC Actor fixture for the sandbox class
-// under test, waits for its golden snapshot and returns it. Mirrors the
-// capabilities and sizing suites: render one manifest, build and apply it
-// through the repo's pinned ko, delete the same file on the way out.
-func deployGRPCEchoTemplate(t *testing.T, ctx context.Context, bucket string) e2e.Fixture {
+// under test, waits for its golden snapshot and returns it. The suite gets its
+// own copy of the fixture: suite packages run as concurrent processes, so a
+// shared one would be deleted out from under another.
+func deployGRPCEchoTemplate(t *testing.T, ctx context.Context, bucket string) e2e.SubstrateFixture {
 	t.Helper()
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-
-	// The suite's own copy of the fixture: suite packages run as concurrent
-	// processes, so a shared one would be deleted out from under another.
-	manifest := e2e.RenderFixtureManifest(t, grpcEchoFixtureManifest, bucket, "networking")
-
-	// KO_CONFIG_PATH is required because ko resolves .ko.yaml from its working
-	// directory, which here is this package rather than the repo root.
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
-	t.Cleanup(func() {
-		// Deletion needs no image build, so go straight to kubectl; `ko delete`
-		// rejects this arg shape.
-		delArgs := []string{"delete", "--ignore-not-found", "-f", manifest}
-		if e2e.KubeContext != "" {
-			delArgs = append([]string{"--context=" + e2e.KubeContext}, delArgs...)
-		}
-		e2e.RunCmd(t, "kubectl", delArgs...)
-	})
-
-	fixture := e2e.Fixture{
-		Namespace:  e2e.FixtureName("ate-e2e-grpcecho") + "-networking",
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, e2e.GetClients(), grpcEchoFixtureManifests, bucket, "networking", false)
+	return e2e.SubstrateFixture{
+		Atespace:   atespace,
 		Name:       "grpcecho",
 		DeployWith: "the networking suite itself (see deployGRPCEchoTemplate)",
 	}
-	e2e.WaitForTemplateReady(ctx, t, e2e.GetClients(), fixture.Namespace, fixture.Name)
-	return fixture
 }
 
 // waitForGRPCRouteReady retries a unary Echo until it succeeds, riding out the

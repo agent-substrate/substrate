@@ -36,7 +36,7 @@ PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
 
 echo "Building Docker image: $IMAGE (platform: $PLATFORM)"
 # Build context is the monorepo root because the Dockerfile compiles the
-# boomer-glutton Go binary alongside the Python install (see Dockerfile).
+# boomer-worker Go binary alongside the Python install (see Dockerfile).
 docker build --platform "$PLATFORM" -t "$IMAGE" -f benchmarking/locust/Dockerfile .
 
 echo "Pushing Docker image..."

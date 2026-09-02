@@ -52,7 +52,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	var errs []error
 	// Cleanup stays best-effort: an unresolvable template is recorded and
 	// the remaining steps run without it, like a missing one.
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, w.actorTemplateLister, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if errors.Is(err, errActorTemplateNotFound) {
 		actorTemplate, err = nil, nil
 	}
@@ -162,8 +162,8 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		// all external volumes recorded on the actor so atelet can unmount them on the node.
 		slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
 			slog.String("actor", actorRef.Name),
-			slog.String("templateNamespace", actor.GetActorTemplateNamespace()),
-			slog.String("templateName", actor.GetActorTemplateName()))
+			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
+			slog.String("templateName", actor.GetActorTemplate().GetName()))
 		workloadSpec = &ateletpb.WorkloadSpec{}
 		for _, vol := range actor.GetStatus().GetActorVolumes() {
 			// StorageVolumeId is only populated once the volume is provisioned.
@@ -188,8 +188,8 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorUid:              actor.GetMetadata().GetUid(),
-		ActorTemplateAtespace: actorTemplate.GetMetadata().GetAtespace(),
-		ActorTemplateName:     actorTemplate.GetMetadata().GetName(),
+		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
+		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
 	}
 

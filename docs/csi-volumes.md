@@ -117,8 +117,7 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 mountOptions:
-  - nfsvers=3
-  - nolock
+  - nfsvers=4.1
 ```
 
 ### Step 2: Register the CSIDriverConfig
@@ -142,6 +141,8 @@ spec:
 
 Refer to [ActorTemplate: The Workload Blueprint](api-guide.md#2-actortemplate-the-workload-blueprint) for general template options.
 
+The `WorkerPool` is a Kubernetes resource, applied with `kubectl apply`:
+
 ```yaml
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
@@ -153,32 +154,37 @@ metadata:
 spec:
   replicas: 5
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
----
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
+```
+
+The `ActorTemplate` is a protojson-shaped `ateapipb.ActorTemplate`, created
+through the ate API with `kubectl ate create actor-template -f -` (the
+`ate-demo` atespace must exist):
+
+```yaml
 metadata:
+  atespace: ate-demo
   name: stateful-agent-template
-  namespace: ate-demo
-spec:
-  sandboxClass: gvisor
-  workerSelector:
-    matchLabels:
-      workload: stateful-agent
-  containers:
-  - name: agent
-    image: gcr.io/my-project/agent-app@sha256:7f28ab0...
-    volumeMounts:
-    - name: shared-storage
-      mountPath: /mnt/shared
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 8080
-  snapshotsConfig:
-    location: gs://my-snapshots-bucket/stateful-agent
-  volumes:
+workerSelector:
+  matchLabels:
+    workload: stateful-agent
+containers:
+- name: agent
+  image: gcr.io/my-project/agent-app@sha256:7f28ab0...
+  volumeMounts:
   - name: shared-storage
-    externalVolumeTemplate:
-      capacity: 5Gi
-      storageClassName: csi-nfs-sc
+    mountPath: /mnt/shared
+  readyz:
+    httpGet:
+      path: /readyz
+      port: 8080
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default
+snapshotsConfig:
+  storageLocation: gs://my-snapshots-bucket/stateful-agent
+volumes:
+- name: shared-storage
+  externalVolumeTemplate:
+    capacity: 5Gi
+    storageClassName: csi-nfs-sc
 ```

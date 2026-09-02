@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	gzip "github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -53,7 +54,7 @@ const sandboxManifestName = "manifest.json"
 var maxAssetBytes int64 = 8 << 30
 
 const (
-	// gvisorAssetName is the gVisor release tarball asset (gvisor.tar.bz2). The
+	// gvisorAssetName is the gVisor release tarball asset (gvisor.tar.zstd). The
 	// tarball carries `runsc` together with the `gvisor-bin/` helper binaries,
 	// so it is extracted into a content-addressed directory rather than as a
 	// single file.
@@ -204,7 +205,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	return localPath, nil
 }
 
-// fetchGVisorRelease downloads the gVisor release tarball (gvisor.tar.bz2,
+// fetchGVisorRelease downloads the gVisor release tarball (gvisor.tar.zstd,
 // verifying its sha256) and extracts it into a content-addressed directory in
 // the shared static-files cache, returning the local path of the extracted
 // `runsc` binary.
@@ -320,19 +321,21 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 }
 
 // extractTarArchive decompresses and extracts the tarball file at tarPath into
-// destDir. It dynamically selects the decompression format (gzip, bzip2, or none)
-// based on the suffix of urlPath. If ctx is canceled, extraction will stop
-// early and return an error.
+// destDir. It dynamically selects the decompression format (gzip, bzip2, zstd,
+// or none) based on the suffix of urlPath. If ctx is canceled, extraction will
+// stop early and return an error.
 func extractTarArchive(ctx context.Context, tarPath, urlPath, destDir string) error {
-	var isGz, isBz, isTar bool
+	var isGz, isBz, isZst, isTar bool
 	if strings.HasSuffix(urlPath, ".tar.gz") || strings.HasSuffix(urlPath, ".tgz") {
 		isGz = true
 	} else if strings.HasSuffix(urlPath, ".tar.bz2") || strings.HasSuffix(urlPath, ".tbz2") {
 		isBz = true
+	} else if strings.HasSuffix(urlPath, ".tar.zst") || strings.HasSuffix(urlPath, ".tar.zstd") {
+		isZst = true
 	} else if strings.HasSuffix(urlPath, ".tar") {
 		isTar = true
 	} else {
-		return fmt.Errorf("%w: unsupported archive format for URL %s (must be .tar.gz, .tgz, .tar.bz2, .tbz2, or .tar)", ateerrors.ReasonInvalidSandboxAsset, urlPath)
+		return fmt.Errorf("%w: unsupported archive format for URL %s (must be .tar.gz, .tgz, .tar.bz2, .tbz2, .tar.zst, .tar.zstd, or .tar)", ateerrors.ReasonInvalidSandboxAsset, urlPath)
 	}
 
 	f, err := os.Open(tarPath)
@@ -353,6 +356,13 @@ func extractTarArchive(ctx context.Context, tarPath, urlPath, destDir string) er
 		r = gzr
 	} else if isBz {
 		r = bzip2.NewReader(buf)
+	} else if isZst {
+		zr, err := zstd.NewReader(buf)
+		if err != nil {
+			return fmt.Errorf("%w: failed to create zstd reader for %s: %w", ateerrors.ReasonInvalidSandboxAsset, urlPath, err)
+		}
+		defer zr.Close()
+		r = zr
 	} else if isTar {
 		r = buf
 	}

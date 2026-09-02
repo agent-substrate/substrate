@@ -52,6 +52,17 @@ demo-claude-code-multiplex_build_workload() {
   echo "${repo}@${digest}"
 }
 
+# demo-claude-code-multiplex_render substitutes the demo's placeholders in a
+# manifest. DEMO_CLAUDE_WORKLOAD_IMAGE is set by the deploy function after
+# building the workload image; the pool manifest uses none of these values,
+# so the defaults keep delete-time rendering valid without credentials.
+demo-claude-code-multiplex_render() {
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME:-placeholder}|g" \
+      -e "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY:-placeholder}|g" \
+      -e "s|\${WORKLOAD_IMAGE}|${DEMO_CLAUDE_WORKLOAD_IMAGE:-placeholder}|g" \
+      "$1"
+}
+
 demo-claude-code-multiplex_deploy() {
   log_step "demo-claude-code-multiplex_deploy"
   if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
@@ -67,34 +78,25 @@ demo-claude-code-multiplex_deploy() {
     return 1
   fi
 
-  local workload_image
-  workload_image=$(demo-claude-code-multiplex_build_workload)
-  if [[ -z "${workload_image}" ]]; then
+  DEMO_CLAUDE_WORKLOAD_IMAGE=$(demo-claude-code-multiplex_build_workload)
+  if [[ -z "${DEMO_CLAUDE_WORKLOAD_IMAGE}" ]]; then
     return 1
   fi
-  log_step "  workload image: ${workload_image}"
+  log_step "  workload image: ${DEMO_CLAUDE_WORKLOAD_IMAGE}"
 
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      -e "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY}|g" \
-      -e "s|\${WORKLOAD_IMAGE}|${workload_image}|g" \
-      demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
-    | run_ko apply -f -
+  deploy_substrate_demo demo-claude-code-multiplex_render \
+    demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
+    claude-multiplex-demo claude-workerpool 300 \
+    demos/claude-code-multiplex/agent-luna-template.yaml.tmpl agent-luna \
+    demos/claude-code-multiplex/agent-mars-template.yaml.tmpl agent-mars \
+    demos/claude-code-multiplex/agent-orion-template.yaml.tmpl agent-orion
 }
 
 demo-claude-code-multiplex_delete() {
   log_step "demo-claude-code-multiplex_delete"
-  delete_demo_actors \
-    claude-multiplex-demo agent-luna \
-    claude-multiplex-demo agent-mars \
-    claude-multiplex-demo agent-orion
-  # Delete-time substitution doesn't need a real image — k8s identifies
-  # resources by metadata, not container spec. Use placeholders so sed
-  # produces valid YAML even when the env vars aren't set.
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME:-placeholder}|g" \
-      -e "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY:-placeholder}|g" \
-      -e "s|\${WORKLOAD_IMAGE}|placeholder|g" \
-      demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo demo-claude-code-multiplex_render \
+    demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
+    claude-multiplex-demo agent-luna agent-mars agent-orion
 }
 
 demo-claude-code-multiplex_usage() {

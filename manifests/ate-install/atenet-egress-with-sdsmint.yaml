@@ -25,8 +25,8 @@ metadata:
 #
 # No RBAC is bound to this ServiceAccount on purpose: the ext_proc sidecar runs
 # with --mode=egress, which serves the egress ext_proc handler and nothing else
-# — no xDS server and no ActorTemplate controller, so no Kubernetes access. It
-# reaches the control plane over the ate API only.
+# — no xDS server, so no Kubernetes access. It reaches the control plane over
+# the ate API only.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -143,7 +143,7 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
                   on_request_headers:
-                  - object_key: ate.actor.identity
+                  - object_key: dev.ate.actor.identity
                     factory_key: envoy.string
                     shared_with_upstream: ONCE
                     skip_if_empty: true
@@ -295,7 +295,7 @@ data:
                     json_format:
                       leg: mitm
                       time: "%START_TIME%"
-                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
+                      actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
                       sni: "%REQUESTED_SERVER_NAME%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
@@ -427,7 +427,7 @@ data:
                     json_format:
                       leg: cleartext
                       time: "%START_TIME%"
-                      actor: "%FILTER_STATE(ate.actor.identity:PLAIN)%"
+                      actor: "%FILTER_STATE(dev.ate.actor.identity:PLAIN)%"
                       authority: "%REQ(:AUTHORITY)%"
                       method: "%REQ(:METHOD)%"
                       path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
@@ -506,7 +506,7 @@ data:
         connect_timeout: 1s
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection. Two objects ride this hop,
-        # both set on the CONNECT leg above: ate.actor.identity, which the MITM
+        # both set on the CONNECT leg above: dev.ate.actor.identity, which the MITM
         # access logs and the optional ext_proc filter read, and
         # original_dst_address, which egress_tcp_passthrough dials.
         #
@@ -935,8 +935,8 @@ spec:
           mountPath: /var/run/sdsmint     
       # Co-located ext_proc server: the same atenet router binary the ingress
       # gateway runs, started with --mode=egress so it serves only the egress
-      # ext_proc handler (no xDS server, no ActorTemplate controller, no
-      # Kubernetes access). The egress Envoy calls it over localhost to
+      # ext_proc handler (no xDS server, no Kubernetes access). The egress
+      # Envoy calls it over localhost to
       # authenticate actor identity against the ate API on every CONNECT.
       #
       # Ingress and egress are separate Deployments because they scale

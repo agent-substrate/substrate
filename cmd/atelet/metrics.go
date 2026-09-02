@@ -168,6 +168,16 @@ func isCollateral(groupErr, legErr error) bool {
 	return legErr != nil && groupErr != legErr
 }
 
+// assetsAfterCollateral keeps the sandbox-asset duration when the prep leg was
+// cancelled during the later OCI unpack: only the phase a leg stopped in is
+// truncated, and dropping a completed one reports a step that ran as never run.
+func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Duration {
+	if prepFailedPhase == ateattr.SnapshotPhaseSandboxAssets {
+		return 0
+	}
+	return assets
+}
+
 // restoreSnapshotKind classifies which snapshot a restore reads. A local
 // restore is evident from the wire; golden and latest both arrive as an external
 // URI prefix, so they are told apart by the identity the manifest records for

@@ -35,9 +35,21 @@ def add_memload_arguments(parser: LocustArgumentParser) -> None:
         "--mem-churn",
         type=str,
         default="",
-        help="How much of the working set each GluttonUser re-randomizes in "
-        "place every cycle (WriteRAM overwrite), with an optional unit "
-        "suffix (e.g. '64Mi'), so repeated suspends snapshot changing "
-        "memory like a live application's (default: empty = disabled). "
+        help="How much of the working set each GluttonUser re-randomizes "
+        "every cycle (WriteRAM rotate: the dirty window advances through "
+        "the array, wrapping at the end), with an optional unit suffix "
+        "(e.g. '64Mi'), so repeated suspends snapshot changing memory "
+        "like a live application's (default: empty = disabled). "
         "Requires --mem-target.",
+    )
+    group.add_argument(
+        "--mem-read",
+        type=str,
+        default="",
+        help="How much of the working set each GluttonUser walks (ReadRAM, "
+        "one byte per page) right after every resume, with an optional "
+        "unit suffix (e.g. '1Gi') or 'all' for the whole array. Under a "
+        "demand-paged restore the walk's latency is the cost of paging "
+        "the previous snapshot's memory back in (default: empty = "
+        "disabled). Requires --mem-target.",
     )

@@ -17,9 +17,7 @@ package controlapi
 import (
 	"testing"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // TestActorResourceLimits covers the actor-side extraction: the CPU/memory limits
@@ -27,50 +25,37 @@ import (
 func TestActorResourceLimits(t *testing.T) {
 	tests := []struct {
 		name       string
-		res        *corev1.ResourceRequirements
+		resources  *ateapipb.Resources
 		wantCPU    int64
 		wantMemory int64
 	}{
 		{
 			name:       "nil resources yields zero",
-			res:        nil,
+			resources:  nil,
 			wantCPU:    0,
 			wantMemory: 0,
 		},
 		{
 			name: "cpu and memory limits are read",
-			res: &corev1.ResourceRequirements{
-				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("2"),
-					corev1.ResourceMemory: resource.MustParse("4Gi"),
-				},
-			},
+			resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
+				{Name: "cpu", Quantity: "2"},
+				{Name: "memory", Quantity: "4Gi"},
+			}},
 			wantCPU:    2000,
 			wantMemory: 4 << 30,
 		},
 		{
 			name: "millicpu is preserved",
-			res: &corev1.ResourceRequirements{
-				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1500m")},
-			},
+			resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
+				{Name: "cpu", Quantity: "1500m"},
+			}},
 			wantCPU:    1500,
-			wantMemory: 0,
-		},
-		{
-			name: "requests are ignored; only limits size the actor",
-			res: &corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("1"),
-					corev1.ResourceMemory: resource.MustParse("1Gi"),
-				},
-			},
-			wantCPU:    0,
 			wantMemory: 0,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpl := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{Resources: tc.res}})
+			tmpl := &ateapipb.ActorTemplate{Resources: tc.resources}
 			cpu, mem, err := actorResourceLimits(tmpl)
 			if err != nil {
 				t.Fatalf("actorResourceLimits() error: %v", err)

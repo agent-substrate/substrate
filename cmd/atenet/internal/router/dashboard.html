@@ -370,34 +370,6 @@
             </div>
         </div>
 
-        <div class="log-section" style="margin-bottom: 2rem;">
-            <div class="log-header">
-                <h2>Active Actor Templates</h2>
-            </div>
-            <div class="table-container">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Namespace</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{ range .Templates }}
-                        <tr>
-                            <td style="font-weight: 600;">{{ .Name }}</td>
-                            <td>{{ .Namespace }}</td>
-                        </tr>
-                        {{ else }}
-                        <tr>
-                            <td colspan="2" class="empty-state">No ActorTemplates are currently being handled.</td>
-                        </tr>
-                        {{ end }}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
         <div class="log-section">
             <div class="log-header">
                 <h2>Recent 100 Processing Inquiries Served</h2>

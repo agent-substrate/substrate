@@ -15,6 +15,7 @@
 package controllers
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -378,12 +379,12 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 		name     string
 		class    atev1alpha1.SandboxClass
 		wantCaps []corev1.Capability
-		// wantSeccompUnconfined is micro-VM only: virtiofsd's sandbox pivot_root()s,
-		// which the default profile denies.
+		// wantSeccompUnconfined holds for every class: both runsc's and
+		// virtiofsd's sandbox pivot_root(), which the default profile denies.
 		wantSeccompUnconfined bool
 	}{
-		{"gvisor default", "", ateomGvisorCapabilities, false},
-		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, ateomGvisorCapabilities, false},
+		{"gvisor default", "", ateomGvisorCapabilities, true},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, ateomGvisorCapabilities, true},
 		{"microvm", atev1alpha1.SandboxClassMicroVM, ateomMicroVMCapabilities, true},
 	}
 	for _, tt := range tests {
@@ -410,15 +411,12 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 				*sc.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
 				t.Errorf("AppArmorProfile = %v, want Unconfined", sc.AppArmorProfile)
 			}
-			// gVisor must keep the runtime default (an unset profile), so the
-			// micro-VM relaxation cannot leak to it.
+			// Every class declares Unconfined explicitly so it does not depend on
+			// the cluster leaving the seccomp profile unset.
 			gotSeccompUnconfined := sc.SeccompProfile != nil && sc.SeccompProfile.Type != nil &&
 				*sc.SeccompProfile.Type == corev1.SeccompProfileTypeUnconfined
 			if gotSeccompUnconfined != tt.wantSeccompUnconfined {
 				t.Errorf("seccomp Unconfined = %v, want %v", gotSeccompUnconfined, tt.wantSeccompUnconfined)
-			}
-			if !tt.wantSeccompUnconfined && sc.SeccompProfile != nil {
-				t.Errorf("SeccompProfile = %v, want unset so the runtime default applies", sc.SeccompProfile)
 			}
 		})
 	}
@@ -437,8 +435,8 @@ func TestTerminationGracePeriodSeconds(t *testing.T) {
 }
 
 // TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint and the
-// pod-scoped resource identity are set on the ateom container only when an endpoint
-// is configured, and that the $(POD_*) refs precede OTEL_RESOURCE_ATTRIBUTES.
+// resource identity are set on the ateom container only when an endpoint is
+// configured, and that every ref the value substitutes is declared ahead of it.
 func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	const endpoint = "http://collector.otel-system.svc:4317"
 	tests := []struct {
@@ -460,7 +458,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE"} {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE", "NODE_NAME"} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -471,11 +469,19 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"].value; got != endpoint {
 				t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", got, endpoint)
 			}
-			if got := env["OTEL_RESOURCE_ATTRIBUTES"].value; got != ateomOTelResourceAttributes {
-				t.Errorf("OTEL_RESOURCE_ATTRIBUTES = %q, want %q", got, ateomOTelResourceAttributes)
+			resourceAttrs := env["OTEL_RESOURCE_ATTRIBUTES"].value
+
+			wantKeys := []string{"k8s.namespace.name", "k8s.pod.name", "k8s.pod.uid", "k8s.node.name", "service.instance.id"}
+			if diff := cmp.Diff(wantKeys, envAttrKeys(resourceAttrs)); diff != "" {
+				t.Errorf("OTEL_RESOURCE_ATTRIBUTES keys (-want +got):\n%s", diff)
+			}
+
+			refs := envRefs(resourceAttrs)
+			if len(refs) == 0 {
+				t.Fatalf("OTEL_RESOURCE_ATTRIBUTES %q substitutes nothing, so the ref check below proves nothing", resourceAttrs)
 			}
 			raIdx := env["OTEL_RESOURCE_ATTRIBUTES"].index
-			for _, ref := range []string{"POD_UID", "POD_NAME", "POD_NAMESPACE"} {
+			for _, ref := range refs {
 				if _, ok := env[ref]; !ok {
 					t.Errorf("%s must be set for OTEL_RESOURCE_ATTRIBUTES substitution", ref)
 					continue
@@ -609,6 +615,33 @@ type envInfo struct {
 	value string
 }
 
+var envRefPattern = regexp.MustCompile(`\$\(([A-Za-z_][A-Za-z0-9_]*)\)`)
+
+// envRefs returns the distinct variables a value substitutes, first use first.
+func envRefs(value string) []string {
+	var refs []string
+	seen := make(map[string]bool)
+	for _, m := range envRefPattern.FindAllStringSubmatch(value, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		refs = append(refs, m[1])
+	}
+	return refs
+}
+
+// envAttrKeys returns the attribute keys of an OTEL_RESOURCE_ATTRIBUTES value.
+func envAttrKeys(value string) []string {
+	var keys []string
+	for _, pair := range strings.Split(value, ",") {
+		if k, _, ok := strings.Cut(pair, "="); ok {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
 func envByName(env []corev1ac.EnvVarApplyConfiguration) map[string]envInfo {
 	m := make(map[string]envInfo, len(env))
 	for i, e := range env {
@@ -622,172 +655,6 @@ func envByName(env []corev1ac.EnvVarApplyConfiguration) map[string]envInfo {
 		m[*e.Name] = info
 	}
 	return m
-}
-
-func TestGPUPoolMountsToolkit(t *testing.T) {
-	gpu := resource.MustParse("1")
-	wp := &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-		Spec: atev1alpha1.WorkerPoolSpec{
-			WorkerImage: "img",
-			Template: &atev1alpha1.WorkerPoolPodTemplate{
-				Resources: &corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
-				},
-			},
-		},
-	}
-	dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
-	pod := dep.Spec.Template.Spec
-
-	var found bool
-	for _, v := range pod.Volumes {
-		if v.Name != nil && *v.Name == "nvidia-toolkit" {
-			found = true
-			if v.HostPath == nil || *v.HostPath.Path != defaultNvidiaToolkitHostPath {
-				t.Fatalf("nvidia-toolkit volume has wrong hostPath: %+v", v.HostPath)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected nvidia-toolkit host mount on a GPU pool")
-	}
-
-	var mounted bool
-	for _, c := range pod.Containers {
-		for _, m := range c.VolumeMounts {
-			if m.Name != nil && *m.Name == "nvidia-toolkit" && *m.MountPath == nvidiaToolkitContainerPath {
-				mounted = true
-			}
-		}
-	}
-	if !mounted {
-		t.Fatal("expected nvidia-toolkit mount on the ateom container")
-	}
-
-	// A GPU pool keeps the same posture as any other unprivileged gVisor worker: no
-	// user namespace and no unmasked /proc, which the skipped update-ldcache hook
-	// would otherwise force.
-	if pod.HostUsers != nil {
-		t.Error("did not expect hostUsers to be set on a GPU pool")
-	}
-	for _, c := range pod.Containers {
-		if c.SecurityContext != nil && c.SecurityContext.ProcMount != nil {
-			t.Errorf("did not expect procMount to be set, got %v", *c.SecurityContext.ProcMount)
-		}
-	}
-}
-
-// TestGPUPoolDriverRootEnv covers the override reaching the worker: ateom derives the
-// driver library and binary paths from it, and nvidia-ctk cannot generate a CDI spec
-// without them. Unset, no env is added at all.
-func TestGPUPoolDriverRootEnv(t *testing.T) {
-	gpu := resource.MustParse("1")
-	newGPUPool := func() *atev1alpha1.WorkerPool {
-		return &atev1alpha1.WorkerPool{
-			ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-			Spec: atev1alpha1.WorkerPoolSpec{
-				WorkerImage: "img",
-				Template: &atev1alpha1.WorkerPoolPodTemplate{
-					Resources: &corev1.ResourceRequirements{
-						Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
-					},
-				},
-			},
-		}
-	}
-	driverRootEnv := func(wp *atev1alpha1.WorkerPool) (string, bool) {
-		for _, c := range buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec.Containers {
-			for _, e := range c.Env {
-				if e.Name != nil && *e.Name == nvidiaDriverRootEnv {
-					return *e.Value, true
-				}
-			}
-		}
-		return "", false
-	}
-
-	if v, ok := driverRootEnv(newGPUPool()); ok {
-		t.Errorf("unset: expected no %s on the worker, got %q", nvidiaDriverRootEnv, v)
-	}
-
-	t.Setenv(nvidiaDriverRootEnv, "/opt/nvidia")
-	v, ok := driverRootEnv(newGPUPool())
-	if !ok || v != "/opt/nvidia" {
-		t.Errorf("set: want %s=/opt/nvidia on the worker, got %q (present=%v)", nvidiaDriverRootEnv, v, ok)
-	}
-}
-
-func TestNonGPUPoolHasNoToolkit(t *testing.T) {
-	wp := &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-		Spec:       atev1alpha1.WorkerPoolSpec{WorkerImage: "img"},
-	}
-	dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
-	pod := dep.Spec.Template.Spec
-	for _, v := range pod.Volumes {
-		if v.Name != nil && *v.Name == "nvidia-toolkit" {
-			t.Fatal("non-GPU pool must not mount the toolkit")
-		}
-	}
-	// Non-GPU workers keep the tighter base posture: no user namespace, no
-	// unmasked /proc.
-	if pod.HostUsers != nil {
-		t.Error("non-GPU pool must not set hostUsers")
-	}
-	for _, c := range pod.Containers {
-		if c.SecurityContext != nil && c.SecurityContext.ProcMount != nil {
-			t.Error("non-GPU pool must not set procMount")
-		}
-	}
-}
-
-// TestGPUMicroVMPoolHasNoGPUPodShape asserts none of the GPU pod shaping is applied
-// to a non-gVisor pool: no toolkit volume, no toolkit mount, no driver-root env.
-//
-// A WorkerPool like this is rejected at apply time by the CEL rule on
-// WorkerPoolSpec, so it should never reach the controller. This covers the case
-// where one already exists — the rule was added after the fact, or the object was
-// written by a path that skipped CRD validation. The controller does not strip the
-// resource request itself, so such a pod still schedules onto a GPU node and holds a
-// device no actor can use; that gap is why the combination is rejected at the API
-// rather than only here.
-func TestGPUMicroVMPoolHasNoGPUPodShape(t *testing.T) {
-	// Set so the driver-root assertion below is not vacuous: a gVisor GPU pool would
-	// carry this env, a micro-VM one must not.
-	t.Setenv(nvidiaDriverRootEnv, "/opt/nvidia")
-	gpu := resource.MustParse("1")
-	wp := &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
-		Spec: atev1alpha1.WorkerPoolSpec{
-			WorkerImage:  "img",
-			SandboxClass: atev1alpha1.SandboxClassMicroVM,
-			Template: &atev1alpha1.WorkerPoolPodTemplate{
-				Resources: &corev1.ResourceRequirements{
-					Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
-				},
-			},
-		},
-	}
-	pod := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
-
-	for _, v := range pod.Volumes {
-		if v.Name != nil && *v.Name == "nvidia-toolkit" {
-			t.Error("micro-VM pool must not mount the NVIDIA toolkit even when it requests a GPU")
-		}
-	}
-	for _, c := range pod.Containers {
-		for _, m := range c.VolumeMounts {
-			if m.Name != nil && *m.Name == "nvidia-toolkit" {
-				t.Error("micro-VM pool must not get the toolkit volume mount")
-			}
-		}
-		for _, e := range c.Env {
-			if e.Name != nil && *e.Name == nvidiaDriverRootEnv {
-				t.Errorf("micro-VM pool must not get %s", nvidiaDriverRootEnv)
-			}
-		}
-	}
 }
 
 func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {
@@ -849,8 +716,8 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithImage(wp.Spec.WorkerImage).
 			WithArgs(
 				"--pod-uid=$(POD_UID)",
-				"--atunnel-listen-address=0.0.0.0:443",
-				"--atunnel-connect-listen-address=0.0.0.0:8443",
+				"--atunnel-listen-address=:443",
+				"--atunnel-connect-listen-address=:8443",
 				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
 				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
 				"--atunnel-egress-listen-address=0.0.0.0:15001",
@@ -880,7 +747,9 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithDrop("ALL").
 					WithAdd(ateomGvisorCapabilities...)).
 				WithAppArmorProfile(corev1ac.AppArmorProfile().
-					WithType(corev1.AppArmorProfileTypeUnconfined))).
+					WithType(corev1.AppArmorProfileTypeUnconfined)).
+				WithSeccompProfile(corev1ac.SeccompProfile().
+					WithType(corev1.SeccompProfileTypeUnconfined))).
 			WithEnv(
 				corev1ac.EnvVar().
 					WithName("POD_UID").

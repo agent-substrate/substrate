@@ -19,12 +19,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/protobuf/testing/protocmp"
 
@@ -35,7 +38,7 @@ import (
 )
 
 // One Postgres container serves every test in this package; each test gets
-// isolation via DebugClearAll rather than a fresh container, which would be
+// isolation via clearAll rather than a fresh container, which would be
 // far slower. Tests in this package are not safe to run with -parallel.
 var (
 	containerOnce sync.Once
@@ -114,6 +117,346 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	return containerPool
 }
 
+func TestMigrationsConcurrentStartup(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "concurrent-startup" CASCADE`); err != nil {
+		t.Fatalf("resetting PostgreSQL schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "concurrent-startup" CASCADE`)
+	})
+
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			p, err := Connect(ctx, containerDSN, "concurrent-startup")
+			if p != nil {
+				p.Close()
+				p.pool.Close()
+			}
+			errs <- err
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("Connect failed: %v", err)
+		}
+	}
+
+	var applied int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "concurrent-startup".schema_migrations WHERE version_id > 0 AND is_applied`).Scan(&applied); err != nil {
+		t.Fatalf("reading applied migrations: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied migration rows = %d, want 1", applied)
+	}
+}
+
+func TestMigrationsWaitForInProgressMigration(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "migration-lock-wait"
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-lock-wait" CASCADE`); err != nil {
+		t.Fatalf("resetting schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-lock-wait" CASCADE`)
+	})
+
+	if _, err := pool.Exec(ctx, `CREATE SCHEMA "migration-lock-wait"`); err != nil {
+		t.Fatalf("creating migration schema: %v", err)
+	}
+	migrationPool, err := pgxpool.New(ctx, containerDSN+"&search_path="+schema)
+	if err != nil {
+		t.Fatalf("opening migration pool: %v", err)
+	}
+	t.Cleanup(migrationPool.Close)
+	lockID, err := migrationLockID(ctx, migrationPool)
+	if err != nil {
+		t.Fatalf("generating migration lock ID: %v", err)
+	}
+	lockConn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquiring migration lock connection: %v", err)
+	}
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, lockID)
+		}
+		lockConn.Release()
+	})
+	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockID); err != nil {
+		t.Fatalf("locking migrations: %v", err)
+	}
+
+	result := make(chan error, 1)
+	go func() { result <- applyMigrations(ctx, migrationPool) }()
+	select {
+	case err := <-result:
+		t.Fatalf("migration returned while its advisory lock was held: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockID); err != nil {
+		t.Fatalf("unlocking migrations: %v", err)
+	}
+	locked = false
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("migration failed after the advisory lock was released: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("migration did not finish after the advisory lock was released")
+	}
+}
+
+func TestConnectUsesConfiguredSchema(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "substrate-test"
+	if _, err := pool.Exec(ctx, `
+		DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+		DROP SCHEMA IF EXISTS "substrate-other-test" CASCADE;
+		CREATE SCHEMA "substrate-other-test";
+		CREATE TABLE "substrate-other-test".worker_outbox (
+			created_at timestamptz NOT NULL
+		) PARTITION BY RANGE (created_at);
+		CREATE TABLE "substrate-other-test".worker_outbox_p200001010000
+			PARTITION OF "substrate-other-test".worker_outbox
+			FOR VALUES FROM ('2000-01-01 00:00:00+00') TO ('2000-01-01 00:05:00+00');
+		CREATE TABLE IF NOT EXISTS public.substrate_schema_test_marker (id integer)`); err != nil {
+		t.Fatalf("preparing schema test: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `
+			DROP SCHEMA IF EXISTS "substrate-test" CASCADE;
+			DROP SCHEMA IF EXISTS "substrate-other-test" CASCADE;
+			DROP TABLE IF EXISTS public.substrate_schema_test_marker`)
+	})
+
+	dsn, err := containerPG.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		t.Fatalf("getting PostgreSQL connection string: %v", err)
+	}
+	persistence, err := Connect(ctx, dsn+"&search_path=public", schema)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer persistence.pool.Close()
+	defer persistence.Close()
+
+	if _, err := persistence.CreateAtespace(ctx, newTestAtespace("schema-test")); err != nil {
+		t.Fatalf("creating atespace in configured schema: %v", err)
+	}
+
+	for _, table := range []string{"atespaces", "schema_migrations"} {
+		var exists bool
+		if err := persistence.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema = $1 AND table_name = $2
+			)`, schema, table).Scan(&exists); err != nil {
+			t.Fatalf("checking %s.%s: %v", schema, table, err)
+		}
+		if !exists {
+			t.Errorf("expected %s.%s to exist", schema, table)
+		}
+	}
+
+	var markerExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.substrate_schema_test_marker') IS NOT NULL`).Scan(&markerExists); err != nil {
+		t.Fatalf("checking unrelated table: %v", err)
+	}
+	if !markerExists {
+		t.Error("migration removed an unrelated table")
+	}
+
+	if err := persistence.dropExpiredWorkerOutboxPartitions(ctx, persistence.watchPool, time.Now()); err != nil {
+		t.Fatalf("dropping expired partitions in the configured schema: %v", err)
+	}
+	var unrelatedPartitionExists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('"substrate-other-test".worker_outbox_p200001010000') IS NOT NULL`).Scan(&unrelatedPartitionExists); err != nil {
+		t.Fatalf("checking unrelated outbox partition: %v", err)
+	}
+	if !unrelatedPartitionExists {
+		t.Error("outbox maintenance removed a partition from another schema")
+	}
+}
+
+func TestMigrationSchemaStates(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+
+	t.Run("ahead", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`); err != nil {
+			t.Fatalf("resetting schema: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-ahead" CASCADE`)
+		})
+
+		p, err := Connect(ctx, containerDSN, "migration-ahead")
+		if err != nil {
+			t.Fatalf("creating current schema: %v", err)
+		}
+		p.Close()
+		p.pool.Close()
+		if _, err := pool.Exec(ctx, `INSERT INTO "migration-ahead".schema_migrations (version_id, is_applied) VALUES (2, true)`); err != nil {
+			t.Fatalf("setting ahead migration state: %v", err)
+		}
+
+		p, err = Connect(ctx, containerDSN, "migration-ahead")
+		if err != nil {
+			t.Fatalf("Connect with an ahead clean schema failed: %v", err)
+		}
+		p.Close()
+		p.pool.Close()
+	})
+
+	t.Run("tables without metadata", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `
+			DROP SCHEMA IF EXISTS "migration-legacy" CASCADE;
+			CREATE SCHEMA "migration-legacy";
+			CREATE TABLE "migration-legacy".atespaces (id integer)`); err != nil {
+			t.Fatalf("creating legacy schema: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-legacy" CASCADE`)
+		})
+
+		_, err := Connect(ctx, containerDSN, "migration-legacy")
+		if err == nil || !strings.Contains(err.Error(), "Substrate tables exist without a migration ledger") {
+			t.Fatalf("Connect error = %v, want unsupported schema error", err)
+		}
+		var metadataExists bool
+		if err := pool.QueryRow(ctx, `SELECT to_regclass('"migration-legacy".schema_migrations') IS NOT NULL`).Scan(&metadataExists); err != nil {
+			t.Fatalf("checking migration metadata: %v", err)
+		}
+		if metadataExists {
+			t.Error("Connect created a migration ledger for an unsupported schema")
+		}
+	})
+}
+
+func TestMigrationFailureLeavesCompletedPrefixAndResumes(t *testing.T) {
+	pool := requirePool(t)
+	ctx := t.Context()
+	const schema = "migration-resume"
+	if _, err := pool.Exec(ctx, `DROP SCHEMA IF EXISTS "migration-resume" CASCADE; CREATE SCHEMA "migration-resume"`); err != nil {
+		t.Fatalf("resetting schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS "migration-resume" CASCADE`)
+	})
+
+	migrationPool, err := pgxpool.New(ctx, containerDSN+"&search_path="+schema)
+	if err != nil {
+		t.Fatalf("opening migration pool: %v", err)
+	}
+	t.Cleanup(migrationPool.Close)
+	files := fstest.MapFS{
+		"000001_create.sql": {Data: []byte("-- +goose Up\nCREATE TABLE resume_test (id integer PRIMARY KEY);")},
+		"000002_add_value.sql": {Data: []byte("-- +goose Up\n" +
+			"ALTER TABLE resume_test ADD COLUMN value text;")},
+		"000003_fail.sql": {Data: []byte("-- +goose Up\n" +
+			"CREATE TABLE failed_transaction (id integer);\n" +
+			"ALTER TABLE missing_table ADD COLUMN value text;")},
+	}
+	provider, err := openMigrationProvider(ctx, migrationPool, files)
+	if err != nil {
+		t.Fatalf("creating migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 1); err != nil {
+		t.Fatalf("applying pre-run migration: %v", err)
+	}
+	migrationErr := migrateToLatest(ctx, provider)
+	if migrationErr == nil {
+		t.Fatal("migration succeeded, want version 3 failure")
+	}
+	var partial *goose.PartialError
+	if !errors.As(migrationErr, &partial) {
+		t.Fatalf("migration error = %v, want goose.PartialError", migrationErr)
+	}
+	if got := partial.Failed.Source.Version; got != 3 {
+		t.Fatalf("failed migration version = %d, want 3", got)
+	}
+	if len(partial.Applied) != 1 || partial.Applied[0].Source.Version != 2 {
+		t.Fatalf("migrations completed before failure = %#v, want version 2", partial.Applied)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("closing failed migration provider: %v", err)
+	}
+
+	var valueColumnExists bool
+	if err := migrationPool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'resume_test' AND column_name = 'value'
+	)`, schema).Scan(&valueColumnExists); err != nil {
+		t.Fatalf("checking completed migration: %v", err)
+	}
+	if !valueColumnExists {
+		t.Error("migration 2 was not left applied")
+	}
+	var failedSQLApplied bool
+	if err := migrationPool.QueryRow(ctx, `SELECT to_regclass('failed_transaction') IS NOT NULL`).Scan(&failedSQLApplied); err != nil {
+		t.Fatalf("checking failed migration transaction: %v", err)
+	}
+	if failedSQLApplied {
+		t.Error("SQL from failed migration 3 was committed")
+	}
+	if diff := cmp.Diff([]int64{1, 2}, appliedMigrationVersions(t, migrationPool)); diff != "" {
+		t.Fatalf("applied migration versions after failure (-want +got):\n%s", diff)
+	}
+
+	files["000003_fail.sql"] = &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE resumed_migration (id integer);")}
+	resumedProvider, err := openMigrationProvider(ctx, migrationPool, files)
+	if err != nil {
+		t.Fatalf("creating resumed migration provider: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := resumedProvider.Close(); err != nil {
+			t.Errorf("closing resumed migration provider: %v", err)
+		}
+	})
+	if err := migrateToLatest(ctx, resumedProvider); err != nil {
+		t.Fatalf("resuming migrations: %v", err)
+	}
+	if diff := cmp.Diff([]int64{1, 2, 3}, appliedMigrationVersions(t, migrationPool)); diff != "" {
+		t.Fatalf("applied migration versions after resume (-want +got):\n%s", diff)
+	}
+	var resumed bool
+	if err := migrationPool.QueryRow(ctx, `SELECT to_regclass('resumed_migration') IS NOT NULL`).Scan(&resumed); err != nil {
+		t.Fatalf("checking resumed migration: %v", err)
+	}
+	if !resumed {
+		t.Error("migration 3 was not applied after restart")
+	}
+}
+
+func appliedMigrationVersions(t *testing.T, pool *pgxpool.Pool) []int64 {
+	t.Helper()
+	var versions []int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT COALESCE(array_agg(version_id ORDER BY version_id), '{}'::bigint[])
+		FROM schema_migrations
+		WHERE version_id > 0 AND is_applied`).Scan(&versions); err != nil {
+		t.Fatalf("reading applied migration versions: %v", err)
+	}
+	return versions
+}
+
+// clearAll truncates every table so the next test starts from an empty store
+// without paying for a fresh database. Nothing in production mass-deletes
+// state, so the statement lives here rather than on Persistence.
+func clearAll(t *testing.T, p *Persistence) {
+	t.Helper()
+	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
+		t.Fatalf("truncating tables: %v", err)
+	}
+}
+
 func setupPostgresPersistence(t *testing.T) *Persistence {
 	t.Helper()
 	ctx := context.Background()
@@ -122,9 +465,7 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}
 	t.Cleanup(p.Close)
-	if err := p.DebugClearAll(ctx); err != nil {
-		t.Fatalf("DebugClearAll failed: %v", err)
-	}
+	clearAll(t, p)
 	return p
 }
 
@@ -158,10 +499,9 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 	created, err := s.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "template-a",
-		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -353,10 +693,9 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 	ctx := context.Background()
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
-		ActorTemplateNamespace: "ns1",
-		ActorTemplateName:      "tmpl1",
-		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		Metadata:      &ateapipb.ResourceMetadata{Name: "id1", Atespace: "no-such-atespace"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)

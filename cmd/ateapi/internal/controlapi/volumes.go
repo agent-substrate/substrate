@@ -30,6 +30,9 @@ import (
 
 // initialActorVolumes constructs initial volume objects in PENDING state before volume creation.
 func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
+	if template == nil {
+		return nil, status.Error(codes.InvalidArgument, "template is required")
+	}
 	var volumes []*ateapipb.ExternalVolume
 	for _, vol := range template.GetVolumes() {
 		if vol.GetExternalVolumeTemplate() != nil {

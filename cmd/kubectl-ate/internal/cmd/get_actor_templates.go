@@ -32,7 +32,7 @@ var getActorTemplatesCmd = &cobra.Command{
 	Use:     "actor-template <template-name ...>",
 	Aliases: []string{"actor-templates"},
 	Short:   "List all actor templates or get one or more actor templates",
-	Long:    "List or get actor templates (substrate resources, not the ActorTemplate CRD).",
+	Long:    "List or get actor templates.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 

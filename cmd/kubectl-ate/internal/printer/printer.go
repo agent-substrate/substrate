@@ -60,13 +60,10 @@ func sortActors(actors []*ateapipb.Actor) {
 }
 
 // actorTemplateDisplay renders the template an actor was created from, in
-// "<atespace>/<name>" form for substrate-resource references and
-// "<namespace>/<name>" form for legacy CRD references.
+// "<atespace>/<name>" form.
 func actorTemplateDisplay(a *ateapipb.Actor) string {
-	if ref := a.GetActorTemplate(); ref != nil {
-		return ref.GetAtespace() + "/" + ref.GetName()
-	}
-	return a.GetActorTemplateNamespace() + "/" + a.GetActorTemplateName()
+	ref := a.GetActorTemplate()
+	return ref.GetAtespace() + "/" + ref.GetName()
 }
 
 // PrintActorsTo prints a slice of actors to the provided writer.
@@ -136,14 +133,9 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 			assignedActor := "<none>"
 			if wass := worker.GetStatus().GetAssignment(); wass != nil {
 				status = "ASSIGNED"
-				// The assignment names the template either as a substrate
-				// resource ref or as a legacy CRD ref; exactly one is set.
-				template := wass.GetActorTemplate().GetNamespace() + "/" + wass.GetActorTemplate().GetName()
-				if ref := wass.GetActorTemplateRef(); ref != nil {
-					template = ref.GetAtespace() + "/" + ref.GetName()
-				}
-				assignedActor = fmt.Sprintf("%s/%s/%s",
-					template, wass.GetActor().GetAtespace(), wass.GetActor().GetName())
+				ref := wass.GetActorTemplateRef()
+				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
+					ref.GetAtespace(), ref.GetName(), wass.GetActor().GetAtespace(), wass.GetActor().GetName())
 			}
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", ns, pool, class, pod, status, assignedActor)
@@ -271,15 +263,18 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 		return printProto(out, &ateapipb.ListActorTemplatesResponse{ActorTemplates: templates}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tSTATUS\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tGOLDEN SNAPSHOT\tERROR\tAGE")
 		for _, t := range templates {
-			status := "Failed"
-			if t.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot() != nil {
-				status = "Ready"
+			gss := t.GetStatus().GetGoldenSnapshotStatus()
+			// Error messages are too long for a table cell.
+			errFlag := ""
+			if gss.GetErrorMessage() != "" {
+				errFlag = "ERROR"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
-				t.GetSandboxConfig().GetSandboxClass(), status,
+				t.GetSandboxConfig().GetSandboxClass(),
+				gss.GetGoldenSnapshot().GetName(), errFlag,
 				formatAge(t.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()

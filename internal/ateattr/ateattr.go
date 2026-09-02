@@ -19,6 +19,7 @@
 package ateattr
 
 import (
+	"log/slog"
 	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -345,6 +346,20 @@ func ActorLogLabels(a resources.ActorAttribution, containerName string) map[stri
 		labels[string(ActorContainerNameKey)] = containerName
 	}
 	return labels
+}
+
+// ActorLogAttrs is the same identity for a component's own slog record, which
+// needs no envelope: a collector lifts flat keys straight onto the record's OTLP
+// attributes. It must agree with ActorLogLabels key for key, or joining a
+// component record to the actor lifecycle stream takes two spellings.
+func ActorLogAttrs(a resources.ActorAttribution) []slog.Attr {
+	return []slog.Attr{
+		slog.String(string(AtespaceKey), a.Ref.Atespace),
+		slog.String(string(ActorNameKey), a.Ref.Name),
+		slog.String(string(ActorUIDKey), a.UID),
+		slog.String(string(TemplateAtespaceKey), a.TemplateAtespace),
+		slog.String(string(TemplateNameKey), a.TemplateName),
+	}
 }
 
 // ActorMetricAttributes returns the metric labels for an Actor.

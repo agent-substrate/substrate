@@ -174,7 +174,7 @@ kubectl ate delete actor-template <name> -a <atespace>
 ```
 
 See
-[`demos/counter/counter-substrate-template.yaml.tmpl`](../../demos/counter/counter-substrate-template.yaml.tmpl)
+[`demos/counter/counter-template.yaml.tmpl`](../../demos/counter/counter-template.yaml.tmpl)
 for a complete manifest example.
 
 #### `kubectl ate get actor-templates` output columns
@@ -184,7 +184,8 @@ for a complete manifest example.
 | `ATESPACE` | The atespace the template belongs to. |
 | `NAME` | The template's name. |
 | `SANDBOX CLASS` | The sandbox runtime family (`SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`). |
-| `STATUS` | `Ready` once the golden snapshot exists (actors can be created), `Failed` otherwise. |
+| `GOLDEN SNAPSHOT` | The golden snapshot's name once it exists (actors can be created); empty while the golden build is still running. |
+| `ERROR` | `ERROR` when the golden build failed; `-o yaml` shows the full message. |
 | `AGE` | Time elapsed since the template was created. |
 
 ### Actor Lifecycle
@@ -227,7 +228,7 @@ kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope published
 kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope atespace
 
 # Create an actor from a tag and remove the tag when it is no longer needed.
-kubectl ate create actor <actor-name> -a <atespace> --template <namespace/name> --snapshot-tag <tag-atespace/tag-name>
+kubectl ate create actor <actor-name> -a <atespace> --template-ref <template-name> --snapshot-tag <tag-atespace/tag-name>
 kubectl ate delete snapshot-tag <tag-name> -a <atespace>
 ```
 
@@ -251,7 +252,7 @@ kubectl ate logs actors my-actor -a <atespace> -c my-container
 Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
 
 ### Administration & Setup
-Commands for bootstrapping the Substrate control plane and debugging local environments.
+Commands for bootstrapping the Substrate control plane.
 
 ```bash
 # Generate a new Actor ID CA pool and push it directly to a Kubernetes Secret
@@ -265,7 +266,4 @@ kubectl ate admin make-jwt-pool \
   --name actor-id-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"
-
-# DANGEROUS: Completely clear all Actor and Worker tracking state
-kubectl ate admin debug-clear-store
 ```

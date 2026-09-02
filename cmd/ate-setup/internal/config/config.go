@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -85,6 +87,10 @@ type Config struct {
 	// KODefaultPlatforms constrains ko's build platforms.
 	KODefaultPlatforms string
 
+	// Images selects where container images come from. Its zero value builds
+	// them from source with ko, which is what a developer install does.
+	Images images.Source
+
 	// Router selects the atenet router dataplane.
 	Router string
 	// PostgresConnectionString is the apiserver's store connection string.
@@ -133,6 +139,10 @@ type Options struct {
 	PodcertWorkersPerSigner        int
 	ExperimentalUseSDSMint         bool
 	AdditionalEgressExtprocService string
+
+	// Image source selection.
+	ImageRepo string
+	ImageTag  string
 
 	// NoDevEnv skips sourcing .ate-dev-env.sh even when it exists.
 	NoDevEnv bool
@@ -202,6 +212,7 @@ func Load(opts Options) (*Config, error) {
 		BucketName:                     env["BUCKET_NAME"],
 		KODockerRepo:                   env["KO_DOCKER_REPO"],
 		KODefaultPlatforms:             env["KO_DEFAULTPLATFORMS"],
+		Images:                         loadImageSource(opts, env),
 		PostgresConnectionString:       env["ATE_API_POSTGRES_CONNECTION_STRING"],
 		RolloutTimeout:                 rolloutTimeout,
 		rolloutTimeoutSet:              timeoutStr != "",
@@ -226,6 +237,14 @@ func Load(opts Options) (*Config, error) {
 	return cfg, nil
 }
 
+// loadImageSource resolves where images come from.
+func loadImageSource(opts Options, env map[string]string) images.Source {
+	return images.Source{
+		Repo: strings.TrimSuffix(firstNonEmpty(opts.ImageRepo, env["ATE_IMAGE_REPO"]), "/"),
+		Tag:  firstNonEmpty(opts.ImageTag, env["ATE_IMAGE_TAG"]),
+	}
+}
+
 func applyKindDefaults(cfg *Config) {
 	cfg.ProjectID = ""
 	cfg.ClusterLocation = ""
@@ -237,6 +256,9 @@ func applyKindDefaults(cfg *Config) {
 }
 
 func validate(cfg *Config) error {
+	if err := cfg.Images.Validate(); err != nil {
+		return err
+	}
 	switch cfg.Router {
 	case RouterEnvoy, RouterAgentgateway:
 	default:

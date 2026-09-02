@@ -186,6 +186,7 @@ func newMux(svc *gluttonService) *http.ServeMux {
 	mux.HandleFunc("/writedisk", protoRoute("WriteDisk", svc.WriteDisk))
 	mux.HandleFunc("/readdisk", protoRoute("ReadDisk", svc.ReadDisk))
 	mux.HandleFunc("/writeram", protoRoute("WriteRAM", svc.WriteRAM))
+	mux.HandleFunc("/readram", protoRoute("ReadRAM", svc.ReadRAM))
 	return mux
 }
 
@@ -256,12 +257,16 @@ type gluttonService struct {
 
 	// TODO: split this into per-resource locks (ram, fds, peers). A single
 	// global mutex serializes unrelated operations across all three.
-	mu    sync.Mutex
-	ram   map[string][]byte
-	fds   []*os.File
-	peers map[string]*peerGossip
+	mu  sync.Mutex
+	ram map[string][]byte
+	// ramCursor is each array's next WRITE_MODE_OVERWRITE_ROTATE offset.
+	// Absent means 0; invalidated whenever the array is reallocated.
+	ramCursor map[string]int
+	fds       []*os.File
+	peers     map[string]*peerGossip
 
 	ramWriteBytes  metric.Int64Counter
+	ramReadBytes   metric.Int64Counter
 	diskWriteBytes metric.Int64Counter
 	diskReadBytes  metric.Int64Counter
 	pingsReceived  metric.Int64Counter
@@ -278,9 +283,10 @@ type peerGossip struct {
 
 func newGluttonService(dir string) (*gluttonService, error) {
 	s := &gluttonService{
-		dataDir: dir,
-		ram:     make(map[string][]byte),
-		peers:   make(map[string]*peerGossip),
+		dataDir:   dir,
+		ram:       make(map[string][]byte),
+		ramCursor: make(map[string]int),
+		peers:     make(map[string]*peerGossip),
 	}
 
 	m := otel.Meter(meterName)
@@ -293,6 +299,14 @@ func newGluttonService(dir string) (*gluttonService, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create glutton.ram.write.bytes counter: %w", err)
+	}
+	s.ramReadBytes, err = m.Int64Counter(
+		"glutton.ram.read.bytes",
+		metric.WithUnit("By"),
+		metric.WithDescription("Total bytes walked by ReadRAM over the process lifetime."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create glutton.ram.read.bytes counter: %w", err)
 	}
 	s.diskWriteBytes, err = m.Int64Counter(
 		"glutton.disk.write.bytes",
@@ -402,6 +416,7 @@ func (s *gluttonService) WriteRAM(ctx context.Context, req *glutton.WriteRAMRequ
 		}
 		s.mu.Lock()
 		s.ram[req.GetKey()] = buf
+		delete(s.ramCursor, req.GetKey())
 		s.mu.Unlock()
 	case glutton.WriteMode_WRITE_MODE_OVERWRITE:
 		s.mu.Lock()
@@ -409,18 +424,89 @@ func (s *gluttonService) WriteRAM(ctx context.Context, req *glutton.WriteRAMRequ
 		if size > len(existing) {
 			existing = make([]byte, size)
 			s.ram[req.GetKey()] = existing
+			delete(s.ramCursor, req.GetKey())
 		}
 		if _, err := rand.Read(existing[:size]); err != nil {
 			s.mu.Unlock()
 			return nil, status.Errorf(codes.Internal, "generate random bytes: %v", err)
 		}
 		s.mu.Unlock()
+	case glutton.WriteMode_WRITE_MODE_OVERWRITE_ROTATE:
+		if err := s.rotateRAM(req.GetKey(), size); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown write_mode %v", req.GetWriteMode())
 	}
 
 	s.ramWriteBytes.Add(ctx, int64(size))
 	return &glutton.WriteRAMResponse{}, nil
+}
+
+// rotateRAM re-randomizes size bytes starting at the key's cursor, wrapping
+// at the end of the array, then advances the cursor past the write. Repeated
+// rotates therefore walk the whole array instead of re-dirtying the same
+// prefix. The cursor lives in process memory, so it rides along in snapshots
+// and the walk keeps advancing across suspend/resume cycles.
+func (s *gluttonService) rotateRAM(key string, size int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := s.ram[key]
+	if len(existing) == 0 {
+		return status.Errorf(codes.NotFound, "rotate needs an existing array %q; fill with TRUNCATE first", key)
+	}
+	if size > len(existing) {
+		size = len(existing)
+	}
+	start := s.ramCursor[key]
+	head := existing[start:min(start+size, len(existing))]
+	if _, err := rand.Read(head); err != nil {
+		return status.Errorf(codes.Internal, "generate random bytes: %v", err)
+	}
+	if wrapped := size - len(head); wrapped > 0 {
+		if _, err := rand.Read(existing[:wrapped]); err != nil {
+			return status.Errorf(codes.Internal, "generate random bytes: %v", err)
+		}
+	}
+	s.ramCursor[key] = (start + size) % len(existing)
+	return nil
+}
+
+// pageSize is the stride of the ReadRAM walk: one byte per 4KiB page is
+// enough to force every page resident without the cost of reading them all.
+const pageSize = 4096
+
+// Walk RAM previously written by WriteRAM, reading one byte per page so
+// every touched page must be resident before the response returns. After a
+// demand-paged restore this converts restore-time laziness into measurable
+// read latency.
+func (s *gluttonService) ReadRAM(ctx context.Context, req *glutton.ReadRAMRequest) (*glutton.ReadRAMResponse, error) {
+	if req.GetKey() == "" {
+		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	arr, ok := s.ram[req.GetKey()]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no RAM array %q", req.GetKey())
+	}
+	walk := int64(len(arr))
+	if req.GetSize() != "" {
+		n, err := parseBytes(req.GetSize())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "size: %v", err)
+		}
+		if n < 0 {
+			return nil, status.Error(codes.InvalidArgument, "size must be non-negative")
+		}
+		walk = min(n, walk)
+	}
+	var sum uint32
+	for i := int64(0); i < walk; i += pageSize {
+		sum ^= uint32(arr[i])
+	}
+	s.ramReadBytes.Add(ctx, walk)
+	return &glutton.ReadRAMResponse{Size: walk, Checksum: sum}, nil
 }
 
 // Write to disk using the specified mode. Data written will be random bytes.
