@@ -256,7 +256,7 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
-			if _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
+			if _, _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 				t.Fatal("ensureAteletSuspended: want error for dangling worker, got nil")
 			}
 
@@ -308,7 +308,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence}
 	tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"}}
-	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
+	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl, false, nil)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestEnsureSuspendedFinalized_StampsSubstrateTemplateRef(t *testing.T) {
 	})
 
 	w := &ActorWorkflow{store: persistence}
-	if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, template); err != nil {
+	if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, template, false, nil); err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
 
@@ -449,7 +449,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 
 			w := &ActorWorkflow{store: persistence}
 			tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://bucket/root"}}
-			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl); err != nil {
+			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl, false, nil); err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
 
@@ -490,7 +490,7 @@ func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
 
 	w := &ActorWorkflow{store: persistence}
 	tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"}}
-	final, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
+	final, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl, false, &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1"})
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
@@ -507,6 +507,11 @@ func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
 	}
 	if got := snap.GetStatus().GetSourceActorVersion(); got != 42 {
 		t.Errorf("SourceActorVersion = %d, want 42", got)
+	}
+	// The actor's SandboxConfig reference (recorded at resume) rides onto the
+	// snapshot, where a later restore resolves its assets from it.
+	if ref := snap.GetStatus().GetSandboxConfigRef(); ref.GetName() != "gvisor-prod" || ref.GetUid() != "sandbox-uid-1" {
+		t.Errorf("snapshot SandboxConfigRef = %s/%s, want gvisor-prod/sandbox-uid-1", ref.GetName(), ref.GetUid())
 	}
 }
 
@@ -707,5 +712,43 @@ func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("stored state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	}
+}
+
+// TestEnsureSuspendedFinalized_PausedOriginSandboxConfigRef pins that a
+// paused-origin suspend carries the pause snapshot's own SandboxConfig
+// reference onto the ActorSnapshot, not a checkpoint-reported one (no
+// checkpoint runs on that path).
+func TestEnsureSuspendedFinalized_PausedOriginSandboxConfigRef(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	const snapshotName = "2026-01-01t00-00-00z-abc"
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotName: snapshotName,
+			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
+				SnapshotName:     "pause-snap-1",
+				SandboxConfigRef: &ateapipb.SandboxConfigRef{Name: "gvisor-at-pause", Uid: "sandbox-uid-pause"},
+			},
+		},
+	})
+
+	w := &ActorWorkflow{store: persistence}
+	tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"}}
+	// A non-nil reference is passed deliberately: the paused-origin path
+	// must ignore it in favor of the pause snapshot's recorded one.
+	final, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl, true, &ateapipb.SandboxConfigRef{Name: "gvisor-later", Uid: "sandbox-uid-later"})
+	if err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+
+	snap, err := persistence.GetActorSnapshot(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: final.GetStatus().GetLatestSnapshot().GetName()})
+	if err != nil {
+		t.Fatalf("GetActorSnapshot: %v", err)
+	}
+	if ref := snap.GetStatus().GetSandboxConfigRef(); ref.GetName() != "gvisor-at-pause" || ref.GetUid() != "sandbox-uid-pause" {
+		t.Errorf("snapshot SandboxConfigRef = %s/%s, want the pause snapshot's gvisor-at-pause/sandbox-uid-pause", ref.GetName(), ref.GetUid())
 	}
 }

@@ -52,6 +52,19 @@ type resumeSnapshotSource struct {
 	// TemplateReplaced is true when the snapshot's recorded template UID
 	// differs from the actor's current template.
 	TemplateReplaced bool
+
+	// SandboxConfigRef is the SandboxConfig recorded on the snapshot at
+	// SnapshotURI; GoldenSandboxConfigRef the one at GoldenSnapshotURI.
+	// Nil when the snapshot records none or the URI is zero.
+	SandboxConfigRef       *ateapipb.SandboxConfigRef
+	GoldenSandboxConfigRef *ateapipb.SandboxConfigRef
+
+	// RepointSandboxConfigRef is the SandboxConfig recorded on the
+	// replacement template's golden snapshot, resolved only when
+	// TemplateReplaced: the repointed boot uses it so the actor lands on the
+	// sandbox its new template's golden ran. Nil when the replacement
+	// template has no golden snapshot or its snapshot records no reference.
+	RepointSandboxConfigRef *ateapipb.SandboxConfigRef
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -196,6 +209,17 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		// repointed since the capture.
 		snapshotTemplateUID := snapshot.GetStatus().GetActorTemplateUid()
 		src.TemplateReplaced = snapshotTemplateUID != "" && snapshotTemplateUID != actorTemplate.GetMetadata().GetUid()
+		src.SandboxConfigRef = snapshot.GetStatus().GetSandboxConfigRef()
+		if goldenRef := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot(); src.TemplateReplaced && goldenRef != nil {
+			goldenSnapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(goldenRef))
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, nil, src, status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
+			}
+			if err != nil {
+				return nil, nil, src, fmt.Errorf("while getting golden ActorSnapshot: %w", err)
+			}
+			src.RepointSandboxConfigRef = goldenSnapshot.GetStatus().GetSandboxConfigRef()
+		}
 	} else if goldenRef := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot(); goldenRef != nil && !boot {
 		snapshot, err := w.store.GetActorSnapshot(ctx, resources.ActorSnapshotRefFromObjectRef(goldenRef))
 		if errors.Is(err, store.ErrNotFound) {
@@ -211,6 +235,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", goldenRef.GetName(), err)
 		}
 		src.Scope = snapshot.GetStatus().GetContentScope()
+		src.SandboxConfigRef = snapshot.GetStatus().GetSandboxConfigRef()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -246,6 +271,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenSnapshot.GetStatus().GetSnapshotUri()); err != nil {
 				return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", goldenRef.GetName(), err)
 			}
+			src.GoldenSandboxConfigRef = goldenSnapshot.GetStatus().GetSandboxConfigRef()
 		}
 	}
 
@@ -655,6 +681,9 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
+//
+// Every branch resolves and sends sandbox assets; restores resolve them from
+// the SandboxConfig reference recorded on the snapshot.
 func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
@@ -679,6 +708,14 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, err
 	}
 
+	// Snapshot manifests carry only a SandboxConfig reference, so the
+	// restore's assets ride the request: resolved from the reference recorded
+	// on the snapshot whose sandbox will run the guest.
+	sandboxAssets, err := w.resolveSandboxAssetsForResume(actor, src, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
+	if err != nil {
+		return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
+	}
+
 	if local := actor.GetStatus().GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
@@ -694,6 +731,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			EgressGateway:         egressGateway,
 			CpuMilli:              cpuMilli,
 			MemoryBytes:           memBytes,
+			SandboxAssets:         sandboxAssets,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
@@ -723,6 +761,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if actor.GetStatus().GetLatestSnapshot() != nil {
 			tele.SnapshotKind = ateattr.SnapshotKindLatest
 		}
+		// Same wire-scope derivation as the local branch above.
 		var scope ateletpb.SnapshotScope
 		var goldenSnapshotURI string
 		switch {
@@ -755,20 +794,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			EgressGateway:     egressGateway,
 			CpuMilli:          cpuMilli,
 			MemoryBytes:       memBytes,
+			SandboxAssets:     sandboxAssets,
 		}
 		_, err = client.Restore(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
-
-		// Booting from scratch: resolve the sandbox binaries from the pool's
-		// SandboxConfig and send them so atelet can fetch and record them.
-		// (Restores above are self-describing via the snapshot manifest.)
-		sandboxAssets, err := resolveSandboxAssets(w.workerPoolLister, w.sandboxConfigLister, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
-		if err != nil {
-			return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
-		}
 
 		req := &ateletpb.RunRequest{
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
@@ -786,6 +818,31 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		_, err = client.Run(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while creating workload from spec", ateattr.OperationResume)
 	}
+}
+
+// resolveSandboxAssetsForResume picks the SandboxConfig for the pending
+// boot: the replacement template's golden config when the actor was
+// repointed, else the one recorded on the snapshot whose sandbox will run
+// the restored guest (the golden's for a DATA_ON_GOLDEN restore, the actor's
+// local or durable snapshot's otherwise). Boots from scratch, and snapshots
+// recorded before the reference existed, fall back to the assigned pool's
+// SandboxConfig.
+func (w *ActorWorkflow) resolveSandboxAssetsForResume(actor *ateapipb.Actor, src resumeSnapshotSource, poolNamespace, poolName string) (*ateletpb.SandboxAssets, error) {
+	var ref *ateapipb.SandboxConfigRef
+	switch {
+	case src.TemplateReplaced:
+		ref = src.RepointSandboxConfigRef
+	case !src.GoldenSnapshotURI.IsZero():
+		ref = src.GoldenSandboxConfigRef
+	case actor.GetStatus().GetLocalSnapshotInfo() != nil:
+		ref = actor.GetStatus().GetLocalSnapshotInfo().GetSandboxConfigRef()
+	default:
+		ref = src.SandboxConfigRef
+	}
+	if ref == nil {
+		return resolveSandboxAssets(w.workerPoolLister, w.sandboxConfigLister, poolNamespace, poolName)
+	}
+	return resolveSandboxAssetsByRef(w.sandboxConfigLister, ref)
 }
 
 func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {

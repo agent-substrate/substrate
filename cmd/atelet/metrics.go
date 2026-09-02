@@ -183,16 +183,16 @@ func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Du
 // URI prefix, so they are told apart by the identity the manifest records for
 // the actor that wrote the snapshot. An empty result means the manifest has not
 // been read yet, so the kind is not knowable.
-func restoreSnapshotKind(req *ateletpb.RestoreRequest, rec *sandboxAssetsRecord) string {
+func restoreSnapshotKind(req *ateletpb.RestoreRequest, man *snapshotManifest) string {
 	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
 		return ateattr.SnapshotKindLocal
 	}
-	if rec == nil {
+	if man == nil {
 		return ""
 	}
 	// Manifests written before the identity fields existed carry no atespace and
 	// fall through to latest, which is the common case for them anyway.
-	if rec.Atespace == resources.GoldenActorAtespace {
+	if man.Atespace == resources.GoldenActorAtespace {
 		return ateattr.SnapshotKindGolden
 	}
 	return ateattr.SnapshotKindLatest

@@ -152,6 +152,11 @@ message LocalSnapshotInfo {
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 3;
+
+  // The SandboxConfig the paused activation was booted with.
+  //
+  // +k8s:optional
+  SandboxConfigRef sandbox_config_ref = 4;
 }
 
 enum SnapshotContentScope {
@@ -667,6 +672,12 @@ message ActorSnapshotStatus {
   // Immutable reference to the actor_template where the snapshot was created from.
   // +k8s:opaqueType
   ObjectRef actor_template = 9;
+
+  // The SandboxConfig the snapshotted sandbox was booted from. A restore
+  // resolves it to send the sandbox assets to atelet. Unset on older
+  // snapshots.
+  // +k8s:optional
+  SandboxConfigRef sandbox_config_ref = 10;
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
@@ -707,6 +718,30 @@ message ObjectRef {
   // +k8s:required
   // +k8s:format=k8s-short-name
   string name = 2;
+}
+
+// SandboxConfigRef references a cluster-scoped SandboxConfig Kubernetes
+// object by name, UID, and resource version. The UID distinguishes an object
+// from a later re-creation under the same name; the resource version pins the
+// exact object version.
+message SandboxConfigRef {
+  // The name of the referenced Kubernetes object. Required.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-long-name
+  string name = 1;
+
+  // The Kubernetes UID of the referenced object. Required.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-uuid
+  string uid = 2;
+
+  // resource_version is the object's metadata.resourceVersion at the time
+  // the control plane resolved the request from it.
+  //
+  // +k8s:required
+  string resource_version = 3;
 }
 
 // SandboxClass selects the sandbox runtime family. Snapshots are not portable

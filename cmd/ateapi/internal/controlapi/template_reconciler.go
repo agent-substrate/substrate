@@ -206,8 +206,9 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			// The golden snapshot exists already.
 			return 0, nil
 		}
-		// TODO: Freeze sandbox assets before creating the golden actor.
-
+		// The golden actor boots with the pool's SandboxConfig; the suspend
+		// below freezes the reference its checkpoint reports into the golden
+		// ActorSnapshot's status.
 		actor, err := r.ensureActorExists(ctx, tmpl, goldenActorRef)
 		if err != nil {
 			if status.Code(err) == codes.InvalidArgument {

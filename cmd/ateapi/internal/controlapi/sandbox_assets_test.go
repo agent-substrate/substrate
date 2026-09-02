@@ -19,6 +19,9 @@ import (
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -97,6 +100,72 @@ func TestResolveSandboxAssetsCarriesPauseImage(t *testing.T) {
 			}
 			if got.GetPauseImage() != tt.wantPauseImage {
 				t.Errorf("pause image = %q, want %q", got.GetPauseImage(), tt.wantPauseImage)
+			}
+		})
+	}
+}
+
+// TestResolveSandboxAssetsCarriesConfigRef pins that the resolved assets name
+// the SandboxConfig object they came from (name + UID + resourceVersion).
+func TestResolveSandboxAssetsCarriesConfigRef(t *testing.T) {
+	config := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-prod", UID: "sandbox-uid-1", ResourceVersion: "42"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			Default:      true,
+			PauseImage:   "registry.k8s.io/pause@sha256:abc",
+			Assets:       testAssets(),
+		},
+	}
+	pool := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool1", Namespace: "worker-ns"},
+	}
+	poolLister, configLister := listersFor(t, []*atev1alpha1.WorkerPool{pool}, []*atev1alpha1.SandboxConfig{config})
+
+	got, err := resolveSandboxAssets(poolLister, configLister, "worker-ns", "pool1")
+	if err != nil {
+		t.Fatalf("resolveSandboxAssets() error: %v", err)
+	}
+	ref := got.GetSandboxConfigRef()
+	if ref.GetName() != "gvisor-prod" || ref.GetUid() != "sandbox-uid-1" || ref.GetResourceVersion() != "42" {
+		t.Errorf("SandboxConfig ref = %s/%s@%s, want gvisor-prod/sandbox-uid-1@42", ref.GetName(), ref.GetUid(), ref.GetResourceVersion())
+	}
+}
+
+// TestResolveSandboxAssetsByRef pins that the named SandboxConfig is used
+// only while its UID still matches; a missing or re-created object is a
+// FailedPrecondition.
+func TestResolveSandboxAssetsByRef(t *testing.T) {
+	config := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-prod", UID: "sandbox-uid-1"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			PauseImage:   "registry.k8s.io/pause@sha256:abc",
+			Assets:       testAssets(),
+		},
+	}
+	_, configLister := listersFor(t, nil, []*atev1alpha1.SandboxConfig{config})
+
+	tests := []struct {
+		name     string
+		ref      *ateapipb.SandboxConfigRef
+		wantCode codes.Code
+	}{
+		{name: "match", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1"}, wantCode: codes.OK},
+		{name: "object gone", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-gone", Uid: "sandbox-uid-1"}, wantCode: codes.FailedPrecondition},
+		{name: "uid mismatch (object recreated under the same name)", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-0"}, wantCode: codes.FailedPrecondition},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveSandboxAssetsByRef(configLister, tt.ref)
+			if code := status.Code(err); code != tt.wantCode {
+				t.Fatalf("status.Code = %v (err %v), want %v", code, err, tt.wantCode)
+			}
+			if tt.wantCode != codes.OK {
+				return
+			}
+			if got.GetSandboxConfigRef().GetName() != "gvisor-prod" || got.GetSandboxConfigRef().GetUid() != "sandbox-uid-1" {
+				t.Errorf("SandboxConfig ref = %s/%s, want gvisor-prod/sandbox-uid-1", got.GetSandboxConfigRef().GetName(), got.GetSandboxConfigRef().GetUid())
 			}
 		})
 	}

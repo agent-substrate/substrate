@@ -25,6 +25,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -68,7 +69,7 @@ func TestPortFlagDefault(t *testing.T) {
 }
 
 func TestSnapshotManifestActorMetadata(t *testing.T) {
-	rec := sandboxAssetsRecord{
+	man := snapshotManifest{
 		Atespace:              "team-a",
 		ActorName:             "actor-1",
 		ActorUID:              "actor-uid",
@@ -76,7 +77,7 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 		ActorTemplateName:     "agent",
 		Scope:                 ateattr.SnapshotScopeFull,
 	}
-	got, err := json.Marshal(rec)
+	got, err := json.Marshal(man)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,35 +90,92 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 
 // TestSnapshotManifestScopeAbsent pins backward compatibility: manifests
 // written before the scope field existed must still parse, reporting an empty
-// scope, and a scope-less record must not serialize a scope key at all.
+// scope, and a scope-less manifest must not serialize a scope key at all.
 func TestSnapshotManifestScopeAbsent(t *testing.T) {
 	legacy := []byte(`{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","snapshotFiles":["checkpoint.img"]}`)
-	rec, err := unmarshalSandboxRecord(legacy)
+	man, err := unmarshalSandboxManifest(legacy)
 	if err != nil {
-		t.Fatalf("unmarshalSandboxRecord(legacy manifest): %v", err)
+		t.Fatalf("unmarshalSandboxManifest(legacy manifest): %v", err)
 	}
-	if rec.Scope != "" {
-		t.Errorf("legacy manifest scope = %q, want empty", rec.Scope)
+	if man.Scope != "" {
+		t.Errorf("legacy manifest scope = %q, want empty", man.Scope)
 	}
 
-	got, err := json.Marshal(sandboxAssetsRecord{SandboxClass: "gvisor"})
+	got, err := json.Marshal(snapshotManifest{SandboxClass: "gvisor"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(got, []byte(`"scope"`)) {
-		t.Errorf("scope-less record serialized a scope key: %s", got)
+		t.Errorf("scope-less manifest serialized a scope key: %s", got)
 	}
 }
 
-// TestSnapshotManifestRequiresPauseImage pins that a manifest without a pause
-// image is rejected outright rather than yielding an empty image that would
-// fail later, deep in the image pull.
-func TestSnapshotManifestRequiresPauseImage(t *testing.T) {
-	noPause := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
+// TestSnapshotManifestCarriesNoAssets pins that a marshaled manifest carries
+// no asset content, and that an old-format manifest with assets parses with
+// those keys ignored.
+func TestSnapshotManifestCarriesNoAssets(t *testing.T) {
+	man := &snapshotManifest{
+		SandboxClass:     "gvisor",
+		Atespace:         "team-a",
+		ActorName:        "actor-1",
+		SnapshotFiles:    []string{"checkpoint.img"},
+		Scope:            ateattr.SnapshotScopeFull,
+		SandboxConfigRef: &sandboxConfigRef{Name: "gvisor-prod", UID: "sandbox-uid-1", ResourceVersion: "42"},
+	}
+	data, err := json.Marshal(man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"assets"`, `"pauseImage"`} {
+		if bytes.Contains(data, []byte(key)) {
+			t.Errorf("marshaled manifest contains %s: %s", key, data)
+		}
+	}
+
+	legacy := []byte(`{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","assets":{"gvisor":{"url":"gs://b/gvisor.tar.bz2","sha256":"abc"}},"snapshotFiles":["checkpoint.img"],"scope":"full"}`)
+	parsed, err := unmarshalSandboxManifest(legacy)
+	if err != nil {
+		t.Fatalf("unmarshalSandboxManifest(old-format manifest): %v", err)
+	}
+	if parsed.SandboxConfigRef != nil {
+		t.Errorf("old-format manifest yielded a SandboxConfig ref: %+v", parsed.SandboxConfigRef)
+	}
+	if parsed.SandboxClass != "gvisor" || parsed.Scope != ateattr.SnapshotScopeFull || !slices.Equal(parsed.SnapshotFiles, []string{"checkpoint.img"}) {
+		t.Errorf("parsed manifest dropped non-asset fields: %+v", parsed)
+	}
+}
+
+// TestSandboxRecordRequiresPauseImage pins that an on-node record without a
+// pause image is rejected outright rather than yielding an empty image that
+// would fail later, deep in the image pull.
+func TestSandboxRecordRequiresPauseImage(t *testing.T) {
+	noPause := []byte(`{"sandboxClass":"gvisor","assets":{"gvisor":{"url":"gs://b/gvisor.tar.bz2","sha256":"abc"}}}`)
 	if _, err := unmarshalSandboxRecord(noPause); err == nil {
-		t.Fatal("unmarshalSandboxRecord accepted a manifest with no pauseImage")
+		t.Fatal("unmarshalSandboxRecord accepted a record with no pauseImage")
 	} else if !strings.Contains(err.Error(), "pauseImage") {
 		t.Errorf("error = %v, want it to name pauseImage", err)
+	}
+}
+
+// TestSandboxAssetsFromRequestSandboxConfigRef pins that the SandboxConfig
+// reference rides the request into the projected asset set, where Checkpoint
+// picks it up for the snapshot manifest.
+func TestSandboxAssetsFromRequestSandboxConfigRef(t *testing.T) {
+	rec, err := recordFromRequest(&ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   testPauseImage,
+		Assets: map[string]*ateletpb.ArchAssets{
+			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				gvisorAssetName: {Url: "gs://b/gvisor.tar.bz2", Sha256: "abc"},
+			}},
+		},
+		SandboxConfigRef: &ateletpb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1", ResourceVersion: "42"},
+	})
+	if err != nil {
+		t.Fatalf("sandboxAssetsFromRequest: %v", err)
+	}
+	if want := (sandboxConfigRef{Name: "gvisor-prod", UID: "sandbox-uid-1", ResourceVersion: "42"}); rec.SandboxConfigRef != want {
+		t.Errorf("record SandboxConfig ref = %+v, want %+v", rec.SandboxConfigRef, want)
 	}
 }
 
@@ -434,6 +492,15 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   testPauseImage,
+			Assets: map[string]*ateletpb.ArchAssets{
+				"amd64": {Files: map[string]*ateletpb.AssetFile{
+					gvisorAssetName: {Url: "gs://bucket/gvisor.tar.bz2", Sha256: "abc"},
+				}},
+			},
+		},
 	}
 }
 
@@ -571,6 +638,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
 		}), true},
+		{"missing sandbox assets", makeReq(func(r *ateletpb.RestoreRequest) { r.SandboxAssets = nil }), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
@@ -1599,7 +1667,7 @@ func (r *recordingObjectStorage) keys() []string {
 
 // writeLocalSnapshot lays a local pause snapshot out in dir: the given files
 // plus the marshaled manifest beside them.
-func writeLocalSnapshot(t *testing.T, dir string, rec sandboxAssetsRecord, contents map[string]string) {
+func writeLocalSnapshot(t *testing.T, dir string, man snapshotManifest, contents map[string]string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("creating snapshot dir: %v", err)
@@ -1609,7 +1677,7 @@ func writeLocalSnapshot(t *testing.T, dir string, rec sandboxAssetsRecord, conte
 			t.Fatalf("writing snapshot file %s: %v", name, err)
 		}
 	}
-	manifest, err := json.Marshal(rec)
+	manifest, err := json.Marshal(man)
 	if err != nil {
 		t.Fatalf("marshaling manifest: %v", err)
 	}
@@ -1637,33 +1705,40 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseSnapshotURI: %v", err)
 	}
-	fullRec := func(class string) sandboxAssetsRecord {
-		return sandboxAssetsRecord{
-			SandboxClass:  class,
-			PauseImage:    testPauseImage,
-			SnapshotFiles: []string{"config.json", "memory-ranges", ateompath.DurableDirTarFile},
-			Scope:         ateattr.SnapshotScopeFull,
+	fullMan := func(class string) snapshotManifest {
+		return snapshotManifest{
+			SandboxClass:     class,
+			SnapshotFiles:    []string{"config.json", "memory-ranges", ateompath.DurableDirTarFile},
+			Scope:            ateattr.SnapshotScopeFull,
+			SandboxConfigRef: &sandboxConfigRef{Name: "sandbox-prod", UID: "sandbox-uid-1"},
 		}
 	}
 
-	remoteManifest := func(t *testing.T, store *recordingObjectStorage) sandboxAssetsRecord {
+	remoteManifest := func(t *testing.T, store *recordingObjectStorage) snapshotManifest {
 		t.Helper()
 		b, ok := store.objects["bucket/root/snapshots/ate-demo/snap-1/manifest.json"]
 		if !ok {
 			t.Fatal("no manifest uploaded")
 		}
-		rec, err := unmarshalSandboxRecord(b)
+		// Uploaded manifests carry the SandboxConfig reference, never asset
+		// content.
+		for _, key := range []string{`"assets"`, `"pauseImage"`} {
+			if bytes.Contains(b, []byte(key)) {
+				t.Errorf("uploaded manifest contains %s: %s", key, b)
+			}
+		}
+		man, err := unmarshalSandboxManifest(b)
 		if err != nil {
 			t.Fatalf("parsing uploaded manifest: %v", err)
 		}
-		return *rec
+		return *man
 	}
 
 	t.Run("matching scope uploads all files", func(t *testing.T) {
 		store := &recordingObjectStorage{}
 		s := &AteomHerder{gcsClient: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
+		writeLocalSnapshot(t, dir, fullMan("microvm"), map[string]string{
 			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
 		})
 
@@ -1679,8 +1754,12 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		if got := store.keys(); !slices.Equal(got, want) {
 			t.Errorf("uploaded objects = %v, want %v", got, want)
 		}
-		if rec := remoteManifest(t, store); rec.Scope != ateattr.SnapshotScopeFull {
+		rec := remoteManifest(t, store)
+		if rec.Scope != ateattr.SnapshotScopeFull {
 			t.Errorf("uploaded manifest scope = %q, want %q", rec.Scope, ateattr.SnapshotScopeFull)
+		}
+		if ref := rec.SandboxConfigRef; ref == nil || ref.Name != "sandbox-prod" || ref.UID != "sandbox-uid-1" {
+			t.Errorf("uploaded manifest SandboxConfig ref = %+v, want sandbox-prod/sandbox-uid-1", ref)
 		}
 	})
 
@@ -1688,7 +1767,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		store := &recordingObjectStorage{}
 		s := &AteomHerder{gcsClient: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
+		writeLocalSnapshot(t, dir, fullMan("microvm"), map[string]string{
 			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
 		})
 
@@ -1716,9 +1795,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	t.Run("gvisor full capture without durable tar has no data", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
+		writeLocalSnapshot(t, dir, snapshotManifest{
 			SandboxClass:  "gvisor",
-			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{"checkpoint.img"},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{"checkpoint.img": "img"})
@@ -1734,9 +1812,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	t.Run("microvm full capture without durable tar has no data", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
+		writeLocalSnapshot(t, dir, snapshotManifest{
 			SandboxClass:  "microvm",
-			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{"config.json", "memory-ranges"},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{"config.json": "cfg", "memory-ranges": "mem"})
@@ -1752,9 +1829,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	t.Run("unknown sandbox class cannot convert", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
+		writeLocalSnapshot(t, dir, snapshotManifest{
 			SandboxClass:  "mystery",
-			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
@@ -1770,9 +1846,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	t.Run("data capture cannot become full", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
+		writeLocalSnapshot(t, dir, snapshotManifest{
 			SandboxClass:  "microvm",
-			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeData,
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
@@ -1787,9 +1862,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		store := &recordingObjectStorage{}
 		s := &AteomHerder{gcsClient: store}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
+		writeLocalSnapshot(t, dir, snapshotManifest{
 			SandboxClass:  "microvm",
-			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
 
@@ -1836,7 +1910,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	t.Run("upload failure is a plain retryable error", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{putErr: errors.New("boom")}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
-		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
+		writeLocalSnapshot(t, dir, fullMan("microvm"), map[string]string{
 			"config.json": "cfg", "memory-ranges": "mem", ateompath.DurableDirTarFile: "data",
 		})
 

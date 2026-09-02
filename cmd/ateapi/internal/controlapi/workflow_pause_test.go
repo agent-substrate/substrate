@@ -59,7 +59,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	w := &ActorWorkflow{store: st}
-	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{}, nil)
 	if err != nil {
 		t.Fatalf("ensurePausedFinalized: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			tmpl := &ateapipb.ActorTemplate{
 				SnapshotsConfig: &ateapipb.SnapshotsConfig{OnPause: tc.onPause},
 			}
-			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
+			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl, &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1"})
 			if err != nil {
 				t.Fatalf("ensurePausedFinalized: %v", err)
 			}
@@ -149,6 +149,11 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			}
 			if scope := got.GetStatus().GetLocalSnapshotInfo().GetContentScope(); scope != tc.want {
 				t.Errorf("LocalSnapshotInfo.ContentScope = %v, want %v", scope, tc.want)
+			}
+			// The pause snapshot record carries the activation's SandboxConfig
+			// reference; a later resume resolves the restore's assets from it.
+			if ref := got.GetStatus().GetLocalSnapshotInfo().GetSandboxConfigRef(); ref.GetName() != "gvisor-prod" || ref.GetUid() != "sandbox-uid-1" {
+				t.Errorf("LocalSnapshotInfo.SandboxConfigRef = %s/%s, want gvisor-prod/sandbox-uid-1", ref.GetName(), ref.GetUid())
 			}
 		})
 	}
@@ -283,7 +288,7 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
-			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
+			if _, _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 				t.Fatal("ensureAteletPaused: want error for dangling worker, got nil")
 			}
 
