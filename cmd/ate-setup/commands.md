@@ -60,6 +60,16 @@ Each reference is then pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the
 cluster does.
 
+That read is authenticated with the docker config file and the credential
+helpers it names, plus gcloud's own credentials for GCR and Artifact Registry:
+Application Default Credentials, falling back to the `gcloud` CLI. Installing a
+release onto GKE therefore needs no `~/.docker/config.json` entry. Amazon ECR
+and Azure Container Registry need credential-helper modules this repository does
+not depend on, so those registries need a `docker login` first.
+
+`TAG` may itself carry a digest, as in `--image-tag v0.0.0@sha256:...`. A tag
+that already names a manifest is used as written, and is not looked up.
+
 ## Deploy
 
 | `ate-setup` | `hack/install-ate.sh` |

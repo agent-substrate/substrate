@@ -98,6 +98,12 @@ func (p *Prebuilt) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, e
 // and leaves the reference legible in `kubectl get`.
 func (p *Prebuilt) pin(ctx context.Context, image string) (string, error) {
 	tagged := p.src.Repo + "/" + image + ":" + p.src.Tag
+	// A tag that already carries one is pinned as it stands. Looking it up
+	// would only append the same digest a second time, and the reference the
+	// caller wrote is the one they meant.
+	if strings.Contains(p.src.Tag, "@") {
+		return tagged, nil
+	}
 	if ref, ok := p.pinned[tagged]; ok {
 		return ref, nil
 	}

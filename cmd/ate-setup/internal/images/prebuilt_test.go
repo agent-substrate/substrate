@@ -94,6 +94,15 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			want: "spec:\n  workerImage: example.com/substrate/ateom-gvisor:v1.2.3" + digestSuffix + "\n",
 		},
 		{
+			// A tag can carry its own digest, and then there is nothing to look
+			// up. The stub would answer with testDigest a second time, so the
+			// expected output is also what catches a redundant lookup.
+			name: "tag already carries a digest",
+			src:  images.Source{Repo: "example.com/substrate", Tag: "v1.2.3" + digestSuffix},
+			in:   "image: ko://github.com/agent-substrate/substrate/cmd/ateapi\n",
+			want: "image: example.com/substrate/ateapi:v1.2.3" + digestSuffix + "\n",
+		},
+		{
 			name: "nested package maps to its image name",
 			in:   "image: ko://github.com/agent-substrate/substrate/demos/multi-template/fspersist\n",
 			want: "image: example.com/substrate/fspersist:v1.2.3" + digestSuffix + "\n",
