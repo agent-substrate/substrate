@@ -229,7 +229,7 @@ func TestPrewarmPauseImage(t *testing.T) {
 		}
 		return s
 	}
-	okStore, failStore := newStore(), newStore()
+	okStore, failStore, archStore := newStore(), newStore(), newStore()
 
 	ctx := context.Background()
 	content := []byte("runsc binary bytes")
@@ -257,13 +257,61 @@ func TestPrewarmPauseImage(t *testing.T) {
 		t.Error("prewarm returned nil despite the asset fetch failing")
 	}
 
+	// A config with no assets for this node's architecture still gets its
+	// pause image pulled: the image needs no per-architecture projection.
+	archCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
+	archCfg.Spec.Assets = map[string]map[string]v1alpha1.AssetFile{
+		"other-arch": {runscAssetName: archCfg.Spec.Assets[runtime.GOARCH][runscAssetName]},
+	}
+	archCfg.Spec.PauseImage = pauseRef
+	p = &sandboxPrewarmer{herder: &AteomHerder{imageCache: archStore}}
+	if err := p.prewarm(ctx, archCfg); err == nil {
+		t.Error("prewarm returned nil despite the config having no assets for the local architecture")
+	}
+
 	// With the registry gone, only a cache hit can satisfy a digest ref.
 	srv.Close()
 	digestRef := u.Host + "/pause@" + pauseDigest.String()
-	for name, store := range map[string]*imagecache.Store{"ok": okStore, "asset-failure": failStore} {
+	for name, store := range map[string]*imagecache.Store{"ok": okStore, "asset-failure": failStore, "no-local-arch": archStore} {
 		if _, err := store.EnsureImage(ctx, digestRef); err != nil {
 			t.Errorf("pause image not prewarmed into the %s store: %v", name, err)
 		}
+	}
+}
+
+// hangingObjectStorage blocks GetObject until the caller's context ends,
+// simulating a bucket read that stalls without failing.
+type hangingObjectStorage struct{}
+
+func (hangingObjectStorage) GetObject(ctx context.Context, _, _ string) (io.ReadCloser, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (hangingObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
+
+// TestPrewarmTimeout verifies a single prewarm attempt is bounded by
+// prewarmTimeout: the queue has one worker, so an attempt that never returned
+// would block every other config's prewarm.
+func TestPrewarmTimeout(t *testing.T) {
+	origDir, origTimeout := ateompath.StaticFilesDir, prewarmTimeout
+	ateompath.StaticFilesDir = t.TempDir()
+	prewarmTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { ateompath.StaticFilesDir, prewarmTimeout = origDir, origTimeout })
+
+	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
+	cfg.Spec.PauseImage = ""
+	p := &sandboxPrewarmer{herder: &AteomHerder{anonGCSClient: hangingObjectStorage{}}}
+
+	done := make(chan error, 1)
+	go func() { done <- p.prewarm(context.Background(), cfg) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("prewarm returned nil despite the download hanging")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("prewarm never returned; a hung download would block the worker forever")
 	}
 }
 

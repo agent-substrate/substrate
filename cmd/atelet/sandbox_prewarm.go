@@ -40,6 +40,15 @@ import (
 // worker. A var so tests can zero it.
 var prewarmMaxJitter = 30 * time.Second
 
+// prewarmTimeout bounds a single prewarm attempt. The queue is drained by one
+// worker, so without a deadline a download that hangs without failing (a
+// registry that accepts the connection and stalls, a wedged bucket read)
+// would block every other config forever — prewarm runs on the daemon's
+// never-cancelled context. Generous enough for multi-hundred-MiB micro-VM
+// guest images on a busy node; a timed-out attempt requeues with backoff like
+// any other failure. A var so tests can shorten it.
+var prewarmTimeout = 5 * time.Minute
+
 // prewarmMaxRetries bounds how often one config's failed prewarm is retried
 // before it is dropped until the next config event (or first use, which stays
 // the correctness path). The backoff below caps at 5 minutes, so this covers
@@ -192,31 +201,27 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 // content-addressed files via atomic rename, and the image cache collapses
 // concurrent pulls of one digest.
 func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxConfig) error {
-	rec, err := recordFromSandboxConfig(cfg)
-	if err != nil {
-		return err
-	}
+	ctx, cancel := context.WithTimeout(ctx, prewarmTimeout)
+	defer cancel()
 	t := time.Now()
-	// The pause image is a sandbox prerequisite like the runtime binaries: it
-	// is the root container of every actor, and without prewarming each node
-	// pulls it inside its first Run/Restore — which at fleet scale is a
-	// synchronized stampede on the image registry. The two fetches live in
-	// different backends (bucket vs. registry), so they run concurrently and
-	// fail independently: either being warm still shortens the first actor's
-	// critical path.
-	var assetErr, imageErr error
+
+	var imageErr error
 	var wg sync.WaitGroup
-	wg.Go(func() {
-		_, assetErr = p.herder.ensureSandboxAssets(ctx, rec)
-	})
-	wg.Go(func() {
-		if rec.PauseImage == "" {
-			return
-		}
-		if _, err := p.herder.imageCache.EnsureImage(ctx, rec.PauseImage); err != nil {
-			imageErr = fmt.Errorf("while prewarming pause image %q: %w", rec.PauseImage, err)
-		}
-	})
+	// schedule prewarm pause image if provided
+	if cfg.Spec.PauseImage != "" {
+		wg.Go(func() {
+			if _, err := p.herder.imageCache.EnsureImage(ctx, cfg.Spec.PauseImage); err != nil {
+				imageErr = fmt.Errorf("while prewarming pause image %q: %w", cfg.Spec.PauseImage, err)
+			}
+		})
+	}
+	// schedule prewarm sandbox assets if provided
+	rec, assetErr := recordFromSandboxConfig(cfg)
+	if assetErr == nil {
+		wg.Go(func() {
+			_, assetErr = p.herder.ensureSandboxAssets(ctx, rec)
+		})
+	}
 	wg.Wait()
 	if err := errors.Join(assetErr, imageErr); err != nil {
 		return err
@@ -224,7 +229,7 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	slog.InfoContext(ctx, "Sandbox assets prewarmed",
 		slog.String("config", cfg.Name),
 		slog.Int("assets", len(rec.Assets)),
-		slog.String("pauseImage", rec.PauseImage),
+		slog.String("pauseImage", cfg.Spec.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }
