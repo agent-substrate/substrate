@@ -17,35 +17,11 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
-
-// TestNvproxyGlobalArgs checks that runsc is told to enable nvproxy exactly when the
-// worker has a GPU. The flag must be present on sandbox creation so the sentry
-// initializes GPU support up front; without it the GPU subcontainer crashes.
-func TestNvproxyGlobalArgs(t *testing.T) {
-	dir := t.TempDir()
-	old := gpuDeviceGlob
-	gpuDeviceGlob = filepath.Join(dir, "nvidia[0-9]*")
-	defer func() { gpuDeviceGlob = old }()
-
-	if got := nvproxyGlobalArgs(); len(got) != 0 {
-		t.Fatalf("no GPU: want no flags, got %v", got)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, "nvidia0"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := nvproxyGlobalArgs()
-	if len(got) != 1 || got[0] != "--nvproxy" {
-		t.Fatalf("GPU: want [--nvproxy], got %v", got)
-	}
-}
 
 func TestKillArgs(t *testing.T) {
 	r := &runsc{

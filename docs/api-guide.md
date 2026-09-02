@@ -89,85 +89,16 @@ spec:
   # gvisor SandboxConfig unless sandboxConfigName is set.
 ```
 
-### GPU worker pools
+### Devices (GPUs) — temporarily unsupported
 
-A GPU pool needs two things: (1) scheduling onto GPU nodes, and (2) a
-`nvidia.com/gpu` request in `template.resources`. The request does double duty —
-it makes the device plugin assign a GPU to the worker pod **and** triggers
-Substrate to pass that GPU **through to each actor's sandbox**. No per-actor
-configuration is needed.
+Substrate does not pass devices through to actors. A GPU worker pod's devices were
+injected into every actor container; that was removed while the device API is
+designed, since a resource name and a count cannot express which container gets a
+device, sharing one, or resuming onto compatible hardware.
 
-```yaml
-apiVersion: ate.dev/v1alpha1
-kind: WorkerPool
-metadata:
-  name: gpu-pool
-  namespace: ate-demo
-spec:
-  replicas: 5
-  # GPU pools need a glibc ateom-gvisor build — see Requirements below.
-  workerImage: <your-registry>/ateom-gvisor-glibc@sha256:...
-  template:
-    # (1) schedule onto GPU nodes
-    nodeSelector:
-      cloud.google.com/gke-accelerator: nvidia-tesla-t4
-    tolerations:
-    - key: nvidia.com/gpu
-      operator: Exists
-      effect: NoSchedule
-    priorityClassName: substrate-workers
-    resources:
-      requests:
-        cpu: 500m
-        memory: 1Gi
-      limits:
-        cpu: "1"
-        memory: 2Gi
-        # (2) claim a GPU — this request is what triggers GPU passthrough
-        nvidia.com/gpu: "1"
-```
+A `nvidia.com/gpu` pool limit is now an ordinary extended resource: it places the
+worker pod on a GPU node and reserves the device, and nothing else reads it.
 
-`atecontroller` propagates the request onto the `ateom` container and mounts the
-host NVIDIA toolkit into the pod. `ateom-gvisor` then generates a CDI spec with
-`nvidia-ctk` and injects the GPU device nodes, driver libraries, and env into
-each actor container's OCI spec, and runs `runsc` with `--nvproxy` so CUDA and NVML
-work inside the sandbox. A worker requesting `nvidia.com/gpu: N` passes all N
-through.
-
-Every container in the actor gets the GPU. An actor's containers share one sandbox
-and the worker's whole device set, and `ActorTemplate` has no per-container resource
-fields, so GPUs are shared at the actor level rather than assigned to one container,
-the same as cpu and memory. This differs from a Kubernetes Pod, where the GPU goes
-only to the container that requests it. If per-container resource limits are added
-later, GPU assignment should follow them.
-
-The driver library directory is prepended to each container's `LD_LIBRARY_PATH` so an
-image does not have to set it to find `libcuda.so.1`; any existing value is kept after
-it rather than replaced.
-
-**Requirements**
-
-- **A glibc `ateom-gvisor` image**, set as `spec.workerImage`. The distroless default
-  cannot exec `nvidia-ctk`. Build one with
-  `KO_DEFAULTBASEIMAGE=debian:stable-slim ko build ./cmd/ateom-gvisor`.
-- **`nvidia-ctk` on the node**, at the path mounted into the worker — by default
-  `/usr/local/nvidia/toolkit`, overridable with the controller's
-  `ATE_NVIDIA_TOOLKIT_HOST_PATH`. gpu-operator installs it; GKE's built-in GPU
-  support does not.
-- **The driver mounted into the pod by the device plugin**, at `/usr/local/nvidia`
-  by default. `nvidia-ctk` needs its libraries to enumerate the GPUs at all, so a
-  cluster whose plugin uses a different layout must set the controller's
-  `ATE_NVIDIA_DRIVER_ROOT`.
-- **`atelet` must run on the GPU nodes**, so add a matching toleration to its
-  DaemonSet if those nodes are tainted (for example `nvidia.com/gpu`).
-- **gVisor only.** `microvm` pools would need VFIO PCI passthrough instead.
-
-**Known limitation: a GPU actor can only be suspended while no CUDA context is
-open.** gVisor cannot serialize GPU state, so a checkpoint taken while the workload
-holds a context fails with an nvproxy encoding error and terminates the
-sandbox. Workloads that run CUDA and exit snapshot normally; one that keeps a
-context alive (a model resident in device memory, say) cannot be suspended or have a
-golden snapshot taken.
 
 ### Status (`WorkerPoolStatus`)
 

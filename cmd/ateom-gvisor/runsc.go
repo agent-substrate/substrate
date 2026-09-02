@@ -55,23 +55,6 @@ func durableVolumeNames(spec *ateompb.WorkloadSpec) []string {
 	return slices.Compact(names)
 }
 
-// nvproxyGlobalArgs returns the runsc global flags for GPU sandboxes, enabling
-// gVisor's GPU ioctl proxy when the worker has a GPU. --nvproxy must be set when
-// the sandbox is created (the pause/root container) so the sentry initializes GPU
-// support up front — like enabling nvproxy in the containerd runtime config on
-// normal Kubernetes. Otherwise nvproxy would try to initialize late, when the app
-// subcontainer joins carrying the CDI /dev/nvidia* devices, and the running sentry
-// crashes (StartSubcontainer: EOF).
-//
-// Only create and restore need it: both boot a sentry. `runsc start` acts on a
-// sandbox that already exists, so the flag has no effect there.
-func nvproxyGlobalArgs() []string {
-	if gpuPresent() {
-		return []string{"--nvproxy"}
-	}
-	return nil
-}
-
 // shapeSpec loads, shapes for gVisor, and saves the container's OCI spec.
 func (r *runsc) shapeSpec(containerName string) error {
 	bundle := ateompath.OCIBundlePath(r.actorUID, containerName)
@@ -109,7 +92,6 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		// otherwise sizes to all host CPUs). Global flag: before the subcommand.
 		"--cpu-num-from-quota",
 	}
-	args = append(args, nvproxyGlobalArgs()...)
 	args = append(args,
 		"create",
 		"-bundle", ateompath.OCIBundlePath(r.actorUID, containerName),
@@ -245,7 +227,6 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		// Match cmdCreate: size the restored sentry from the cgroup CPU quota.
 		"--cpu-num-from-quota",
 	}
-	restoreArgs = append(restoreArgs, nvproxyGlobalArgs()...)
 	restoreArgs = append(restoreArgs,
 		"restore",
 		"-bundle", ateompath.OCIBundlePath(r.actorUID, containerName),
