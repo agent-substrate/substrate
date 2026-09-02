@@ -68,9 +68,10 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	// are still waiting is turned away rather than queued behind us.
 	s.shuttingDown.Store(true)
 
-	// Cancel an in-flight run or restore. Waiting for a cold boot to finish only to
-	// SIGTERM the guest it just produced is strictly worse than aborting it.
-	s.cancelActiveRestoreOrRunRPC()
+	// Cancel an in-flight prepare, run, or restore. Waiting for a VM startup to
+	// finish only to SIGTERM the guest it just produced is strictly worse than
+	// aborting it.
+	s.cancelActiveStartupRPC()
 
 	// Wait for whatever still holds lock — a suspend, a resume — to finish, but
 	// only for the grace period. In the worst case that RPC burns nearly all of it
@@ -83,6 +84,11 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		slog.ErrorContext(ctx, "Failed to acquire lock during graceful shutdown; another RPC is still running")
 		return
 	}
+	// A completed PrepareSandbox has no application process to signal, but it
+	// still owns a VMM, virtiofsds, mounts, and host networking. Remove it from
+	// the service slot under lock, then tear it down after unlocking.
+	prepared := s.prepared
+	s.prepared = nil
 	// Snapshot by value rather than ranging over s.running directly: we drop the
 	// lock immediately below, and a suspend landing mid-drain deletes from the live
 	// map and writes through the *runningActor it finds there (teardownActor closes
@@ -99,6 +105,11 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	// Release lock so the service can answer new RPCs — notably a suspend arriving
 	// mid-drain — while the stop below waits out the grace period.
 	s.lock.Unlock()
+	if prepared != nil {
+		if err := s.cleanupPreparedSandbox(ctx, prepared); err != nil {
+			slog.WarnContext(ctx, "Failed to clean up prepared microVM during graceful shutdown", slog.Any("err", err))
+		}
+	}
 
 	if len(targets) == 0 {
 		slog.InfoContext(ctx, "No active actor sessions at shutdown; exiting cleanly")

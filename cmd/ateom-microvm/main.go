@@ -324,6 +324,7 @@ func ensureSharedPropagation(ctx context.Context, path string) error {
 }
 
 const (
+	rpcPrepareSandbox     = "PrepareSandbox"
 	rpcRunWorkload        = "RunWorkload"
 	rpcRestoreWorkload    = "RestoreWorkload"
 	rpcCheckpointWorkload = "CheckpointWorkload"
@@ -386,11 +387,16 @@ type AteomService struct {
 	shuttingDown atomic.Bool
 
 	// activeRPC is the workload RPC in flight, tracked so gracefulShutdown can
-	// cancel a run or restore rather than wait out its boot. Guarded by
+	// cancel a prepare, run, or restore rather than wait out its boot. Guarded by
 	// activeRPCMu, which is separate from lock because the whole point is to reach
 	// it while lock is held by the RPC being cancelled.
 	activeRPCMu sync.Mutex
 	activeRPC   *activeRPCInfo
+
+	// prepared is a micro-VM booted by PrepareSandbox while atelet prepares the
+	// application OCI bundles. RunWorkload consumes the slot; a failed parallel
+	// preparation releases it through DiscardPreparedSandbox.
+	prepared *preparedSandbox
 
 	podUID     string
 	chBinary   string
@@ -596,14 +602,14 @@ func (s *AteomService) clearActiveRPC() {
 	s.activeRPC = nil
 }
 
-// cancelActiveRestoreOrRunRPC cancels an in-flight run or restore so it releases
-// lock instead of running its boot to completion. A checkpoint is deliberately
-// left alone: it is the one workload RPC worth finishing during a drain, since
-// it is what saves the actor's state.
-func (s *AteomService) cancelActiveRestoreOrRunRPC() {
+// cancelActiveStartupRPC cancels an in-flight prepare, run, or restore so it
+// releases lock instead of running its boot to completion. A checkpoint is
+// deliberately left alone: it is the one workload RPC worth finishing during
+// a drain, since it is what saves the actor's state.
+func (s *AteomService) cancelActiveStartupRPC() {
 	s.activeRPCMu.Lock()
 	defer s.activeRPCMu.Unlock()
-	if s.activeRPC != nil && (s.activeRPC.name == rpcRestoreWorkload || s.activeRPC.name == rpcRunWorkload) {
+	if s.activeRPC != nil && (s.activeRPC.name == rpcPrepareSandbox || s.activeRPC.name == rpcRestoreWorkload || s.activeRPC.name == rpcRunWorkload) {
 		slog.Info("Cancelling in-progress workload startup RPC due to graceful shutdown", slog.String("rpc", s.activeRPC.name))
 		s.activeRPC.cancel()
 	}

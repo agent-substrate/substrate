@@ -57,7 +57,7 @@ type runningActor struct {
 	// base-id file so the chain survives suspend->resume->suspend.
 	baseID string
 
-	// ateom owns this CH process (booted at Run or relaunched at Restore).
+	// ateom owns this CH process (booted at Prepare/Run or relaunched at Restore).
 	chCmd *exec.Cmd
 	// vfsdCmd is the virtiofsd serving the unified share (merged rootfs overlay,
 	// durable-dir volumes, and CSI volumes). ateom owns it; teardownActor
@@ -254,7 +254,9 @@ func writeGuestResolvConf(rootfs string) error {
 	return nil
 }
 
-// RunWorkload boots the actor as a cloud-hypervisor micro-VM and starts its containers.
+// RunWorkload starts an actor's containers in a cloud-hypervisor micro-VM. It
+// consumes a VM booted by PrepareSandbox when one is available, otherwise it
+// performs the same boot inline.
 //
 // ateom boots cloud-hypervisor directly (no kata shim) and gives each container a
 // rootfs merged ON THE HOST: overlay(image lower + host-disk upper), served over the
@@ -281,7 +283,17 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	s.setActiveRPC(rpcRunWorkload, cancel)
 	defer s.clearActiveRPC()
 
-	if err := s.deactivateActorNetworking(ctx); err != nil {
+	var prepared *preparedSandbox
+	if s.prepared != nil {
+		if s.prepared.cleanupStarted {
+			return nil, status.Error(codes.FailedPrecondition, "prepared sandbox cleanup is incomplete")
+		}
+		if !s.prepared.params.matches(sandboxParamsFromRun(req)) {
+			return nil, status.Error(codes.FailedPrecondition, "RunWorkload does not match the prepared sandbox")
+		}
+		prepared = s.prepared
+		s.prepared = nil
+	} else if err := s.deactivateActorNetworking(ctx); err != nil {
 		return nil, err
 	}
 
@@ -294,6 +306,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		assetPaths:       req.GetRuntimeAssetPaths(),
 		egressGateway:    req.GetEgressGateway(),
 		size:             sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
+		prepared:         prepared,
 	}
 
 	attribution := p.actorAttribution()
@@ -337,6 +350,11 @@ type actorBootParams struct {
 	// memory); a container's own cgroup limit comes from its declared resources.
 	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
+	// prepared is non-nil when PrepareSandbox already booted the VM while atelet
+	// prepared the application OCI bundles and, on restore, the checkpoint.
+	// coldBootActor consumes it exactly once; a retry after a dead prepared VM
+	// performs a full fresh boot.
+	prepared *preparedSandbox
 }
 
 // actorAttribution regroups the actor fields that arrived on the Run/Restore
@@ -351,14 +369,13 @@ func (p actorBootParams) actorAttribution() resources.ActorAttribution {
 }
 
 // coldBootAttempts is how many times a cold boot is tried when the micro-VM
-// stops before the kata-agent answers. Two: one retry covers a transient guest
-// death (a contended host makes the guest's boot pathologically slow, and a
-// boot that stalls long enough is torn down guest-side), and beyond that the
-// fault is not transient and the caller should hear about it.
+// stops before any application container starts. Two: one retry covers a
+// transient guest death, and beyond that the fault is not transient and the
+// caller should hear about it.
 const coldBootAttempts = 2
 
 // coldBootActorRetrying cold-boots the actor, retrying if the micro-VM stopped
-// before the kata-agent answered.
+// before any application container started.
 //
 // Retrying is safe there and nowhere else: a guest that never reached its agent
 // ran none of the actor's containers, so the attempt has no observable effect,
@@ -370,19 +387,44 @@ const coldBootAttempts = 2
 func (s *AteomService) coldBootActorRetrying(ctx context.Context, p actorBootParams) error {
 	for attempt := 1; ; attempt++ {
 		err := s.coldBootActor(ctx, p)
+		p.prepared = nil
 		if err == nil || attempt >= coldBootAttempts || !errors.Is(err, errGuestStopped) {
 			return err
 		}
-		slog.WarnContext(ctx, "Micro-VM stopped before the kata-agent answered; retrying cold boot",
+		slog.WarnContext(ctx, "Micro-VM stopped before application containers started; retrying cold boot",
 			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
 	}
 }
 
-// coldBootActor boots the actor's micro-VM from scratch and starts its
-// containers, registering the result in s.running. The caller holds s.lock and
+// coldBootActor completes a cold boot and starts the actor's containers,
+// reusing a VM from PrepareSandbox when supplied and otherwise booting one
+// inline. It registers the result in s.running. The caller holds s.lock and
 // owns the lifecycle logging.
 func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (retErr error) {
 	actorUID := p.actorUID
+	prepared := p.prepared
+
+	// From this point coldBootActor owns a VM supplied by PrepareSandbox or one
+	// returned by bootSandbox below. Install cleanup before any other operation:
+	// egress setup and OCI-bundle validation can fail before the normal boot path.
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if prepared != nil {
+			if cleanupErr := s.cleanupPreparedSandbox(cleanupCtx, prepared); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up microVM after cold boot failure", slog.Any("err", cleanupErr))
+			}
+		}
+		// buildActorContainers may have composed bundle overlays before a fresh
+		// boot was attempted. bootSandbox cleanup also reaches these mounts, but
+		// this covers failures that happen before bootSandbox owns any resources.
+		if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+			slog.WarnContext(cleanupCtx, "Failed to unmount bundle rootfs overlays after Run failure", slog.Any("err", err))
+		}
+	}()
 
 	// All of the actor's containers share the one micro-VM (which is the pod
 	// sandbox): each gets its own overlay rootfs and its own kata-agent
@@ -403,59 +445,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	if kernel == "" || image == "" {
 		return fmt.Errorf("ateom-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
-	rr := s.resolveRuntime(paths)
 	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
-	if err != nil {
-		return err
-	}
-
-	// Networking (host side): per-activation veth into the interior netns. The
-	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
-		InteriorNetNS:      s.interiorNetNS,
-		HostVethHWAddr:     hostVethHWAddr,
-		SweepInteriorLinks: true,
-		EgressRedirectPort: s.egressRedirectPort(p.egressGateway != nil),
-	}); err != nil {
-		return fmt.Errorf("while setting up actor network: %w", err)
-	}
-	defer func() {
-		if retErr != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancel()
-			if cleanupErr := s.deactivateActorNetworking(cleanupCtx); cleanupErr != nil {
-				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", cleanupErr))
-			}
-			if cleanupErr := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); cleanupErr != nil {
-				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
-			}
-			// Detach any bundle rootfs overlays mounted by buildActorContainers
-			// before the failure, mirroring teardownActor's cleanup.
-			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
-				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure", slog.Any("err", err))
-			}
-		}
-	}()
-
-	// Guest sizing + agent kernel params from the kata config.
-	memMiB, vcpus, kparams, err := s.guestConfig(rr)
-	if err != nil {
-		return err
-	}
-
-	// Right-size the VM to the actor's declared limits (see internal/sizing),
-	// keeping the kata-config values above as the fallback when a limit is unset.
-	// vCPUs round up; VM RAM reserves a fixed margin for the VMM + virtiofsd, which
-	// share the pod cgroup with the guest RAM. A declared memory limit the reserve
-	// leaves too small to boot is rejected (resolveGuestMemMiB) rather than silently
-	// falling back to the larger kata default. NB: a FULL-scope snapshot restore
-	// reuses the size baked into the snapshot (restoreFullScope), so resizing an
-	// existing actor takes effect on its next cold boot.
-	sz := p.size
-	if v := sz.VCPUs(); v > 0 {
-		vcpus = v
-	}
-	memMiB, err = resolveGuestMemMiB(sz.MemoryBytes, s.memReserveMiB, memMiB)
 	if err != nil {
 		return err
 	}
@@ -467,125 +457,50 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return err
 	}
 
-	// Reject limits the guest can never satisfy, before the containers reach the
-	// agent. Restore does not repeat this: it resumes a snapshotted VM, and the
-	// template spec is immutable, so an actor's limits were validated when its
-	// golden was built.
-	if err := checkResourceEnvelope(ctrs, guestEnvelope{
-		memMiB:        memMiB,
-		vcpus:         vcpus,
-		declaredBytes: sz.MemoryBytes,
-		reserveMiB:    s.memReserveMiB,
-	}); err != nil {
+	tStarted := time.Now()
+	preparedEarly := prepared != nil
+	if prepared == nil {
+		prepared, err = s.bootSandbox(ctx, sandboxBootParams{
+			actorUID:       actorUID,
+			assetPaths:     paths,
+			redirectEgress: p.egressGateway != nil,
+			size:           p.size,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	tSandbox := time.Now()
+
+	// Reject limits the booted guest can never satisfy before any application
+	// container reaches the agent. The envelope is captured from the exact
+	// sizing used by bootSandbox, including for a VM prepared by an earlier RPC.
+	if err := checkResourceEnvelope(ctrs, prepared.envelope); err != nil {
 		return err
 	}
 
-	// Clean stale per-sandbox state + create the runtime dir for the sockets.
-	kata.CleanupSandboxState(ctx, actorUID)
-	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
-		return fmt.Errorf("while creating VM dir: %w", err)
-	}
-
-	// A cold boot starts from the bare image: give it a pristine host upper dir
-	// (atelet's actor-dir reset does not know this directory; see rootfsupper.go).
-	if err := resetRootfsUpperDir(actorUID); err != nil {
+	// virtiofsd and the guest are already running. Mount the application rootfs
+	// overlays into its shared tree only after atelet has completed the bundles;
+	// the guest first reads that tree in CreateSandbox below.
+	if err := s.stageMergedRootfsMounts(ctx, actorUID, ctrs, containers); err != nil {
 		return err
 	}
+	tRootfs := time.Now()
 
-	// Assemble each container's merged rootfs on the host (overlay of image lower +
-	// host upper, mounted into the shared dir) + durable-dir and CSI volumes (if any),
-	// and start the ONE virtiofsd that serves them all. CH connects to it at vm.create
-	// and demand-pages for the actor's lifetime, so ateom owns the process (killed in teardownActor).
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, ctrs, containers)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if retErr != nil && vfsdCmd.Process != nil {
-			_ = vfsdCmd.Process.Kill()
-			_, _ = vfsdCmd.Process.Wait()
-		}
-	}()
-
-	// Launch a bare VMM (CH + api-socket); ateom owns this process for teardown.
-	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api.sock")
-	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
-		Binary:    rr.chBinary,
-		APISocket: apiSocket,
-		Stdout:    slogWriter{ctx},
-		Stderr:    slogWriter{ctx},
-	})
-	if err != nil {
-		return fmt.Errorf("while launching VMM: %w", err)
-	}
-	defer func() {
-		if retErr != nil && chCmd.Process != nil {
-			_ = chCmd.Process.Kill()
-			_, _ = chCmd.Process.Wait()
-		}
-	}()
-
-	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/vda +
-	// the virtio-fs device; no actor virtio-blk disks — rootfs writes land in the
-	// host-side overlay upper through the shared mount). The console log is also read
-	// on a failed agent dial below, so keep it here.
-	consoleLog := kata.ConsoleLogPath(actorUID)
-	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.kataDebug)
-	if err := client.CreateVM(ctx, vmCfg); err != nil {
-		return fmt.Errorf("while creating VM: %w", err)
-	}
-
-	// Network device: build the tap + TC mirror against the actor veth and add a
-	// virtio-net to the created (pre-boot) VM with the tap FDs (SCM_RIGHTS).
-	tapFiles, err := s.setupRestoreTap(ctx, "tap0_kata", 1)
-	if err != nil {
-		return fmt.Errorf("while building tap: %w", err)
-	}
-	defer func() {
-		for _, f := range tapFiles {
-			_ = f.Close() // CH dups adopted FDs; ours always close.
-		}
-	}()
-	var fds []int
-	for _, f := range tapFiles {
-		fds = append(fds, int(f.Fd()))
-	}
-	if err := client.AddNetWithFDs(ctx, actorGuestMAC, 2*len(tapFiles), fds); err != nil {
-		return fmt.Errorf("while adding net device: %w", err)
-	}
-
-	// Boot.
-	if err := client.BootVM(ctx); err != nil {
-		return fmt.Errorf("while booting VM: %w", err)
-	}
-	slog.InfoContext(ctx, "Micro-VM booted", slog.String("id", actorUID), slog.String("api", apiSocket))
-
-	// Dial the kata-agent over hybrid-vsock. The agent only starts listening once
-	// the guest's init reaches kata-containers.target — well after CH creates the
-	// vsock socket file — so poll the CONNECT until it answers (as the kata shim
-	// does), rather than dialing once.
-	tBooted := time.Now()
+	// A VM prepared in a separate RPC can die while atelet is still pulling the
+	// image. Cloud Hypervisor removes this socket when it exits; classify that as
+	// the one safe retry case because no application container has run yet.
 	vsockPath := kata.VsockSocketPath(actorUID)
-	if !waitForFile(vsockPath, 15*time.Second) {
-		return fmt.Errorf("kata-agent vsock socket %q did not appear", vsockPath)
-	}
-	tVsock := time.Now()
-	ac, err := dialAgentRetry(ctx, vsockPath, 60*time.Second)
-	if err != nil {
-		logGuestBootDiagnostics(ctx, actorUID, consoleLog)
-		return fmt.Errorf("while dialing kata-agent: %w", err)
-	}
-	tDialed := time.Now()
-	// The agent client must stay open past this RPC: the stdout/stderr forwarding
-	// goroutines (started below) read over it for the actor's lifetime. It is stored
-	// on the runningActor and closed by teardownActor. Close it here only if Run
-	// fails after this point (no runningActor recorded).
-	defer func() {
-		if retErr != nil {
-			_ = ac.Close()
+	if _, err := os.Stat(vsockPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w (cloud-hypervisor removed %q): %v", errGuestStopped, vsockPath, err)
 		}
-	}()
+		return fmt.Errorf("while checking kata-agent vsock socket %q: %w", vsockPath, err)
+	}
+	ac := prepared.actor.guestAgent
+	if ac == nil {
+		return fmt.Errorf("prepared micro-VM has no kata-agent client")
+	}
 
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
 	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
@@ -597,21 +512,20 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
+	tReady := time.Now()
 
-	// Everything from BootVM onward, split. ateom used to log only the total, which
-	// hid where a cold boot actually goes: it is not the guest booting.
 	slog.InfoContext(ctx, "Actor boot phases", slog.String("id", actorUID),
-		slog.Duration("vsock_wait", tVsock.Sub(tBooted)),
-		slog.Duration("agent_dial", tDialed.Sub(tVsock)),
-		slog.Duration("containers", tContainers.Sub(tDialed)),
-		slog.Duration("readyz", time.Since(tContainers)),
-		slog.Duration("since_boot", time.Since(tBooted)))
+		slog.Bool("prepared_early", preparedEarly),
+		slog.Duration("sandbox", tSandbox.Sub(tStarted)),
+		slog.Duration("rootfs", tRootfs.Sub(tSandbox)),
+		slog.Duration("containers", tContainers.Sub(tRootfs)),
+		slog.Duration("readyz", tReady.Sub(tContainers)))
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac, workloadIDs: workloadIDs(ctrs)}
 	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}
-	s.running[actorUID] = ra
+	prepared.actor.workloadIDs = workloadIDs(ctrs)
+	s.running[actorUID] = prepared.actor
 
 	// Forward each container's stdout/stderr into the pod logs, keyed by the
 	// container id (== the name; see StartRootfsContainer). The goroutines read
@@ -678,45 +592,53 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 	return ctrs, nil
 }
 
-// stageMergedRootfs assembles each container's merged rootfs on the host
-// (overlay: image lower + the actor's rootfs-upper dirs) at virtiofsd's
-// find-paths location (SharedDir(id)/<cid>/rootfs), stages durable-dir volumes,
-// CSI volumes, and system-info volumes (if any) under SharedDir(id)/durable,
-// SharedDir(id)/csi, and SharedDir(id)/system-info,
-// then starts the ONE virtiofsd that serves them all. Must run AFTER CleanupSandboxState (which
-// wipes SharedDir) and resetRootfsUpperDir/untarRootfsUpper (which own the
-// upper contents). The returned virtiofsd cmd outlives this call (CH
-// demand-pages from it); the caller owns it (tracked on runningActor, killed
-// in teardownActor).
-func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, ctrs []actorContainer, containers []*ateompb.Container) (*exec.Cmd, error) {
+// stageMergedRootfsMounts assembles each container's merged rootfs on the host
+// at virtiofsd's find-paths location and stages the actor's volumes beneath the
+// same unified share. It is separate from startRootfsShare so PrepareSandbox can
+// boot before the OCI bundles exist, then add all mounts before CreateSandbox.
+func (s *AteomService) stageMergedRootfsMounts(ctx context.Context, id string, ctrs []actorContainer, containers []*ateompb.Container) error {
 	upperBase := rootfsUpperDir(id)
 	for _, c := range ctrs {
 		if err := kata.StageMergedRootfs(ctx, c.bundleRootfs, upperBase, id, c.name); err != nil {
-			return nil, fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
+			return fmt.Errorf("while staging merged rootfs for %q: %w", c.name, err)
 		}
 		for _, vm := range c.imageMounts {
 			src := ateompath.ImageVolumeMountPath(id, c.name, vm.GetVolumeName())
 			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
-				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
+				return fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
 			}
 		}
 	}
 	if hasDurableVolumes(containers) {
 		if err := s.stageDurableVolumes(ctx, id); err != nil {
-			return nil, fmt.Errorf("while staging durable-dir volumes: %w", err)
+			return fmt.Errorf("while staging durable-dir volumes: %w", err)
 		}
 	}
 	if hasCsiVolumes(containers) {
 		if err := s.stageCsiVolumes(ctx, id); err != nil {
-			return nil, fmt.Errorf("while staging CSI volumes: %w", err)
+			return fmt.Errorf("while staging CSI volumes: %w", err)
 		}
 	}
 	if hasSystemInfoVolumes(containers) {
 		if err := s.stageSystemInfoVolumes(ctx, id); err != nil {
-			return nil, fmt.Errorf("while staging system-info volumes: %w", err)
+			return fmt.Errorf("while staging system-info volumes: %w", err)
 		}
 	}
-	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	return nil
+}
+
+// startRootfsShare starts the one virtiofsd serving an actor's shared rootfs
+// tree. The tree may still be empty: mounts added later beneath this rshared
+// path propagate into virtiofsd's mount namespace.
+func (s *AteomService) startRootfsShare(ctx context.Context, rr resolvedRuntime, id string) (*exec.Cmd, error) {
+	if err := os.MkdirAll(kata.SharedDir(id), 0o755); err != nil {
+		return nil, fmt.Errorf("while creating virtiofsd shared directory: %w", err)
+	}
+	vfsdLog, err := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("while opening virtiofsd log: %w", err)
+	}
+	defer vfsdLog.Close()
 	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:     rr.virtiofsd,
 		SocketPath: kata.VirtiofsdSocketPath(id),
@@ -727,6 +649,16 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 		return nil, fmt.Errorf("while starting virtiofsd: %w", err)
 	}
 	return vfsdCmd, nil
+}
+
+// stageMergedRootfs preserves the restore path's original ordering: assemble
+// all rootfs mounts first, then start virtiofsd. The returned process outlives
+// this call and is owned by the caller.
+func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, ctrs []actorContainer, containers []*ateompb.Container) (*exec.Cmd, error) {
+	if err := s.stageMergedRootfsMounts(ctx, id, ctrs, containers); err != nil {
+		return nil, err
+	}
+	return s.startRootfsShare(ctx, rr, id)
 }
 
 // guestConfig reads guest sizing + agent kernel params from the resolved kata
@@ -961,10 +893,10 @@ func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, a resources
 	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), a, containerName)
 }
 
-// errGuestStopped reports that the micro-VM stopped before the kata-agent
-// answered. Callers that can start over (a cold boot has no observable side
-// effects until the agent runs the containers) retry on it.
-var errGuestStopped = errors.New("micro-VM stopped before the kata-agent answered")
+// errGuestStopped reports that the micro-VM stopped before an application
+// container started. Callers can safely retry because there are no workload
+// side effects yet.
+var errGuestStopped = errors.New("micro-VM stopped before application containers started")
 
 // Bounds on the kata-agent dial poll. What they set is the window between the agent
 // starting to listen and us noticing: an attempt already in flight when the agent

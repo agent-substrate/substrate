@@ -18,10 +18,11 @@ package ateom;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateompb";
 
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
-// guest inside a worker pod.
+// Ateom is the interface to control a single gVisor or microVM guest inside a
+// worker pod.
 //
-// Each ateom server has two main states, "available" and "executing".
+// Each ateom server may be available, have a prepared root sandbox, or be
+// executing a workload.
 //
 // When the ateom is "available", the substrate control plane is free to either
 // boot a new workload (using RunWorkload), or restore an existing workload from
@@ -32,6 +33,14 @@ option go_package = "github.com/agent-substrate/substrate/internal/proto/ateompb
 // running workload (with CheckpointWorkload).  This moves the ateom back to
 // "free" state.
 service Ateom {
+  // PrepareSandbox starts the root sandbox before application images finish
+  // downloading. RunWorkload later attaches and starts the applications.
+  rpc PrepareSandbox(PrepareSandboxRequest) returns (PrepareSandboxResponse) {}
+
+  // DiscardPreparedSandbox tears down a sandbox that cannot be used because
+  // another concurrent preparation step failed.
+  rpc DiscardPreparedSandbox(DiscardPreparedSandboxRequest) returns (DiscardPreparedSandboxResponse) {}
+
   // RunWorkload tells ateom to begin running a new workload (one or more
   // containers, potentially with shared filesystems).
   rpc RunWorkload(RunWorkloadRequest) returns (RunWorkloadResponse) {}
@@ -454,4 +463,41 @@ message GetActiveWorkloadStatsResponse {
     WorkloadStatsSample sample = 1;
     NoSampleReason no_sample_reason = 2;
   }
+}
+
+message PrepareSandboxRequest {
+  string actor_uid = 1;
+  string runsc_path = 2;
+
+  // Whether the actor network needs transparent egress redirection.
+  bool redirect_egress = 3;
+
+  // The actor's declared size. The pause/root container is created by this RPC,
+  // so it must receive the same limits as the later RunWorkload call.
+  int64 cpu_milli = 4;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 5; // Memory limit in bytes.
+
+  // Runtime assets needed before a microVM can boot. Empty for gVisor.
+  map<string, string> runtime_asset_paths = 6;
+
+  // Runtime-specific preparation needs the workload shape: gVisor declares
+  // durable mount hints while microVM decides its early sandbox shape.
+  // Application rootfs and volume data are consumed only by RunWorkload or
+  // RestoreWorkload, after atelet finishes preparing them.
+  WorkloadSpec spec = 7;
+
+  // Whether RestoreWorkload, rather than RunWorkload, will consume this
+  // sandbox. Runtimes can defer initialization that depends on checkpoint
+  // contents.
+  bool from_checkpoint = 8;
+}
+
+message PrepareSandboxResponse {
+}
+
+message DiscardPreparedSandboxRequest {
+  string actor_uid = 1;
+}
+
+message DiscardPreparedSandboxResponse {
 }
