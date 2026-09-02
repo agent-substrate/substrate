@@ -347,8 +347,7 @@ func goldenSnapshotDone(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
 
 // goldenSnapshotWarmupFor returns 0 when every container has a readyz probe
 // (ResumeActor already blocked until the workload reported 200), and the
-// default warmup otherwise. Mirrors the CRD controller's function of the
-// same name; keep both in sync.
+// default warmup otherwise.
 func goldenSnapshotWarmupFor(containers []*ateapipb.Container) time.Duration {
 	if len(containers) == 0 {
 		return goldenSnapshotWarmup

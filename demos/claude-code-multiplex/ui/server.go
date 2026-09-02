@@ -388,7 +388,7 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleActors returns actor-shaped JSON sourced from ateapi.ListActors.
-// ActorTemplates / WorkerPools (k8s CRDs) are no longer surfaced —
+// ActorTemplate / WorkerPool resources are no longer surfaced —
 // substrate-native Actors are the canonical demo entity.
 func handleActors(w http.ResponseWriter, r *http.Request) {
 	if ateClient == nil {

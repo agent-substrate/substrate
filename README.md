@@ -208,10 +208,10 @@ If you need to delete the local `kind` cluster and its registry (if it was creat
 
 We provide several sample applications demonstrating Agent Substrate's capabilities:
 
-1. **[Counter Demo](demos/counter/README.md)**: A stateful Go HTTP server demonstrating state preservation across suspends/resumes, and dynamic CRD routing.
+1. **[Counter Demo](demos/counter/README.md)**: A stateful Go HTTP server demonstrating state preservation across suspends/resumes, and on-demand actor resumption and routing via the Substrate router.
 2. **[Sandbox Demo (Antigravity)](demos/sandbox/README.md)**: A secure, sandboxed execution environment (running Alpine Linux) that allows arbitrary shell execution while preserving filesystem state across sessions.
 3. **[Claude Code Multiplex](demos/claude-code-multiplex/README.md)**: Demonstrates oversubscribing physical hardware by multiplexing multiple Claude Code agents onto a limited pool of workers.
-4. **[Multi-Template](demos/multi-template/README.md)**: Two `ActorTemplate`s running different binaries share one `WorkerPool`, across three namespaces.
+4. **[Multi-Template](demos/multi-template/README.md)**: Two `ActorTemplate`s running different binaries share one `WorkerPool`, even though the templates live in different atespaces.
 5. **[Request Parking](demos/parking/README.md)**: An oversubscribed pool where the router holds inbound requests until a worker frees up, instead of returning `503`.
 6. **[Autoscaled WorkerPool](demos/autoscaled-workerpool/README.md)**: Scales a `WorkerPool` on its assigned-worker count with an HPA fed by prometheus-adapter.
 

@@ -5,37 +5,40 @@ This document defines the core terms used across Agent Substrate.
 For how the pieces fit together, see the [Architecture](architecture.md) and
 [API Guide](api-guide.md).
 
-## Resources (declarative, Kubernetes CRDs)
+## Resources (declarative)
 
-- **ActorTemplate**: the definition of an actor "class": the container image(s)
-  and snapshot configuration. Creating an `ActorTemplate` triggers creation of
-  a [Golden Snapshot](#snapshots). It is treated as immutable: you create a new
-  template for a new version rather than editing an existing one. It is
-  analogous to a Pod template, but for a checkpointable workload.
+- **ActorTemplate** (ate API resource): the definition of an actor "class":
+  the container image(s) and snapshot configuration. Creating an
+  `ActorTemplate` triggers creation of a [Golden Snapshot](#snapshots). It is
+  treated as immutable: you create a new template for a new version rather
+  than editing an existing one. It is analogous to a Pod template, but for a
+  checkpointable workload. ActorTemplates are created and managed through the
+  substrate gRPC API (e.g. `kubectl ate create actor-template`) and stored in
+  the control-plane database; they are not Kubernetes objects.
 
-- **WorkerPool**: declares warm compute capacity, a fleet of pre-started worker
-  pods. It is reconciled into a Kubernetes `Deployment` by the
-  [atecontroller](#components).
+- **WorkerPool** (Kubernetes CRD): declares warm compute capacity, a fleet of
+  pre-started worker pods. It is reconciled into a Kubernetes `Deployment` by
+  the [atecontroller](#components).
 
-- **SandboxConfig**: a cluster-scoped resource holding the sandbox binaries for
-  one runtime family (the gVisor `runsc` binary, or a micro-VM
-  kernel/firmware/config), plus the pause image for the sandbox's root
-  container. An actor resolves its sandbox at first cold boot from the config its
-  `ActorTemplate` names (naming one is currently required; per-class cluster
-  defaults are planned), so one config pins the runtime version for many
-  templates.
+- **SandboxConfig** (Kubernetes CRD): a cluster-scoped resource holding the
+  sandbox binaries for one runtime family (the gVisor `runsc` binary, or a
+  micro-VM kernel/firmware/config), plus the pause image for the sandbox's
+  root container. An actor resolves its sandbox at first cold boot from the
+  config its `ActorTemplate` names (naming one is currently required;
+  per-class cluster defaults are planned), so one config pins the runtime
+  version for many templates.
 
 ## Records (dynamic state, in the control-plane store)
 
-These are not Kubernetes objects; they live in the control-plane database
-because they change too frequently for etcd.
+These live in the control-plane database because they change too frequently
+for etcd.
 
 - **Atespace**: the isolation boundary an Actor belongs to, and the first half
   of its identity: an Actor is addressed by `(atespace, name)`, so the same
   name can exist in two atespaces. Atespaces are global-scoped, not Kubernetes
-  namespaces, and are distinct from the namespace an `ActorTemplate` lives in.
-  One must exist before any Actor can be created in it, and it can only be
-  deleted once empty.
+  namespaces — an `ActorTemplate` also lives in an atespace, while
+  `WorkerPool`s live in Kubernetes namespaces. One must exist before any
+  Actor can be created in it, and it can only be deleted once empty.
 
 - **Actor**: a single instance derived from an `ActorTemplate`, identified by a
   DNS-1123 name. It is the unit that is suspended and resumed, and it moves

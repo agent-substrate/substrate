@@ -44,7 +44,7 @@ fi
 
 WORKER_COUNT=1
 SANDBOX_CLASS="gvisor"
-# Actor memory limit (ActorTemplate spec.resources.limits.memory). The default
+# Actor memory limit (ActorTemplate resources.limits.memory). The default
 # is the smallest size microvm admits (128Mi VMM reserve + 128Mi guest floor),
 # so benchmark actors do not inherit the 2 GiB kata default and drag its page
 # cache into every memory snapshot. Raise it for RAM-consuming suites.

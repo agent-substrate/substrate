@@ -48,7 +48,7 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | Directory            | Binary / Purpose                                      |
 |----------------------|-------------------------------------------------------|
 | `cmd/ateapi`         | Control-plane API server (gRPC)                       |
-| `cmd/atecontroller`  | Kubernetes controller for WorkerPool/ActorTemplate    |
+| `cmd/atecontroller`  | Kubernetes controller for WorkerPools (and network/egress resources) |
 | `cmd/atelet`         | Node supervisor (DaemonSet)                           |
 | `cmd/atenet`         | Network proxy / Envoy external-processing server      |
 | `cmd/ateom-gvisor`   | In-pod gVisor container image entry point             |

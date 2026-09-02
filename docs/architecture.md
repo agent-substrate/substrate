@@ -136,8 +136,9 @@ There are a few different personas that interact with the system:
   3) **Agent developers**: These are the people who deploy agents into a substrate
      for users or higher-level systems to consume. They might have to be aware
      that they are using Kubernetes (some concepts are represented as CRDs,
-     such as ActorTemplates), or they might be using a higher level API which
-     itself uses Agent Substrate under the hood.
+     such as WorkerPools), or they might be using a higher level API which
+     itself uses Agent Substrate under the hood. ActorTemplates are managed
+     through the substrate API (`kubectl-ate`), not through Kubernetes.
 
   4) **Agent users**: These are the people who interact with agents running in the
      substrate.  They might be end-users of an application that is built on top
@@ -207,20 +208,22 @@ worker.
 Agent Substrate categorizes resources into two groups based on their
 persistence requirements and the frequency of state transitions.
 
-### System Configuration (Declarative/CRD-based)
+### System Configuration (Declarative)
 
-These resources define the intended state of the system and are managed via
-Kubernetes CRD APIs. They are used for administrative operations and actor
-environment definitions.
+These resources define the intended state of the system. They are used for
+administrative operations and actor environment definitions.
 
-  * **WorkerPool**: Defines a pool of "warm" compute capacity. It manages a
-    fleet of standby worker pods initialized and ready to receive resumed actor
-    states. Optional `spec.template` fields configure worker pod node
-    selection, tolerations, priority class, and node affinity.
+  * **WorkerPool** (Kubernetes CRD): Defines a pool of "warm" compute
+    capacity. It manages a fleet of standby worker pods initialized and ready
+    to receive resumed actor states. Optional `spec.template` fields configure
+    worker pod node selection, tolerations, priority class, and node affinity.
 
-  * **ActorTemplate**: An immutable definition of an actor-version. It
-    encapsulates the container image, configuration, and environment required
-    to generate a "golden" snapshot.
+  * **ActorTemplate** (ate API resource): An immutable definition of an
+    actor-version. It encapsulates the container image, configuration, and
+    environment required to generate a "golden" snapshot. ActorTemplates are
+    created and managed through the substrate gRPC API (e.g. `kubectl ate
+    create actor-template`) and stored in the control-plane state store; they
+    are not Kubernetes objects.
 
 ### Dynamic Instance State (Database-based)
 
@@ -249,21 +252,22 @@ and Performance:
       lookups and atomic worker assignments that bypass the eventual
       consistency and variable latency of standard Kubernetes API servers.
 
-  3.  **Governance**: Using Kubernetes objects for the environment (WorkerPools
-      and Templates) allows platform teams to apply familiar RBAC, auditing,
-      and policy enforcement to the underlying infrastructure.
+  3.  **Governance**: Keeping infrastructure resources (WorkerPools,
+      SandboxConfigs) as Kubernetes objects allows platform teams to apply
+      familiar RBAC, auditing, and policy enforcement to the underlying
+      infrastructure, while workload definitions (ActorTemplates) are managed
+      through the substrate API instead, which authenticates callers itself
+      but does not yet implement authorization (see
+      [authentication.md](authentication.md)).
 
 ### Resource Model
 
-The CRDs and control-plane records described above, with their relationships and
-multiplicities (UML class diagram):
+The Kubernetes resources and control-plane records described above, with their
+relationships and multiplicities (UML class diagram):
 
 ```mermaid
 classDiagram
     namespace kube-apiserver {
-        class ActorTemplate {
-            <<CRD>>
-        }
         class WorkerPool {
             <<CRD>>
         }
@@ -275,6 +279,9 @@ classDiagram
     }
 
     namespace ate-api-server {
+        class ActorTemplate {
+            <<record>>
+        }
         class Actor {
             <<record>>
             status
@@ -287,10 +294,10 @@ classDiagram
         }
     }
 
-    ActorTemplate "1" --> "1" WorkerPool : workerPoolRef
+    ActorTemplate ..> WorkerPool : worker_selector (labels)
     WorkerPool ..> Deployment : reconciled by atecontroller
     Deployment "1" *-- "*" WorkerPod : manages
-    Actor ..> ActorTemplate : derived from
+    Actor "*" --> "1" ActorTemplate : actor_template
     Actor "0..1" --> "0..1" Worker : runs on
     Worker "1" --> "1" WorkerPod : maps to
 ```

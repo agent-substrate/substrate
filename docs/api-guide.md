@@ -61,7 +61,7 @@ moves. A pinned pool cannot put those pods back on a moved node, so the old
 version drains away node by node. An unpinned pool breaks this constraints.
 #### Worker Capacity (`spec.template.resources`)
 
-Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope available to host an actor sandbox, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-specresources) on the `ActorTemplate`).
+Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope available to host an actor sandbox, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).
 
 - Size a pool's `limits` to the largest actor it should host. An actor occupies its whole worker, so worker capacity is the per-actor ceiling, not a shared budget.
 - Capacity is advisory for placement only: a worker that declares no CPU/memory limit reports zero capacity for that dimension, which the scheduler treats as **unconstrained** (placement is never blocked by missing data). The actual sandbox size still comes from the `ActorTemplate`.
@@ -112,24 +112,24 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 
 The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. It is used to generate the "Golden Snapshot" from which all actors of this type are derived.
 
-### Specification (`ActorTemplateSpec`)
+### Specification (`ActorTemplate`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
-| `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
+| `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
-| `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-specresources). Immutable, like the rest of the spec. |
+| `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
-Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` of the matching class. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the spec, is immutable, so each template's class is fixed at creation.
+Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` of the matching class. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
 
-### Sandbox Right-Sizing (`spec.resources`)
+### Sandbox Right-Sizing (`resources`)
 
-Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate` spec. Declared limits do three things:
+Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate`. Declared limits do three things:
 
 1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateom):
    - **gVisor (`ateom-gvisor`)** — applied to the container OCI spec: `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
@@ -148,7 +148,7 @@ Substrate uses a **Uniform DNS Mesh**: every actor created from a template is au
 
 ### SystemInfo Volumes
 
-To deliver identity information, including credentials, to a running actor, you can use a SystemInfo volume. Define it in `spec.volumes`, and mount it into each container that needs it.
+To deliver identity information, including credentials, to a running actor, you can use a SystemInfo volume. Define it in `volumes`, and mount it into each container that needs it.
 
 Available information sources:
 
@@ -215,7 +215,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
 | `env` | `[]EnvVar` | Optional. Literal `value` entries. |
 | `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
-| `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `spec.volumes` entry (e.g. `durableDir`) into this container. |
+| `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
 | `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |
 
@@ -265,7 +265,7 @@ A container that exceeds its memory limit is OOM-killed on its own; the actor's 
 
 Per-container limits are micro-VM only today. gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). A template that sets `resources` with `sandboxClass: gvisor` is rejected.
 
-These limits subdivide the sandbox that [`spec.resources`](#sandbox-right-sizing-specresources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A micro-VM guest is sized from `spec.resources.limits.memory` minus the VMM reserve, or from the template's [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) when the template declares no actor-level limit. The CPU ceiling is the guest's vCPU count, which falls back to the config's `default_vcpus` (1 unless the `SandboxConfig` raises it), so a template that declares no `spec.resources.limits.cpu` caps each container, and their sum, at `1000m`. A limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
+These limits subdivide the sandbox that [`resources`](#sandbox-right-sizing-resources) already sized; a container that declares none is bounded by the guest as a whole, not by a copy of the actor's total. A micro-VM guest is sized from `resources.limits.memory` minus the VMM reserve, or from the template's [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) when the template declares no actor-level limit. The CPU ceiling is the guest's vCPU count, which falls back to the config's `default_vcpus` (1 unless the `SandboxConfig` raises it), so a template that declares no `resources.limits.cpu` caps each container, and their sum, at `1000m`. A limit above either ceiling can never bind, so the actor fails to start with an error naming both the limit and the ceiling.
 
 Each limit is validated on its own at apply, but the sum across the actor's containers is only checked when the actor first runs, against the real guest size. A template whose limits do not fit is accepted by the API server and fails on its first actor.
 
@@ -408,13 +408,13 @@ When an `ActorTemplate` is created:
 4.  The template enters the `Ready` phase.
 
 ### Resumption Lifecycle
-Once a template is `Ready`, creating an actor logically (via `kubectl-ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
+Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
 
 ---
 
 ## 5. Best Practices
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
-*   **Symmetry:** Ensure your `ActorTemplate` and `WorkerPool` are in the same namespace or have appropriate RBAC permissions to reference each other.
+*   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
 
 ---
