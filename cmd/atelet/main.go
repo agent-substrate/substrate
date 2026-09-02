@@ -429,6 +429,9 @@ type AteomHerder struct {
 	volumePlugins            map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister    listersv1alpha1.CSIDriverConfigLister
 	clusterTrustBundleLister certlisters.ClusterTrustBundleLister
+
+	// Serializes node-local operations per actor.
+	actorLocks actorLocks
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -467,6 +470,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+
+	// Serialize node-local operations per actor.
+	release, err := s.lockActorFor("run", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	sandboxRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
@@ -575,6 +585,13 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+
+	// Serialize node-local operations per actor.
+	release, err := s.lockActorFor("checkpoint", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed. Phases left at zero never ran.
@@ -815,6 +832,13 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// Serialize node-local operations per actor.
+	release, err := s.lockActorFor("paused-checkpoint upload", req.GetActorUid())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	tStart := time.Now()
 	var dPersist time.Duration
 	op := snapshotOp{
@@ -947,6 +971,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	actorUID := req.GetActorUid()
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
+
+	// Serialize node-local operations per actor.
+	release, err := s.lockActorFor("restore", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	// Per-step timing so we can attribute resume latency between the rustfs
 	// download/decompress, the OCI image unpack, and ateom's own work. Reported on
@@ -1247,6 +1278,13 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
+
+	// Serialize node-local operations per actor.
+	release, err := s.lockActorFor("terminate", actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	var assetPaths map[string]string
 	sandboxRec, err := readSandboxRecord(actorUID)
