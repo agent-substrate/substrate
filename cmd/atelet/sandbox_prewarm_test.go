@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -110,6 +111,10 @@ func TestRecordFromSandboxConfig(t *testing.T) {
 }
 
 func TestPrewarmEnqueueFilters(t *testing.T) {
+	origJitter := prewarmMaxJitter
+	prewarmMaxJitter = 0 // enqueue synchronously so Len is observable
+	t.Cleanup(func() { prewarmMaxJitter = origJitter })
+
 	ctx := context.Background()
 	microvm := &v1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "microvm-default"},
@@ -118,7 +123,7 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 	gvisor := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
 
 	t.Run("node without KVM", func(t *testing.T) {
-		p := &sandboxPrewarmer{queue: make(chan *v1alpha1.SandboxConfig, 1)}
+		p := newSandboxPrewarmer(nil, nil, false)
 
 		p.enqueue(ctx, "not a sandbox config")
 		p.enqueue(ctx, microvm)
@@ -126,29 +131,62 @@ func TestPrewarmEnqueueFilters(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: "future-class"},
 			Spec:       v1alpha1.SandboxConfigSpec{SandboxClass: "future-class"},
 		})
-		if len(p.queue) != 0 {
-			t.Fatalf("queue holds %d configs after filtered enqueues, want 0", len(p.queue))
+		if p.queue.Len() != 0 {
+			t.Fatalf("queue holds %d configs after filtered enqueues, want 0", p.queue.Len())
 		}
 
 		p.enqueue(ctx, gvisor)
-		if len(p.queue) != 1 {
-			t.Fatalf("queue holds %d configs after gvisor enqueue, want 1", len(p.queue))
+		if p.queue.Len() != 1 {
+			t.Fatalf("queue holds %d configs after gvisor enqueue, want 1", p.queue.Len())
 		}
-		// A full queue must drop rather than block the informer handler.
+		// Duplicate events (e.g. a relist) must coalesce, not stack work.
 		p.enqueue(ctx, gvisor)
-		if len(p.queue) != 1 {
-			t.Errorf("queue holds %d configs after enqueue on a full queue, want 1", len(p.queue))
+		if p.queue.Len() != 1 {
+			t.Errorf("queue holds %d configs after duplicate enqueue, want 1", p.queue.Len())
 		}
 	})
 
 	t.Run("node with KVM", func(t *testing.T) {
-		p := &sandboxPrewarmer{queue: make(chan *v1alpha1.SandboxConfig, 2), microvmCapable: true}
+		p := newSandboxPrewarmer(nil, nil, true)
 		p.enqueue(ctx, microvm)
 		p.enqueue(ctx, gvisor)
-		if len(p.queue) != 2 {
-			t.Errorf("queue holds %d configs, want both microvm and gvisor queued", len(p.queue))
+		if p.queue.Len() != 2 {
+			t.Errorf("queue holds %d configs, want both microvm and gvisor queued", p.queue.Len())
 		}
 	})
+}
+
+// TestPrewarmProcessRetries covers the worker's failure handling: a failed
+// prewarm is requeued with backoff, and a config deleted between enqueue and
+// processing is forgotten without retries.
+func TestPrewarmProcessRetries(t *testing.T) {
+	origDir := ateompath.StaticFilesDir
+	ateompath.StaticFilesDir = t.TempDir()
+	t.Cleanup(func() { ateompath.StaticFilesDir = origDir })
+
+	ctx := context.Background()
+	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
+	// No pause image, so a failing prewarm exercises only the asset path.
+	cfg.Spec.PauseImage = ""
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(cfg); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	p := newSandboxPrewarmer(herder, listersv1alpha1.NewSandboxConfigLister(indexer), false)
+
+	p.queue.Add(cfg.Name)
+	name, _ := p.queue.Get()
+	p.process(ctx, name)
+	if got := p.queue.NumRequeues(cfg.Name); got != 1 {
+		t.Errorf("NumRequeues after failed prewarm = %d, want 1 (requeued with backoff)", got)
+	}
+
+	p.process(ctx, "deleted-config")
+	if got := p.queue.NumRequeues("deleted-config"); got != 0 {
+		t.Errorf("NumRequeues for a deleted config = %d, want 0 (forgotten)", got)
+	}
 }
 
 // TestMicrovmNodeCapable covers the detectable negative cases; the positive

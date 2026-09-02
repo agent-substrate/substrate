@@ -24,16 +24,28 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 )
 
 // prewarmMaxJitter spreads the fleet's asset downloads after a SandboxConfig
 // change. Every atelet observes a create/update within about a second, and
-// without jitter they would all open the same bucket objects at once. A var so
-// tests can zero it.
+// without jitter they would all open the same bucket objects at once. The
+// jitter is applied as the enqueue delay, so duplicate events arriving inside
+// the window collapse into one queue entry instead of stacking waits in the
+// worker. A var so tests can zero it.
 var prewarmMaxJitter = 30 * time.Second
+
+// prewarmMaxRetries bounds how often one config's failed prewarm is retried
+// before it is dropped until the next config event (or first use, which stays
+// the correctness path). The backoff below caps at 5 minutes, so this covers
+// transient bucket or registry outages of several minutes without hammering a
+// permanently broken config forever.
+const prewarmMaxRetries = 8
 
 // sandboxPrewarmer downloads SandboxConfig assets into the node's
 // content-addressed static-files cache before any actor asks for them, so the
@@ -41,15 +53,33 @@ var prewarmMaxJitter = 30 * time.Second
 // download+extract on the critical path.
 type sandboxPrewarmer struct {
 	herder *AteomHerder
+	// lister resolves a queued config name to its latest revision at
+	// processing time, so coalesced events never prewarm a stale spec.
+	lister listersv1alpha1.SandboxConfigLister
 	// queue decouples informer event handlers (which must not block) from the
-	// downloads. A single worker drains it, which also serializes downloads so
-	// concurrent prewarms never compete for node bandwidth.
-	queue chan *v1alpha1.SandboxConfig
+	// downloads, dedupes by config name so relists cannot stack duplicate
+	// work, and rate-limits retries after failures. A single worker drains
+	// it, which also serializes downloads so concurrent prewarms never
+	// compete for node bandwidth.
+	queue workqueue.TypedRateLimitingInterface[string]
 	// microvmCapable gates micro-VM configs: their guest images run to
 	// hundreds of MiB, and a node without /dev/kvm can never run that class
 	// (workers request the ate.dev/kvm extended resource, so they only
 	// schedule where the device exists). See microvmNodeCapable.
 	microvmCapable bool
+}
+
+func newSandboxPrewarmer(herder *AteomHerder, lister listersv1alpha1.SandboxConfigLister, microvmCapable bool) *sandboxPrewarmer {
+	return &sandboxPrewarmer{
+		herder: herder,
+		lister: lister,
+		// Downloads fail on the scale of network timeouts, not API conflicts,
+		// so back off in seconds and cap in minutes rather than the
+		// millisecond-based controller default.
+		queue: workqueue.NewTypedRateLimitingQueue(
+			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
+		microvmCapable: microvmCapable,
+	}
 }
 
 // startSandboxAssetPrewarm registers an event handler on the SandboxConfig
@@ -63,13 +93,7 @@ type sandboxPrewarmer struct {
 // revision makes stale releases accumulate faster. Add a GC that removes
 // assets referenced by no current SandboxConfig and no on-node actor record.
 func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, herder *AteomHerder, microvmCapable bool) error {
-	p := &sandboxPrewarmer{
-		herder: herder,
-		// SandboxConfigs are cluster-scoped and number a handful; 64 buffered
-		// events is far beyond any realistic burst.
-		queue:          make(chan *v1alpha1.SandboxConfig, 64),
-		microvmCapable: microvmCapable,
-	}
+	p := newSandboxPrewarmer(herder, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
 	// The handler is registered after the informer cache has synced, so it
 	// replays every existing SandboxConfig as a synthetic Add: a freshly booted
 	// node prewarms the current configs, not only future changes.
@@ -106,36 +130,60 @@ func (p *sandboxPrewarmer) enqueue(ctx context.Context, obj any) {
 			slog.String("sandboxClass", string(cfg.Spec.SandboxClass)))
 		return
 	}
-
-	select {
-	case p.queue <- cfg:
-	default:
-		// Best-effort: dropping an event only costs a download at first use.
-		slog.WarnContext(ctx, "Sandbox asset prewarm queue full; skipping config", slog.String("config", cfg.Name))
+	if prewarmMaxJitter > 0 {
+		p.queue.AddAfter(cfg.Name, rand.N(prewarmMaxJitter))
+		return
 	}
+	p.queue.Add(cfg.Name)
 }
 
 func (p *sandboxPrewarmer) run(ctx context.Context) {
+	go func() {
+		<-ctx.Done()
+		p.queue.ShutDown()
+	}()
 	for {
-		select {
-		case <-ctx.Done():
+		name, shutdown := p.queue.Get()
+		if shutdown {
 			return
-		case cfg := <-p.queue:
-			if prewarmMaxJitter > 0 {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(rand.N(prewarmMaxJitter)):
-				}
-			}
-			if err := p.prewarm(ctx, cfg); err != nil {
-				// TODO: retry with backoff (e.g. a rate-limited workqueue).
-				// Until then a transient failure leaves the asset cold until
-				// the next config event or first use.
-				slog.WarnContext(ctx, "Sandbox asset prewarm failed", slog.String("config", cfg.Name), slog.Any("err", err))
-			}
 		}
+		p.process(ctx, name)
 	}
+}
+
+// process prewarms the named config's current revision, requeueing with
+// backoff on failure. The queue holds names, not objects, so an event that
+// arrives while its config is being processed is simply requeued by the
+// workqueue and prewarms the newer revision afterwards.
+func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
+	defer p.queue.Done(name)
+	cfg, err := p.lister.Get(name)
+	if apierrors.IsNotFound(err) {
+		// Deleted since it was enqueued; nothing to prewarm anymore.
+		p.queue.Forget(name)
+		return
+	}
+	if err == nil {
+		err = p.prewarm(ctx, cfg)
+	}
+	if err == nil {
+		p.queue.Forget(name)
+		return
+	}
+	if ctx.Err() != nil {
+		// Shutting down, not a prewarm failure; drop without retry noise.
+		return
+	}
+	if retries := p.queue.NumRequeues(name); retries < prewarmMaxRetries {
+		slog.WarnContext(ctx, "Sandbox asset prewarm failed; will retry",
+			slog.String("config", name), slog.Int("retries", retries), slog.Any("err", err))
+		p.queue.AddRateLimited(name)
+		return
+	}
+	// Best-effort: give up until the next config event or first use.
+	slog.WarnContext(ctx, "Sandbox asset prewarm failed; giving up",
+		slog.String("config", name), slog.Int("retries", prewarmMaxRetries), slog.Any("err", err))
+	p.queue.Forget(name)
 }
 
 // prewarm fetches every asset of one SandboxConfig into the static-files
