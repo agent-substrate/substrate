@@ -23,16 +23,22 @@ set -o errexit -o nounset -o pipefail
 if [ -f .ate-dev-env.sh ]; then
   source .ate-dev-env.sh
 fi
-for var in PROJECT_ID PROJECT_NUMBER CLUSTER_NAME CLUSTER_LOCATION BUCKET_NAME NODE_POOL_NAME; do
-  if [ -z "${!var:-}" ]; then
-    echo "${var} is not set; export it or create .ate-dev-env.sh from the example file in hack" >&2
-    exit 1
-  fi
-done
-
 # No cluster-admin precheck here: every step below talks to GCP, not to the
 # cluster, and requiring a live kubectl context would block tearing down a
 # cluster that is already half-gone.
+
+# require checks that each named variable is set, so a step fails up front
+# with the variable's name rather than mid-deletion with a gcloud error. Each
+# step declares only what it uses: deleting a bucket must not demand a node
+# pool name.
+require() {
+  for var in "$@"; do
+    if [ -z "${!var:-}" ]; then
+      echo "${var} is not set; export it or create .ate-dev-env.sh from the example file in hack" >&2
+      exit 1
+    fi
+  done
+}
 
 # --- Helper Functions ---
 function usage() {
@@ -53,6 +59,7 @@ function usage() {
 
 # Revoke GKE Node Permissions (Reverse of grant_gke_node_permissions)
 revoke_gke_node_permissions() {
+  require PROJECT_ID PROJECT_NUMBER
   echo "Revoking GKE node permissions..."
   gcloud projects remove-iam-policy-binding "${PROJECT_ID}" \
     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
@@ -68,6 +75,7 @@ revoke_gke_node_permissions() {
 
 # Revoke Atelet's project-level bindings (Reverse of grant_atelet_permissions)
 revoke_atelet_permissions() {
+  require PROJECT_ID PROJECT_NUMBER
   echo "Revoking atelet project-level permissions..."
   local member="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa/atelet"
   gcloud projects remove-iam-policy-binding "${PROJECT_ID}" \
@@ -84,6 +92,7 @@ revoke_atelet_permissions() {
 
 # Delete Monitoring Dashboards (Reverse of create_monitoring_dashboards)
 delete_dashboards() {
+  require PROJECT_ID
   echo "Deleting Substrate monitoring dashboards..."
   # Matched by display name, since setup only records names in its JSON.
   local names=(
@@ -105,6 +114,7 @@ delete_dashboards() {
 
 # Delete IAM Policy Bindings for Bucket (Reverse of create_iam_policy_bindings)
 delete_iam_policy_bindings() {
+  require PROJECT_ID PROJECT_NUMBER BUCKET_NAME
   echo "Deleting IAM policy bindings for bucket..."
   gcloud storage buckets remove-iam-policy-binding "gs://${BUCKET_NAME}" \
     --member="principal://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${PROJECT_ID}.svc.id.goog/subject/ns/ate-system/sa/atelet" \
@@ -118,6 +128,7 @@ delete_iam_policy_bindings() {
 
 # Delete Snapshot Bucket (Reverse of create_snapshot_bucket)
 delete_snapshot_bucket() {
+  require PROJECT_ID BUCKET_NAME
   echo "Deleting snapshot bucket..."
   gcloud storage rm --recursive "gs://${BUCKET_NAME}/**" --project="${PROJECT_ID}" --quiet || true
   gcloud storage buckets delete "gs://${BUCKET_NAME}" --project="${PROJECT_ID}" --quiet || true
@@ -125,6 +136,7 @@ delete_snapshot_bucket() {
 
 # Delete gVisor Node Pool (Reverse of create_gvisor_node_pool)
 delete_gvisor_node_pool() {
+  require PROJECT_ID CLUSTER_NAME CLUSTER_LOCATION NODE_POOL_NAME
   echo "Deleting gVisor node pool..."
   gcloud container node-pools delete "${NODE_POOL_NAME}" \
     --cluster="${CLUSTER_NAME}" \
@@ -135,6 +147,7 @@ delete_gvisor_node_pool() {
 
 # Delete Cluster (Reverse of create_cluster)
 delete_cluster() {
+  require PROJECT_ID CLUSTER_NAME CLUSTER_LOCATION
   echo "Deleting GKE cluster..."
   gcloud container clusters delete "${CLUSTER_NAME}" \
     --location="${CLUSTER_LOCATION}" \
@@ -162,7 +175,13 @@ while [[ "$#" -gt 0 ]]; do
       revoke_atelet_permissions
       revoke_gke_node_permissions
       delete_snapshot_bucket
-      delete_gvisor_node_pool
+      # Deleting the cluster removes its node pools, so --all does not insist
+      # on a pool name a caller (e.g. an installer) may not track.
+      if [ -n "${NODE_POOL_NAME:-}" ]; then
+        delete_gvisor_node_pool
+      else
+        echo "NODE_POOL_NAME not set; skipping node pool deletion (the cluster deletion removes its pools)"
+      fi
       delete_cluster
       ;;
     *) usage ;;
