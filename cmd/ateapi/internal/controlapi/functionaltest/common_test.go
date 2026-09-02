@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -90,6 +91,9 @@ type testContext struct {
 	ateletIndexer cache.Indexer
 	// metricReader collects what the service's instruments recorded.
 	metricReader *sdkmetric.ManualReader
+	// objectStore holds the external snapshots the service wrote, so a test can
+	// see which ones a flow created and released.
+	objectStore *objectstoretest.Fake
 }
 
 // setupTest sets up a fully isolated test environment.
@@ -176,7 +180,8 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 			mockDriverName: mockPlugin,
 		}
 	}
-	service := controlapi.NewRPCService(persistence, wc, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
+	objectStore := objectstoretest.New()
+	service := controlapi.NewRPCService(persistence, wc, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins, objectStore)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
@@ -252,6 +257,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		sandboxConfigLister: sandboxConfigLister,
 		ateletIndexer:       ateletInformer.GetIndexer(),
 		metricReader:        metricReader,
+		objectStore:         objectStore,
 	}
 }
 

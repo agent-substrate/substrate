@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
@@ -39,12 +40,15 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -187,9 +191,14 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
+	objectStore, err := newObjectStore(ctx)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
+	}
+
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	controlSrv := controlapi.NewRPCService(persistence, workerCache, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	controlSrv := controlapi.NewRPCService(persistence, workerCache, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins, objectStore)
 
 	// Drive stored ActorTemplates through the golden actor flow.
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
@@ -316,6 +325,35 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
+}
+
+// newObjectStore builds the client ate-api manages external snapshots with.
+// The backend is selected the same way atelet selects the one it reads and
+// writes snapshots through, so both ends of a snapshot's life agree on where
+// it lives.
+func newObjectStore(ctx context.Context) (objectstore.Store, error) {
+	switch backend := os.Getenv("ATE_STORAGE_BACKEND"); backend {
+	case "s3":
+		slog.InfoContext(ctx, "Using S3 storage backend")
+		// Depends on the standard AWS environment variables, which have to be
+		// set on the ate-api pod.
+		cfg, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading S3 config: %w", err)
+		}
+		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
+			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
+				o.UsePathStyle = true
+			}
+		})), nil
+	// GCS is currently the default, TODO: we assume workload identity / ADC
+	default:
+		client, err := storage.NewClient(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("creating GCS client: %w", err)
+		}
+		return objectstore.NewGCS(client), nil
+	}
 }
 
 // connectStore builds the PostgreSQL-backed store.Interface. Startup fails if

@@ -20,6 +20,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
@@ -46,6 +47,7 @@ type RPCService struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
+	objectStore           objectstore.Store
 }
 
 var _ ateapipb.ControlServer = (*RPCService)(nil)
@@ -59,6 +61,10 @@ type VolumePluginRegistry interface {
 // implements the outward-facing RPC interface.
 //
 // instruments may be nil; the record helpers no-op.
+//
+// objectStore may be nil, which leaves external snapshots in place instead of
+// copying and releasing them. Only tests that never reach those steps pass nil;
+// ate-api always builds one.
 func NewRPCService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -69,6 +75,7 @@ func NewRPCService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
+	objectStore objectstore.Store,
 ) *RPCService {
 	impl := newServiceImpl(persistence, storageClassLister)
 	s := &RPCService{
@@ -80,8 +87,9 @@ func NewRPCService(
 		dialer:                dialer,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
+		objectStore:           objectStore,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }
