@@ -691,8 +691,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 			// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data
 			// volume elsewhere, tmpl-d declares an extra volume, and tmpl-e
 			// commits FULL snapshots, which gVisor cannot restore data-only.
-			dataVolume := &ateapipb.Volume{Name: "data", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
-			scratchVolume := &ateapipb.Volume{Name: "scratch", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+			dataVolume := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+			scratchVolume := &ateapipb.Volume{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 			templates := map[string]struct {
 				mountPath string
 				volumes   []*ateapipb.Volume

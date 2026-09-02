@@ -881,8 +881,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data volume
 	// elsewhere, tmpl-d declares an extra volume, and tmpl-e commits FULL
 	// snapshots, which gVisor cannot restore data-only.
-	dataVolume := &ateapipb.Volume{Name: "data", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
-	scratchVolume := &ateapipb.Volume{Name: "scratch", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	dataVolume := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	scratchVolume := &ateapipb.Volume{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 	templates := map[string]struct {
 		mountPath string
 		volumes   []*ateapipb.Volume
@@ -1000,8 +1000,8 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 // per-container mount comparison applied when an actor is repointed at a
 // replacement template.
 func TestValidateTemplateVolumesUnchanged(t *testing.T) {
-	dataVolume := &ateapipb.Volume{Name: "data", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
-	scratchVolume := &ateapipb.Volume{Name: "scratch", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	dataVolume := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	scratchVolume := &ateapipb.Volume{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 	template := func(volumes []*ateapipb.Volume, containers ...*ateapipb.Container) *ateapipb.ActorTemplate {
 		return &ateapipb.ActorTemplate{Volumes: volumes, Containers: containers}
 	}
@@ -1039,12 +1039,12 @@ func TestValidateTemplateVolumesUnchanged(t *testing.T) {
 	}, {
 		name:    "volume renamed",
 		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template([]*ateapipb.Volume{{Name: "data2", Type: "DurableDir", DurableDir: &ateapipb.DurableDirVolumeSource{}}}, container("main", dataMount)),
+		newTmpl: template([]*ateapipb.Volume{{Name: "data2", DurableDir: &ateapipb.DurableDirVolumeSource{}}}, container("main", dataMount)),
 		wantErr: true,
 	}, {
 		name:    "volume source changed",
 		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template([]*ateapipb.Volume{{Name: "data", Type: "Image", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/data@sha256:0f9c04b7387d13ba9d15ec50355f9ad533fee2e5ad25378753a30671f8f9b938"}}}, container("main", dataMount)),
+		newTmpl: template([]*ateapipb.Volume{{Name: "data", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/data@sha256:0f9c04b7387d13ba9d15ec50355f9ad533fee2e5ad25378753a30671f8f9b938"}}}, container("main", dataMount)),
 		wantErr: true,
 	}, {
 		name:    "volume order changed",
