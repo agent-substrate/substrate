@@ -184,7 +184,6 @@ snapshotsConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:
 - name: shared-storage
-  type: ExternalVolumeTemplate
   externalVolumeTemplate:
     capacity: 5Gi
     storageClassName: csi-nfs-sc
