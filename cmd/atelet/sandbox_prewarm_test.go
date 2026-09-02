@@ -337,21 +337,21 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	client := fake.NewSimpleClientset(cfg)
 	factory := externalversions.NewSharedInformerFactory(client, 0)
 	informer := factory.Api().V1alpha1().SandboxConfigs().Informer()
-	stopCh := make(chan struct{})
-	defer close(stopCh)
-	factory.Start(stopCh)
-	if !cache.WaitForCacheSync(stopCh, informer.HasSynced) {
-		t.Fatal("informer cache never synced")
-	}
 
 	store, err := imagecache.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("imagecache.New: %v", err)
 	}
 	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, imageCache: store}
+	// Handler first, informer start second, mirroring main: atelet startup
+	// must never wait on this informer's sync, and the initial List replays
+	// the pre-existing config into the handler as an Add.
 	if err := startSandboxAssetPrewarm(ctx, informer, herder, false); err != nil {
 		t.Fatalf("startSandboxAssetPrewarm: %v", err)
 	}
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	factory.Start(stopCh)
 
 	wantPath := ateompath.RunSCBinaryPath(sha)
 	deadline := time.Now().Add(10 * time.Second)

@@ -103,9 +103,20 @@ func newSandboxPrewarmer(herder *AteomHerder, lister listersv1alpha1.SandboxConf
 // assets referenced by no current SandboxConfig and no on-node actor record.
 func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, herder *AteomHerder, microvmCapable bool) error {
 	p := newSandboxPrewarmer(herder, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
-	// The handler is registered after the informer cache has synced, so it
-	// replays every existing SandboxConfig as a synthetic Add: a freshly booted
-	// node prewarms the current configs, not only future changes.
+	// Atelet startup never waits for this informer to sync: prewarm is
+	// best-effort, so a failing list/watch (e.g. Forbidden while an RBAC
+	// rollout lags the binary) must degrade prewarm, not hang the node. The
+	// handler makes that degradation visible in the log; the reflector keeps
+	// retrying and prewarm recovers with it. Setting it fails only on an
+	// already-started informer, where the default reflector logging applies.
+	if err := informer.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+		slog.WarnContext(ctx, "SandboxConfig list/watch failed; sandbox asset prewarm degraded until it recovers", slog.Any("err", err))
+	}); err != nil {
+		slog.InfoContext(ctx, "Could not set sandbox config watch error handler", slog.Any("err", err))
+	}
+	// The initial List replays every existing SandboxConfig into the handler
+	// as an Add: a freshly booted node prewarms the current configs, not only
+	// future changes.
 	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { p.enqueue(ctx, obj) },
 		UpdateFunc: func(_, obj any) { p.enqueue(ctx, obj) },
