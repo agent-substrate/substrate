@@ -160,6 +160,21 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3
+        # :9090 is bound near the end of boot, after the store connect and
+        # the schema migrations, so nothing answers here until both finish.
+        # The store connect alone budgets 60s (30 attempts, 2s apart) and the
+        # migrations serialize across replicas on an advisory lock. Without a
+        # startup probe the liveness probe below SIGTERMs the container at
+        # ~30s, halfway through that budget: the retry loop is rooted in the
+        # signal context, so it reports "context canceled" and the process
+        # exits into CrashLoopBackOff instead of waiting out a store that is
+        # merely slow to return. A booting replica is not a dead one.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          periodSeconds: 5
+          failureThreshold: 24
         # /healthz stays 200 while a terminating pod drains; /readyz
         # turns 503, so liveness and readiness diverge correctly during
         # shutdown.
