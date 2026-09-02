@@ -65,6 +65,21 @@ func TestWriteSysctlIfUnset(t *testing.T) {
 		}
 	})
 
+	t.Run("missing_path_is_noop", func(t *testing.T) {
+		// A node under a directory that does not exist stands in for
+		// /proc/sys/net/ipv6/... on a kernel with IPv6 disabled. The other
+		// subtests' paths can be created, so they return at the os.WriteFile
+		// fast path; this is the only one that reaches the os.Stat branch,
+		// which is what procfs always does in production.
+		p := filepath.Join(dir, "no-such-dir", "forwarding")
+		if err := writeSysctlIfUnset(p); err != nil {
+			t.Fatalf("writeSysctlIfUnset on a missing path: %v", err)
+		}
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to stay absent, stat err = %v", p, err)
+		}
+	})
+
 	t.Run("zero_is_rewritten", func(t *testing.T) {
 		p := filepath.Join(dir, "zero")
 		if err := os.WriteFile(p, []byte("0\n"), 0o644); err != nil {

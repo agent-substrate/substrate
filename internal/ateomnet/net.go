@@ -192,7 +192,10 @@ func PodIPv4() (net.IP, error) {
 	return nil, fmt.Errorf("pod eth0 has no IPv4 address")
 }
 
-// EnableForwarding enables IPv4 forwarding in the current network namespace.
+// EnableForwarding enables IPv4 and IPv6 forwarding in the current network
+// namespace, so actor traffic (including DNS queries on IPv6-capable clusters)
+// is routed between the veth and eth0 instead of being dropped by ip_forward()
+// or ip6_forward().
 func EnableForwarding() error {
 	// Forwarding is required because actor packets now enter the worker pod via
 	// the host-side veth and then leave through the pod's eth0. Without this, the
@@ -202,12 +205,22 @@ func EnableForwarding() error {
 	if err := writeSysctlIfUnset(path); err != nil {
 		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
 	}
+	// IPv6 forwarding: actor packets that arrive on the veth and leave via eth0
+	// are IPv6 on dual-stack / IPv6-only clusters. Without
+	// net.ipv6.conf.all.forwarding the kernel drops every IPv6 packet in
+	// ip6_forward(), including the actor's DNS queries. conf.all.forwarding=1
+	// also implies the per-interface default, so a single write covers the veth
+	// and eth0.
+	const v6path = "/proc/sys/net/ipv6/conf/all/forwarding"
+	if err := writeSysctlIfUnset(v6path); err != nil {
+		return fmt.Errorf("while enabling IPv6 forwarding in worker pod netns: %w", err)
+	}
 	return nil
 }
 
 // writeSysctlIfUnset writes "1\n" to a sysctl path unless it already reads "1".
-// If the path does not exist, it returns nil — the sysctl is simply unavailable,
-// not an error.
+// If the path does not exist (e.g. IPv6 sysctls on a kernel with IPv6 disabled),
+// it returns nil — IPv6 forwarding is simply unavailable, not an error.
 func writeSysctlIfUnset(path string) error {
 	if b, err := os.ReadFile(path); err == nil && len(b) > 0 && b[0] == '1' {
 		return nil
