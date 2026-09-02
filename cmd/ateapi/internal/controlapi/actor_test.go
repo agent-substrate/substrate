@@ -870,8 +870,8 @@ func TestUpdateActor(t *testing.T) {
 // TestUpdateActor_RepointTemplate covers the mutable actor_template ref: an
 // update may point a suspended actor at a different template (it takes effect
 // on the next ResumeActor), but the actor must be suspended, the new ref must
-// resolve, the replacement's volumes and volume mounts must match the old
-// template's, and gVisor templates must commit DATA-scope snapshots.
+// resolve, and the replacement's volumes and volume mounts must match the old
+// template's.
 func TestUpdateActor_RepointTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
@@ -879,20 +879,17 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 
 	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
 	// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data volume
-	// elsewhere, tmpl-d declares an extra volume, and tmpl-e commits FULL
-	// snapshots, which gVisor cannot restore data-only.
+	// elsewhere and tmpl-d declares an extra volume.
 	dataVolume := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 	scratchVolume := &ateapipb.Volume{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}
 	templates := map[string]struct {
 		mountPath string
 		volumes   []*ateapipb.Volume
-		onCommit  ateapipb.SnapshotContentScope
 	}{
-		"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-		"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-		"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-		"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-		"tmpl-e": {"/data", []*ateapipb.Volume{dataVolume}, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+		"tmpl-a": {"/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-b": {"/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-c": {"/mnt/data", []*ateapipb.Volume{dataVolume}},
+		"tmpl-d": {"/data", []*ateapipb.Volume{dataVolume, scratchVolume}},
 	}
 	for name, tmpl := range templates {
 		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
@@ -903,8 +900,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: tmpl.mountPath}},
 			}},
 			Volumes:         tmpl.volumes,
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots", OnCommit: tmpl.onCommit},
-			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}
@@ -942,15 +938,6 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	}})
 	if got := status.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
-	}
-
-	// Repointing at a gVisor template that commits FULL snapshots is rejected.
-	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      created.GetMetadata(),
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
-	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("UpdateActor to a FULL-commit gVisor template = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
 	// Repointing at an existing template with identical volumes and mounts
@@ -1089,71 +1076,6 @@ func TestValidateTemplateVolumesUnchanged(t *testing.T) {
 			err := validateTemplateVolumesUnchanged(tt.oldTmpl, tt.newTmpl)
 			if gotErr := err != nil; gotErr != tt.wantErr {
 				t.Fatalf("validateVolumeMountsUnchanged() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err != nil {
-				if got := status.Code(err); got != codes.FailedPrecondition {
-					t.Errorf("status code = %v, want FailedPrecondition", got)
-				}
-			}
-		})
-	}
-}
-
-// TestValidateTemplateSnapshotScopes exercises the snapshot-scope comparison
-// applied when an actor is repointed: a gVisor template on either side must
-// commit DATA-scope snapshots, while other sandbox classes are unconstrained.
-func TestValidateTemplateSnapshotScopes(t *testing.T) {
-	template := func(class ateapipb.SandboxClass, onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
-		tmpl := &ateapipb.ActorTemplate{
-			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots", OnCommit: onCommit},
-		}
-		switch class {
-		case ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR:
-			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: class, ConfigName: "gvisor-default"}
-		case ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM:
-			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: class, ConfigName: "microvm-default"}
-		}
-		return tmpl
-	}
-	dataScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-	unspecifiedScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
-	gvisor := ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR
-	microvm := ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM
-
-	tests := []struct {
-		name             string
-		oldTmpl, newTmpl *ateapipb.ActorTemplate
-		wantErr          bool
-	}{{
-		name:    "gvisor with DATA commits on both sides",
-		oldTmpl: template(gvisor, dataScope),
-		newTmpl: template(gvisor, dataScope),
-	}, {
-		name:    "gvisor with FULL commits on the current template",
-		oldTmpl: template(gvisor, fullScope),
-		newTmpl: template(gvisor, dataScope),
-		wantErr: true,
-	}, {
-		name:    "gvisor with FULL commits on the new template",
-		oldTmpl: template(gvisor, dataScope),
-		newTmpl: template(gvisor, fullScope),
-		wantErr: true,
-	}, {
-		name:    "gvisor with an unset on_commit reads as FULL",
-		oldTmpl: template(gvisor, dataScope),
-		newTmpl: template(gvisor, unspecifiedScope),
-		wantErr: true,
-	}, {
-		name:    "microvm with FULL commits",
-		oldTmpl: template(microvm, fullScope),
-		newTmpl: template(microvm, fullScope),
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateTemplateSnapshotScopes(tt.oldTmpl, tt.newTmpl)
-			if gotErr := err != nil; gotErr != tt.wantErr {
-				t.Fatalf("validateTemplateSnapshotScopes() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil {
 				if got := status.Code(err); got != codes.FailedPrecondition {

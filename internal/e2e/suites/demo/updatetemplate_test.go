@@ -23,8 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // TestUpdateTemplateLifecycle covers repointing a suspended actor at a
@@ -33,9 +31,7 @@ import (
 // UpdateActor, and resumes. The resume must detect the template change (the
 // recorded current_actor_template_uid no longer matches) and restore
 // data-only: the durable dir survives while the guest cold-boots from
-// template B. On gVisor the onCommit:Full case instead expects UpdateActor
-// to refuse the repoint: gVisor cannot restore data-only from a FULL
-// snapshot yet.
+// template B.
 func TestUpdateTemplateLifecycle(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -162,15 +158,6 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 		Metadata:      suspended.GetMetadata(),
 		ActorTemplate: refB,
 	}})
-	// gVisor cannot restore data-only from a FULL snapshot yet, so the API
-	// refuses to repoint an actor whose gVisor templates commit FULL scope.
-	if onCommit == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL &&
-		createdA.GetSandboxConfig().GetSandboxClass() == ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR {
-		if got := status.Code(err); got != codes.FailedPrecondition {
-			t.Fatalf("UpdateActor repointing a FULL-commit gVisor actor = %v, want FailedPrecondition (err: %v)", got, err)
-		}
-		return
-	}
 	if err != nil {
 		t.Fatalf("failed to update Actor's template: %v", err)
 	}
