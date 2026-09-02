@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestExtractTarArchive(t *testing.T) {
@@ -53,6 +55,24 @@ func TestExtractTarArchive(t *testing.T) {
 			name:      ".tar.bz2 format",
 			url:       "https://example.com/gvisor.tar.bz2",
 			compress:  nil,
+			wantError: false,
+		},
+		{
+			name: ".tar.zst format",
+			url:  "https://example.com/gvisor.tar.zst",
+			compress: func(w io.Writer) io.WriteCloser {
+				zw, _ := zstd.NewWriter(w) // no options, cannot fail
+				return zw
+			},
+			wantError: false,
+		},
+		{
+			name: ".tar.zstd format",
+			url:  "https://example.com/gvisor.tar.zstd",
+			compress: func(w io.Writer) io.WriteCloser {
+				zw, _ := zstd.NewWriter(w) // no options, cannot fail
+				return zw
+			},
 			wantError: false,
 		},
 		{
