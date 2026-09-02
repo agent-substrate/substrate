@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -177,53 +178,237 @@ func TestReasonTagging(t *testing.T) {
 	}
 }
 
-// TestCrashIfReason verifies the boundary rule: an error whose chain carries a
-// Reason the call site explicitly claims escalates to a DataLoss gRPC status
-// with that Reason and the actor-crash directive; anything else — untagged, or
-// tagged with an unclaimed Reason — passes through unchanged.
-func TestCrashIfReason(t *testing.T) {
-	t.Run("claimed reason escalates to DataLoss and crash", func(t *testing.T) {
-		tagged := fmt.Errorf("%w: while parsing manifest: %w", ReasonInvalidSandboxAsset, errors.New("bad json"))
-		err := CrashIfReason(context.Background(), tagged, ReasonFailedGetExternalObject, ReasonInvalidSandboxAsset)
+// TestMarkRetriable verifies the marker is a plain in-process tag: it keeps
+// the cause in the unwrap chain, carries no gRPC status of its own (the
+// crash boundary encodes it onto the wire), and never invents an error from
+// nil.
+func TestMarkRetriable(t *testing.T) {
+	if got := MarkRetriable(nil); got != nil {
+		t.Errorf("MarkRetriable(nil) = %v, want nil", got)
+	}
+	cause := errors.New("connection reset by peer")
+	marked := MarkRetriable(cause)
+	if !IsRetriableError(marked) {
+		t.Errorf("IsRetriableError(MarkRetriable(err)) = false, want true")
+	}
+	if got, want := marked.Error(), cause.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+	if !errors.Is(marked, cause) {
+		t.Errorf("errors.Is(MarkRetriable(err), err) = false, want true")
+	}
+	if !IsRetriableError(fmt.Errorf("while fetching manifest: %w", marked)) {
+		t.Errorf("IsRetriableError(wrapped) = false, want true")
+	}
+	if IsRetriableError(cause) {
+		t.Errorf("IsRetriableError(unclassified) = true, want false")
+	}
+	if IsRetriableError(status.Error(codes.Unavailable, "raw transport failure")) {
+		t.Errorf("IsRetriableError(raw Unavailable status) = true, want false: only the explicit marker counts")
+	}
+	// The marker deliberately carries no status of its own: an error that
+	// skips the boundary surfaces as Unknown, never as a silent retriable.
+	if _, ok := status.FromError(marked); ok {
+		t.Errorf("bare marker is a status error; it must stay a plain in-process tag the boundary encodes")
+	}
+}
 
-		st, ok := status.FromError(err)
+// TestCrashUnlessRetriable verifies the crash boundary rule: every failure
+// escalates to a status carrying the actor-crash directive and the Reason
+// from the chain (ReasonUnknown when untagged) — a fresh DataLoss status for
+// plain failures, the original status kept (code, message, ErrorInfo) for
+// status-bearing ones. Failures marked retriable (MarkRetriable) encode as
+// an Unavailable status carrying the tagged Reason. Only context
+// cancellation/deadline — plain or as a gRPC status — and request-level
+// rejection codes pass through unchanged. Raw transient gRPC codes (a
+// transport failure nobody classified) crash.
+func TestCrashUnlessRetriable(t *testing.T) {
+	passThrough := []struct {
+		name string
+		err  error
+	}{
+		{name: "context canceled", err: fmt.Errorf("while copying: %w", context.Canceled)},
+		{name: "context deadline", err: fmt.Errorf("while copying: %w", context.DeadlineExceeded)},
+		{name: "grpc canceled", err: status.Error(codes.Canceled, "caller went away")},
+		{name: "grpc deadline exceeded", err: status.Error(codes.DeadlineExceeded, "request deadline hit")},
+		{name: "invalid argument rejection", err: status.Error(codes.InvalidArgument, "bad spec")},
+		{name: "failed precondition rejection", err: status.Error(codes.FailedPrecondition, "scope mismatch")},
+	}
+	for _, tt := range passThrough {
+		t.Run(tt.name+" passes through unchanged", func(t *testing.T) {
+			got := CrashUnlessRetriable(context.Background(), tt.err)
+			if got != tt.err {
+				t.Errorf("CrashUnlessRetriable(%v) = %v, want the same error back", tt.err, got)
+			}
+			if ActorCrashRequested(got) {
+				t.Errorf("ActorCrashRequested(%v) = true, want false", got)
+			}
+		})
+	}
+
+	crash := []struct {
+		name       string
+		err        error
+		wantReason Reason
+		wantCode   codes.Code
+	}{
+		{
+			name:       "tagged reason escalates with that reason",
+			err:        fmt.Errorf("%w: while parsing manifest: %w", ReasonInvalidSandboxAsset, errors.New("bad json")),
+			wantReason: ReasonInvalidSandboxAsset,
+			wantCode:   codes.DataLoss,
+		},
+		{
+			name:       "untagged error escalates as UNKNOWN",
+			err:        errors.New("some failure nobody classified"),
+			wantReason: ReasonUnknown,
+			wantCode:   codes.DataLoss,
+		},
+		{
+			name:       "grpc internal escalates as UNKNOWN keeping its code",
+			err:        status.Error(codes.Internal, "ateom blew up"),
+			wantReason: ReasonUnknown,
+			wantCode:   codes.Internal,
+		},
+		{
+			name:       "grpc not found escalates as UNKNOWN keeping its code",
+			err:        status.Error(codes.NotFound, "workload not on ateom"),
+			wantReason: ReasonUnknown,
+			wantCode:   codes.NotFound,
+		},
+		{
+			name:       "raw grpc unavailable escalates as UNKNOWN keeping its code",
+			err:        status.Error(codes.Unavailable, "ateom unreachable"),
+			wantReason: ReasonUnknown,
+			wantCode:   codes.Unavailable,
+		},
+		{
+			name:       "wrapped raw grpc unavailable escalates as UNKNOWN keeping its code",
+			err:        fmt.Errorf("while calling ateom.CheckpointWorkload: %w", status.Error(codes.Unavailable, "unreachable")),
+			wantReason: ReasonUnknown,
+			wantCode:   codes.Unavailable,
+		},
+		{
+			name:       "raw grpc aborted escalates as UNKNOWN keeping its code",
+			err:        status.Error(codes.Aborted, "checkpoint raced"),
+			wantReason: ReasonUnknown,
+			wantCode:   codes.Aborted,
+		},
+		{
+			name:       "grpc unimplemented escalates as UNKNOWN keeping its code",
+			err:        status.Error(codes.Unimplemented, "gVisor split checkpoint"),
+			wantReason: ReasonUnknown,
+			wantCode:   codes.Unimplemented,
+		},
+		{
+			name:       "status with a downstream ErrorInfo keeps its reason and code",
+			err:        NewGRPCError(context.Background(), codes.Internal, ReasonFailedGetExternalObject, nil, errors.New("blob fetch failed")),
+			wantReason: ReasonFailedGetExternalObject,
+			wantCode:   codes.Internal,
+		},
+	}
+	for _, tt := range crash {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CrashUnlessRetriable(context.Background(), tt.err)
+			st, ok := status.FromError(err)
+			if !ok {
+				t.Fatalf("CrashUnlessRetriable(%v) = %v, want a gRPC status error", tt.err, err)
+			}
+			if got, want := st.Code(), tt.wantCode; got != want {
+				t.Errorf("status code = %v, want %v", got, want)
+			}
+			if got := errorReasonsFromStatus(err); !slices.Contains(got, string(tt.wantReason)) {
+				t.Errorf("errorReasonsFromStatus() = %q, want it to contain %q", got, tt.wantReason)
+			}
+			if !ActorCrashRequested(err) {
+				t.Errorf("ActorCrashRequested(%v) = false, want true", err)
+			}
+		})
+	}
+
+	t.Run("marked retriable encodes as Unavailable with the tagged reason", func(t *testing.T) {
+		err := fmt.Errorf("while downloading gs://bucket/assets/runsc: %w",
+			MarkRetriable(fmt.Errorf("%w: connection reset by peer", ReasonTransientObjectStorage)))
+		got := CrashUnlessRetriable(context.Background(), err)
+		st, ok := status.FromError(got)
 		if !ok {
-			t.Fatalf("CrashIfReason(tagged, claimed) = %v, want a gRPC status error", err)
+			t.Fatalf("CrashUnlessRetriable(%v) = %v, want a gRPC status error", err, got)
 		}
-		if got, want := st.Code(), codes.DataLoss; got != want {
-			t.Errorf("status code = %v, want %v", got, want)
-		}
-		if got := errorReasonsFromStatus(err); !slices.Contains(got, string(ReasonInvalidSandboxAsset)) {
-			t.Errorf("errorReasonsFromStatus() = %q, want it to contain %q", got, ReasonInvalidSandboxAsset)
-		}
-		if !ActorCrashRequested(err) {
-			t.Errorf("ActorCrashRequested(%v) = false, want true", err)
-		}
-	})
-
-	t.Run("unclaimed reason passes through unchanged", func(t *testing.T) {
-		// The chain is tagged terminal, but this boundary does not claim that
-		// Reason, so the actor must not crash.
-		tagged := fmt.Errorf("%w: sha256 mismatch: %w", ReasonInvalidObjectURL, errors.New("boom"))
-		got := CrashIfReason(context.Background(), tagged, ReasonInvalidSandboxAsset)
-		if got != tagged {
-			t.Errorf("CrashIfReason(tagged, unclaimed) = %v, want the same error back", got)
+		if code := st.Code(); code != codes.Unavailable {
+			t.Errorf("status code = %v, want Unavailable", code)
 		}
 		if ActorCrashRequested(got) {
 			t.Errorf("ActorCrashRequested(%v) = true, want false", got)
 		}
+		// The boundary encodes from the full wrapped error, so context above
+		// the marker survives onto the wire.
+		if want := "while downloading gs://bucket/assets/runsc"; !strings.Contains(st.Message(), want) {
+			t.Errorf("status message %q lost the outer wrap %q", st.Message(), want)
+		}
+		if reasons := errorReasonsFromStatus(got); !slices.Contains(reasons, string(ReasonTransientObjectStorage)) {
+			t.Errorf("errorReasonsFromStatus() = %q, want it to contain %q", reasons, ReasonTransientObjectStorage)
+		}
 	})
 
-	t.Run("untagged error passes through unchanged", func(t *testing.T) {
-		plain := errors.New("transient network failure")
-		if got := CrashIfReason(context.Background(), plain, ReasonInvalidSandboxAsset); got != plain {
-			t.Errorf("CrashIfReason(plain) = %v, want the same error back", got)
+	t.Run("marked retriable without a fact tag encodes as UNSET", func(t *testing.T) {
+		got := CrashUnlessRetriable(context.Background(), MarkRetriable(errors.New("dial tcp: connection refused")))
+		if code := status.Code(got); code != codes.Unavailable {
+			t.Errorf("status code = %v, want Unavailable", code)
+		}
+		if reasons := errorReasonsFromStatus(got); !slices.Contains(reasons, "UNSET") {
+			t.Errorf("errorReasonsFromStatus() = %q, want it to contain UNSET", reasons)
+		}
+	})
+
+	t.Run("call-site crash directive beats the context pass-through", func(t *testing.T) {
+		// A point-of-no-return call site builds the crash directive directly
+		// with NewGRPCError: it must survive even when the cause chain matches
+		// context.DeadlineExceeded (an http.Client timeout does, with the
+		// RPC's own context still alive).
+		err := NewGRPCError(context.Background(), codes.DataLoss, ReasonFaileSaveSnapshot,
+			ActorCrashedMetadata(), fmt.Errorf("while uploading external snapshot: %w", context.DeadlineExceeded))
+		got := CrashUnlessRetriable(context.Background(), err)
+		if got != err {
+			t.Errorf("CrashUnlessRetriable(%v) = %v, want the crash error back unchanged", err, got)
+		}
+		if !ActorCrashRequested(got) {
+			t.Errorf("ActorCrashRequested(%v) = false, want true", got)
+		}
+		if code := status.Code(got); code != codes.DataLoss {
+			t.Errorf("status code = %v, want DataLoss", code)
+		}
+		if reasons := errorReasonsFromStatus(got); !slices.Contains(reasons, string(ReasonFaileSaveSnapshot)) {
+			t.Errorf("errorReasonsFromStatus() = %q, want it to contain %q", reasons, ReasonFaileSaveSnapshot)
+		}
+	})
+
+	t.Run("downstream classification wins over the appended directive", func(t *testing.T) {
+		orig := NewGRPCError(context.Background(), codes.Internal, ReasonFailedGetExternalObject, nil, errors.New("blob fetch failed"))
+		got := CrashUnlessRetriable(context.Background(), orig)
+		st, ok := status.FromError(got)
+		if !ok {
+			t.Fatal("CrashUnlessRetriable(status error) is not a gRPC status error")
+		}
+		if got, want := st.Message(), "blob fetch failed"; got != want {
+			t.Errorf("status message = %q, want %q", got, want)
+		}
+		// The downstream ErrorInfo comes first in the details, so its reason
+		// wins over the ReasonUnknown carried by the appended crash directive.
+		if gotReason, want := ExtractReason(got), string(ReasonFailedGetExternalObject); gotReason != want {
+			t.Errorf("ExtractReason() = %q, want %q", gotReason, want)
+		}
+	})
+
+	t.Run("already crash-marked error passes through unchanged", func(t *testing.T) {
+		marked := NewGRPCError(context.Background(), codes.DataLoss, ReasonFaileSaveSnapshot, ActorCrashedMetadata(), errors.New("upload failed"))
+		if got := CrashUnlessRetriable(context.Background(), marked); got != marked {
+			t.Errorf("CrashUnlessRetriable(crash-marked) = %v, want the same error back", got)
 		}
 	})
 
 	t.Run("nil error returns nil", func(t *testing.T) {
-		if got := CrashIfReason(context.Background(), nil, ReasonInvalidSandboxAsset); got != nil {
-			t.Errorf("CrashIfReason(nil) = %v, want nil", got)
+		if got := CrashUnlessRetriable(context.Background(), nil); got != nil {
+			t.Errorf("CrashUnlessRetriable(nil) = %v, want nil", got)
 		}
 	})
 }

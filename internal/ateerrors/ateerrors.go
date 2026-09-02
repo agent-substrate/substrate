@@ -34,9 +34,9 @@ const errorDomain = "substrate.dev"
 
 // Reason is the AIP-193 ErrorInfo.Reason: a bounded, UPPER_SNAKE_CASE enum of
 // failure causes the control plane can classify on. A Reason is also an error:
-// source layers tag failures with fmt.Errorf("%w: ...", ReasonX, err), and
-// each RPC boundary claims the Reasons it treats as terminal (CrashIfReason);
-// untagged errors stay retriable.
+// source layers tag failures with fmt.Errorf("%w: ...", ReasonX, err). RPC
+// boundaries crash the actor on every failure not explicitly marked retriable
+// (CrashUnlessRetriable).
 type Reason string
 
 // Error makes a Reason wrappable with %w and matchable with errors.Is/As.
@@ -60,6 +60,11 @@ const (
 	// its state is unrecoverable.
 	ReasonLocalSnapshotGone Reason = "LOCAL_SNAPSHOT_GONE"
 
+	// Transient failures: the backend failed in a way its client library
+	// considers retryable (5xx, throttling, connection trouble).
+	ReasonTransientObjectStorage Reason = "TRANSIENT_OBJECT_STORAGE"
+	ReasonTransientImageRegistry Reason = "TRANSIENT_IMAGE_REGISTRY"
+
 	// Control-plane failure reasons for ate.actor.crashes metric.
 	ReasonCorruptedAssignment Reason = "CORRUPTED_ASSIGNMENT"
 	ReasonWorkerReassigned    Reason = "WORKER_REASSIGNED"
@@ -77,6 +82,8 @@ var AllReasons = []Reason{
 	ReasonFailedGetExternalObject,
 	ReasonInvalidContainerConfig,
 	ReasonLocalSnapshotGone,
+	ReasonTransientObjectStorage,
+	ReasonTransientImageRegistry,
 	ReasonCorruptedAssignment,
 	ReasonWorkerReassigned,
 	ReasonWorkerPodGone,
@@ -127,14 +134,70 @@ func NewGRPCError(ctx context.Context, grpcCode codes.Code, reason Reason, metad
 	return st.Err()
 }
 
-// CrashIfReason sets the err to a DataLoss gRPC status with the actor-crash
-// directive iff its chain carries one of the given Reasons; any other error is
-// returned unchanged. Claiming is per call site: the same tagged failure may
-// crash the actor in one RPC and stay retriable in another.
-func CrashIfReason(ctx context.Context, err error, reasons ...Reason) error {
-	r, ok := errors.AsType[Reason](err)
-	if !ok || !slices.Contains(reasons, r) {
+// retriableError marks a failure a handler call site decided to keep
+// retriable.
+type retriableError struct {
+	cause error
+}
+
+func (e *retriableError) Error() string { return e.cause.Error() }
+
+func (e *retriableError) Unwrap() error { return e.cause }
+
+func MarkRetriable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &retriableError{cause: err}
+}
+
+// IsRetriableError reports whether err was explicitly marked retriable with
+// MarkRetriable.
+func IsRetriableError(err error) bool {
+	_, ok := errors.AsType[*retriableError](err)
+	return ok
+}
+
+// CrashUnlessRetriable will append ActorCrashedMetadata unless the
+// error was marked as retriable.
+func CrashUnlessRetriable(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ActorCrashRequested(err) {
 		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if IsRetriableError(err) {
+		r, ok := errors.AsType[Reason](err)
+		if !ok {
+			r = "UNSET"
+		}
+		return NewGRPCError(ctx, codes.Unavailable, r, nil, err)
+	}
+	r, ok := errors.AsType[Reason](err)
+	if !ok {
+		r = ReasonUnknown
+	}
+	var grpcErr interface{ GRPCStatus() *status.Status }
+	if errors.As(err, &grpcErr) {
+		st := grpcErr.GRPCStatus()
+		switch st.Code() {
+		case codes.Canceled, codes.DeadlineExceeded,
+			codes.InvalidArgument, codes.FailedPrecondition:
+			return err
+		}
+		if crashed, derr := st.WithDetails(&epb.ErrorInfo{
+			Domain:   errorDomain,
+			Reason:   string(r),
+			Metadata: ActorCrashedMetadata(),
+		}); derr == nil {
+			return crashed.Err()
+		}
+		// WithDetails on an ErrorInfo should never fail; fall through so the
+		// crash directive is never lost.
 	}
 	return NewGRPCError(ctx, codes.DataLoss, r, ActorCrashedMetadata(), err)
 }

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
@@ -232,5 +233,28 @@ func TestResolveCapabilities(t *testing.T) {
 				t.Errorf("resolveCapabilities() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A pull the registry definitively rejects surfaces from prepareOCIDirectory
+// tagged terminal, proving imagecache classifies the EnsureImage leg at the
+// source.
+func TestPrepareOCIDirectory_MissingImageIsTerminal(t *testing.T) {
+	origActors := ateompath.ActorsDir
+	t.Cleanup(func() { ateompath.ActorsDir = origActors })
+	ateompath.ActorsDir = t.TempDir()
+
+	host := imageVolumeTestRegistry(t)
+	err := prepareOCIDirectory(t.Context(), newImageVolumeStore(t),
+		"actor_uid", "app", host+"/missing/app:v1",
+		[]string{"/app"}, nil, nil, "/run/netns/x", nil, nil, nil, nil)
+	if err == nil {
+		t.Fatal("prepareOCIDirectory succeeded, want a missing-image error")
+	}
+	if !errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
+		t.Errorf("err = %v, want ReasonFailedGetExternalObject in the chain", err)
+	}
+	if ateerrors.IsRetriableError(err) {
+		t.Errorf("IsRetriableError(%v) = true, want false for a definitive rejection", err)
 	}
 }

@@ -288,6 +288,18 @@ groups:
               stability: development
               value: LOCAL_SNAPSHOT_GONE
               brief: The local snapshot on the node no longer exists.
+            - id: transient_object_storage
+              stability: development
+              value: TRANSIENT_OBJECT_STORAGE
+              brief: >
+                The object storage backend had a retryable fault. A crash with
+                this reason means the handler call site chose not to retry.
+            - id: transient_image_registry
+              stability: development
+              value: TRANSIENT_IMAGE_REGISTRY
+              brief: >
+                The container image registry had a retryable fault. A crash with
+                this reason means the handler call site chose not to retry.
             - id: corrupted_assignment
               stability: development
               value: CORRUPTED_ASSIGNMENT

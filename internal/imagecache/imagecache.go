@@ -51,6 +51,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -59,17 +60,20 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 )
 
 const (
@@ -331,6 +335,7 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 	// reclassifies a failure onto its own outcome.
 	outcome := ateattr.ImageCacheOutcomeMiss
 	defer func() { s.recordRequest(ctx, outcome, err) }()
+	defer func() { err = classifyRegistryErr(err) }()
 
 	parsedRef, err := s.parseRef(ref)
 	if err != nil {
@@ -376,6 +381,48 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 		return nil, err
 	}
 	return v.(*Image), nil
+}
+
+// classifyRegistryErr tags a registry failure with the fact a handler call
+// site classifies on: ReasonTransientImageRegistry for a retryable class (an
+// answer the transport calls temporary, connection trouble, a stream cut
+// mid-pull), ReasonFailedGetExternalObject for a definitive registry
+// rejection — re-pulling the same ref cannot succeed. Local cache I/O,
+// context errors, and tagged errors pass through untouched.
+func classifyRegistryErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := errors.AsType[ateerrors.Reason](err); ok {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if regErr, ok := errors.AsType[*transport.Error](err); ok {
+		if regErr.Temporary() {
+			return fmt.Errorf("%w: %w", ateerrors.ReasonTransientImageRegistry, err)
+		}
+		return fmt.Errorf("%w: %w", ateerrors.ReasonFailedGetExternalObject, err)
+	}
+	if isNetworkErr(err) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("%w: %w", ateerrors.ReasonTransientImageRegistry, err)
+	}
+	return err
+}
+
+// isNetworkErr matches the concrete *net.OpError, not the net.Error
+// interface (every syscall.Errno satisfies net.Error, which would sweep
+// local disk faults under a PathError into the transient class) and not
+// *url.Error (which wraps every http.Client failure, retryable or not; its
+// genuinely transient causes match through the chain).
+func isNetworkErr(err error) bool {
+	if _, ok := errors.AsType[*net.OpError](err); ok {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE)
 }
 
 // cachedImageHit is the hit side of the hitMu contract: it verifies the
