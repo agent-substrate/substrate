@@ -214,16 +214,18 @@ kubectl ate delete actor my-actor -a <atespace> --any-state
 ### Actor Snapshots
 
 Suspending an actor creates a durable snapshot. Tags give snapshots stable,
-Atespace-owned names; published tags may be used from other Atespaces.
+Atespace-owned names; published tags may be used from other Atespaces. A tag is
+created from a suspended actor and gets its own copy of that actor's snapshot,
+so suspending or deleting the actor afterwards cannot collect it.
 
 ```bash
-# List snapshots, or resolve one canonical snapshot or tag.
-kubectl ate get snapshots -a <atespace>
-kubectl ate get snapshot <snapshot-name> -a <atespace>
-kubectl ate get snapshot <tag-name> -a <atespace> --tag
+# List an Atespace's tags, all Atespaces' tags, or resolve tags by name.
+kubectl ate get snapshot-tags -a <atespace>
+kubectl ate get snapshot-tags -A
+kubectl ate get snapshot-tag <tag-name> [<tag-name> ...] -a <atespace>
 
-# Tag a snapshot, then publish or unpublish the tag.
-kubectl ate create snapshot-tag <tag-name> -a <atespace> --snapshot <snapshot-name>
+# Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
+kubectl ate create snapshot-tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
 kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope published
 kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope atespace
 

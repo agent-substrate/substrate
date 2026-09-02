@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
@@ -39,6 +40,8 @@ func testWorkerUID(podName string) string {
 // with one minimal ActorTemplate stored in tmplAtespace. Dependencies the
 // unit tests never reach (worker cache, atelet dialer, k8s clients) are nil,
 // so a step that unexpectedly executes against them fails the test loudly.
+// External snapshots go to an in-memory object store, reachable from a test as
+// w.objectStore.(*objectstoretest.Fake).
 func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
@@ -54,7 +57,26 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil)
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoretest.New())
+}
+
+// newFinalizeWorkflow builds an ActorWorkflow over persistence with an
+// in-memory object store, for the step-level tests that seed the store
+// directly rather than going through newTestActorWorkflow.
+func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
+	objects := objectstoretest.New()
+	return &ActorWorkflow{store: persistence, objectStore: objects}, objects
+}
+
+// mustSnapshotURI builds the external snapshot URI for name under template's
+// storage location, the way the suspend workflow does.
+func mustSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, atespace, name string) resources.SnapshotURI {
+	t.Helper()
+	uri, err := resources.NewSnapshotURI(template.GetSnapshotsConfig().GetStorageLocation(), atespace, name)
+	if err != nil {
+		t.Fatalf("NewSnapshotURI(%s/%s): %v", atespace, name, err)
+	}
+	return uri
 }
 
 // seedWorkflowActor stores an actor with the given state, bound to the given

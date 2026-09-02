@@ -143,8 +143,8 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	if got := suspended.GetStatus().GetCurrentActorTemplate().GetName(); got != nameA {
 		t.Errorf("suspended Actor current_actor_template = %q, want %q", got, nameA)
 	}
-	if suspended.GetStatus().GetLatestSnapshot() == nil {
-		t.Error("suspended Actor has no latest snapshot")
+	if suspended.GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
+		t.Error("suspended Actor has no external snapshot")
 	}
 	if wa := suspended.GetStatus().GetWorkerAssignment(); wa != nil {
 		t.Errorf("suspended Actor still carries a worker assignment: %v", wa)

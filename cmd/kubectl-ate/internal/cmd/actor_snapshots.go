@@ -27,35 +27,31 @@ import (
 )
 
 var (
-	snapshotAtespaceFlag     string
-	snapshotAllAtespacesFlag bool
-	snapshotTagRefFlag       bool
-	createTagAtespaceFlag    string
-	createTagSnapshotFlag    string
-	createTagScopeFlag       string
-	updateTagAtespaceFlag    string
-	updateTagScopeFlag       string
-	deleteTagAtespaceFlag    string
+	tagAtespaceFlag       string
+	tagAllAtespacesFlag   bool
+	createTagAtespaceFlag string
+	createTagActorFlag    string
+	createTagScopeFlag    string
+	updateTagAtespaceFlag string
+	updateTagScopeFlag    string
+	deleteTagAtespaceFlag string
 )
 
 var updateCmd = &cobra.Command{Use: "update", Short: "Update a resource"}
 
-var getActorSnapshotsCmd = &cobra.Command{
-	Use:     "actor-snapshots [snapshot-name ...]",
-	Aliases: []string{"actor-snapshot", "snapshots", "snapshot"},
-	Short:   "List or get actor snapshots",
+var getActorSnapshotTagsCmd = &cobra.Command{
+	Use:     "actor-snapshot-tags [tag-name ...]",
+	Aliases: []string{"actor-snapshot-tag", "snapshot-tags", "snapshot-tag"},
+	Short:   "List or get actor snapshot tags",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if snapshotAllAtespacesFlag && snapshotAtespaceFlag != "" {
+		if tagAllAtespacesFlag && tagAtespaceFlag != "" {
 			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
 		}
-		if len(args) > 0 && snapshotAtespaceFlag == "" {
-			return fmt.Errorf("--atespace is required when getting snapshots")
+		if len(args) > 0 && tagAtespaceFlag == "" {
+			return fmt.Errorf("--atespace is required when getting snapshot tags")
 		}
-		if len(args) == 0 && !snapshotAllAtespacesFlag && snapshotAtespaceFlag == "" {
+		if len(args) == 0 && !tagAllAtespacesFlag && tagAtespaceFlag == "" {
 			return fmt.Errorf("specify --atespace <name>, or -A/--all-atespaces")
-		}
-		if snapshotTagRefFlag && len(args) == 0 {
-			return fmt.Errorf("--tag requires at least one tag name")
 		}
 
 		ctx := cmd.Context()
@@ -65,46 +61,43 @@ var getActorSnapshotsCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		var snapshots []*ateapipb.ActorSnapshot
+		var tags []*ateapipb.ActorSnapshotTag
 		if len(args) > 0 {
 			for _, name := range args {
-				ref := &ateapipb.ObjectRef{Atespace: snapshotAtespaceFlag, Name: name}
-				if snapshotTagRefFlag {
-					tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: ref})
-					if err != nil {
-						return fmt.Errorf("failed to get actor snapshot tag %q: %w", name, err)
-					}
-					ref = tag.GetSnapshot()
-				}
-				snapshot, err := client.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{ActorSnapshot: ref})
+				tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{
+					ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: tagAtespaceFlag, Name: name},
+				})
 				if err != nil {
-					return fmt.Errorf("failed to get actor snapshot %q: %w", name, err)
+					return fmt.Errorf("failed to get actor snapshot tag %q: %w", name, err)
 				}
-				snapshots = append(snapshots, snapshot)
+				tags = append(tags, tag)
 			}
 		} else {
 			pageToken := ""
 			for {
-				resp, err := client.ListActorSnapshots(ctx, &ateapipb.ListActorSnapshotsRequest{Atespace: snapshotAtespaceFlag, PageSize: 1000, PageToken: pageToken})
+				resp, err := client.ListActorSnapshotTags(ctx, &ateapipb.ListActorSnapshotTagsRequest{Atespace: tagAtespaceFlag, PageSize: 1000, PageToken: pageToken})
 				if err != nil {
-					return fmt.Errorf("failed to list actor snapshots: %w", err)
+					return fmt.Errorf("failed to list actor snapshot tags: %w", err)
 				}
-				snapshots = append(snapshots, resp.GetActorSnapshots()...)
+				tags = append(tags, resp.GetActorSnapshotTags()...)
 				pageToken = resp.GetNextPageToken()
 				if pageToken == "" {
 					break
 				}
 			}
 		}
-		return printer.PrintActorSnapshots(snapshots, outputFmt)
+		return printer.PrintActorSnapshotTags(tags, outputFmt)
 	},
 }
 
 var createActorSnapshotTagCmd = &cobra.Command{
 	Use:     "actor-snapshot-tag <tag-name>",
 	Aliases: []string{"snapshot-tag"},
-	Short:   "Tag an actor snapshot",
-	Args:    cobra.ExactArgs(1),
+	Short:   "Tag the external snapshot a suspended actor holds",
+	Long: "Tag the external snapshot a suspended actor holds.\n\n" +
+		"The tag gets its own copy of that snapshot, so suspending the actor\n" +
+		"again or deleting it cannot collect what the tag names.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		scope, err := parseActorSnapshotTagScope(createTagScopeFlag)
 		if err != nil {
@@ -117,17 +110,17 @@ var createActorSnapshotTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		resp, err := client.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
+		tag, err := client.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
+			Actor: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
-				Snapshot: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagSnapshotFlag},
 				Scope:    scope,
 			},
 		})
 		if err != nil {
-			return fmt.Errorf("failed to tag actor snapshot: %w", err)
+			return fmt.Errorf("failed to create actor snapshot tag: %w", err)
 		}
-		return printer.PrintActorSnapshotTag(resp, outputFmt)
+		return printer.PrintActorSnapshotTag(tag, outputFmt)
 	},
 }
 
@@ -218,16 +211,15 @@ func parseNamespacedName(value string) (*ateapipb.ObjectRef, error) {
 }
 
 func init() {
-	getActorSnapshotsCmd.Flags().StringVarP(&snapshotAtespaceFlag, "atespace", "a", "", "Atespace to list/get snapshots in")
-	getActorSnapshotsCmd.Flags().BoolVarP(&snapshotAllAtespacesFlag, "all-atespaces", "A", false, "List snapshots across all atespaces")
-	getActorSnapshotsCmd.Flags().BoolVar(&snapshotTagRefFlag, "tag", false, "Resolve the supplied names as tags")
-	getCmd.AddCommand(getActorSnapshotsCmd)
+	getActorSnapshotTagsCmd.Flags().StringVarP(&tagAtespaceFlag, "atespace", "a", "", "Atespace to list/get snapshot tags in")
+	getActorSnapshotTagsCmd.Flags().BoolVarP(&tagAllAtespacesFlag, "all-atespaces", "A", false, "List snapshot tags across all atespaces")
+	getCmd.AddCommand(getActorSnapshotTagsCmd)
 
-	createActorSnapshotTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "Atespace owning the snapshot and tag (required)")
-	createActorSnapshotTagCmd.Flags().StringVar(&createTagSnapshotFlag, "snapshot", "", "Snapshot name to tag (required)")
-	createActorSnapshotTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "Tag scope: atespace or published")
+	createActorSnapshotTagCmd.Flags().StringVarP(&createTagAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in; the tag is created here (required)")
 	_ = createActorSnapshotTagCmd.MarkFlagRequired("atespace")
-	_ = createActorSnapshotTagCmd.MarkFlagRequired("snapshot")
+	createActorSnapshotTagCmd.Flags().StringVar(&createTagActorFlag, "actor", "", "Name of the suspended actor whose external snapshot to tag (required)")
+	_ = createActorSnapshotTagCmd.MarkFlagRequired("actor")
+	createActorSnapshotTagCmd.Flags().StringVar(&createTagScopeFlag, "scope", "atespace", "Tag scope: atespace or published")
 	createCmd.AddCommand(createActorSnapshotTagCmd)
 
 	rootCmd.AddCommand(updateCmd)

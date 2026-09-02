@@ -58,8 +58,10 @@ func TestUpdateActorSnapshotTagScope(t *testing.T) {
 			Uid:      "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55",
 			Version:  1,
 		},
-		Snapshot: &ateapipb.ObjectRef{Atespace: "space-1", Name: "snap-1"},
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		Status: &ateapipb.ActorSnapshotTagStatus{
+			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/snapshots/space-1/tag-tag-1"},
+		},
 	}
 
 	client := &fakeTagClient{tag: testTag}

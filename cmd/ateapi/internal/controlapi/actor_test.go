@@ -410,19 +410,29 @@ func TestValidateActorUpdate(t *testing.T) {
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressSnapshotName = "SNAP 1" })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"valid actor.status.latest_snapshot",
+		"valid actor.status.external_snapshot",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LatestSnapshot = &ateapipb.ObjectRef{Atespace: "as", Name: "snap-1"}
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+				SnapshotUri:  "gs://private/snapshots/as/snap-1",
+				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			}
 		})),
 		nil,
 	}, {
-		"missing actor.status.latest_snapshot.atespace",
+		"valid actor.status.current_snapshot_tag",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LatestSnapshot = &ateapipb.ObjectRef{Name: "snap-1"}
+			s.CurrentSnapshotTag = &ateapipb.ObjectRef{Atespace: "as", Name: "v1"}
 		})),
-		field.ErrorList{field.Required(field.NewPath("status", "latest_snapshot", "atespace"), "")},
+		nil,
+	}, {
+		"missing actor.status.current_snapshot_tag.atespace",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.CurrentSnapshotTag = &ateapipb.ObjectRef{Name: "v1"}
+		})),
+		field.ErrorList{field.Required(field.NewPath("status", "current_snapshot_tag", "atespace"), "")},
 	}, {
 		"valid actor.status.local_snapshot_info.snapshot_name",
 		validInput(),
@@ -484,11 +494,6 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot_info", "content_scope"), nil, "").WithOrigin("maximum")},
 	}, {
-		"negative actor.status.in_progress_snapshot_source_actor_version",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressSnapshotSourceActorVersion = -1 })),
-		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_snapshot_source_actor_version"), nil, "").WithOrigin("minimum")},
-	}, {
 		"too many actor_volumes",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
@@ -538,41 +543,6 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressLocalSnapshotName = "BAD NAME" })),
 		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_local_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		"set actor.status.source_snapshot",
-		validInput(withStatus()),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.SourceSnapshot = &ateapipb.ActorSourceSnapshotStatus{
-				Snapshot:    &ateapipb.ObjectRef{Atespace: "as", Name: "snap-1"},
-				SnapshotUid: "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63",
-			}
-		})),
-		nil,
-	}, {
-		"clear actor.status.source_snapshot",
-		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.SourceSnapshot = &ateapipb.ActorSourceSnapshotStatus{
-				Snapshot:    &ateapipb.ObjectRef{Atespace: "as", Name: "snap-1"},
-				SnapshotUid: "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63",
-			}
-		})),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.SourceSnapshot = nil })),
-		field.ErrorList{field.Invalid(field.NewPath("status", "source_snapshot"), nil, "").WithOrigin("update")},
-	}, {
-		"change actor.status.source_snapshot",
-		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.SourceSnapshot = &ateapipb.ActorSourceSnapshotStatus{
-				Snapshot:    &ateapipb.ObjectRef{Atespace: "as", Name: "snap-1"},
-				SnapshotUid: "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63",
-			}
-		})),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.SourceSnapshot = &ateapipb.ActorSourceSnapshotStatus{
-				Snapshot:    &ateapipb.ObjectRef{Atespace: "as", Name: "snap-2"},
-				SnapshotUid: "9d1f7b06-3c58-4a2e-8b40-5f7c1e9a2d63",
-			}
-		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "source_snapshot"), nil, "").WithOrigin("update")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

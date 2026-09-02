@@ -142,7 +142,7 @@ Rules:
 - Request message name **must** match the RPC name with a `Request` suffix.
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
 - Request **must** identify the resource with a single `ObjectRef` field (for both atespace-scoped and global-scoped resources).
-- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot` for `ActorSnapshot`), not a generic name like `name` or `ref`.
+- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot_tag` for `ActorSnapshotTag`), not a generic name like `name` or `ref`.
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List

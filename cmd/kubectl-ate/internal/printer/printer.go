@@ -272,7 +272,7 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
 				t.GetSandboxConfig().GetSandboxClass(),
-				gss.GetGoldenSnapshot().GetName(), errFlag,
+				gss.GetGoldenSnapshot().GetSnapshotUri(), errFlag,
 				formatAge(t.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
@@ -286,46 +286,62 @@ func PrintActorTemplate(template *ateapipb.ActorTemplate, format string) error {
 	return PrintActorTemplates([]*ateapipb.ActorTemplate{template}, format)
 }
 
-// PrintActorSnapshots prints actor snapshots to stdout in the requested format.
-func PrintActorSnapshots(snapshots []*ateapipb.ActorSnapshot, format string) error {
-	if format == "json" || format == "yaml" {
-		return printProto(os.Stdout, &ateapipb.ListActorSnapshotsResponse{ActorSnapshots: snapshots}, format)
-	}
-	if format != "table" {
-		return fmt.Errorf("unsupported format %q", format)
-	}
-	slices.SortFunc(snapshots, func(a, b *ateapipb.ActorSnapshot) int {
+// PrintActorSnapshotTags prints actor snapshot tags to stdout in the requested
+// format.
+func PrintActorSnapshotTags(tags []*ateapipb.ActorSnapshotTag, format string) error {
+	return PrintActorSnapshotTagsTo(os.Stdout, tags, format)
+}
+
+// PrintActorSnapshotTagsTo prints a slice of actor snapshot tags to the
+// provided writer.
+func PrintActorSnapshotTagsTo(out io.Writer, tags []*ateapipb.ActorSnapshotTag, format string) error {
+	slices.SortFunc(tags, func(a, b *ateapipb.ActorSnapshotTag) int {
 		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
 	})
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "ATESPACE\tNAME\tSOURCE ACTOR\tSOURCE VERSION\tSCOPE\tAGE")
-	for _, snapshot := range snapshots {
-		fmt.Fprintf(w, "%s\t%s\t%s/%s\t%d\t%s\t%s\n",
-			snapshot.GetMetadata().GetAtespace(), snapshot.GetMetadata().GetName(),
-			snapshot.GetStatus().GetSourceActor().GetAtespace(), snapshot.GetStatus().GetSourceActor().GetName(),
-			snapshot.GetStatus().GetSourceActorVersion(), snapshot.GetStatus().GetContentScope(), formatAge(snapshot.GetMetadata().GetCreateTime()))
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapipb.ListActorSnapshotTagsResponse{ActorSnapshotTags: tags}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tCONTENT SCOPE\tAGE")
+		for _, tag := range tags {
+			// A pending tag has no snapshot yet, so neither its URI nor its
+			// content scope says anything.
+			snapshotURI, contentScope := "<none>", "<none>"
+			if snapshot := tag.GetStatus().GetSnapshot(); snapshot.GetSnapshotUri() != "" {
+				snapshotURI = snapshot.GetSnapshotUri()
+				contentScope = snapshot.GetContentScope().String()
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(), tag.GetScope(),
+				actorSnapshotTagState(tag), snapshotURI, contentScope,
+				formatAge(tag.GetMetadata().GetCreateTime()))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
 	}
-	return w.Flush()
 }
 
-// PrintActorSnapshotTag prints an actor snapshot tag to stdout.
+// actorSnapshotTagState reports whether a tag is usable. A tag is Pending until
+// the copy of its own snapshot lands; until then it names nothing an Actor can
+// be created from, and deleting it collects whatever the create stranded.
+func actorSnapshotTagState(tag *ateapipb.ActorSnapshotTag) string {
+	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+		return "Pending"
+	}
+	return "Ready"
+}
+
+// PrintActorSnapshotTag prints a single actor snapshot tag to stdout.
 func PrintActorSnapshotTag(tag *ateapipb.ActorSnapshotTag, format string) error {
 	if format == "json" || format == "yaml" {
 		return printProto(os.Stdout, tag, format)
 	}
-	if format != "table" {
-		return fmt.Errorf("unsupported format %q", format)
-	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "ATESPACE\tNAME\tSNAPSHOT\tSCOPE\tAGE")
-	fmt.Fprintf(w, "%s\t%s\t%s/%s\t%s\t%s\n",
-		tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(),
-		tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName(),
-		tag.GetScope(), formatAge(tag.GetMetadata().GetCreateTime()))
-	return w.Flush()
+	return PrintActorSnapshotTags([]*ateapipb.ActorSnapshotTag{tag}, format)
 }
 
 // PrintAtespaces prints a slice of atespaces to stdout in the requested format.

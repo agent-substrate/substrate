@@ -58,23 +58,24 @@ service Control {
   // Delete the egress policy resource nested under an Actor.
   rpc DeleteActorEgressPolicy(DeleteActorEgressPolicyRequest) returns (EgressPolicy) {}
 
-  // Get an ActorSnapshot.
-  rpc GetActorSnapshot(GetActorSnapshotRequest) returns (ActorSnapshot) {}
+  // Tag the external snapshot a suspended Actor holds. The tag gets its own
+  // copy of that snapshot, so suspending or deleting the Actor afterwards
+  // cannot collect it.
+  rpc CreateActorSnapshotTag(CreateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
   // Get an ActorSnapshot tag.
   rpc GetActorSnapshotTag(GetActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
-  // List ActorSnapshots.
-  rpc ListActorSnapshots(ListActorSnapshotsRequest) returns (ListActorSnapshotsResponse) {}
-
-  // Add an Atespace-owned, stable name for an ActorSnapshot.
-  rpc CreateActorSnapshotTag(CreateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+  // List ActorSnapshot tags.
+  rpc ListActorSnapshotTags(ListActorSnapshotTagsRequest) returns (ListActorSnapshotTagsResponse) {}
 
   // Publish or unpublish an ActorSnapshot tag without changing its address.
   rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
-  // Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
-  // its final tag is deleted.
+  // Delete an ActorSnapshot tag and the external snapshot it owns. Actors
+  // created from the tag that have not yet been suspended still point at that
+  // external snapshot and become unrecoverable, so do not delete a tag while
+  // such Actors exist.
   rpc DeleteActorSnapshotTag(DeleteActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
   // List Workers.
@@ -126,6 +127,17 @@ service Control {
   // Delete an ActorTemplate together with its golden actor and golden
   // snapshot in the ActorTemplate's namespace.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
+}
+
+// ExternalSnapshot addresses a snapshot held in object storage.
+message ExternalSnapshot {
+  // snapshot_uri addresses the snapshot's prefix in object storage.
+  // TODO: Add DV (required, maxLength?)
+  string snapshot_uri = 1;
+
+  // content_scope is what the snapshot captured.
+  // TODO: Add DV (optional, minimum, maximum?)
+  SnapshotContentScope content_scope = 2;
 }
 
 message LocalSnapshotInfo {
@@ -520,23 +532,19 @@ message ActorStatus {
   // +k8s:format=k8s-short-name
   string in_progress_snapshot_name = 3;
 
-  // The latest durable snapshot created for this Actor. Unset until the first
-  // snapshot exists.
+  // external_snapshot is the Actor's current external snapshot.
+  // If the actor was created from an ActorSnapshotTag:
+  //   * This is the tag's snapshot AND
+  //   * current_snapshot_tag is set
+  // Otherwise: this field is unset until the Actor is first suspended
   //
   // +k8s:optional
-  // +k8s:subfield(atespace)=+k8s:required
-  ObjectRef latest_snapshot = 4;
+  ExternalSnapshot external_snapshot = 4;
 
   // Node-local state used only while the Actor is paused.
   //
   // +k8s:optional
   LocalSnapshotInfo local_snapshot_info = 5;
-
-  // Actor version captured when the current durable snapshot began.
-  //
-  // +k8s:optional
-  // +k8s:minimum=1
-  int64 in_progress_snapshot_source_actor_version = 6;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted. Each template volume
@@ -557,16 +565,14 @@ message ActorStatus {
   // +k8s:format=k8s-short-name
   string in_progress_local_snapshot_name = 8;
 
-  // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
-  // the Actor was not created from a snapshot. Set once at creation and
-  // never changed afterward.
+  // current_snapshot_tag is the ActorSnapshotTag that owns the external
+  // snapshot at `external_snapshot`. It is set when the Actor is created from
+  // a tag and cleared once the Actor takes a snapshot of its own (at it's
+  // first Suspend operation).
   //
   // +k8s:optional
-  // +k8s:update=NoModify
-  // +k8s:update=NoUnset # together: set once, never changed, never cleared.
-  // Not immutable: create validates the final object against the request
-  // with op=Update, and immutable rejects that nil->set.
-  ActorSourceSnapshotStatus source_snapshot = 9;
+  // +k8s:subfield(atespace)=+k8s:required
+  ObjectRef current_snapshot_tag = 9;
 
   // The actor template the Actor's guest state is currently built on: the
   // one its latest sprint booted with, recorded when the resume (or first
@@ -581,23 +587,6 @@ message ActorStatus {
   //
   // +k8s:optional
   string current_actor_template_uid = 11;
-}
-
-// ActorSourceSnapshotStatus records what an Actor's source_snapshot_tag
-// resolved to at CreateActor time. Set once, immutable afterward.
-message ActorSourceSnapshotStatus {
-  // The (atespace, name) of the snapshot the tag resolved to at
-  // creation time.
-  //
-  // +k8s:required
-  // +k8s:subfield(atespace)=+k8s:required
-  ObjectRef snapshot = 1;
-
-  // UID of the snapshot resolved at creation time.
-  //
-  // +k8s:required
-  // +k8s:format=k8s-uuid
-  string snapshot_uid = 2;
 }
 
 // WorkerAssignment points at the Worker currently hosting an Actor.
@@ -651,35 +640,47 @@ message WorkerAssignment {
   string worker_pod_ip = 5;
 }
 
-// ActorSnapshot is an independently addressable durable Actor snapshot. Its
-// contents are immutable.
-message ActorSnapshot {
-  // +k8s:opaqueType
-  ResourceMetadata metadata = 1;
-  ActorSnapshotStatus status = 2;
+// ActorSnapshotTagStatus is the server-owned state of an ActorSnapshotTag.
+// The tag is fixed to one external snapshot once its creation completes, so
+// the rest is immutable provenance.
+message ActorSnapshotTagStatus {
+  // snapshot is the external snapshot this tag points at. Unset while the tag
+  // is still being created, and immutable once set: a tag never moves between
+  // snapshots. A tag is usable only once this is set.
+  ExternalSnapshot snapshot = 1;
+
+  // UID of the ActorTemplate the snapshot was taken under. Actors can only be
+  // seeded from a tag under the same template.
+  string actor_template_uid = 2;
+
+  // in_progress_snapshot_uri is where CreateActorSnapshotTag is copying the
+  // tag's own snapshot to. It is minted before a single object is written and
+  // cleared once snapshot is set, so a tag left with it set names exactly the
+  // objects its unfinished create stranded, and deleting the tag collects
+  // them.
+  string in_progress_snapshot_uri = 3;
+
+  // source_actor_uid is the UID of the Actor this tag's snapshot was copied
+  // from. A retried CreateActorSnapshotTag adopts a still-pending row only when
+  // this matches the Actor it was called for: adopting another Actor's pending
+  // create would let two sources interleave objects into one prefix.
+  string source_actor_uid = 4;
 }
 
-message ActorSnapshotStatus {
-  // +k8s:opaqueType
-  ObjectRef source_actor = 1;
-  string source_actor_uid = 2;
-  int64 source_actor_version = 3;
-  string actor_template_uid = 6;
-  SnapshotContentScope content_scope = 7;
-  string snapshot_uri = 8;
-  // Immutable reference to the actor_template where the snapshot was created from.
-  // +k8s:opaqueType
-  ObjectRef actor_template = 9;
-}
-
-// ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
-// Its owning Atespace cannot be deleted until the tag is removed.
+// ActorSnapshotTag is an Atespace-owned, stable name for one external
+// snapshot. The external snapshot pointed by a tag is a copy of an actor snapshot.
+// The snapshot is copied when the tag is
+// created, and deleted when the tag is. Its owning Atespace cannot be deleted
+// until the tag is removed.
 message ActorSnapshotTag {
   // Common resource metadata: name, uid, version, timestamps.
   // +k8s:opaqueType
   ResourceMetadata metadata = 1;
-  // +k8s:opaqueType
-  ObjectRef snapshot = 2;
+
+  // status is set by the control plane; it is ignored on write.
+  ActorSnapshotTagStatus status = 2;
+
+  // scope controls who may create an Actor from this tag.
   ActorSnapshotTagScope scope = 3;
 }
 
@@ -790,11 +791,10 @@ message Limits {
 }
 
 message GoldenSnapshotStatus {
-  // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
-  // system atespace, built for this version by ate-api. Set once state is
-  // READY.
-  // +k8s:opaqueType
-  ObjectRef golden_snapshot = 1;
+  // golden_snapshot is the external snapshot built for this version by
+  // ate-api, taken from the golden Actor in the reserved ate-golden system
+  // atespace. Set once state is READY. The golden Actor owns it.
+  ExternalSnapshot golden_snapshot = 1;
 
   // take_golden_snapshot_at is when the golden-actor warmup ends and the
   // golden snapshot may be taken.
@@ -1425,30 +1425,44 @@ message DeleteActorEgressPolicyRequest {
   ObjectRef actor = 1;
 }
 
-message GetActorSnapshotRequest {
-  // +k8s:opaqueType
-  ObjectRef actor_snapshot = 1;
-}
-
 message GetActorSnapshotTagRequest {
   // +k8s:opaqueType
   ObjectRef actor_snapshot_tag = 1;
 }
 
-message ListActorSnapshotsRequest {
+message ListActorSnapshotTagsRequest {
   string atespace = 1;
   int32 page_size = 2;
   string page_token = 3;
 }
 
-message ListActorSnapshotsResponse {
-  repeated ActorSnapshot actor_snapshots = 1;
+message ListActorSnapshotTagsResponse {
+  repeated ActorSnapshotTag actor_snapshot_tags = 1;
   string next_page_token = 2;
 }
 
+// Request to tag the external snapshot a suspended Actor holds.
+//
+// The tag captures whichever snapshot the Actor holds when the call runs. An
+// Actor keeps no snapshot history — each suspend replaces the last — so a
+// suspend that lands between taking a snapshot and tagging it moves what gets
+// tagged. That race is inherent and accepted: the tag means "the Actor as of
+// this call", not "the snapshot some earlier suspend returned".
+//
+// The tag is given its own copy of that snapshot, so it survives the Actor
+// being suspended again or deleted. Retrying a create that timed out resumes
+// the copy for the same Actor; a name held by a finished tag, or by a pending
+// tag of a different Actor, is ALREADY_EXISTS.
 message CreateActorSnapshotTagRequest {
-  // The tag to create.
-  ActorSnapshotTag actor_snapshot_tag = 1;
+  // The suspended Actor whose external snapshot to tag. The tag is created in
+  // this Actor's Atespace.
+  //
+  // +k8s:opaqueType
+  ObjectRef actor = 1;
+
+  // The tag to create. metadata.name and scope are honored; metadata.atespace
+  // must be empty or match the Actor's, and status is ignored on write.
+  ActorSnapshotTag actor_snapshot_tag = 2;
 }
 
 // Request to update mutable fields on an existing ActorSnapshotTag.

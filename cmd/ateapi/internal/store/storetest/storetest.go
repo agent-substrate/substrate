@@ -108,16 +108,18 @@ func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor
 	return created
 }
 
-// MustCreateActorSnapshot ensures snapshot's parent atespace exists, then
-// creates snapshot. Use the store method directly only in tests that exercise
+// MustCreateActorSnapshotTag ensures tag's parent atespace exists, then stores
+// tag as given — ready or still pending, whichever state the test needs to
+// start from. Use the store method directly only in tests that exercise
 // missing-parent behavior.
-func MustCreateActorSnapshot(t *testing.T, ctx context.Context, s store.Interface, snapshot *ateapipb.ActorSnapshot) *ateapipb.ActorSnapshot {
+func MustCreateActorSnapshotTag(t *testing.T, ctx context.Context, s store.Interface, tag *ateapipb.ActorSnapshotTag) *ateapipb.ActorSnapshotTag {
 	t.Helper()
-	atespace := snapshot.GetMetadata().GetAtespace()
+	atespace := tag.GetMetadata().GetAtespace()
+	name := tag.GetMetadata().GetName()
 	MustCreateAtespace(t, ctx, s, atespace)
-	created, err := s.CreateActorSnapshot(ctx, snapshot)
+	created, err := s.CreateActorSnapshotTag(ctx, tag)
 	if err != nil {
-		t.Fatalf("creating test actor snapshot %q/%q: %v", atespace, snapshot.GetMetadata().GetName(), err)
+		t.Fatalf("creating test actor snapshot tag %q/%q: %v", atespace, name, err)
 	}
 	return created
 }

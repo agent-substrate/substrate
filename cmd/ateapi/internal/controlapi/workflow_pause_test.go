@@ -268,15 +268,15 @@ func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
 	tests := []struct {
 		name         string
-		prevSnapshot *ateapipb.ObjectRef
+		prevSnapshot string
 	}{
 		{
-			name:         "keeps previous snapshot",
-			prevSnapshot: &ateapipb.ObjectRef{Atespace: "team-a", Name: "prev"},
+			name:         "keeps previous external snapshot",
+			prevSnapshot: "gs://bucket/root/snapshots/team-a/prev",
 		},
 		{
-			name:         "stays nil without previous snapshot",
-			prevSnapshot: nil,
+			name:         "stays empty without previous external snapshot",
+			prevSnapshot: "",
 		},
 	}
 
@@ -295,7 +295,7 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 						WorkerPod:       "pod-gone",
 					},
 					InProgressLocalSnapshotName: "actor-1-never-written",
-					LatestSnapshot:              tt.prevSnapshot,
+					ExternalSnapshot:            &ateapipb.ExternalSnapshot{SnapshotUri: tt.prevSnapshot},
 				},
 			}
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
@@ -315,12 +315,8 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 			if got := stored.GetStatus().GetInProgressLocalSnapshotName(); got != "actor-1-never-written" {
 				t.Errorf("InProgressLocalSnapshotName = %q, want preserved for debugging", got)
 			}
-			if tt.prevSnapshot == nil {
-				if stored.GetStatus().GetLatestSnapshot() != nil {
-					t.Errorf("LatestSnapshot = %v, want nil", stored.GetStatus().GetLatestSnapshot())
-				}
-			} else if got, want := stored.GetStatus().GetLatestSnapshot().GetName(), tt.prevSnapshot.GetName(); got != want {
-				t.Errorf("LatestSnapshot name = %q, want %q", got, want)
+			if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != tt.prevSnapshot {
+				t.Errorf("SnapshotUri = %q, want %q", got, tt.prevSnapshot)
 			}
 		})
 	}

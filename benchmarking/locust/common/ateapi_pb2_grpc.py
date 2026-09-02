@@ -104,25 +104,20 @@ class ControlStub:
                 request_serializer=ateapi__pb2.DeleteActorEgressPolicyRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.EgressPolicy.FromString,
                 _registered_method=True)
-        self.GetActorSnapshot = channel.unary_unary(
-                '/ateapi.Control/GetActorSnapshot',
-                request_serializer=ateapi__pb2.GetActorSnapshotRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ActorSnapshot.FromString,
+        self.CreateActorSnapshotTag = channel.unary_unary(
+                '/ateapi.Control/CreateActorSnapshotTag',
+                request_serializer=ateapi__pb2.CreateActorSnapshotTagRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorSnapshotTag.FromString,
                 _registered_method=True)
         self.GetActorSnapshotTag = channel.unary_unary(
                 '/ateapi.Control/GetActorSnapshotTag',
                 request_serializer=ateapi__pb2.GetActorSnapshotTagRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.ActorSnapshotTag.FromString,
                 _registered_method=True)
-        self.ListActorSnapshots = channel.unary_unary(
-                '/ateapi.Control/ListActorSnapshots',
-                request_serializer=ateapi__pb2.ListActorSnapshotsRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ListActorSnapshotsResponse.FromString,
-                _registered_method=True)
-        self.CreateActorSnapshotTag = channel.unary_unary(
-                '/ateapi.Control/CreateActorSnapshotTag',
-                request_serializer=ateapi__pb2.CreateActorSnapshotTagRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.ActorSnapshotTag.FromString,
+        self.ListActorSnapshotTags = channel.unary_unary(
+                '/ateapi.Control/ListActorSnapshotTags',
+                request_serializer=ateapi__pb2.ListActorSnapshotTagsRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ListActorSnapshotTagsResponse.FromString,
                 _registered_method=True)
         self.UpdateActorSnapshotTag = channel.unary_unary(
                 '/ateapi.Control/UpdateActorSnapshotTag',
@@ -299,8 +294,10 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetActorSnapshot(self, request, context):
-        """Get an ActorSnapshot.
+    def CreateActorSnapshotTag(self, request, context):
+        """Tag the external snapshot a suspended Actor holds. The tag gets its own
+        copy of that snapshot, so suspending or deleting the Actor afterwards
+        cannot collect it.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -313,15 +310,8 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ListActorSnapshots(self, request, context):
-        """List ActorSnapshots.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def CreateActorSnapshotTag(self, request, context):
-        """Add an Atespace-owned, stable name for an ActorSnapshot.
+    def ListActorSnapshotTags(self, request, context):
+        """List ActorSnapshot tags.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -335,8 +325,10 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def DeleteActorSnapshotTag(self, request, context):
-        """Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
-        its final tag is deleted.
+        """Delete an ActorSnapshot tag and the external snapshot it owns. Actors
+        created from the tag that have not yet been suspended still point at that
+        external snapshot and become unrecoverable, so do not delete a tag while
+        such Actors exist.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -514,25 +506,20 @@ def add_ControlServicer_to_server(servicer, server):
                     request_deserializer=ateapi__pb2.DeleteActorEgressPolicyRequest.FromString,
                     response_serializer=ateapi__pb2.EgressPolicy.SerializeToString,
             ),
-            'GetActorSnapshot': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetActorSnapshot,
-                    request_deserializer=ateapi__pb2.GetActorSnapshotRequest.FromString,
-                    response_serializer=ateapi__pb2.ActorSnapshot.SerializeToString,
+            'CreateActorSnapshotTag': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateActorSnapshotTag,
+                    request_deserializer=ateapi__pb2.CreateActorSnapshotTagRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorSnapshotTag.SerializeToString,
             ),
             'GetActorSnapshotTag': grpc.unary_unary_rpc_method_handler(
                     servicer.GetActorSnapshotTag,
                     request_deserializer=ateapi__pb2.GetActorSnapshotTagRequest.FromString,
                     response_serializer=ateapi__pb2.ActorSnapshotTag.SerializeToString,
             ),
-            'ListActorSnapshots': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListActorSnapshots,
-                    request_deserializer=ateapi__pb2.ListActorSnapshotsRequest.FromString,
-                    response_serializer=ateapi__pb2.ListActorSnapshotsResponse.SerializeToString,
-            ),
-            'CreateActorSnapshotTag': grpc.unary_unary_rpc_method_handler(
-                    servicer.CreateActorSnapshotTag,
-                    request_deserializer=ateapi__pb2.CreateActorSnapshotTagRequest.FromString,
-                    response_serializer=ateapi__pb2.ActorSnapshotTag.SerializeToString,
+            'ListActorSnapshotTags': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListActorSnapshotTags,
+                    request_deserializer=ateapi__pb2.ListActorSnapshotTagsRequest.FromString,
+                    response_serializer=ateapi__pb2.ListActorSnapshotTagsResponse.SerializeToString,
             ),
             'UpdateActorSnapshotTag': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdateActorSnapshotTag,
@@ -934,7 +921,7 @@ class Control:
             _registered_method=True)
 
     @staticmethod
-    def GetActorSnapshot(request,
+    def CreateActorSnapshotTag(request,
             target,
             options=(),
             channel_credentials=None,
@@ -947,9 +934,9 @@ class Control:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ateapi.Control/GetActorSnapshot',
-            ateapi__pb2.GetActorSnapshotRequest.SerializeToString,
-            ateapi__pb2.ActorSnapshot.FromString,
+            '/ateapi.Control/CreateActorSnapshotTag',
+            ateapi__pb2.CreateActorSnapshotTagRequest.SerializeToString,
+            ateapi__pb2.ActorSnapshotTag.FromString,
             options,
             channel_credentials,
             insecure,
@@ -988,7 +975,7 @@ class Control:
             _registered_method=True)
 
     @staticmethod
-    def ListActorSnapshots(request,
+    def ListActorSnapshotTags(request,
             target,
             options=(),
             channel_credentials=None,
@@ -1001,36 +988,9 @@ class Control:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ateapi.Control/ListActorSnapshots',
-            ateapi__pb2.ListActorSnapshotsRequest.SerializeToString,
-            ateapi__pb2.ListActorSnapshotsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def CreateActorSnapshotTag(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.Control/CreateActorSnapshotTag',
-            ateapi__pb2.CreateActorSnapshotTagRequest.SerializeToString,
-            ateapi__pb2.ActorSnapshotTag.FromString,
+            '/ateapi.Control/ListActorSnapshotTags',
+            ateapi__pb2.ListActorSnapshotTagsRequest.SerializeToString,
+            ateapi__pb2.ListActorSnapshotTagsResponse.FromString,
             options,
             channel_credentials,
             insecure,

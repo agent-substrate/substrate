@@ -986,47 +986,7 @@ func unmarshalEgressPolicy(uid string, version int64, protoBytes []byte) (*ateap
 	return policy, nil
 }
 
-// --- Actor snapshots ---
-
-func (p *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error) {
-	atespace := snapshot.GetMetadata().GetAtespace()
-	name := snapshot.GetMetadata().GetName()
-	dbSnapshot := proto.Clone(snapshot).(*ateapipb.ActorSnapshot)
-	dbSnapshot.Metadata = newCreateMetadata(atespace, name)
-
-	protoBytes, err := proto.Marshal(dbSnapshot)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling actor snapshot: %w", err)
-	}
-	if _, err := p.pool.Exec(ctx, `
-		INSERT INTO actor_snapshots (atespace, name, uid, version, proto)
-		VALUES ($1, $2, $3, $4, $5)`,
-		atespace, name, dbSnapshot.GetMetadata().GetUid(), dbSnapshot.GetMetadata().GetVersion(), protoBytes); err != nil {
-		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
-		}
-		return nil, fmt.Errorf("inserting actor snapshot %s/%s: %w", atespace, name, err)
-	}
-	return dbSnapshot, nil
-}
-
-func (p *Persistence) GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error) {
-	atespace, name := snapshotRef.Atespace, snapshotRef.Name
-	var protoBytes []byte
-	if err := p.pool.QueryRow(ctx, `
-		SELECT proto FROM actor_snapshots
-		WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("getting actor snapshot %s/%s: %w", atespace, name, err)
-	}
-	out := &ateapipb.ActorSnapshot{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
-		return nil, fmt.Errorf("unmarshaling actor snapshot: %w", err)
-	}
-	return out, nil
-}
+// --- Actor snapshot tags ---
 
 func (p *Persistence) GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
@@ -1046,26 +1006,26 @@ func (p *Persistence) GetActorSnapshotTag(ctx context.Context, tagRef resources.
 	return tag, nil
 }
 
-func (p *Persistence) ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error) {
+func (p *Persistence) ListActorSnapshotTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshotTag], error) {
 	opts, err := store.NormalizeListOptions(opts)
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorSnapshot]{}, err
+		return store.ListResponse[*ateapipb.ActorSnapshotTag]{}, err
 	}
-	var items []*ateapipb.ActorSnapshot
+	var items []*ateapipb.ActorSnapshotTag
 	var nextToken string
 	if atespace != "" {
-		items, nextToken, err = p.listActorSnapshotsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
+		items, nextToken, err = p.listActorSnapshotTagsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
 	} else {
-		items, nextToken, err = p.listActorSnapshotsGlobal(ctx, opts.PageSize, opts.PageToken)
+		items, nextToken, err = p.listActorSnapshotTagsGlobal(ctx, opts.PageSize, opts.PageToken)
 	}
 	if err != nil {
-		return store.ListResponse[*ateapipb.ActorSnapshot]{}, err
+		return store.ListResponse[*ateapipb.ActorSnapshotTag]{}, err
 	}
-	return store.ListResponse[*ateapipb.ActorSnapshot]{Items: items, NextPageToken: nextToken}, nil
+	return store.ListResponse[*ateapipb.ActorSnapshotTag]{Items: items, NextPageToken: nextToken}, nil
 }
 
-func (p *Persistence) listActorSnapshotsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
-	token, err := decodePageToken(pageTokenStr, kindSnapshot, atespace, 1)
+func (p *Persistence) listActorSnapshotTagsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshotTag, string, error) {
+	token, err := decodePageToken(pageTokenStr, kindSnapshotTag, atespace, 1)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1074,43 +1034,43 @@ func (p *Persistence) listActorSnapshotsScoped(ctx context.Context, atespace str
 		last = &token.Last[0]
 	}
 	rows, err := p.pool.Query(ctx, `
-		SELECT name, proto FROM actor_snapshots
+		SELECT name, proto FROM actor_snapshot_tags
 		WHERE atespace = $1 AND ($2::text IS NULL OR name > $2)
 		ORDER BY name
 		LIMIT $3`, atespace, last, int64(pageSize)+1)
 	if err != nil {
-		return nil, "", fmt.Errorf("listing actor snapshots in %q: %w", atespace, err)
+		return nil, "", fmt.Errorf("listing actor snapshot tags in %q: %w", atespace, err)
 	}
 	defer rows.Close()
 
 	var names []string
-	var result []*ateapipb.ActorSnapshot
+	var result []*ateapipb.ActorSnapshotTag
 	for rows.Next() {
 		var name string
 		var protoBytes []byte
 		if err := rows.Scan(&name, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning actor snapshot row: %w", err)
+			return nil, "", fmt.Errorf("scanning actor snapshot tag row: %w", err)
 		}
-		snapshot := &ateapipb.ActorSnapshot{}
-		if err := unmarshalStored(protoBytes, snapshot); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling actor snapshot: %w", err)
+		tag := &ateapipb.ActorSnapshotTag{}
+		if err := unmarshalStored(protoBytes, tag); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
 		}
-		result = append(result, snapshot)
+		result = append(result, tag)
 		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing actor snapshots in %q: %w", atespace, err)
+		return nil, "", fmt.Errorf("listing actor snapshot tags in %q: %w", atespace, err)
 	}
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
-		nextToken = encodePageToken(kindSnapshot, atespace, []string{names[pageSize-1]})
+		nextToken = encodePageToken(kindSnapshotTag, atespace, []string{names[pageSize-1]})
 	}
 	return result, nextToken, nil
 }
 
-func (p *Persistence) listActorSnapshotsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
-	token, err := decodePageToken(pageTokenStr, kindSnapshot, "", 2)
+func (p *Persistence) listActorSnapshotTagsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshotTag, string, error) {
+	token, err := decodePageToken(pageTokenStr, kindSnapshotTag, "", 2)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1119,105 +1079,72 @@ func (p *Persistence) listActorSnapshotsGlobal(ctx context.Context, pageSize int
 		lastAtespace, lastName = &token.Last[0], &token.Last[1]
 	}
 	rows, err := p.pool.Query(ctx, `
-		SELECT atespace, name, proto FROM actor_snapshots
+		SELECT atespace, name, proto FROM actor_snapshot_tags
 		WHERE $1::text IS NULL OR (atespace, name) > ($1, $2)
 		ORDER BY atespace, name
 		LIMIT $3`, lastAtespace, lastName, int64(pageSize)+1)
 	if err != nil {
-		return nil, "", fmt.Errorf("listing actor snapshots: %w", err)
+		return nil, "", fmt.Errorf("listing actor snapshot tags: %w", err)
 	}
 	defer rows.Close()
 
 	type key struct{ atespace, name string }
 	var keys []key
-	var result []*ateapipb.ActorSnapshot
+	var result []*ateapipb.ActorSnapshotTag
 	for rows.Next() {
 		var k key
 		var protoBytes []byte
 		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning actor snapshot row: %w", err)
+			return nil, "", fmt.Errorf("scanning actor snapshot tag row: %w", err)
 		}
-		snapshot := &ateapipb.ActorSnapshot{}
-		if err := unmarshalStored(protoBytes, snapshot); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling actor snapshot: %w", err)
+		tag := &ateapipb.ActorSnapshotTag{}
+		if err := unmarshalStored(protoBytes, tag); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
 		}
-		result = append(result, snapshot)
+		result = append(result, tag)
 		keys = append(keys, k)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing actor snapshots: %w", err)
+		return nil, "", fmt.Errorf("listing actor snapshot tags: %w", err)
 	}
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
 		last := keys[pageSize-1]
-		nextToken = encodePageToken(kindSnapshot, "", []string{last.atespace, last.name})
+		nextToken = encodePageToken(kindSnapshotTag, "", []string{last.atespace, last.name})
 	}
 	return result, nextToken, nil
 }
 
-func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
-	snapshotAtespace, snapshotName := snapshotRef.Atespace, snapshotRef.Name
-	tagAtespace := tag.GetMetadata().GetAtespace()
-	tagName := tag.GetMetadata().GetName()
-	dbTag := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
-	dbTag.Metadata = newCreateMetadata(tagAtespace, tagName)
-	dbTag.Snapshot = &ateapipb.ObjectRef{Atespace: snapshotAtespace, Name: snapshotName}
+func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+	atespace := tag.GetMetadata().GetAtespace()
+	name := tag.GetMetadata().GetName()
+	dbTag := proto.CloneOf(tag)
+	dbTag.Metadata = newCreateMetadata(atespace, name)
 	protoBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor snapshot tag: %w", err)
 	}
 
-	tx, err := p.pool.Begin(ctx)
+	_, err = p.pool.Exec(ctx, `
+		INSERT INTO actor_snapshot_tags (atespace, name, uid, version, proto)
+		VALUES ($1, $2, $3, $4, $5)`, atespace, name,
+		dbTag.GetMetadata().GetUid(), dbTag.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {
-		return nil, fmt.Errorf("beginning actor snapshot tag create: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-	var inserted []byte
-	err = tx.QueryRow(ctx, `
-		INSERT INTO actor_snapshot_tags
-		    (atespace, name, snapshot_atespace, snapshot_name, uid, version, proto)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (atespace, name) DO NOTHING
-		RETURNING proto`, tagAtespace, tagName, snapshotAtespace, snapshotName,
-		dbTag.GetMetadata().GetUid(), dbTag.GetMetadata().GetVersion(), protoBytes).Scan(&inserted)
-	if err == nil {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("committing actor snapshot tag create: %w", err)
+		if isUniqueViolation(err) {
+			return nil, store.ErrAlreadyExists
 		}
-		return dbTag, nil
-	}
-	if isForeignKeyViolation(err) {
-		switch pgErrConstraint(err) {
-		case "actor_snapshot_tags_snapshot_fk":
-			return nil, store.ErrNotFound
-		case "actor_snapshot_tags_atespace_fk":
-			return nil, store.ErrFailedPrecondition
-		default:
-			return nil, fmt.Errorf("inserting actor snapshot tag %s/%s violated unknown foreign key %q: %w", tagAtespace, tagName, pgErrConstraint(err), err)
+		if isForeignKeyViolation(err) {
+			switch pgErrConstraint(err) {
+			case "actor_snapshot_tags_atespace_fk":
+				return nil, store.ErrFailedPrecondition
+			default:
+				return nil, fmt.Errorf("inserting actor snapshot tag %s/%s violated unknown foreign key %q: %w", atespace, name, pgErrConstraint(err), err)
+			}
 		}
+		return nil, fmt.Errorf("inserting actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("inserting actor snapshot tag %s/%s: %w", tagAtespace, tagName, err)
-	}
-
-	var existingBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actor_snapshot_tags
-		WHERE atespace = $1 AND name = $2`, tagAtespace, tagName).Scan(&existingBytes); err != nil {
-		return nil, fmt.Errorf("getting existing actor snapshot tag %s/%s: %w", tagAtespace, tagName, err)
-	}
-	existing := &ateapipb.ActorSnapshotTag{}
-	if err := unmarshalStored(existingBytes, existing); err != nil {
-		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
-	}
-	if existing.GetSnapshot().GetAtespace() != snapshotAtespace || existing.GetSnapshot().GetName() != snapshotName || existing.GetScope() != tag.GetScope() {
-		return nil, store.ErrAlreadyExists
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing idempotent actor snapshot tag create: %w", err)
-	}
-	return existing, nil
+	return dbTag, nil
 }
 
 func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.ActorSnapshotTag) error {
@@ -1227,11 +1154,17 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
 		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
-	if stored, mutated := storedTag.GetSnapshot().GetAtespace(), mutatedTag.GetSnapshot().GetAtespace(); stored != mutated {
-		return fmt.Errorf("snapshot.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); stored != nil && !proto.Equal(stored, mutated) {
+		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
 	}
-	if stored, mutated := storedTag.GetSnapshot().GetName(), mutatedTag.GetSnapshot().GetName(); stored != mutated {
-		return fmt.Errorf("snapshot.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	if stored, mutated := storedTag.GetStatus().GetInProgressSnapshotUri(), mutatedTag.GetStatus().GetInProgressSnapshotUri(); stored != mutated && mutated != "" {
+		return fmt.Errorf("status.in_progress_snapshot_uri may only be cleared: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
+		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetStatus().GetSourceActorUid(), mutatedTag.GetStatus().GetSourceActorUid(); stored != mutated {
+		return fmt.Errorf("status.source_actor_uid is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
 	return nil
 }

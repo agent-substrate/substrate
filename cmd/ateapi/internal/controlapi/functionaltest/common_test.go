@@ -334,16 +334,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
-	const goldenSnapshot = "golden"
-	storetest.MustCreateActorSnapshot(t, context.Background(), tc.persistence, &ateapipb.ActorSnapshot{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
-		Status: &ateapipb.ActorSnapshotStatus{
-			ActorTemplateUid: created.GetMetadata().GetUid(),
-			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			SnapshotUri:      "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
-		},
-	})
-
 	// Record the golden snapshot on the template's status directly in the
 	// store, as the ActorTemplateReconciler's checkpoint would: there is no
 	// status RPC, and the reconciler does not run in this test environment.
@@ -352,7 +342,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		func(dbTemplate *ateapipb.ActorTemplate) error {
 			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
+					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/golden", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 				},
 			}
 			return nil

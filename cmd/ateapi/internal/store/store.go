@@ -114,25 +114,19 @@ type Interface interface {
 	// Deletes and returns an Actor's policy subresource.
 	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
 
-	// Creates an immutable ActorSnapshot. The caller sets snapshot_uri; the
-	// store keeps no location of its own.
-	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
-
-	// Fetches an ActorSnapshot by reference. Returns ErrNotFound if missing.
-	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
-
-	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
-	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
-
-	// Adds an immutable Atespace-owned tag to the ActorSnapshot addressed by
-	// snapshotRef. Returns ErrNotFound if the snapshot does not exist, or
+	// CreateActorSnapshotTag creates an immutable tag to an actor snapshot.
+	//
+	// Returns ErrAlreadyExists if the name is taken — including by the caller's
+	// own unfinished attempt, which it can then read back and resume — or
 	// ErrFailedPrecondition if the tag's atespace does not exist.
-	CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	CreateActorSnapshotTag(ctx context.Context, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
 	// Fetches an Atespace-owned tag by reference. Returns ErrNotFound if
-	// missing. The tag's snapshot field names the ActorSnapshot it resolves
-	// to; fetch it with GetActorSnapshot if needed.
+	// missing.
 	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
+
+	// Lists ActorSnapshotTags in one atespace, or all atespaces when empty.
+	ListActorSnapshotTags(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshotTag], error)
 
 	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag
 	// addressed by tagRef, and returns the stored ActorSnapshotTag with
@@ -153,6 +147,8 @@ type Interface interface {
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
 	// exhausted, ErrImmutableField if the mutated tag changed a field that is
 	// immutable for its lifetime, or the mutate's error verbatim otherwise.
+	//
+	// status.snapshot is immutable once set
 	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
