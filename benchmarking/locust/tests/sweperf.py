@@ -15,7 +15,7 @@
 """Stub SweperfUser declaration.
 
 The real load implementation lives in the boomer-Go worker at
-cmd/benchmarking/boomer-glutton/; this Python class is declared only so the
+cmd/benchmarking/boomer-worker/; this Python class is declared only so the
 master recognizes the name and attributes boomer's stats rows to it. The
 master loads this stub file, selected by ${BENCHMARK_USER_CLASS} in
 locust/manifests/locust.yaml. The Python worker container sets

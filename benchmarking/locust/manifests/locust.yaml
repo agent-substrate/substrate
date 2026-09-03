@@ -132,12 +132,6 @@ spec:
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
-        - name: WORKLOAD_TEMPLATE
-          value: "${WORKLOAD_TEMPLATE}"
-        - name: TOTAL_STEPS
-          value: "${TOTAL_STEPS}"
-        - name: NUM_CYCLES
-          value: "${NUM_CYCLES}"
         ports:
         - name: boomer-prom
           containerPort: 8001

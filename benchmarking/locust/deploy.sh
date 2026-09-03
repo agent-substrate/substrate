@@ -34,21 +34,15 @@ MANIFEST="${SCRIPT_DIR}/manifests/locust.yaml"
 
 # Substituted into the boomer container's --user-class argument and the master's -f.
 BENCHMARK_USER_CLASS=glutton
-WORKLOAD_TEMPLATE="${WORKLOAD_TEMPLATE:-swebench-sympy}"
-TOTAL_STEPS="${TOTAL_STEPS:-30}"
-NUM_CYCLES="${NUM_CYCLES:-4}"
 
 usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy                 Deploy the locust workers"
-  echo "  --delete                 Delete the locust workers"
-  echo "  --user-class NAME        Locust user class, lowercase; runs tests/NAME.py (default: glutton)"
-  echo "  --workload-template NAME Workload template name for sweperf (default: swebench-sympy)"
-  echo "  --total-steps N          Total steps for sweperf (default: 30)"
-  echo "  --num-cycles N           Number of cycles for sweperf (default: 4)"
-  echo "  -h|--help                Show this help message"
+  echo "  --deploy           Deploy the locust workers"
+  echo "  --delete           Delete the locust workers"
+  echo "  --user-class NAME  Locust user class, lowercase; runs tests/NAME.py (default: glutton)"
+  echo "  -h|--help          Show this help message"
 }
 
 deploy() {
@@ -57,7 +51,7 @@ deploy() {
   # benchmarking/monitoring.yaml is otherwise optional.
   echo "Ensuring benchmarking namespace exists..."
   kubectl create namespace benchmarking --dry-run=client -o yaml | kubectl apply -f -
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, workload_template=${WORKLOAD_TEMPLATE})..."
+  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS})..."
   envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
@@ -78,12 +72,6 @@ while [[ "$#" -gt 0 ]]; do
     --delete) action="delete" ;;
     --user-class) shift; BENCHMARK_USER_CLASS="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" ;;
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
-    --workload-template) shift; WORKLOAD_TEMPLATE="$1" ;;
-    --workload-template=*) WORKLOAD_TEMPLATE="${1#*=}" ;;
-    --total-steps) shift; TOTAL_STEPS="$1" ;;
-    --total-steps=*) TOTAL_STEPS="${1#*=}" ;;
-    --num-cycles) shift; NUM_CYCLES="$1" ;;
-    --num-cycles=*) NUM_CYCLES="${1#*=}" ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -99,9 +87,6 @@ if [[ ! -f "${SCRIPT_DIR}/tests/${BENCHMARK_USER_CLASS}.py" ]]; then
   exit 1
 fi
 export BENCHMARK_USER_CLASS
-export WORKLOAD_TEMPLATE
-export TOTAL_STEPS
-export NUM_CYCLES
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

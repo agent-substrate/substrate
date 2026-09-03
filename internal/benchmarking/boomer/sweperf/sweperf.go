@@ -50,7 +50,10 @@ const (
 )
 
 const (
-	sweperfUserClass = "SweperfUser"
+	sweperfUserClass        = "SweperfUser"
+	defaultSweperfTemplate   = "swebench-astropy-7336"
+	defaultSweperfTotalSteps = 21
+	defaultSweperfNumCycles  = 4
 )
 
 func init() {
@@ -100,48 +103,56 @@ func initSweperf(cfg *userclass.Config) (taskFn func(), shutdown func(context.Co
 		cfg.Tracer = otel.Tracer("substrate-boomer/sweperf")
 	}
 
-	totalSteps := 30
-	if val := os.Getenv("TOTAL_STEPS"); val != "" {
-		if i, err := strconv.Atoi(val); err == nil {
-			totalSteps = i
-		}
-	}
-
-	numCycles := 4
-	if val := os.Getenv("NUM_CYCLES"); val != "" {
-		if i, err := strconv.Atoi(val); err == nil {
-			numCycles = i
-		}
-	}
-
-	workloadTemplate := "swebench-sympy"
-	if val := os.Getenv("WORKLOAD_TEMPLATE"); val != "" {
-		workloadTemplate = val
-	} else if val := os.Getenv("WORKLOAD_REPO"); val != "" {
-		workloadTemplate = val
-	}
-
-	slog.Info("initializing sweperf workload runtime",
-		slog.Int("total_steps", totalSteps),
-		slog.Int("num_cycles", numCycles),
-		slog.String("workload_template", workloadTemplate),
-	)
-
 	rt := &sweperfRuntime{
-		cfg:              cfg,
-		totalSteps:       totalSteps,
-		numCycles:        numCycles,
-		workloadTemplate: workloadTemplate,
+		cfg: cfg,
 	}
 	return rt.iterate, rt.shutdown
 }
 
 type sweperfRuntime struct {
-	cfg              *userclass.Config
-	users            sync.Map // goroutineID -> *sweperfUser
-	totalSteps       int
-	numCycles        int
-	workloadTemplate string
+	cfg   *userclass.Config
+	users sync.Map // goroutineID -> *sweperfUser
+}
+
+func (r *sweperfRuntime) resolveConfig() (string, int, int) {
+	dyn := r.cfg.Dyn.Load()
+
+	template := dyn.SweperfTemplate
+	if template == "" {
+		if val := os.Getenv("WORKLOAD_TEMPLATE"); val != "" {
+			template = val
+		} else if val := os.Getenv("WORKLOAD_REPO"); val != "" {
+			template = val
+		} else {
+			template = defaultSweperfTemplate
+		}
+	}
+
+	totalSteps := dyn.SweperfTotalSteps
+	if totalSteps <= 0 {
+		if val := os.Getenv("TOTAL_STEPS"); val != "" {
+			if i, err := strconv.Atoi(val); err == nil && i > 0 {
+				totalSteps = i
+			}
+		}
+	}
+	if totalSteps <= 0 {
+		totalSteps = defaultSweperfTotalSteps
+	}
+
+	numCycles := dyn.SweperfNumCycles
+	if numCycles <= 0 {
+		if val := os.Getenv("NUM_CYCLES"); val != "" {
+			if i, err := strconv.Atoi(val); err == nil && i > 0 {
+				numCycles = i
+			}
+		}
+	}
+	if numCycles <= 0 {
+		numCycles = defaultSweperfNumCycles
+	}
+
+	return template, totalSteps, numCycles
 }
 
 func (r *sweperfRuntime) dynamicWait() time.Duration {
@@ -183,12 +194,13 @@ func (r *sweperfRuntime) iterate() {
 }
 
 func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
-	chunks := generateDynamicChunks(r.totalSteps, r.numCycles)
+	tmpl, totalSteps, numCycles := r.resolveConfig()
+	chunks := generateDynamicChunks(totalSteps, numCycles)
 
 	u := &sweperfUser{
 		cfg:          r.cfg,
 		actorName:    "sb-" + uuid.NewString(),
-		templateName: r.workloadTemplate,
+		templateName: tmpl,
 		userClass:    sweperfUserClass,
 		chunks:       chunks,
 		cycleIndex:   0,
