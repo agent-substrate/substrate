@@ -91,3 +91,24 @@ func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
 		return true, nil
 	})
 }
+
+// TestBuildNetworkPolicyRelocatedNamespace pins the ingress peer to the
+// reconciler's SystemNamespace rather than the canonical install namespace.
+// The rest of the suite configures the reconciler with the default, so it
+// passes just as well against a hardcoded "ate-system"; this is the case that
+// catches that. A policy naming the wrong namespace admits nobody, and the CNI
+// drops every request to the pool with no error from substrate itself.
+func TestBuildNetworkPolicyRelocatedNamespace(t *testing.T) {
+	const relocated = "substrate-test"
+
+	r := &NetworkPolicyReconciler{SystemNamespace: relocated}
+	np := r.buildNetworkPolicyApplyConfig(testWorkerPoolApplyConfig(nil))
+
+	if len(np.Spec.Ingress) != 1 || len(np.Spec.Ingress[0].From) != 1 {
+		t.Fatalf("expected exactly one ingress rule with one peer, got %+v", np.Spec.Ingress)
+	}
+	got := np.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]
+	if got != relocated {
+		t.Errorf("ingress namespace selector = %q, want %q", got, relocated)
+	}
+}
