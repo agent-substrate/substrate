@@ -126,18 +126,7 @@ func (s *s3Store) copyMultipart(ctx context.Context, srcBucket, srcObject, dstBu
 
 	parts, err := s.copyParts(ctx, srcBucket, srcObject, dstBucket, dstObject, uploadID, size)
 	if err != nil {
-		// Abort on a context that is still live: the failing context may be the
-		// reason this is unwinding, and an abandoned upload keeps billing.
-		abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abortTimeout)
-		defer cancel()
-		if _, abortErr := s.client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
-			Bucket:   aws.String(dstBucket),
-			Key:      aws.String(dstObject),
-			UploadId: uploadID,
-		}); abortErr != nil {
-			return errors.Join(err, fmt.Errorf("while aborting multipart copy to s3://%s/%s: %w", dstBucket, dstObject, abortErr))
-		}
-		return err
+		return s.abortMultipart(ctx, dstBucket, dstObject, uploadID, err)
 	}
 
 	_, err = s.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
@@ -147,9 +136,28 @@ func (s *s3Store) copyMultipart(ctx context.Context, srcBucket, srcObject, dstBu
 		MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
 	})
 	if err != nil {
-		return fmt.Errorf("while completing multipart copy to s3://%s/%s: %w", dstBucket, dstObject, err)
+		// A completion that fails leaves the parts uploaded, so this needs the
+		// same cleanup a failed part copy gets.
+		return s.abortMultipart(ctx, dstBucket, dstObject, uploadID, fmt.Errorf("while completing multipart copy to s3://%s/%s: %w", dstBucket, dstObject, err))
 	}
 	return nil
+}
+
+// abortMultipart discards the parts of the upload that failed with cause, and
+// returns cause joined with whatever went wrong discarding them.
+func (s *s3Store) abortMultipart(ctx context.Context, dstBucket, dstObject string, uploadID *string, cause error) error {
+	// Abort on a context that is still live: the failing context may be the
+	// reason this is unwinding, and an abandoned upload keeps billing.
+	abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), abortTimeout)
+	defer cancel()
+	if _, err := s.client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(dstBucket),
+		Key:      aws.String(dstObject),
+		UploadId: uploadID,
+	}); err != nil {
+		return errors.Join(cause, fmt.Errorf("while aborting multipart copy to s3://%s/%s: %w", dstBucket, dstObject, err))
+	}
+	return cause
 }
 
 // abortTimeout bounds the cleanup of a failed multipart copy, which runs on a

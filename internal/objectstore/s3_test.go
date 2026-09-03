@@ -262,6 +262,43 @@ func TestS3CopyMultipart(t *testing.T) {
 	}
 }
 
+// TestS3CopyMultipartAbortsOnCompleteFailure ensures that an upload
+// that will never complete has to be abandoned just as one that
+// failed mid-copy does.
+func TestS3CopyMultipartAbortsOnCompleteFailure(t *testing.T) {
+	const size = 5<<30 + 1
+	fake, store := newS3(t)
+	fake.handle = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(size))
+			return true
+		}
+		// CompleteMultipartUpload: a POST against the upload rather than the
+		// one that starts it.
+		if r.Method != http.MethodPost || !r.URL.Query().Has("uploadId") {
+			return false
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusInternalServerError)
+		writeXML(w, `<Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>`)
+		return true
+	}
+
+	if err := store.Copy(t.Context(), "bucket", "root/snap/memory.zst", "bucket", "root/tag-v1/memory.zst"); err == nil {
+		t.Fatal("Copy() = nil, want an error")
+	}
+
+	var aborted bool
+	for _, req := range fake.requestsSeen() {
+		if req.method == http.MethodDelete && strings.Contains(req.query, "uploadId=upload-1") {
+			aborted = true
+		}
+	}
+	if !aborted {
+		t.Errorf("requests = %+v, want one aborting the multipart upload after the failed completion", fake.requestsSeen())
+	}
+}
+
 // TestS3CopyMultipartAborts covers a part copy that fails: the upload is
 // abandoned rather than left to bill for parts nothing will ever complete.
 func TestS3CopyMultipartAborts(t *testing.T) {
