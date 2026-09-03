@@ -22,10 +22,12 @@ package imagecache
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 
@@ -103,6 +105,14 @@ func SetupBundleRootfs(bundlePath string) error {
 	return nil
 }
 
+// lowerdirPlusOption is the fsconfig parameter name mountOverlay uses for
+// each lowerdir. It is a var, not a literal, only so tests can force it to
+// an unrecognized name and exercise the pre-6.5-kernel fallback below
+// without needing an actual old kernel.
+var lowerdirPlusOption = "lowerdir+"
+
+var warnLegacyMountOnce sync.Once
+
 // setupImageVolumes exposes each image volume's contents read-only at its
 // bundle-local mount point, for the OCI spec to bind into the container.
 func setupImageVolumes(bundlePath string, volumes []ImageVolumeOverlay) error {
@@ -145,10 +155,10 @@ func mountImageVolume(mountpoint string, layers []string) error {
 }
 
 // mountOverlay attaches an overlay of lowers (top-most first) with the given
-// upper/work dirs at mountpoint, using the new mount API rather than
-// mount(2): appending lowerdirs one fsconfig(2) call at a time sidesteps
-// mount(2)'s single-page option-string cap, which digest-derived layer paths
-// (~114 bytes each) would hit at roughly 34 layers.
+// upper/work dirs at mountpoint. It prefers the new mount API, appending
+// lowerdirs one fsconfig(2) call at a time to sidestep mount(2)'s
+// single-page option-string cap, which digest-derived layer paths (~114
+// bytes each) would hit at roughly 34 layers.
 //
 // An empty upper mounts the overlay without a writable layer, which overlayfs
 // makes read-only.
@@ -156,11 +166,35 @@ func mountImageVolume(mountpoint string, layers []string) error {
 // Minimum supported kernel: Linux 6.5, where overlayfs gained the
 // incremental "lowerdir+" option. Every current GKE channel is at or above
 // it (Stable runs COS 121 LTS on kernel 6.6; Regular and Rapid run COS
-// 125/129 on 6.12).
+// 125/129 on 6.12). Kernels older than 6.5 do not recognize the incremental
+// "lowerdir+" parameter at all: the kernel queues "Unknown parameter
+// 'lowerdir+'" on the fs context log and the very first attempt to set it
+// fails, before any path is looked at or any superblock created. That
+// specific diagnostic is used as the fall-back signal rather than a
+// separate startup probe. A bad lowerdir path fails the same call with a
+// different error (e.g. ENOENT, since 6.5 resolves the path while parsing
+// the parameter) and is reported as-is instead of being misread as a
+// kernel-version problem.
 func mountOverlay(mountpoint string, lowers []string, upper, work string) error {
+	if len(lowers) == 0 {
+		return fmt.Errorf("mountOverlay: no lower layers")
+	}
+
 	fsfd, err := unix.Fsopen("overlay", unix.FSOPEN_CLOEXEC)
 	if err != nil {
 		return fmt.Errorf("while opening overlay fs context: %w", err)
+	}
+
+	if err := unix.FsconfigSetString(fsfd, lowerdirPlusOption, lowers[0]); err != nil {
+		log := fsContextLog(fsfd)
+		unix.Close(fsfd)
+		if strings.Contains(log, "Unknown parameter") {
+			warnLegacyMountOnce.Do(func() {
+				slog.Warn("kernel lacks overlayfs lowerdir+ (need >= 6.5); using legacy mount, images beyond ~34 layers will fail")
+			})
+			return mountOverlayLegacy(mountpoint, lowers, upper, work)
+		}
+		return fmt.Errorf("while setting overlay %s=%q: %w%s", lowerdirPlusOption, lowers[0], err, log)
 	}
 	defer unix.Close(fsfd)
 
@@ -170,8 +204,8 @@ func mountOverlay(mountpoint string, lowers []string, upper, work string) error 
 		}
 		return nil
 	}
-	for _, lower := range lowers {
-		if err := set("lowerdir+", lower); err != nil {
+	for _, lower := range lowers[1:] {
+		if err := set(lowerdirPlusOption, lower); err != nil {
 			return err
 		}
 	}
@@ -207,10 +241,44 @@ func mountOverlay(mountpoint string, lowers []string, upper, work string) error 
 	return nil
 }
 
+// legacyOptionsPageCap is mount(2)'s per-call option-string limit: the
+// kernel copies the "data" argument through a single page.
+const legacyOptionsPageCap = 4096
+
+// overlayMountOptions builds the mount(2) overlayfs option string for
+// kernels without "lowerdir+" support. lowers must already be top-first and
+// deduplicated (see overlayLowerDirs).
+func overlayMountOptions(lowers []string, upper, work string) (string, error) {
+	for _, p := range append([]string{upper, work}, lowers...) {
+		if strings.ContainsAny(p, ":,") {
+			return "", fmt.Errorf("overlay path %q contains mount option separators", p)
+		}
+	}
+	opts := "lowerdir=" + strings.Join(lowers, ":") + ",upperdir=" + upper + ",workdir=" + work
+	if len(opts) >= legacyOptionsPageCap {
+		return "", fmt.Errorf("overlay options for %d layers are %d bytes, at or over mount(2)'s %d-byte page cap; kernel lacks overlayfs lowerdir+, upgrade to Linux >= 6.5 to support longer layer chains", len(lowers), len(opts), legacyOptionsPageCap)
+	}
+	return opts, nil
+}
+
+// mountOverlayLegacy mounts the overlay via a plain mount(2) call, for
+// kernels older than 6.5 that do not support the incremental "lowerdir+"
+// fsconfig option.
+func mountOverlayLegacy(mountpoint string, lowers []string, upper, work string) error {
+	opts, err := overlayMountOptions(lowers, upper, work)
+	if err != nil {
+		return err
+	}
+	if err := unix.Mount("overlay", mountpoint, "overlay", 0, opts); err != nil {
+		return fmt.Errorf("while mounting overlay rootfs at %q (%s): %w", mountpoint, opts, err)
+	}
+	return nil
+}
+
 // fsContextLog drains the human-readable message log the kernel queues on an
 // fs context fd (one "e/w/i "-prefixed message per read, ENODATA when empty)
-// and renders it for appending to an error. mount(2) had no equivalent — a
-// failed overlay mount was a bare errno; here the kernel says which option
+// and renders it for appending to an error. mount(2) had no equivalent,
+// a failed overlay mount was a bare errno; here the kernel says which option
 // it rejected and why.
 func fsContextLog(fsfd int) string {
 	var msgs []string
