@@ -272,6 +272,8 @@ func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 		}
 		return nil
 	}
+	// Per-statement trace spans; the watch pool inherits this through Copy().
+	cfg.ConnConfig.Tracer = queryTracer{}
 	usesTLS := cfg.ConnConfig.TLSConfig != nil
 	for _, fallback := range cfg.ConnConfig.Fallbacks {
 		usesTLS = usesTLS || fallback.TLSConfig != nil
