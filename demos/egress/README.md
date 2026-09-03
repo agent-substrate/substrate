@@ -2,7 +2,7 @@
 
 This demo shows an Actor's outbound traffic being **transparently tunneled through an
 egress gateway** and **authenticated by actor identity**, end to end. The same demo runs
-with either the default Envoy dataplane or [agentgateway](https://agentgateway.dev/).
+with either Envoy or [agentgateway](https://agentgateway.dev/).
 
 The Actor is a tiny service that accepts `{"url":"..."}`, performs an HTTP `GET`, and returns
 the upstream response. The Actor believes it is dialing plain HTTP directly — but its egress is
@@ -21,7 +21,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
   └────────┼────────────────────────────────────────────┘
            ▼
   ┌──────────── atenet-egress pod ───────────────────┐
-  │  Envoy or agentgateway                            │
+  │  Egress Gateway                            │
   │    • downstream mTLS, trusted by actor-id CA      │
   │    • terminates HTTP CONNECT                      │
   │    • verifies Actor identity with the ATE API     │
