@@ -410,7 +410,6 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 				ActorTemplateUid:   actorTemplate.GetMetadata().GetUid(),
 				ContentScope:       commitSnapshotScope(actorRef.Atespace, actorTemplate),
 				SnapshotUri:        snapshotURI.String(),
-				SandboxConfigName:  latestActor.GetStatus().GetSandboxConfigName(),
 			},
 		}
 		// ErrAlreadyExists means a previous attempt crashed after creating

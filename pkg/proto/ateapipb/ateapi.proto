@@ -578,14 +578,6 @@ message ActorStatus {
   //
   // +k8s:optional
   string current_actor_template_uid = 11;
-
-  // The name of the cluster-scoped SandboxConfig the Actor's current guest
-  // state was built with: resolved at cold boot, or inherited from the
-  // restored snapshot's record.
-  //
-  // +k8s:optional
-  // +k8s:format=k8s-long-name
-  string sandbox_config_name = 12;
 }
 
 // ActorSourceSnapshotStatus records what an Actor's source_snapshot_tag
@@ -675,15 +667,6 @@ message ActorSnapshotStatus {
   // Immutable reference to the actor_template where the snapshot was created from.
   // +k8s:opaqueType
   ObjectRef actor_template = 9;
-
-  // sandbox_config_name records the name of the cluster-scoped SandboxConfig
-  // the snapshotted actor's guest state was built with (provenance only;
-  // restores are self-describing via the snapshot manifest). Empty on
-  // snapshots whose lineage predates this field.
-  //
-  // +k8s:optional
-  // +k8s:format=k8s-long-name
-  string sandbox_config_name = 10;
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.

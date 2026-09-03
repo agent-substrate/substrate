@@ -870,8 +870,8 @@ func TestUpdateActor(t *testing.T) {
 // TestUpdateActor_RepointTemplate covers the mutable actor_template ref: an
 // update may point a suspended actor at a different template (it takes effect
 // on the next ResumeActor), but the actor must be suspended, the new ref must
-// resolve, the replacement must name the SandboxConfig the actor booted with,
-// and its volumes and volume mounts must match the old template's.
+// resolve, and the replacement's sandbox config, volumes, and volume mounts
+// must match the old template's.
 func TestUpdateActor_RepointTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
@@ -946,13 +946,13 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing at a template with a different sandbox class is rejected.
+	// Repointing at a template naming a different SandboxConfig is rejected.
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
 	}})
 	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("UpdateActor to a template with a different sandbox class = %v, want FailedPrecondition (err: %v)", got, err)
+		t.Fatalf("UpdateActor to a template with a different sandbox config = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
 	// Repointing at an existing template with identical volumes and mounts
@@ -968,33 +968,22 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Errorf("updated actor_template.name = %q, want %q", got, want)
 	}
 
-	// When the old template no longer exists, the sandbox config comparison
-	// falls back to the actor's recorded SandboxConfig provenance: a template
-	// naming a different config is rejected, one naming the recorded config
-	// is accepted.
+	// When the old template no longer exists there is nothing left to
+	// compare the sandbox config or volume layout against, so the repoint
+	// only requires the new ref to resolve.
 	orphan := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "orphan-actor"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-gone"},
-		Status: &ateapipb.ActorStatus{
-			State:             ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			SandboxConfigName: "gvisor-default",
-		},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
-	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+	repointed, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      orphan.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("UpdateActor from a deleted template to a different recorded config = %v, want FailedPrecondition (err: %v)", got, err)
-	}
-	repointed, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      orphan.GetMetadata(),
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
-	}})
 	if err != nil {
-		t.Fatalf("UpdateActor from a deleted template to the recorded config failed: %v", err)
+		t.Fatalf("UpdateActor from a deleted template failed: %v", err)
 	}
-	if got, want := repointed.GetActorTemplate().GetName(), "tmpl-b"; got != want {
+	if got, want := repointed.GetActorTemplate().GetName(), "tmpl-e"; got != want {
 		t.Errorf("updated actor_template.name = %q, want %q", got, want)
 	}
 

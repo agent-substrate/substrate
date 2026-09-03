@@ -26,13 +26,12 @@ import (
 // resolveSandboxAssets determines the sandbox binaries and pause image an actor
 // should boot with and projects them onto the ateletpb.SandboxAssets atelet
 // fetches: the SandboxConfig the ActorTemplate names via
-// sandbox_config.config_name (required; enforced by CreateActorTemplate). It
-// also returns the chosen config's name so the boot can record it for
-// provenance.
+// sandbox_config.config_name (required; enforced by CreateActorTemplate),
+// checked against the template's sandbox_class.
 func resolveSandboxAssets(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	templateSandbox *ateapipb.SandboxConfig,
-) (*ateletpb.SandboxAssets, string, error) {
+) (*ateletpb.SandboxAssets, error) {
 	class := atev1alpha1.SandboxClass(sandboxClassString(templateSandbox.GetSandboxClass()))
 	if class == "" {
 		class = atev1alpha1.SandboxClassGvisor
@@ -40,18 +39,18 @@ func resolveSandboxAssets(
 
 	name := templateSandbox.GetConfigName()
 	if name == "" {
-		return nil, "", fmt.Errorf("ActorTemplate names no sandbox_config.config_name")
+		return nil, fmt.Errorf("ActorTemplate names no sandbox_config.config_name")
 	}
 	sc, err := sandboxConfigLister.Get(name)
 	if err != nil {
-		return nil, "", fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
+		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
 	}
 	if sc.Spec.SandboxClass != class {
-		return nil, "", fmt.Errorf("SandboxConfig %q has class %q but the ActorTemplate's sandbox_config.sandbox_class is %q",
+		return nil, fmt.Errorf("SandboxConfig %q has class %q but the ActorTemplate's sandbox_config.sandbox_class is %q",
 			name, sc.Spec.SandboxClass, class)
 	}
 
-	return sandboxAssetsProto(class, sc), sc.Name, nil
+	return sandboxAssetsProto(class, sc), nil
 }
 
 // sandboxAssetsProto converts a resolved SandboxConfig into the proto atelet

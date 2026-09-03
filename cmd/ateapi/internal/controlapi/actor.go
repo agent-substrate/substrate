@@ -281,9 +281,8 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// Update actor template is only allowed while the actor is suspended.
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
-		// cleanly), the replacement must name the SandboxConfig the actor's
-		// guest state was booted with, and its volumes and volume mounts must
-		// match the old template's.
+		// cleanly), and the replacement's sandbox config, volumes, and
+		// volume mounts must match the old template's.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return status.Errorf(codes.FailedPrecondition,
@@ -293,22 +292,23 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			if err != nil {
 				return err
 			}
-			// Updating SandboxConfig is not allowed yet.
-			if name := oldVal.GetStatus().GetSandboxConfigName(); name != "" && name != newTemplate.GetSandboxConfig().GetConfigName() {
-				return status.Errorf(codes.FailedPrecondition,
-					"actor's guest state was booted with SandboxConfig %q but the new actor template names %q; the sandbox config must be identical to repoint an actor",
-					name, newTemplate.GetSandboxConfig().GetConfigName())
-			}
-
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
 			switch {
 			case err == nil:
+				// Snapshots are not portable across sandbox runtime
+				// families, so the replacement template must name the same
+				// SandboxConfig.
+				if !proto.Equal(oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()) {
+					return status.Errorf(codes.FailedPrecondition,
+						"the current actor template names SandboxConfig %q but the new one names %q; the sandbox config must be identical to repoint an actor",
+						oldTemplate.GetSandboxConfig().GetConfigName(), newTemplate.GetSandboxConfig().GetConfigName())
+				}
 				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
 					return err
 				}
 			case errors.Is(err, errActorTemplateNotFound):
-				// The old template is gone, so there is no volume layout left
-				// to compare against.
+				// The old template is gone, so there is nothing left to
+				// compare the sandbox config or volume layout against.
 			default:
 				return err
 			}

@@ -1760,7 +1760,6 @@ func TestResumeActor(t *testing.T) {
 			State:                   ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			SandboxConfigName:       "gvisor-default",
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
 				WorkerNamespace: ns,
@@ -2154,12 +2153,6 @@ func TestSuspendActor(t *testing.T) {
 	if got := snapshot.GetStatus().GetSourceActorVersion(); got != running.GetActor().GetMetadata().GetVersion() {
 		t.Errorf("snapshot source version = %d, want %d", got, running.GetActor().GetMetadata().GetVersion())
 	}
-	// The resume restored the template's golden snapshot, and the actor
-	// inherited the SandboxConfig name recorded there; the suspend snapshot
-	// carries it forward for provenance.
-	if got := snapshot.GetStatus().GetSandboxConfigName(); got != "gvisor-default" {
-		t.Errorf("snapshot sandbox_config_name = %q, want %q", got, "gvisor-default")
-	}
 	listed, err := tc.client.ListActorSnapshots(context.Background(), &ateapipb.ListActorSnapshotsRequest{Atespace: testAtespace, PageSize: 1})
 	if err != nil || len(listed.GetActorSnapshots()) != 1 {
 		t.Fatalf("ListActorSnapshots = (%v, %v), want one", listed, err)
@@ -2264,7 +2257,6 @@ func TestSuspendActor(t *testing.T) {
 			State:                   ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			SandboxConfigName:       "gvisor-default",
 		},
 	}
 
@@ -2359,7 +2351,6 @@ func TestPauseActor(t *testing.T) {
 			},
 			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 			CurrentActorTemplateUid: tmpl.GetMetadata().GetUid(),
-			SandboxConfigName:       "gvisor-default",
 		},
 	}
 

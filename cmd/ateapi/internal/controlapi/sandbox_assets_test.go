@@ -61,7 +61,6 @@ func TestResolveSandboxAssets(t *testing.T) {
 	tests := []struct {
 		name           string
 		sandbox        *ateapipb.SandboxConfig
-		wantName       string
 		wantPauseImage string
 		wantErr        string
 	}{{
@@ -70,7 +69,6 @@ func TestResolveSandboxAssets(t *testing.T) {
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 			ConfigName:   "gvisor-custom",
 		},
-		wantName:       "gvisor-custom",
 		wantPauseImage: namedPause,
 	}, {
 		name: "named config class mismatch",
@@ -95,7 +93,7 @@ func TestResolveSandboxAssets(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			configLister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{namedConfig})
 
-			got, gotName, err := resolveSandboxAssets(configLister, tt.sandbox)
+			got, err := resolveSandboxAssets(configLister, tt.sandbox)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("resolveSandboxAssets() error = %v, want it to contain %q", err, tt.wantErr)
@@ -104,9 +102,6 @@ func TestResolveSandboxAssets(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("resolveSandboxAssets() error: %v", err)
-			}
-			if gotName != tt.wantName {
-				t.Errorf("resolved config name = %q, want %q", gotName, tt.wantName)
 			}
 			if got.GetPauseImage() != tt.wantPauseImage {
 				t.Errorf("pause image = %q, want %q", got.GetPauseImage(), tt.wantPauseImage)

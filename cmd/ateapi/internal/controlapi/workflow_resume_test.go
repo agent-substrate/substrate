@@ -94,9 +94,8 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 }
 
 // TestFinalizeRunning_RecordsSprintTemplate verifies committing RUNNING stamps
-// the template — and the SandboxConfig — the sprint booted with, overwriting
-// the previous sprint's record, so the next resume can detect a repointed
-// template by UID.
+// the template the sprint booted with, overwriting the previous sprint's
+// record, so the next resume can detect a repointed template by UID.
 func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
@@ -107,14 +106,13 @@ func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
 			State:                   ateapipb.ActorState_ACTOR_STATE_RESUMING,
 			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
 			CurrentActorTemplateUid: "tmpl-uid-1",
-			SandboxConfigName:       "gvisor-old",
 		},
 	})
 	w := &ActorWorkflow{store: persistence}
 
 	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl-2", Uid: "tmpl-uid-2"},
-	}, "gvisor-new")
+	})
 	if err != nil {
 		t.Fatalf("finalizeRunning: %v", err)
 	}
@@ -127,36 +125,6 @@ func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
 	}
 	if uid := got.GetStatus().GetCurrentActorTemplateUid(); uid != "tmpl-uid-2" {
 		t.Errorf("CurrentActorTemplateUid = %q, want %q", uid, "tmpl-uid-2")
-	}
-	if name := got.GetStatus().GetSandboxConfigName(); name != "gvisor-new" {
-		t.Errorf("SandboxConfigName = %q, want %q", name, "gvisor-new")
-	}
-}
-
-// TestFinalizeRunning_EmptySandboxConfigNameKeepsPrior verifies a resume that
-// resolved no SandboxConfig (e.g. a pause/unpause local-snapshot resume)
-// keeps the previous sprint's record instead of clearing it.
-func TestFinalizeRunning_EmptySandboxConfigNameKeepsPrior(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
-	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
-		Status: &ateapipb.ActorStatus{
-			State:             ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			SandboxConfigName: "gvisor-prior",
-		},
-	})
-	w := &ActorWorkflow{store: persistence}
-
-	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl-1", Uid: "tmpl-uid-1"},
-	}, "")
-	if err != nil {
-		t.Fatalf("finalizeRunning: %v", err)
-	}
-	if name := got.GetStatus().GetSandboxConfigName(); name != "gvisor-prior" {
-		t.Errorf("SandboxConfigName = %q, want %q", name, "gvisor-prior")
 	}
 }
 

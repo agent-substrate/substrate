@@ -52,13 +52,6 @@ type resumeSnapshotSource struct {
 	// TemplateReplaced is true when the snapshot's recorded template UID
 	// differs from the actor's current template.
 	TemplateReplaced bool
-	// SandboxConfigName is the SandboxConfig name recorded on the snapshot
-	// being restored. The ActorTemplate's config is read only on the first
-	// resume (the cold-boot Run request); every later restore keeps the
-	// config the snapshot was captured with. UpdateActor enforces that a
-	// template repoint never changes the SandboxConfig, so the recorded
-	// config stays consistent with the actor's template.
-	SandboxConfigName string
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -132,12 +125,11 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if err = w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate); err != nil {
 		return nil, false, err
 	}
-	var sandboxConfigName string
-	if tele, sandboxConfigName, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
+	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
-	if running, err = w.finalizeRunning(leaseCtx, actorRef, actorTemplate, sandboxConfigName); err != nil {
+	if running, err = w.finalizeRunning(leaseCtx, actorRef, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = running
@@ -199,7 +191,6 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, status.Errorf(codes.DataLoss, "ActorSnapshot %s/%s: %v", ref.GetAtespace(), ref.GetName(), err)
 		}
 		src.Scope = snapshot.GetStatus().GetContentScope()
-		src.SandboxConfigName = snapshot.GetStatus().GetSandboxConfigName()
 		// The snapshot records the template it was captured under; a
 		// different UID on the actor's current template means the actor was
 		// repointed since the capture.
@@ -220,7 +211,6 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", goldenRef.GetName(), err)
 		}
 		src.Scope = snapshot.GetStatus().GetContentScope()
-		src.SandboxConfigName = snapshot.GetStatus().GetSandboxConfigName()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -665,20 +655,20 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, sandboxConfigName string, err error) {
+func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
-		return tele, "", err
+		return tele, err
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
 	if err != nil {
-		return tele, "", err
+		return tele, err
 	}
 	egressGateway := w.egressGateway()
 
@@ -686,7 +676,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	// to the actor (replacing the worker-pod downward-API approach).
 	cpuMilli, memBytes, err := actorResourceLimits(actorTemplate)
 	if err != nil {
-		return tele, "", err
+		return tele, err
 	}
 
 	if local := actor.GetStatus().GetLocalSnapshotInfo(); local != nil {
@@ -724,7 +714,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		_, err = client.Restore(ctx, req)
-		return tele, src.SandboxConfigName, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring workload", ateattr.OperationResume)
+		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring workload", ateattr.OperationResume)
 	} else if !src.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		// Mirrors loadActorForResume's source resolution: the durable URI is
@@ -767,21 +757,19 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			MemoryBytes:       memBytes,
 		}
 		_, err = client.Restore(ctx, req)
-		return tele, src.SandboxConfigName, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
+		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		// Booting from scratch: resolve the sandbox binaries from the
-		// template's SandboxConfig — the one it names, else the cluster
-		// default for its class — and send them so atelet can fetch and
+		// template's SandboxConfig and send them so atelet can fetch and
 		// record them. (Restores above are self-describing via the snapshot
 		// manifest.)
-		sandboxAssets, configName, err := resolveSandboxAssets(w.sandboxConfigLister, actorTemplate.GetSandboxConfig())
+		sandboxAssets, err := resolveSandboxAssets(w.sandboxConfigLister, actorTemplate.GetSandboxConfig())
 		if err != nil {
-			return tele, "", fmt.Errorf("while resolving sandbox assets: %w", err)
+			return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
 		}
-		sandboxConfigName = configName
 
 		req := &ateletpb.RunRequest{
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
@@ -797,7 +785,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			MemoryBytes:           memBytes,
 		}
 		_, err = client.Run(ctx, req)
-		return tele, sandboxConfigName, maybeCrashActor(ctx, w.store, actorRef, err, "while creating workload from spec", ateattr.OperationResume)
+		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while creating workload from spec", ateattr.OperationResume)
 	}
 }
 
@@ -809,9 +797,8 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 }
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
-// recording the template — and, when known, the SandboxConfig — the sprint
-// booted with.
-func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, sandboxConfigName string) (_ *ateapipb.Actor, err error) {
+// recording the template the sprint booted with.
+func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
 
@@ -829,11 +816,6 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 			Name:     actorTemplate.GetMetadata().GetName(),
 		}
 		toUpdate.Status.CurrentActorTemplateUid = actorTemplate.GetMetadata().GetUid()
-		// Never cleared: a pause/unpause resume from a node-local snapshot
-		// resolves no config and keeps the prior record.
-		if sandboxConfigName != "" {
-			toUpdate.Status.SandboxConfigName = sandboxConfigName
-		}
 		return nil
 	})
 	if err != nil {

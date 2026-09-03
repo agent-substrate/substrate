@@ -341,10 +341,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			ActorTemplateUid: created.GetMetadata().GetUid(),
 			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			SnapshotUri:      "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
-			// The golden actor's cold boot resolves the template's config
-			// and its suspend records the name, so a reconciler-produced
-			// golden snapshot always carries it.
-			SandboxConfigName: "gvisor-default",
 		},
 	})
 
