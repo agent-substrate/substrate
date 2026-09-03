@@ -34,9 +34,9 @@ spec:
     - jsonPath: .spec.sandboxClass
       name: Class
       type: string
-    - jsonPath: .spec.default
+    - jsonPath: .metadata.annotations['sandboxconfig\.ate\.dev/is-default']
       name: Default
-      type: boolean
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -45,8 +45,9 @@ spec:
       openAPIV3Schema:
         description: |-
           SandboxConfig is cluster-scoped configuration describing the sandbox binaries
-          for a sandbox runtime family. It is referenced (or defaulted) by WorkerPools
-          and decouples sandbox binary selection from ActorTemplate.
+          for a sandbox runtime family. It is referenced (or defaulted, via the
+          IsDefaultAnnotation) by WorkerPools and decouples sandbox binary selection
+          from ActorTemplate.
         properties:
           apiVersion:
             description: |-
@@ -66,7 +67,10 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of SandboxConfig
+            description: |-
+              spec defines the desired state of SandboxConfig. It is immutable —
+              snapshots pin restores to the exact binaries a config named — so roll
+              to new assets by creating a new SandboxConfig.
             properties:
               assets:
                 additionalProperties:
@@ -104,13 +108,6 @@ spec:
                   intentionally generic; per-class requirements are enforced by a
                   ValidatingAdmissionPolicy.
                 type: object
-              default:
-                description: |-
-                  Default marks this SandboxConfig as the cluster-wide default for its
-                  SandboxClass. A WorkerPool with no explicit SandboxConfigName resolves to
-                  the default config for its SandboxClass. At most one default is expected
-                  per SandboxClass.
-                type: boolean
               pauseImage:
                 description: |-
                   PauseImage is the container image used as the root sandbox container.
@@ -142,6 +139,10 @@ spec:
             - pauseImage
             - sandboxClass
             type: object
+            x-kubernetes-validations:
+            - message: SandboxConfig spec is immutable; create a new SandboxConfig
+                and mark it default
+              rule: self == oldSelf
         required:
         - spec
         type: object

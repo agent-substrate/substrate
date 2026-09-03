@@ -225,3 +225,64 @@ func TestSandboxConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestSandboxConfigSpecImmutable pins that the spec rejects any change after
+// creation while metadata (notably the is-default annotation) stays mutable.
+func TestSandboxConfigSpecImmutable(t *testing.T) {
+	ctx := t.Context()
+
+	tests := []struct {
+		name    string
+		mutate  func(sc *SandboxConfig)
+		wantErr bool
+	}{{
+		name: "changing an asset URL is rejected",
+		mutate: func(sc *SandboxConfig) {
+			sc.Spec.Assets["amd64"]["gvisor"] = AssetFile{URL: "gs://bucket/other", SHA256: validSHA256}
+		},
+		wantErr: true,
+	}, {
+		name:    "changing the pause image is rejected",
+		mutate:  func(sc *SandboxConfig) { sc.Spec.PauseImage = "registry.k8s.io/pause:3.11@sha256:" + validSHA256 },
+		wantErr: true,
+	}, {
+		name:    "adding an architecture is rejected",
+		mutate:  func(sc *SandboxConfig) { sc.Spec.Assets["arm64"] = map[string]AssetFile{"gvisor": gvisorAsset()} },
+		wantErr: true,
+	}, {
+		name:   "no-op update passes",
+		mutate: func(sc *SandboxConfig) {},
+	}, {
+		name:   "flipping the is-default annotation passes",
+		mutate: func(sc *SandboxConfig) { sc.Annotations = map[string]string{IsDefaultAnnotation: "true"} },
+	}, {
+		name:   "adding a label passes",
+		mutate: func(sc *SandboxConfig) { sc.Labels = map[string]string{"team": "substrate"} },
+	}}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := sandboxConfig(fmt.Sprintf("immutable-%d", i), SandboxClassGvisor,
+				map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}})
+			if err := k8sClient.Create(ctx, sc); err != nil {
+				t.Fatalf("Create() error: %v", err)
+			}
+			t.Cleanup(func() { _ = k8sClient.Delete(ctx, sc, &client.DeleteOptions{}) })
+
+			tt.mutate(sc)
+			err := k8sClient.Update(ctx, sc)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Update() succeeded, want denied")
+				}
+				if !strings.Contains(err.Error(), "immutable") {
+					t.Errorf("Update() error = %q, want it to contain %q", err.Error(), "immutable")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Update() unexpected error: %v", err)
+			}
+		})
+	}
+}

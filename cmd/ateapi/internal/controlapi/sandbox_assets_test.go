@@ -15,7 +15,9 @@
 package controlapi
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -57,10 +59,12 @@ func TestResolveSandboxAssetsCarriesPauseImage(t *testing.T) {
 		namedPause   = "gcr.io/gke-release/pause@sha256:named"
 	)
 	defaultConfig := &atev1alpha1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "gvisor-default",
+			Annotations: map[string]string{atev1alpha1.IsDefaultAnnotation: "true"},
+		},
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			Default:      true,
 			PauseImage:   defaultPause,
 			Assets:       testAssets(),
 		},
@@ -97,6 +101,94 @@ func TestResolveSandboxAssetsCarriesPauseImage(t *testing.T) {
 			}
 			if got.GetPauseImage() != tt.wantPauseImage {
 				t.Errorf("pause image = %q, want %q", got.GetPauseImage(), tt.wantPauseImage)
+			}
+		})
+	}
+}
+
+// defaultAt builds a SandboxConfig with the given is-default annotation value
+// and creation time.
+func defaultAt(name string, class atev1alpha1.SandboxClass, annotation string, created time.Time) *atev1alpha1.SandboxConfig {
+	return &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Annotations:       map[string]string{atev1alpha1.IsDefaultAnnotation: annotation},
+			CreationTimestamp: metav1.NewTime(created),
+		},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: class,
+			PauseImage:   "registry.k8s.io/pause@sha256:x",
+			Assets:       testAssets(),
+		},
+	}
+}
+
+// TestDefaultSandboxConfig pins the StorageClass-style default semantics:
+// only "true" counts, the newest default of the class wins, and none is an
+// error.
+func TestDefaultSandboxConfig(t *testing.T) {
+	t0 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		configs []*atev1alpha1.SandboxConfig
+		want    string
+		wantErr string
+	}{{
+		name:    "single default",
+		configs: []*atev1alpha1.SandboxConfig{defaultAt("only", atev1alpha1.SandboxClassGvisor, "true", t0)},
+		want:    "only",
+	}, {
+		name: "most recently created wins",
+		configs: []*atev1alpha1.SandboxConfig{
+			defaultAt("old", atev1alpha1.SandboxClassGvisor, "true", t0),
+			defaultAt("new", atev1alpha1.SandboxClassGvisor, "true", t0.Add(time.Hour)),
+		},
+		want: "new",
+	}, {
+		name: "timestamp tie breaks by smaller name",
+		configs: []*atev1alpha1.SandboxConfig{
+			defaultAt("bbb", atev1alpha1.SandboxClassGvisor, "true", t0),
+			defaultAt("aaa", atev1alpha1.SandboxClassGvisor, "true", t0),
+		},
+		want: "aaa",
+	}, {
+		name: "other classes' defaults are ignored",
+		configs: []*atev1alpha1.SandboxConfig{
+			defaultAt("gv", atev1alpha1.SandboxClassGvisor, "true", t0),
+			defaultAt("mv", atev1alpha1.SandboxClassMicroVM, "true", t0.Add(time.Hour)),
+		},
+		want: "gv",
+	}, {
+		name: "only the exact value true counts",
+		configs: []*atev1alpha1.SandboxConfig{
+			defaultAt("upper", atev1alpha1.SandboxClassGvisor, "True", t0.Add(time.Hour)),
+			defaultAt("one", atev1alpha1.SandboxClassGvisor, "1", t0.Add(2*time.Hour)),
+			defaultAt("lower", atev1alpha1.SandboxClassGvisor, "true", t0),
+		},
+		want: "lower",
+	}, {
+		name: "no default is an error",
+		configs: []*atev1alpha1.SandboxConfig{
+			defaultAt("off", atev1alpha1.SandboxClassGvisor, "false", t0),
+		},
+		wantErr: "no default SandboxConfig",
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, configLister := listersFor(t, nil, tt.configs)
+			got, err := defaultSandboxConfig(configLister, atev1alpha1.SandboxClassGvisor)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("defaultSandboxConfig() error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("defaultSandboxConfig() error: %v", err)
+			}
+			if got.Name != tt.want {
+				t.Errorf("defaultSandboxConfig() = %q, want %q", got.Name, tt.want)
 			}
 		})
 	}

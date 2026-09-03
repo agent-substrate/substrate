@@ -360,13 +360,16 @@ Two consequences worth planning for:
 
 This means a single, cluster-managed config pins the sandbox runtime version for many templates: snapshots stay restorable because the version is recorded in each snapshot's manifest, and operators upgrade the runtime in one place.
 
+A `SandboxConfig`'s `spec` is **immutable**: snapshots pin restores to the exact binaries a sandbox booted with, so editing a config in place would strand every snapshot recorded against it. To roll to a new release, create a new `SandboxConfig` and mark it default or point the `WorkerPool` at it; only `metadata` stays mutable.
+
+The cluster default per class is marked with the `sandboxconfig.ate.dev/is-default: "true"` annotation (as with `StorageClass`). If several configs of one class carry it, the most recently created wins, so a new default can be created before the old one is unmarked. Values other than `"true"` are ignored.
+
 ### Specification (`SandboxConfigSpec`)
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. A `WorkerPool` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
 | `pauseImage` | `string` | **Required.** The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must be pinned by digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
-| `default` | `bool` | Optional. Marks this as the cluster default for its `sandboxClass`. A `WorkerPool` with no `sandboxConfigName` resolves to the default for its class. At most one default per class. |
 | `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
 
 A default cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor pools work out of the box.
@@ -378,9 +381,10 @@ apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:
   name: gvisor-default
+  annotations:
+    sandboxconfig.ate.dev/is-default: "true"
 spec:
   sandboxClass: gvisor
-  default: true
   pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   assets:
     amd64:
