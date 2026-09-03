@@ -299,8 +299,7 @@ func withFailed(reason string) func(*ateapipb.ActorTemplate) {
 }
 
 func newTestTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
-	// The SandboxConfig lister is not used by reconcileOne or resync.
-	return NewActorTemplateReconciler(persistence, control, nil)
+	return NewActorTemplateReconciler(persistence, control)
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {

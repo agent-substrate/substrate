@@ -40,8 +40,7 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 	blocks = map[string]string{
 		// gvisor-default is the cluster-wide default SandboxConfig
 		// manifests/ate-install ships; config_name is required, so the
-		// templates name it explicitly even though the gVisor WorkerPools
-		// leave sandboxConfigName empty and resolve to the same object.
+		// fixtures name it explicitly.
 		"${TEMPLATE_SANDBOX_CONFIG}": "sandboxConfig:\n  sandboxClass: SANDBOX_CLASS_GVISOR\n  configName: gvisor-default",
 		"${TEMPLATE_RESOURCES}":      "",
 		// Off unless the caller opts in; see WithTrustBundle.

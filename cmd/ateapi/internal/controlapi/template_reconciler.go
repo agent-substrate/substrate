@@ -23,7 +23,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -74,17 +73,15 @@ type goldenActorControl interface {
 // ActorTemplateReconciler drives stored ActorTemplates through the golden
 // actor state machine.
 type ActorTemplateReconciler struct {
-	persistence    templateReconcilerStore
-	control        goldenActorControl
-	sandboxConfigs listersv1alpha1.SandboxConfigLister
-	queue          workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
+	persistence templateReconcilerStore
+	control     goldenActorControl
+	queue       workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
 }
 
-func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, sandboxConfigs listersv1alpha1.SandboxConfigLister) *ActorTemplateReconciler {
+func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
 	return &ActorTemplateReconciler{
-		persistence:    persistence,
-		control:        control,
-		sandboxConfigs: sandboxConfigs,
+		persistence: persistence,
+		control:     control,
 		// Create rate-limiting queue with exponential backoff
 		queue: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()),
 	}
@@ -206,7 +203,6 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			// The golden snapshot exists already.
 			return 0, nil
 		}
-		// TODO: Freeze sandbox assets before creating the golden actor.
 
 		actor, err := r.ensureActorExists(ctx, tmpl, goldenActorRef)
 		if err != nil {

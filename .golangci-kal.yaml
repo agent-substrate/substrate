@@ -112,7 +112,7 @@ linters:
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'
         text: '^optionalfields: .*\bWorkerPoolPodTemplate\.PriorityClassName\b'
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'
-        text: '^(optionalfields|requiredfields): .*\bWorkerPoolSpec\.(Replicas|SandboxClass|SandboxConfigName|WorkerImage)\b'
+        text: '^(optionalfields|requiredfields): .*\bWorkerPoolSpec\.(Replicas|SandboxClass|WorkerImage)\b'
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'
         text: '^optionalfields: .*\bWorkerPoolStatus\.(ReadyReplicas|Replicas|Selector)\b'
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'

@@ -51,8 +51,9 @@ type AssetFile struct {
 
 // SandboxConfigSpec is the desired state of a SandboxConfig.
 type SandboxConfigSpec struct {
-	// SandboxClass is the sandbox runtime family this config applies to. A
-	// WorkerPool only uses SandboxConfigs whose SandboxClass matches its own.
+	// SandboxClass is the sandbox runtime family this config applies to. An
+	// ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
+	// sandbox_config.sandbox_class.
 	//
 	// +required
 	// +kubebuilder:validation:Enum=gvisor;microvm
@@ -60,9 +61,10 @@ type SandboxConfigSpec struct {
 	SandboxClass SandboxClass `json:"sandboxClass"`
 
 	// Default marks this SandboxConfig as the cluster-wide default for its
-	// SandboxClass. A WorkerPool with no explicit SandboxConfigName resolves to
-	// the default config for its SandboxClass. At most one default is expected
-	// per SandboxClass.
+	// SandboxClass. Not resolved yet: an ActorTemplate's
+	// sandbox_config.config_name is currently required, so nothing falls back
+	// to the default; the field is retained while the defaulting design is
+	// worked out. At most one default is expected per SandboxClass.
 	//
 	// +optional
 	Default bool `json:"default,omitempty"`
@@ -98,8 +100,9 @@ type SandboxConfigSpec struct {
 }
 
 // SandboxConfig is cluster-scoped configuration describing the sandbox binaries
-// for a sandbox runtime family. It is referenced (or defaulted) by WorkerPools
-// and decouples sandbox binary selection from ActorTemplate.
+// for a sandbox runtime family. It is referenced by an ActorTemplate's
+// sandbox_config.config_name (required for now; see spec.default) and decouples
+// sandbox binary selection from the workload definition.
 //
 // +genclient
 // +genclient:nonNamespaced

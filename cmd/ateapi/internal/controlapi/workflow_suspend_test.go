@@ -360,6 +360,7 @@ func TestEnsureSuspendedFinalized_StampsSubstrateTemplateRef(t *testing.T) {
 			State:                                ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
 			InProgressSnapshotName:               snapshotName,
 			InProgressSnapshotSourceActorVersion: 1,
+			SandboxConfigName:                    "gvisor-default",
 		},
 	})
 
@@ -378,6 +379,10 @@ func TestEnsureSuspendedFinalized_StampsSubstrateTemplateRef(t *testing.T) {
 	}
 	if st.GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		t.Errorf("snapshot ActorTemplateUid = %q, want %q", st.GetActorTemplateUid(), template.GetMetadata().GetUid())
+	}
+	// The actor's recorded SandboxConfig provenance travels onto the snapshot.
+	if st.GetSandboxConfigName() != "gvisor-default" {
+		t.Errorf("snapshot SandboxConfigName = %q, want %q", st.GetSandboxConfigName(), "gvisor-default")
 	}
 }
 

@@ -984,6 +984,37 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("current_actor_template_uid"), &obj.CurrentActorTemplateUid, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ActorStatus.SandboxConfigName
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.LongName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorStatus) *string {
+				return &oldObj.SandboxConfigName
+			})
+		errs = append(errs, fn(fldPath.Child("sandbox_config_name"), &obj.SandboxConfigName, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 

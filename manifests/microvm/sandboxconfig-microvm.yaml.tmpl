@@ -19,10 +19,10 @@
 # asset set (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh).
 #
 # It is deliberately NOT marked default:true. A dirty teardown could leave this
-# CR behind, and if it were the class default a subsequent WorkerPool that
-# omitted sandboxConfigName would silently resolve to the stale config. Making
-# every microvm WorkerPool name it explicitly (sandboxConfigName: microvm) makes
-# a missing/stale config fail loudly instead.
+# CR behind, and if it were the class default a subsequent ActorTemplate that
+# omitted sandboxConfig.configName would silently resolve to the stale config.
+# Making every microvm ActorTemplate name it explicitly (configName: microvm)
+# makes a missing/stale config fail loudly instead.
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs,
 # base configuration.toml) are FETCHED at runtime from the cluster object store

@@ -1485,8 +1485,15 @@ type ActorStatus struct {
 	//
 	// +k8s:optional
 	CurrentActorTemplateUid string `protobuf:"bytes,11,opt,name=current_actor_template_uid,json=currentActorTemplateUid,proto3" json:"current_actor_template_uid,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// The name of the cluster-scoped SandboxConfig the Actor's current guest
+	// state was built with: resolved at cold boot, or inherited from the
+	// restored snapshot's record.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-long-name
+	SandboxConfigName string `protobuf:"bytes,12,opt,name=sandbox_config_name,json=sandboxConfigName,proto3" json:"sandbox_config_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ActorStatus) Reset() {
@@ -1592,6 +1599,13 @@ func (x *ActorStatus) GetCurrentActorTemplate() *ObjectRef {
 func (x *ActorStatus) GetCurrentActorTemplateUid() string {
 	if x != nil {
 		return x.CurrentActorTemplateUid
+	}
+	return ""
+}
+
+func (x *ActorStatus) GetSandboxConfigName() string {
+	if x != nil {
+		return x.SandboxConfigName
 	}
 	return ""
 }
@@ -1847,8 +1861,16 @@ type ActorSnapshotStatus struct {
 	// Immutable reference to the actor_template where the snapshot was created from.
 	// +k8s:opaqueType
 	ActorTemplate *ObjectRef `protobuf:"bytes,9,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// sandbox_config_name records the name of the cluster-scoped SandboxConfig
+	// the snapshotted actor's guest state was built with (provenance only;
+	// restores are self-describing via the snapshot manifest). Empty on
+	// snapshots whose lineage predates this field.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-long-name
+	SandboxConfigName string `protobuf:"bytes,10,opt,name=sandbox_config_name,json=sandboxConfigName,proto3" json:"sandbox_config_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ActorSnapshotStatus) Reset() {
@@ -1928,6 +1950,13 @@ func (x *ActorSnapshotStatus) GetActorTemplate() *ObjectRef {
 		return x.ActorTemplate
 	}
 	return nil
+}
+
+func (x *ActorSnapshotStatus) GetSandboxConfigName() string {
+	if x != nil {
+		return x.SandboxConfigName
+	}
+	return ""
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
@@ -6621,7 +6650,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x19CredentialHeaderInjection\x12\x16\n" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
-	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\xee\x05\n" +
+	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\"\x9e\x06\n" +
 	"\vActorStatus\x12(\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x12.ateapi.ActorStateR\x05state\x12E\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x129\n" +
@@ -6634,7 +6663,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0fsource_snapshot\x18\t \x01(\v2!.ateapi.ActorSourceSnapshotStatusR\x0esourceSnapshot\x12G\n" +
 	"\x16current_actor_template\x18\n" +
 	" \x01(\v2\x11.ateapi.ObjectRefR\x14currentActorTemplate\x12;\n" +
-	"\x1acurrent_actor_template_uid\x18\v \x01(\tR\x17currentActorTemplateUid\"m\n" +
+	"\x1acurrent_actor_template_uid\x18\v \x01(\tR\x17currentActorTemplateUid\x12.\n" +
+	"\x13sandbox_config_name\x18\f \x01(\tR\x11sandboxConfigName\"m\n" +
 	"\x19ActorSourceSnapshotStatus\x12-\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\bsnapshot\x12!\n" +
 	"\fsnapshot_uid\x18\x02 \x01(\tR\vsnapshotUid\"\xf2\x01\n" +
@@ -6649,7 +6679,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"z\n" +
 	"\rActorSnapshot\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x123\n" +
-	"\x06status\x18\x02 \x01(\v2\x1b.ateapi.ActorSnapshotStatusR\x06status\"\xf5\x02\n" +
+	"\x06status\x18\x02 \x01(\v2\x1b.ateapi.ActorSnapshotStatusR\x06status\"\xa5\x03\n" +
 	"\x13ActorSnapshotStatus\x124\n" +
 	"\fsource_actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\vsourceActor\x12(\n" +
 	"\x10source_actor_uid\x18\x02 \x01(\tR\x0esourceActorUid\x120\n" +
@@ -6657,7 +6687,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12actor_template_uid\x18\x06 \x01(\tR\x10actorTemplateUid\x12A\n" +
 	"\rcontent_scope\x18\a \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\x12!\n" +
 	"\fsnapshot_uri\x18\b \x01(\tR\vsnapshotUri\x128\n" +
-	"\x0eactor_template\x18\t \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\"\xac\x01\n" +
+	"\x0eactor_template\x18\t \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x12.\n" +
+	"\x13sandbox_config_name\x18\n" +
+	" \x01(\tR\x11sandboxConfigName\"\xac\x01\n" +
 	"\x10ActorSnapshotTag\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12-\n" +
 	"\bsnapshot\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\bsnapshot\x123\n" +

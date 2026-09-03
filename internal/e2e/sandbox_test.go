@@ -128,9 +128,8 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-gvisor") {
 				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.SandboxClass != "" || pool.Spec.SandboxConfigName != "" {
-				t.Errorf("WorkerPool carries micro-VM runtime fields: class=%q config=%q",
-					pool.Spec.SandboxClass, pool.Spec.SandboxConfigName)
+			if pool.Spec.SandboxClass != "" {
+				t.Errorf("WorkerPool carries micro-VM runtime fields: class=%q", pool.Spec.SandboxClass)
 			}
 
 			templates := renderTemplates(t, fixture.manifests.Template)
@@ -167,9 +166,9 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 	}
 }
 
-// TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the pool
-// names the cluster-wide SandboxConfig, the templates match its class and
-// carry limits, and the snapshots land under their own prefix.
+// TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the
+// templates name the cluster-wide SandboxConfig and match the pool's class
+// and carry limits, and the snapshots land under their own prefix.
 func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
 	for _, fixture := range substrateFixtures {
@@ -178,9 +177,8 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-microvm") {
 				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.SandboxClass != SandboxClassMicroVM || pool.Spec.SandboxConfigName != "microvm" {
-				t.Errorf("WorkerPool runtime = class %q / config %q, want microvm / microvm",
-					pool.Spec.SandboxClass, pool.Spec.SandboxConfigName)
+			if pool.Spec.SandboxClass != SandboxClassMicroVM {
+				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.SandboxClass)
 			}
 
 			templates := renderTemplates(t, fixture.manifests.Template)

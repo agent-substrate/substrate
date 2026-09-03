@@ -890,10 +890,10 @@ deploy_ate_system() {
   # SandboxConfig so the defaults below are validated too).
   run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
 
-  # Install the cluster-wide default sandbox config(s). Sandbox binaries live on
-  # cluster-scoped SandboxConfigs resolved via each WorkerPool's SandboxClass
-  # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
-  # they name their own SandboxConfig.
+  # Install the cluster-wide default sandbox config(s). Sandbox binaries live
+  # on cluster-scoped SandboxConfigs resolved via each ActorTemplate's
+  # sandboxClass. gVisor templates resolve to this default unless they name
+  # their own SandboxConfig.
   run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
 
   # Ahead of the bundle below, for the same reason as the namespace: every

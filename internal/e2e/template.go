@@ -85,10 +85,9 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 			Labels:    opts.Labels,
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:          opts.PoolReplicas,
-			WorkerImage:       existingWp.Spec.WorkerImage,
-			SandboxClass:      existingWp.Spec.SandboxClass,
-			SandboxConfigName: existingWp.Spec.SandboxConfigName,
+			Replicas:     opts.PoolReplicas,
+			WorkerImage:  existingWp.Spec.WorkerImage,
+			SandboxClass: existingWp.Spec.SandboxClass,
 		},
 	}
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
@@ -112,8 +111,8 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		// micro-VM, where an ActorTemplate that declares none boots the guest
 		// at the kata config default (2GiB) instead of the demo's 512Mi.
 		Resources: srcTmpl.GetResources(),
-		// Both sandbox_class and config_name are required; the source carries
-		// the pair for the class under test.
+		// The source carries the sandbox_class/config_name pair for the
+		// class under test.
 		SandboxConfig:   srcTmpl.GetSandboxConfig(),
 		SnapshotsConfig: snapshots,
 		Volumes:         srcTmpl.GetVolumes(),

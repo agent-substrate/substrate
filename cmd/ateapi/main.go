@@ -188,10 +188,10 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	controlSrv := controlapi.NewRPCService(persistence, workerCache, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	controlSrv := controlapi.NewRPCService(persistence, workerCache, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, sandboxConfigLister)
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
 	templateReconciler.Start(shutdownCtx)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)

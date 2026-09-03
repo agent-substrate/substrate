@@ -23,12 +23,15 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/api/operation"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -174,11 +177,73 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}
 }
 
+// gvisorDefaultLister returns a SandboxConfig lister seeded with the
+// "gvisor-default" config that validActorTemplate names.
+func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
+	t.Helper()
+	return sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			Default:      true,
+			PauseImage:   "registry.k8s.io/pause@sha256:x",
+			Assets:       testAssets(),
+		},
+	}})
+}
+
+// TestCreateActorTemplate_SandboxConfigChecks pins the create-time checks on
+// the template's named SandboxConfig: it must exist (FailedPrecondition — the
+// lister may briefly lag a just-created config, so the error is retryable)
+// and match the template's class (InvalidArgument).
+func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
+	persistence := newTestPersistence(t)
+	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	ctx := context.Background()
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		sandbox  *ateapipb.SandboxConfig
+		wantCode codes.Code
+	}{{
+		name:     "named config exists and matches",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		wantCode: codes.OK,
+	}, {
+		name:     "empty config_name is rejected",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name:     "named config missing",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "does-not-exist"},
+		wantCode: codes.FailedPrecondition,
+	}, {
+		name:     "named config class mismatch",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "gvisor-default"},
+		wantCode: codes.InvalidArgument,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
+				tmpl.SandboxConfig = tt.sandbox
+			})}
+			_, err := s.CreateActorTemplate(ctx, req)
+			if status.Code(err) != tt.wantCode {
+				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
+			}
+		})
+	}
+}
+
 // TestCreateActorTemplate covers the atespace precondition: creation fails
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -208,7 +273,7 @@ func TestCreateActorTemplate(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {

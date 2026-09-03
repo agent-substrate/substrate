@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -45,6 +46,10 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 		return nil, toGRPCStatusError(errs)
 	}
 
+	if err := s.validateTemplateSandboxConfig(in.GetSandboxConfig()); err != nil {
+		return nil, err
+	}
+
 	templateRef := resources.ActorTemplateRefFromActorTemplate(in)
 
 	stored, err := s.impl.CreateActorTemplate(ctx, in)
@@ -61,9 +66,29 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 	return stored, nil
 }
 
+// validateTemplateSandboxConfig checks the template's named SandboxConfig
+// against the cluster: it must exist (FailedPrecondition — retryable, the
+// lister may briefly lag a just-created config) and its class must match the
+// template's sandbox_class (InvalidArgument). config_name is required; the
+// declarative validation has already rejected an empty one.
+func (s *RPCService) validateTemplateSandboxConfig(sandbox *ateapipb.SandboxConfig) error {
+	name := sandbox.GetConfigName()
+	sc, err := s.sandboxConfigLister.Get(name)
+	if k8serrors.IsNotFound(err) {
+		return status.Errorf(codes.FailedPrecondition, "SandboxConfig %q not found", name)
+	}
+	if err != nil {
+		return fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
+	}
+	if class := sandboxClassString(sandbox.GetSandboxClass()); string(sc.Spec.SandboxClass) != class {
+		return status.Errorf(codes.InvalidArgument,
+			"SandboxConfig %q has class %q but sandbox_config.sandbox_class is %q", name, sc.Spec.SandboxClass, class)
+	}
+	return nil
+}
+
 func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
 	// Build the stored object: status is server-owned and starts empty.
-	// TODO: check that sandbox_config.config_name matches sandbox_class.
 	outTemplate := proto.Clone(inTemplate).(*ateapipb.ActorTemplate)
 	outTemplate.Status = &ateapipb.ActorTemplateStatus{}
 

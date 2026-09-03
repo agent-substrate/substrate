@@ -20,47 +20,46 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
 // resolveSandboxAssets determines the sandbox binaries and pause image an actor
 // should boot with and projects them onto the ateletpb.SandboxAssets atelet
-// fetches. It takes the SandboxClass (default gvisor) of a given worker pool,
-// then picks the SandboxConfig named by the pool — or, if none is named, the
-// cluster default SandboxConfig for that class.
+// fetches: the SandboxConfig the ActorTemplate names via
+// sandbox_config.config_name — or, if none is named, the cluster default
+// SandboxConfig for the template's sandbox_class. The default branch is
+// currently unreachable (CreateActorTemplate requires config_name) and is kept
+// while the defaulting design is worked out. It also returns the chosen
+// config's name so the boot can record it for provenance.
 func resolveSandboxAssets(
-	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
-	poolNamespace, poolName string,
-) (*ateletpb.SandboxAssets, error) {
-	wp, err := workerPoolLister.WorkerPools(poolNamespace).Get(poolName)
-	if err != nil {
-		return nil, fmt.Errorf("while getting WorkerPool %s/%s: %w", poolNamespace, poolName, err)
-	}
-
-	class := wp.Spec.SandboxClass
+	templateSandbox *ateapipb.SandboxConfig,
+) (*ateletpb.SandboxAssets, string, error) {
+	class := atev1alpha1.SandboxClass(sandboxClassString(templateSandbox.GetSandboxClass()))
 	if class == "" {
 		class = atev1alpha1.SandboxClassGvisor
 	}
 
 	var sc *atev1alpha1.SandboxConfig
-	if name := wp.Spec.SandboxConfigName; name != "" {
+	var err error
+	if name := templateSandbox.GetConfigName(); name != "" {
 		sc, err = sandboxConfigLister.Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
+			return nil, "", fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
 		}
 		if sc.Spec.SandboxClass != class {
-			return nil, fmt.Errorf("SandboxConfig %q has class %q but WorkerPool %s/%s is class %q",
-				name, sc.Spec.SandboxClass, poolNamespace, poolName, class)
+			return nil, "", fmt.Errorf("SandboxConfig %q has class %q but the ActorTemplate's sandbox_config.sandbox_class is %q",
+				name, sc.Spec.SandboxClass, class)
 		}
 	} else {
 		sc, err = defaultSandboxConfig(sandboxConfigLister, class)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 
-	return sandboxAssetsProto(class, sc), nil
+	return sandboxAssetsProto(class, sc), sc.Name, nil
 }
 
 // defaultSandboxConfig returns the single SandboxConfig marked Default for the
@@ -80,7 +79,7 @@ func defaultSandboxConfig(lister listersv1alpha1.SandboxConfigLister, class atev
 		}
 	}
 	if match == nil {
-		return nil, fmt.Errorf("no default SandboxConfig for class %q; set one with spec.default=true or name one via WorkerPool.spec.sandboxConfigName", class)
+		return nil, fmt.Errorf("no default SandboxConfig for class %q; set one with spec.default=true or name one via the ActorTemplate's sandbox_config.config_name", class)
 	}
 	return match, nil
 }
