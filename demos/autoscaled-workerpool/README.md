@@ -132,7 +132,7 @@ In a separate terminal, send requests in a retry loop across all hosts to activa
 ```sh
 for attempt in {1..10}; do
   for i in {001..015}; do
-    curl -s -H "Host: c$i.ate-demo-autoscaled-workerpool.actors.resources.substrate.ate.dev" http://localhost:8000 >/dev/null
+  curl -s -H "X-Ate-Actor-Name: c$i" -H "X-Ate-Atespace: ate-demo-autoscaled-workerpool" http://localhost:8000 >/dev/null
   done
   sleep 2
 done

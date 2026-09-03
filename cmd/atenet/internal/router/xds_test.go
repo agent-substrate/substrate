@@ -38,6 +38,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
@@ -46,9 +47,57 @@ import (
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 )
+
+func TestActorRoutingFilterStateFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		captureAuthority bool
+		want             map[string]string
+	}{
+		{
+			name: "ordinary ingress",
+			want: map[string]string{
+				extproc.ActorNameFilterStateKey: "%REQ(x-ate-actor-name)%",
+				extproc.AtespaceFilterStateKey:  "%REQ(x-ate-atespace)%",
+			},
+		},
+		{
+			name:             "CONNECT termination",
+			captureAuthority: true,
+			want: map[string]string{
+				extproc.ActorNameFilterStateKey:        "%REQ(x-ate-actor-name)%",
+				extproc.AtespaceFilterStateKey:         "%REQ(x-ate-atespace)%",
+				extproc.ConnectAuthorityFilterStateKey: "%REQ(:authority)%",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := actorRoutingFilterStateFilter(tc.captureAuthority)
+			config := &setfilterstatev3.Config{}
+			if err := filter.GetTypedConfig().UnmarshalTo(config); err != nil {
+				t.Fatalf("unmarshal set_filter_state config: %v", err)
+			}
+
+			if len(config.GetOnRequestHeaders()) != len(tc.want) {
+				t.Fatalf("captured values = %d, want %d", len(config.GetOnRequestHeaders()), len(tc.want))
+			}
+			for _, value := range config.GetOnRequestHeaders() {
+				key := value.GetObjectKey()
+				format := value.GetFormatString().GetTextFormatSource().GetInlineString()
+				if format != tc.want[key] {
+					t.Errorf("capture %q = %q, want %q", key, format, tc.want[key])
+				}
+				if key != extproc.ConnectAuthorityFilterStateKey && strings.Contains(strings.ToLower(format), ":authority") {
+					t.Errorf("capture %q derives actor routing from authority", key)
+				}
+			}
+		})
+	}
+}
 
 // assertDualStackIngress checks an ingress listener keeps its 0.0.0.0 primary
 // and gains exactly one "::" socket on the same port.
@@ -1093,31 +1142,25 @@ func TestXdsServer_ActorClusterProtocolOptions(t *testing.T) {
 	}
 }
 
-// TestXdsServer_BuildRoutes_DerivesTargetPortHeader covers the fix for atunnel
-// needing the target port as a real header (it can't read Envoy's dynamic
-// metadata directly): rather than ext_proc building that header mutation
-// itself, the route derives it declaratively from the same
-// ingress.OriginalDstMetadataKey/ingress.OriginalDstPortKey metadata ext_proc
-// already writes for the cluster's own MetadataKey, via a
-// %DYNAMIC_METADATA(...)% command operator.
-func TestXdsServer_BuildRoutes_DerivesTargetPortHeader(t *testing.T) {
+// TestXdsServer_BuildRoutesWritesTargetPortHeader ensures the route overwrites
+// the target-port header with the value from ext_proc's trusted metadata.
+func TestXdsServer_BuildRoutesWritesTargetPortHeader(t *testing.T) {
 	x := NewXdsServer(18000)
 	route := x.buildRoutes().GetVirtualHosts()[0].GetRoutes()[0]
 
 	headers := route.GetRequestHeadersToAdd()
 	if len(headers) != 1 {
-		t.Fatalf("Expected exactly 1 request header to add, got %d: %v", len(headers), headers)
+		t.Fatalf("route adds request headers %v, want exactly one", headers)
 	}
-	h := headers[0]
-	if got, want := h.GetHeader().GetKey(), atunnel.TargetPortHeader; got != want {
-		t.Errorf("Expected header key %q, got %q", want, got)
+	header := headers[0]
+	if got, want := header.GetHeader().GetKey(), atunnel.TargetPortHeader; got != want {
+		t.Errorf("header key = %q, want %q", got, want)
 	}
-	wantValue := "%DYNAMIC_METADATA(" + ingress.OriginalDstMetadataKey + ":" + ingress.OriginalDstPortKey + ")%"
-	if got := h.GetHeader().GetValue(); got != wantValue {
-		t.Errorf("Expected header value %q, got %q", wantValue, got)
+	if got, want := header.GetHeader().GetValue(), "%DYNAMIC_METADATA(envoy.filters.listener.original_dst:port)%"; got != want {
+		t.Errorf("header value = %q, want %q", got, want)
 	}
-	if got, want := h.GetAppendAction(), corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD; got != want {
-		t.Errorf("Expected append action %s, got %s", want, got)
+	if got, want := header.GetAppendAction(), corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD; got != want {
+		t.Errorf("append action = %v, want %v", got, want)
 	}
 }
 

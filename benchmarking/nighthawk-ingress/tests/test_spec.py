@@ -33,9 +33,8 @@ import spec as spec_mod
 def build(**overrides):
     kwargs = dict(
         uri="http://atenet-router.ate-system.svc.cluster.local:80/ping",
-        hosts=[
-            spec_mod.actor_host(f"sb-{i}", "benchmark") for i in range(3)
-        ],
+        actor_names=[f"sb-{i}" for i in range(3)],
+        atespace="benchmark",
         client_concurrency=4,
         connections=1000,
         max_pending_requests=10000,
@@ -67,14 +66,23 @@ def test_traffic_template_shape():
     }
 
 
-def test_host_rotation_covers_all_actors():
-    hosts = [spec_mod.actor_host(f"sb-{i}", "benchmark") for i in range(5)]
-    spec = build(hosts=hosts)
+def test_identity_rotation_covers_all_actors():
+    actor_names = [f"sb-{i}" for i in range(5)]
+    spec = build(actor_names=actor_names)
     plugin = spec["nighthawk_traffic_template"]["request_source_plugin_config"]
     assert plugin["name"] == spec_mod.REQUEST_SOURCE_PLUGIN
     options = plugin["typed_config"]["options_list"]["options"]
-    got = [o["request_headers"][0]["header"]["value"] for o in options]
-    assert got == hosts
+    got = [
+        {header["header"]["key"]: header["header"]["value"] for header in o["request_headers"]}
+        for o in options
+    ]
+    assert got == [
+        {
+            "x-ate-actor-name": actor_name,
+            "x-ate-atespace": "benchmark",
+        }
+        for actor_name in actor_names
+    ]
     assert all(o["request_method"] == "POST" for o in options)
     # 0 = loop the list indefinitely.
     assert plugin["typed_config"]["num_requests"] == 0
@@ -114,13 +122,6 @@ def test_tail_latency_slo_threshold():
     assert "lower_threshold" not in latency
     # Disabled (None) => no latency threshold at all.
     assert len(build(tail_latency_slo_ms=None)["metric_thresholds"]) == 2
-
-
-def test_actor_host_format():
-    assert (
-        spec_mod.actor_host("sb-1", "benchmark")
-        == "sb-1.benchmark.actors.resources.substrate.ate.dev"
-    )
 
 
 def test_spec_round_trips_through_real_protos():

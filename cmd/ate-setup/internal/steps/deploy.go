@@ -289,7 +289,7 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, NamespaceAteSystem, ateletName, e.Cfg.RolloutTimeout)
 }
 
-// DeployAtenet redeploys the atenet dataplane: router, egress, and DNS.
+// DeployAtenet redeploys the atenet dataplane: router and egress.
 func (e *Env) DeployAtenet(ctx context.Context) error {
 	log.Step("deploy_atenet")
 
@@ -316,11 +316,8 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err := e.applyAtenetEgress(ctx); err != nil {
 		return err
 	}
-	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("atenet-dns.yaml")); err != nil {
-		return err
-	}
 
-	for _, name := range []string{"atenet-router", "atenet-egress", "dns"} {
+	for _, name := range []string{"atenet-router", "atenet-egress"} {
 		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, name, e.Cfg.RolloutTimeout); err != nil {
 			return err
 		}

@@ -63,7 +63,7 @@ func TestClientDialContext(t *testing.T) {
 	}
 	defer conn.Close()
 
-	gotRequest := <-request
+	gotRequest := receiveWithin(t, request, "CONNECT request")
 	if gotRequest.Method != http.MethodConnect {
 		t.Errorf("method = %q, want CONNECT", gotRequest.Method)
 	}
@@ -302,6 +302,10 @@ func serveTestConnectGateway(t *testing.T, ca *testCA, handle func(net.Conn, *ht
 			return
 		}
 		defer conn.Close()
+		if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Errorf("setting gateway connection deadline: %v", err)
+			return
+		}
 		req, err := http.ReadRequest(bufio.NewReader(conn))
 		if err != nil {
 			t.Errorf("reading CONNECT request: %v", err)

@@ -44,7 +44,7 @@ Below is a collection of finer-grained efforts which we believe align with the a
 
 * Actor security boundary implementation, default deny with explicit ACLs at scale with low latency. This overlaps with some of the security items (see below).
 * Policy definition: between framework (outside) and Actors, between Actors, Actor Egress.
-* Standardized DNS Mesh: Moving to a production-grade routing format (\<id\>.actors.resources.substrate.ate.dev) for location-transparent actor-to-actor communication.
+* Actor-to-actor routing through explicit identity headers.
 
 ### Storage
 

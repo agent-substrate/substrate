@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
@@ -50,7 +51,6 @@ const (
 	userClass        = "GluttonUser"
 	templateName     = "glutton"
 	templateAtespace = "benchmark-workloads"
-	actorDomain      = "actors.resources.substrate.ate.dev"
 	pingPath         = "/ping"
 	writeRAMPath     = "/writeram"
 	readRAMPath      = "/readram"
@@ -131,7 +131,6 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 		actorName:   "sb-" + uuid.NewString(),
 		firstResume: true,
 	}
-	u.hostHeader = u.actorName + "." + u.cfg.Atespace + "." + actorDomain
 	bmetrics.UpdateUsers(userClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
 		bmetrics.UpdateUsers(userClass, -1)
@@ -172,7 +171,6 @@ func (r *taskRuntime) dynamicWait() time.Duration {
 type gluttonUser struct {
 	cfg          *userclass.Config
 	actorName    string
-	hostHeader   string
 	firstResume  bool
 	actorRunning bool
 	ramFilled    bool
@@ -298,8 +296,9 @@ func (u *gluttonUser) ping(ctx context.Context) {
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, 0, err.Error())
 		return
 	}
-	httpReq.Host = u.hostHeader
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set(atenet.ActorNameHeader, u.actorName)
+	httpReq.Header.Set(atenet.AtespaceHeader, u.cfg.Atespace)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 
 	start := time.Now()
@@ -458,8 +457,9 @@ func (u *gluttonUser) postProto(ctx context.Context, path string, req, resp prot
 	if err != nil {
 		return err
 	}
-	httpReq.Host = u.hostHeader
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set(atenet.ActorNameHeader, u.actorName)
+	httpReq.Header.Set(atenet.AtespaceHeader, u.cfg.Atespace)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 
 	httpResp, err := u.cfg.HTTPClient.Do(httpReq)

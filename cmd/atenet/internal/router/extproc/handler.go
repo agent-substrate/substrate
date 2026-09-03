@@ -37,7 +37,7 @@ type Handler interface {
 	// A returned error denies the request: a *ReqError carries the status code
 	// and client-safe body to answer with, anything else becomes a 500. The
 	// Result is read even when an error is returned, so a handler that got far
-	// enough to learn the metric attributes (template identity, resume outcome)
+	// enough to learn the metric attributes (template coordinates, resume outcome)
 	// should still fill them in.
 	HandleRequestHeaders(ctx context.Context, md *RequestMetadata) (Result, error)
 }

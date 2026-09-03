@@ -27,13 +27,17 @@ package extproc
 // substrate's own metric dimensions and stay on dotted "ate.". Neither is the
 // "ate.dev/" slash form, which is Kubernetes labels only.
 const (
-	// AuthorityFilterStateKey is the filter-state key holding an ingress
-	// request's :authority, set by xds.go's authorityFilterStateFilter.
-	// Ingress-only: it names the actor a request is addressed to.
-	AuthorityFilterStateKey = "dev.ate.authority"
-	// AuthorityFilterStateAttribute is the CEL expression ext_proc evaluates to
-	// read AuthorityFilterStateKey back out.
-	AuthorityFilterStateAttribute = "filter_state['" + AuthorityFilterStateKey + "']"
+	// ActorNameFilterStateKey and AtespaceFilterStateKey carry the ingress actor
+	// routing coordinates across Envoy's CONNECT internal-listener hop.
+	ActorNameFilterStateKey        = "dev.ate.actor.name"
+	AtespaceFilterStateKey         = "dev.ate.actor.atespace"
+	ConnectAuthorityFilterStateKey = "dev.ate.connect.authority"
+
+	// ActorNameFilterStateAttribute and AtespaceFilterStateAttribute are the CEL
+	// expressions ext_proc evaluates to read the corresponding filter state.
+	ActorNameFilterStateAttribute        = "filter_state['" + ActorNameFilterStateKey + "']"
+	AtespaceFilterStateAttribute         = "filter_state['" + AtespaceFilterStateKey + "']"
+	ConnectAuthorityFilterStateAttribute = "filter_state['" + ConnectAuthorityFilterStateKey + "']"
 
 	// ActorIdentityFilterStateKey is the filter-state key holding the actor
 	// identity the egress gateway read from the peer certificate it verified

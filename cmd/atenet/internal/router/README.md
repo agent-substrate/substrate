@@ -63,7 +63,15 @@ cannot pick the egress path by crafting one. `router` itself does the wiring.
 ## adding a dataplane attribute
 
 The filter-state objects and request attributes a proxy carries alongside
-a request are declared once, in `extproc/attributes.go`. 
+a request are declared once, in `extproc/attributes.go`.
+
+| key | direction | purpose |
+| --- | --- | --- |
+| `dev.ate.actor.name` | ingress | carries the actor name across CONNECT re-entry |
+| `dev.ate.actor.atespace` | ingress | carries the atespace across CONNECT re-entry |
+| `dev.ate.connect.authority` | ingress | carries the outer CONNECT authority across re-entry for target-port selection |
+| `dev.ate.actor.identity` | egress | carries the authenticated actor identity for logs and additional ext_proc services |
+| `dev.ate.extproc.direction` | egress | selects the egress handler for dataplanes without Envoy filter chains |
 
 ### name it
 
@@ -94,13 +102,11 @@ reserved.
 
 ### keep it trustworthy
 
-An attribute is only as trustworthy as the thing that set it. Every value here
-comes from something the dataplane itself derived — a peer certificate Envoy
-verified against the actor-identity CA, an `:authority` captured before the
-request entered a tunnel — never from a client header, which an actor controls
-end to end. That is what makes filter state a sound carrier across the
-CONNECT/MITM boundary in the first place, and a new attribute sourced from a
-header gives the property back.
+An attribute is only as trustworthy as its source. The actor name and atespace
+carry client-selected routing coordinates, while the CONNECT authority carries
+only the requested target port across tunnel re-entry. Security-sensitive
+attributes, such as actor identity, must come from dataplane-authenticated
+state rather than a client header.
 
 ## modes
 

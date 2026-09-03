@@ -47,8 +47,8 @@ const EgressFilterChainName = "egress"
 // filter chain name; the request cannot influence it.
 //
 // An unrecognized or absent attribute means ingress, the fail-safe direction:
-// an egress request misrouted to the ingress handler fails to parse as an actor
-// DNS name and 404s, whereas the reverse leaks control-plane state.
+// an egress request misrouted to the ingress handler lacks the required actor
+// routing headers and fails, whereas the reverse leaks control-plane state.
 func directionOf(req *extprocv3.ProcessingRequest) Direction {
 	if requestAttribute(req, directionAttribute) == string(DirectionEgress) {
 		return DirectionEgress

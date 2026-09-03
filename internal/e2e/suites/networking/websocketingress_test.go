@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/gorilla/websocket"
@@ -67,7 +68,8 @@ func TestWebsocketIngressPing(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	header := http.Header{}
-	header.Set("Host", resources.ActorDNSName(actorRef))
+	header.Set(atenet.ActorNameHeader, actorRef.Name)
+	header.Set(atenet.AtespaceHeader, actorRef.Atespace)
 
 	var c *websocket.Conn
 

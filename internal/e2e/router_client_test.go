@@ -31,8 +31,8 @@ func TestRouterClientPostJSON(t *testing.T) {
 			if request.Method != http.MethodPost {
 				t.Errorf("method = %q, want POST", request.Method)
 			}
-			if request.Host != "fetcher.demo.actors.resources.substrate.ate.dev" {
-				t.Errorf("host = %q", request.Host)
+			if request.Host != "router.test" {
+				t.Errorf("host = %q, want router.test", request.Host)
 			}
 			if request.URL.Path != "/fetch" {
 				t.Errorf("path = %q, want /fetch", request.URL.Path)

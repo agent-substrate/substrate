@@ -142,10 +142,11 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
-### Workload Connectivity (Uniform DNS)
-Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and name:
+### Workload Connectivity
 
-**Format:** `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`
+A higher-order system reaches an actor through the **Substrate Router** by
+setting `X-Ate-Actor-Name` to the actor name and `X-Ate-Atespace` to its
+atespace. Substrate does not provide DNS discovery for actors.
 
 ### SystemInfo Volumes
 
@@ -154,7 +155,7 @@ To deliver identity information, including credentials, to a running actor, you 
 Available information sources:
 
 #### actorMetadata
-The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity and DNS name), or `uid` (server-generated, distinguishes incarnations of the same name) — and the relative `path` the value is written to, raw with no trailing newline.
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the relative `path` the value is written to, raw with no trailing newline.
 
 ```yaml
 spec:

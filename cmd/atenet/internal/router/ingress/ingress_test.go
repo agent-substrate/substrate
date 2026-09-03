@@ -32,6 +32,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -45,29 +46,37 @@ func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRe
 	return m.resumeFn(ctx, in, opts...)
 }
 
-// authorityAttributes builds the ProcessingRequest.Attributes map the mux
-// hands the handler -- the forwarded filter_state['dev.ate.authority']
-// CEL attribute that xds.go's buildHcm (backed by authorityFilterStateFilter,
-// or for CONNECT, connect_terminate's own capture) requests from Envoy. It
-// replaces the :authority header as the source of routing truth; tests still
-// set the header too, since RequestMetadata still logs it.
-func authorityAttributes(t *testing.T, authority string) map[string]*structpb.Struct {
-	t.Helper()
-	s, err := structpb.NewStruct(map[string]any{extproc.AuthorityFilterStateAttribute: authority})
-	if err != nil {
-		t.Fatalf("build authority attributes: %v", err)
-	}
-	return map[string]*structpb.Struct{
-		"envoy.filters.http.ext_proc": s,
-	}
+func requestMetadata(actorName, atespace string, headers ...*corev3.HeaderValue) *extproc.RequestMetadata {
+	headers = append(headers,
+		&corev3.HeaderValue{Key: atenet.ActorNameHeader, Value: actorName},
+		&corev3.HeaderValue{Key: atenet.AtespaceHeader, Value: atespace},
+	)
+	return extproc.NewRequestMetadata(headers, nil)
 }
 
-// requestMetadata builds the metadata the ext_proc mux would hand the handler
-// for a request with these headers, with authority forwarded via filter-state
-// attribute the way Envoy actually delivers it (see authorityAttributes).
-func requestMetadata(t *testing.T, authority string, headers ...*corev3.HeaderValue) *extproc.RequestMetadata {
-	t.Helper()
-	return extproc.NewRequestMetadata(headers, authorityAttributes(t, authority))
+func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
+	clientMock := &mockClient{
+		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			if got, want := in.GetActor().GetName(), "actor-1"; got != want {
+				t.Errorf("actor name = %q, want %q", got, want)
+			}
+			if got, want := in.GetActor().GetAtespace(), "team-a"; got != want {
+				t.Errorf("atespace = %q, want %q", got, want)
+			}
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
+			}}, nil
+		},
+	}
+	h := New(clientMock, ParkedRequestConfig{}, nil)
+	md := extproc.NewRequestMetadata([]*corev3.HeaderValue{
+		{Key: "X-ATE-Actor-Name", Value: "actor-1"},
+		{Key: "x-ate-ATESPACE", Value: "team-a"},
+	}, nil)
+
+	if _, err := h.HandleRequestHeaders(context.Background(), md); err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v", err)
+	}
 }
 
 // dynamicMetadataTarget extracts the resolved worker address
@@ -77,10 +86,7 @@ func dynamicMetadataTarget(dynamicMetadata *structpb.Struct) string {
 }
 
 // dynamicMetadataPort extracts the target port HandleRequestHeaders reports
-// via OriginalDstMetadataKey/OriginalDstPortKey. xds.go's buildRoutes derives
-// a real atunnel.TargetPortHeader from this at the route level via a
-// %DYNAMIC_METADATA(...)% format string; HandleRequestHeaders also sets that
-// same header directly (see its own doc comment for why).
+// via OriginalDstMetadataKey/OriginalDstPortKey.
 func dynamicMetadataPort(dynamicMetadata *structpb.Struct) string {
 	return dynamicMetadata.GetFields()[OriginalDstMetadataKey].GetStructValue().GetFields()[OriginalDstPortKey].GetStringValue()
 }
@@ -101,7 +107,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		},
 	}, ParkedRequestConfig{}, nil)
 
-	md := requestMetadata(t, authority,
+	md := requestMetadata(testUUID, "team-a",
 		&corev3.HeaderValue{Key: ":path", Value: "/api/v1/reset?token=" + secret},
 		&corev3.HeaderValue{Key: ":authority", Value: authority},
 		&corev3.HeaderValue{Key: ":method", Value: "POST"},
@@ -138,6 +144,8 @@ func TestHandleRequestHeaders(t *testing.T) {
 
 	tests := []struct {
 		name               string
+		actorName          string
+		atespace           string
 		authority          string
 		resumeResp         *ateapipb.ResumeActorResponse
 		resumeErr          error
@@ -148,10 +156,12 @@ func TestHandleRequestHeaders(t *testing.T) {
 		expectedTargetPort string
 	}{
 		{
-			name:           "invalid host returns 404 identifying the host",
+			name:           "invalid actor header returns 404",
+			actorName:      "INVALID",
+			atespace:       "team-a",
 			authority:      "invalid-host.com",
 			expectErr:      true,
-			expectedErrStr: `invalid host "invalid-host.com": invalid actor DNS name: must end with actors.resources.substrate.ate.dev, got "invalid-host.com"`,
+			expectedErrStr: `invalid actor reference`,
 			expectedStatus: envoy_type.StatusCode_NotFound,
 		},
 		{
@@ -207,8 +217,8 @@ func TestHandleRequestHeaders(t *testing.T) {
 			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
-			name:      "Successful resume",
-			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			name:      "successful resume ignores host and port for actor routing",
+			authority: "127.0.0.1:44681",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
 					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
@@ -222,6 +232,14 @@ func TestHandleRequestHeaders(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			actorName := tc.actorName
+			if actorName == "" {
+				actorName = testUUID
+			}
+			atespace := tc.atespace
+			if atespace == "" {
+				atespace = "team-a"
+			}
 			clientMock := &mockClient{
 				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 					if in.GetActor().GetName() != testUUID {
@@ -240,7 +258,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 			// resumer_test.go.
 			h := New(clientMock, ParkedRequestConfig{}, nil)
 
-			md := requestMetadata(t, tc.authority,
+			md := requestMetadata(actorName, atespace,
 				&corev3.HeaderValue{Key: ":path", Value: "/v1/actors/invoke"},
 				&corev3.HeaderValue{Key: ":authority", Value: tc.authority},
 				&corev3.HeaderValue{Key: ":method", Value: "POST"},
@@ -275,16 +293,22 @@ func TestHandleRequestHeaders(t *testing.T) {
 			}
 
 			mutation := res.Response.GetResponse().GetHeaderMutation()
-			if len(mutation.GetSetHeaders()) != 1 {
-				t.Fatalf("expected exactly one header option (TargetPortHeader), found: %v", mutation.GetSetHeaders())
+			if len(mutation.GetSetHeaders()) != 2 {
+				t.Fatalf("expected actor routing headers, found: %v", mutation.GetSetHeaders())
 			}
 
 			gotMutations := map[string]string{}
 			for _, headerOption := range mutation.GetSetHeaders() {
 				gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
 			}
-			if got := gotMutations[strings.ToLower(atunnel.TargetPortHeader)]; got != tc.expectedTargetPort {
-				t.Errorf("target port mutation = %q, want %q", got, tc.expectedTargetPort)
+			if _, ok := gotMutations[strings.ToLower(atunnel.TargetPortHeader)]; ok {
+				t.Errorf("target port must be emitted only as dynamic metadata")
+			}
+			if got := gotMutations[strings.ToLower(atenet.ActorNameHeader)]; got != testUUID {
+				t.Errorf("actor name mutation = %q, want %q", got, testUUID)
+			}
+			if got := gotMutations[strings.ToLower(atenet.AtespaceHeader)]; got != "team-a" {
+				t.Errorf("atespace mutation = %q, want %q", got, "team-a")
 			}
 			if got := dynamicMetadataTarget(res.DynamicMetadata); got != tc.expectedTarget {
 				t.Errorf("invalid destination mapping found: %s, expected: %s", got, tc.expectedTarget)
@@ -301,9 +325,8 @@ func TestHandleRequestHeaders(t *testing.T) {
 // travels in :authority, e.g. "<actor-dns>:9090") resolves the actor,
 // produces the same "<workerIP>:443" original-dst mutation as an ordinary
 // request (the router only ever dials the worker's atunnel server), and
-// reports the arbitrary port itself via
-// OriginalDstMetadataKey/OriginalDstPortKey, which xds.go's buildRoutes turns
-// into atunnel.TargetPortHeader for atunnel.
+// reports the arbitrary port itself in dynamic metadata for Envoy to write to
+// atunnel.TargetPortHeader.
 func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	authority := testUUID + ".team-a.actors.resources.substrate.ate.dev:9090"
@@ -316,7 +339,7 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	h := New(clientMock, ParkedRequestConfig{}, nil)
 
 	// CONNECT requests carry no :path; the request-target lives in :authority.
-	md := requestMetadata(t, authority,
+	md := requestMetadata(testUUID, "team-a",
 		&corev3.HeaderValue{Key: ":authority", Value: authority},
 		&corev3.HeaderValue{Key: ":method", Value: "CONNECT"},
 	)
@@ -335,6 +358,37 @@ func TestHandleRequestHeadersHandlesConnectMethod(t *testing.T) {
 	}
 	if got := dynamicMetadataPort(res.DynamicMetadata); got != "9090" {
 		t.Errorf("dynamic metadata port = %q, want %q", got, "9090")
+	}
+}
+
+func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
+	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+	clientMock := &mockClient{
+		resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}},
+			}}, nil
+		},
+	}
+	attrs := map[string]*structpb.Struct{
+		"envoy.filters.http.ext_proc": {
+			Fields: map[string]*structpb.Value{
+				extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+			},
+		},
+	}
+	md := extproc.NewRequestMetadata([]*corev3.HeaderValue{
+		{Key: atenet.ActorNameHeader, Value: testUUID},
+		{Key: atenet.AtespaceHeader, Value: "team-a"},
+		{Key: ":authority", Value: "inner.example"},
+	}, attrs)
+
+	res, err := New(clientMock, ParkedRequestConfig{}, nil).HandleRequestHeaders(context.Background(), md)
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v", err)
+	}
+	if got, want := dynamicMetadataPort(res.DynamicMetadata), "9090"; got != want {
+		t.Errorf("target port = %q, want %q", got, want)
 	}
 }
 
@@ -361,7 +415,7 @@ func TestHandleRequestHeaders_ParkingLotFull(t *testing.T) {
 	}
 	defer release(parkOutcomeServed)
 
-	md := requestMetadata(t, authority,
+	md := requestMetadata(testUUID, "team-a",
 		&corev3.HeaderValue{Key: ":authority", Value: authority},
 	)
 

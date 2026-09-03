@@ -124,7 +124,7 @@ func TestRequestMetadataAttribute(t *testing.T) {
 	attrs := map[string]*structpb.Struct{
 		"envoy.filters.http.ext_proc": {
 			Fields: map[string]*structpb.Value{
-				"filter_state['dev.ate.authority']": structpb.NewStringValue("actor-1.team-a.actors.resources.substrate.ate.dev"),
+				ActorNameFilterStateAttribute: structpb.NewStringValue("actor-1"),
 			},
 		},
 	}
@@ -134,10 +134,28 @@ func TestRequestMetadataAttribute(t *testing.T) {
 	// The lookup scans every filter's attributes rather than hardcoding which
 	// filter reported the value (see filterChainName in dispatch.go for why),
 	// so it must not matter which filter name the value arrived under.
-	if got, want := md.Attribute("filter_state['dev.ate.authority']"), "actor-1.team-a.actors.resources.substrate.ate.dev"; got != want {
+	if got, want := md.Attribute(ActorNameFilterStateAttribute), "actor-1"; got != want {
 		t.Errorf("Attribute() = %q, want %q", got, want)
 	}
 	if got := md.Attribute("filter_state['does.not.exist']"); got != "" {
 		t.Errorf("Attribute() for a missing key = %q, want \"\"", got)
+	}
+}
+
+func TestRequestMetadataHeaderIsCaseInsensitive(t *testing.T) {
+	md := NewRequestMetadata([]*corev3.HeaderValue{
+		{Key: "X-ATE-Actor-Name", Value: "actor-1"},
+		{Key: "x-ate-ATESPACE", Value: "team-a"},
+	}, nil)
+
+	for name, want := range map[string]string{
+		"x-ate-actor-name": "actor-1",
+		"X-Ate-Actor-Name": "actor-1",
+		"x-ate-atespace":   "team-a",
+		"X-ATE-ATESPACE":   "team-a",
+	} {
+		if got := md.Header(name); got != want {
+			t.Errorf("Header(%q) = %q, want %q", name, got, want)
+		}
 	}
 }

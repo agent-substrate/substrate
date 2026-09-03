@@ -112,7 +112,10 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST -H "Host: my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev" -i http://localhost:8000/
+curl -X POST \
+   -H "X-Ate-Actor-Name: my-counter-1" \
+   -H "X-Ate-Atespace: ate-demo-counter" \
+   -i http://localhost:8000/
 ```
 
 Worker capacity is versioned: the dataplane (the atelet DaemonSet and the
@@ -234,7 +237,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/ateapi`: The core control plane API server exposing gRPC endpoints to manage actor and worker lifecycles.
 * `cmd/atelet`: A node-level DaemonSet that supervises physical worker pods, coordinates snapshotting, and manages state transfers.
 * `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool custom resources.
-* `cmd/atenet`: A combined networking controller providing DNS, Envoy routing, and proxy sidecars.
+* `cmd/atenet`: A combined networking controller providing Envoy routing and proxy sidecars.
 * `cmd/ateom-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
 * `cmd/ateom-microvm`: The micro-VM peer of `ateom-gvisor`, running actors as cloud-hypervisor VMs.
 * `cmd/podcertcontroller`: A "polyfill" that provides Pod Certificate signers that

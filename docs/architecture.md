@@ -330,16 +330,16 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class
 
   * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay. `DurableDir` volumes are host-backed instead, served over a second (writable) virtio-fs share and shipped in snapshots as a tar, so a `Data`-scope snapshot can capture them without any guest memory. Each volume is a subdirectory of that one share, so an actor can have several at no extra cost in devices — which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
 
-### Networking Stack (`atenet` DNS + `atunnel`)
+### Networking Stack (`atenet` + `atunnel`)
 
 Handles actor-aware routing and automatic re-animation.
 
-  * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<actor-name>.<atespace>.actors.resources.substrate.ate.dev`).
-
   * **Ingress Routing**: `atenet-router` runs Envoy with an `ext_proc` external
-    processor and accepts HTTP traffic for the Actor DNS suffix. The ext_proc
-    extracts the Actor name and Atespace from the `Host` header and calls the
-    Control Plane to resume the Actor and resolve its current worker assignment.
+    processor. A higher-order system connects to the router and supplies the
+    Actor name in `X-Ate-Actor-Name` and the Atespace in `X-Ate-Atespace`.
+    The ext_proc calls the Control Plane to resume the Actor and resolve its
+    current worker assignment. `Host` remains application authority and does
+    not select the Actor.
 
   * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
     authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
@@ -368,7 +368,6 @@ suspended (UML sequence diagram):
 ```mermaid
 sequenceDiagram
     actor Client
-    participant DNS as atenet DNS
     participant Gateway as atenet-router
     participant API as ate-api-server
     participant Atelet as atelet
@@ -376,9 +375,7 @@ sequenceDiagram
     participant A as Actor
     participant Store as snapshot storage
 
-    Client->>DNS: resolve actor DNS name
-    DNS-->>Client: ingress gateway address
-    Client->>Gateway: HTTP request (Host = actor)
+    Client->>Gateway: HTTP request (X-Ate-Actor-Name, X-Ate-Atespace)
     Gateway->>API: ResumeActor(atespace, actor name)
     API->>Atelet: Restore
     Store-->>Atelet: download snapshot
@@ -500,10 +497,9 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     versions.
 
   * **Request Authorization**: The system currently performs **Identity-Aware
-    Routing** by utilizing a uniform DNS routing scheme
-    (`<actor-name>.<atespace>.actors.resources.substrate.ate.dev`)
-    at the gateway to extract and validate actor identifiers from incoming traffic. This
-    ensures requests are only routed to recognized, registered actors.
+    Routing** by extracting and validating the `X-Ate-Actor-Name` and
+    `X-Ate-Atespace` headers at the gateway. This ensures requests are only
+    routed to recognized, registered actors.
     Pluggable, granular authorization policies are planned for future
     milestones.
 

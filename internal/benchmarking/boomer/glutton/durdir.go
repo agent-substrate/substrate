@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
@@ -127,7 +128,6 @@ func (r *durDirRuntime) startUser(ctx context.Context, dynCfg dynconfig.Config) 
 		templateName: tmpl,
 		userClass:    durDirUserClass,
 	}
-	u.hostHeader = u.actorName + "." + u.cfg.Atespace + "." + actorDomain
 	bmetrics.UpdateUsers(durDirUserClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
 		bmetrics.UpdateUsers(durDirUserClass, -1)
@@ -157,7 +157,6 @@ func (r *durDirRuntime) shutdown(ctx context.Context) {
 type durDirUser struct {
 	cfg            *userclass.Config
 	actorName      string
-	hostHeader     string
 	templateName   string
 	userClass      string
 	expectedDigest string
@@ -413,8 +412,9 @@ func (u *durDirUser) httpProtoCall(ctx context.Context, metricName, route string
 		bmetrics.RecordFailure("http", metricName, u.userClass, 0, err.Error())
 		return nil, err
 	}
-	httpReq.Host = u.hostHeader
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
+	httpReq.Header.Set(atenet.ActorNameHeader, u.actorName)
+	httpReq.Header.Set(atenet.AtespaceHeader, u.cfg.Atespace)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(httpReq.Header))
 
 	start := time.Now()

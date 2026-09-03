@@ -15,10 +15,8 @@
 package resources
 
 import (
-	"fmt"
 	"log/slog"
 	"reflect"
-	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -75,53 +73,6 @@ func ActorRefFromActor(a *ateapipb.Actor) ActorRef {
 		Atespace: a.GetMetadata().GetAtespace(),
 		Name:     a.GetMetadata().GetName(),
 	}
-}
-
-// ActorDNSName returns the uniform DNS name the actor is reachable at.
-// This is: "<name>.<atespace>.actors.resources.substrate.ate.dev".
-func ActorDNSName(r ActorRef) string {
-	return r.Name + "." + r.Atespace + "." + ActorDNSSuffix
-}
-
-// lowerASCII folds A-Z and leaves every other byte alone. Resource names are
-// DNS-1123 labels, so ASCII is the whole alphabet here, and strings.ToLower
-// would additionally fold characters outside it onto ASCII letters (the Kelvin
-// sign U+212A onto "k", U+017F onto "s"), letting a non-ASCII host reach an
-// actor under a spelling that is not its name.
-func lowerASCII(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + ('a' - 'A')
-		}
-	}
-	return string(b)
-}
-
-// ParseActorDNSName parses a DNS name for a given actor.
-//
-// The name is folded to lower case first. DNS lookups are case-insensitive
-// (RFC 4343), so a client that resolved "MyActor.MySpace.<suffix>" reaches us
-// with that spelling preserved in the Host header, while actor and atespace
-// names are always lower case. Folding keeps the request addressed to the same
-// actor its DNS lookup resolved to instead of failing to parse.
-func ParseActorDNSName(name string) (ActorRef, error) {
-	normalized := lowerASCII(strings.TrimSuffix(name, "."))
-	rest, found := strings.CutSuffix(normalized, "."+ActorDNSSuffix)
-	if !found {
-		return ActorRef{}, fmt.Errorf("invalid actor DNS name: must end with %s, got %q", ActorDNSSuffix, name)
-	}
-	actorName, atespace, found := strings.Cut(rest, ".")
-	if !found {
-		return ActorRef{}, fmt.Errorf("invalid actor DNS name: expected <actor_name>.<atespace>.%s, got %q", ActorDNSSuffix, name)
-	}
-	if !IsValidResourceName(actorName) {
-		return ActorRef{}, fmt.Errorf("invalid actor DNS name %q: %q is not a valid actor name", name, actorName)
-	}
-	if !IsValidResourceName(atespace) {
-		return ActorRef{}, fmt.Errorf("invalid actor DNS name %q: %q is not a valid atespace", name, atespace)
-	}
-	return ActorRef{Atespace: atespace, Name: actorName}, nil
 }
 
 // ActorTemplateRef identifies an ActorTemplate by the (atespace, name).

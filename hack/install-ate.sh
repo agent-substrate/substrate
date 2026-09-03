@@ -818,10 +818,8 @@ deploy_atenet() {
 
   ensure_egress_mitm_ca_pool_secret
   apply_atenet_egress
-  run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
-  run_kubectl rollout status deployment/dns -n ate-system --timeout="$(rollout_timeout)"
 }
 
 # get_actor_state echoes the actor's state enum (e.g. ACTOR_STATE_SUSPENDED).
@@ -1089,7 +1087,6 @@ delete_atenet() {
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-egress.yaml
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/atenet-egress-with-sdsmint.yaml
-  run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-dns.yaml
 }
 
 deploy_benchmarks() {

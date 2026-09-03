@@ -46,7 +46,6 @@ ROUTER="http://localhost:8000"
 # The template name, resolved in the actors' atespace (--template-ref).
 TEMPLATE="parking"
 ATESPACE="ate-demo-parking"
-SUFFIX="actors.resources.substrate.ate.dev"
 
 usage() {
   cat <<'EOF'
@@ -102,12 +101,13 @@ done
 
 # One worker per actor: hammer it with request->suspend until the deadline.
 worker() {
-  local actor="$1" host="$1.${ATESPACE}.${SUFFIX}" log="${TMP}/$1.log"
+  local actor="$1" log="${TMP}/$1.log"
   local deadline=$(( $(date +%s) + DURATION ))
   while [[ $(date +%s) -lt ${deadline} ]]; do
     # %{http_code} lets us tally outcomes; %{time_total} reveals parking waits.
     curl -s -o /dev/null -w '%{http_code} %{time_total}\n' \
-      -H "Host: ${host}" "${ROUTER}" >>"${log}" 2>/dev/null
+      -H "X-Ate-Actor-Name: ${actor}" \
+      -H "X-Ate-Atespace: ${ATESPACE}" "${ROUTER}" >>"${log}" 2>/dev/null
     # Free the worker so a parked competitor can proceed (simulate going idle).
     kubectl ate suspend actor "${actor}" --atespace "${ATESPACE}" >/dev/null 2>&1 || true
   done

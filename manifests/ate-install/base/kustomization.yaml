@@ -22,7 +22,6 @@ resources:
   - ../ate-api-server.yaml
   - ../ate-controller.yaml
   - ../atelet.yaml
-  - ../atenet-dns.yaml
   - ../atenet-router.yaml
   - ../pod-certificate-controller.yaml
   - ../ate-otel-config.yaml
