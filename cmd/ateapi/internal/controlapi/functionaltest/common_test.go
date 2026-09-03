@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -122,7 +123,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	// 3. Initialize Informers
 	workerFactory, workerInformer := controlapi.WorkerPodInformer(k8sClient)
-	ateletFactory, ateletInformer := controlapi.AteletInformer(k8sClient)
+	ateletFactory, ateletInformer := controlapi.AteletInformer(k8sClient, installdefaults.SystemNamespace)
 	scFactory := informers.NewSharedInformerFactory(k8sClient, 0)
 	scLister := scFactory.Storage().V1().StorageClasses().Lister()
 
@@ -153,7 +154,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	// Dial the fake atelet over insecure transport instead of per-atelet mTLS,
 	// so DialForWorker's real lookup/dial/cache path is exercised under test.
-	dialer := controlapi.NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer(), "", "",
+	dialer := controlapi.NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer(), installdefaults.SystemNamespace, "", "",
 		controlapi.WithDialCredentials(func(_ string) (credentials.TransportCredentials, error) {
 			return insecure.NewCredentials(), nil
 		}))

@@ -17,6 +17,8 @@ package e2e
 import (
 	"fmt"
 	"os"
+
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 // CheckEnv checks the list of env vars exist and returns their value.
@@ -31,4 +33,29 @@ func CheckEnv(keys ...string) (map[string]string, error) {
 		env[key] = value
 	}
 	return env, nil
+}
+
+// SystemNamespaceEnv names the namespace the substrate control plane under test
+// was installed into. It mirrors the ATE_NAMESPACE hack/install-ate.sh
+// installed with, and the --namespace the chart was released into.
+const SystemNamespaceEnv = "E2E_SYSTEM_NAMESPACE"
+
+// SystemNamespace returns the namespace the control plane under test runs in,
+// falling back to the canonical install namespace.
+func SystemNamespace() string {
+	if ns := os.Getenv(SystemNamespaceEnv); ns != "" {
+		return ns
+	}
+	return installdefaults.SystemNamespace
+}
+
+// ResourcePrefixEnv is the prefix the install under test puts on substrate's
+// resource names. The Helm chart prefixes them with the release name for any
+// release not called "substrate", which is what a subchart install produces,
+// and the harness addresses several of those resources by name.
+const ResourcePrefixEnv = "E2E_RESOURCE_PREFIX"
+
+// ResourceName returns name as the install under test renders it.
+func ResourceName(name string) string {
+	return os.Getenv(ResourcePrefixEnv) + name
 }

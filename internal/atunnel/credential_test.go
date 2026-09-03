@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"google.golang.org/grpc"
@@ -184,6 +185,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		CredentialBundlePath: credentialPath,
 		TrustBundlePath:      trustPath,
 		ExpectedActorUID:     "actor-uid",
+		AteletSPIFFEID:       installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace),
 	})
 	if err != nil {
 		t.Fatal(err)

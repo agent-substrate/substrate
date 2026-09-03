@@ -21,6 +21,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -218,7 +219,7 @@ func newDanglingDialer() *AteletDialer {
 		byNamespaceAndName: func(obj any) ([]string, error) { return nil, nil },
 		byNode:             func(obj any) ([]string, error) { return nil, nil },
 	})
-	return NewAteletDialer(empty, empty, "", "")
+	return NewAteletDialer(empty, empty, installdefaults.SystemNamespace, "", "")
 }
 
 func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {

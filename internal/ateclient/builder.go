@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -43,9 +44,52 @@ import (
 	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
-const (
-	apiServerName = "api.ate-system.svc"
+// NamespaceEnv overrides the namespace the client looks for substrate in. The
+// client runs outside the cluster, so it has no downward API to read and no pod
+// namespace to fall back on.
+const NamespaceEnv = "ATE_NAMESPACE"
 
+// APIServiceEnv and ClientServiceAccountEnv override the ateapi Service and the
+// ServiceAccount the client mints its token from. The Helm chart prefixes both
+// names for a release not called "substrate", and the client has no way to
+// discover that from outside the cluster.
+const (
+	APIServiceEnv           = "ATE_API_SERVICE_NAME"
+	ClientServiceAccountEnv = "ATE_CLIENT_SERVICE_ACCOUNT"
+)
+
+// apiServiceName is the Service that fronts ateapi.
+func apiServiceName() string {
+	if n := os.Getenv(APIServiceEnv); n != "" {
+		return n
+	}
+	return installdefaults.APIServiceName
+}
+
+// clientServiceAccount is the ServiceAccount the bearer token is minted from.
+func clientServiceAccount() string {
+	if n := os.Getenv(ClientServiceAccountEnv); n != "" {
+		return n
+	}
+	return installdefaults.ClientServiceAccount
+}
+
+// systemNamespace is the namespace the client expects ateapi to be running in.
+func systemNamespace() string {
+	if ns := os.Getenv(NamespaceEnv); ns != "" {
+		return ns
+	}
+	return installdefaults.SystemNamespace
+}
+
+// apiServerName is the in-cluster DNS name of the ateapi Service. It is both the
+// name checked on ateapi's serving cert and the audience of the bearer token
+// minted for it, so it has to track the namespace ateapi actually runs in.
+func apiServerName() string {
+	return fmt.Sprintf("%s.%s.svc", apiServiceName(), systemNamespace())
+}
+
+const (
 	// serviceDNSSignerName and liveBundleSelector mirror the
 	// clusterTrustBundle projected-volume sources that in-cluster clients
 	// mount to verify ateapi's serving cert.
@@ -82,8 +126,8 @@ func (c *Client) Close() {
 	}
 }
 
-// NewClient creates a new Ate API client. If endpoint is empty, it automatically port-forwards
-// to the ate-api-server pod in the ate-system namespace.
+// NewClient creates a new Ate API client. If endpoint is empty, it automatically
+// port-forwards to the ate-api-server pod in substrate's system namespace.
 func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
 	tp, err := initTracing(ctx, traceEnabled)
 	if err != nil {
@@ -167,7 +211,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 
 	// TODO: Should we special-case a LoadBalancer "api" Service and dial its
 	// address directly instead of port-forwarding?
-	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, "ate-system", "api", 443)
+	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, systemNamespace(), apiServiceName(), 443)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +276,7 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 	return &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		RootCAs:    pool,
-		ServerName: apiServerName,
+		ServerName: apiServerName(),
 	}, nil
 }
 
@@ -252,11 +296,11 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 	expirationSeconds := int64(3600)
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
-			Audiences:         []string{apiServerName},
+			Audiences:         []string{apiServerName()},
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
-	token, err := clientset.CoreV1().ServiceAccounts("ate-system").CreateToken(ctx, "ate-client", tokenRequest, metav1.CreateOptions{})
+	token, err := clientset.CoreV1().ServiceAccounts(systemNamespace()).CreateToken(ctx, clientServiceAccount(), tokenRequest, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
 	}

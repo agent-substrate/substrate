@@ -40,13 +40,16 @@ import (
 // CA pool.
 type EgressMITMTrustReconciler struct {
 	client.Client
+
+	// SystemNamespace is the namespace holding the egress MITM CA pool Secret.
+	SystemNamespace string
 }
 
 // EgressMITMCAPoolRef names the Secret holding the CA pool the egress gateway's
 // sdsmint sidecar signs per-SNI leaves with.
-func EgressMITMCAPoolRef() types.NamespacedName {
+func EgressMITMCAPoolRef(systemNamespace string) types.NamespacedName {
 	const egressMITMCAPoolSecret = "egress-mitm-ca-pool"
-	return types.NamespacedName{Namespace: ateSystemNamespace, Name: egressMITMCAPoolSecret}
+	return types.NamespacedName{Namespace: systemNamespace, Name: egressMITMCAPoolSecret}
 }
 
 //+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
@@ -162,7 +165,7 @@ func (r *EgressMITMTrustReconciler) deleteTrustBundle(ctx context.Context) error
 }
 
 func (r *EgressMITMTrustReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	poolRef := EgressMITMCAPoolRef()
+	poolRef := EgressMITMCAPoolRef(r.SystemNamespace)
 
 	// The pool Secret is the only object reconciled from. The bundle is watched
 	// as well so that deleting or hand-editing the derived object is reverted

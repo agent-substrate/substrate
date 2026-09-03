@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -74,6 +75,19 @@ const (
 // populates. Self-signing is sufficient because the code under test reads an
 // already transport-verified peer certificate and never re-validates the chain
 // itself.
+// The atelet SPIFFE segments the tests build peer certificates from. They
+// mirror what a default install mints, which is what the Server under test is
+// configured with.
+const (
+	ateletTrustDomain = installdefaults.AteletTrustDomain
+	ateletNamespace   = installdefaults.SystemNamespace
+	ateletSA          = installdefaults.AteletServiceAccount
+)
+
+// ateletSPIFFEID is the identity a default install's atelet presents, and what
+// the Server under test is configured to accept.
+var ateletSPIFFEID = installdefaults.SPIFFEID(ateletNamespace, ateletSA)
+
 func newTestCert(t *testing.T, spiffePath string, podIdentity *substratex509.PodIdentity) *x509.Certificate {
 	t.Helper()
 
@@ -165,7 +179,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", "", pool, st, workers)
+	return New("issuer", "", pool, st, workers, ateletSPIFFEID)
 }
 
 // staleWatchStore wraps a store with a WatchWorkers that never delivers,
@@ -324,11 +338,11 @@ func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercac
 		t.Fatalf("generate CA: %v", err)
 	}
 	pool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
-	return New("issuer", "", pool, st, workers)
+	return New("issuer", "", pool, st, workers, ateletSPIFFEID)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
-	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example"}
+	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example", ateletSPIFFEID: ateletSPIFFEID}
 	for _, tt := range []struct {
 		name string
 		ctx  context.Context
@@ -918,7 +932,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 		ActiveForSigning: "test-actor-ca",
 	}
 
-	srv := New("issuer", "", pool, st, workers)
+	srv := New("issuer", "", pool, st, workers, ateletSPIFFEID)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {
@@ -1081,4 +1095,38 @@ func TestValidateMintCertRequest(t *testing.T) {
 			assertValidateErr(t, validateMintCertRequest(context.Background(), tt.req), tt.want)
 		})
 	}
+}
+
+// TestAuthenticateAteletHonorsConfiguredNamespace checks that the namespace
+// the Server is configured with is the one it accepts, and that the canonical
+// namespace is rejected when the install lives elsewhere.
+//
+// The table in TestMintCertAuthorization covers a caller from the wrong
+// namespace, but its Server is always configured with the default, so it holds
+// against a hardcoded "ate-system" too. Only the relocated case distinguishes
+// "reads its configuration" from "happens to agree with the constant".
+func TestAuthenticateAteletHonorsConfiguredNamespace(t *testing.T) {
+	const relocated = "substrate-test"
+
+	srv := &Server{ateletSPIFFEID: installdefaults.SPIFFEID(relocated, ateletSA)}
+
+	t.Run("accepts atelet from the configured namespace", func(t *testing.T) {
+		id := podIdentityOn(testNode)
+		id.Namespace = relocated
+		cert := newTestCert(t, path.Join("ns", relocated, "sa", ateletSA), id)
+
+		if _, err := srv.authenticateAtelet(ctxWithCert(cert)); err != nil {
+			t.Errorf("authenticateAtelet() = %v, want success for an atelet in %q", err, relocated)
+		}
+	})
+
+	t.Run("rejects atelet from the canonical namespace", func(t *testing.T) {
+		id := podIdentityOn(testNode)
+		id.Namespace = installdefaults.SystemNamespace
+		cert := newTestCert(t, path.Join("ns", installdefaults.SystemNamespace, "sa", ateletSA), id)
+
+		if _, err := srv.authenticateAtelet(ctxWithCert(cert)); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("authenticateAtelet() code = %v, want PermissionDenied for an atelet in %q", status.Code(err), installdefaults.SystemNamespace)
+		}
+	})
 }

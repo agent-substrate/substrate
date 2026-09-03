@@ -244,8 +244,8 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 // replica, until predicate accepts the lines written since.
 func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want string, predicate func(lines []string) (bool, error)) {
 	t.Helper()
+	gatewayNamespace := e2e.SystemNamespace()
 	const (
-		gatewayNamespace = "ate-system"
 		gatewaySelector  = "app=atenet-egress"
 		gatewayContainer = "envoy"
 		// The access log's line prefix, from the HttpConnectionManager

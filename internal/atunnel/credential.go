@@ -23,9 +23,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
-	"path"
 	"slices"
 	"sync"
 	"time"
@@ -61,6 +59,11 @@ type BrokerConfig struct {
 	// ExpectedActorUID prevents a mint started for an old activation from
 	// receiving the newly assigned actor's certificate.
 	ExpectedActorUID string
+	// AteletSPIFFEID is the SPIFFE ID atelet must present on the credential
+	// broker connection. It carries the namespace atelet runs in, which is not
+	// this worker's own namespace, so it is supplied by the caller rather than
+	// read from the downward API. See installdefaults.AteletSPIFFEID.
+	AteletSPIFFEID string
 }
 
 // NewBrokerCertificateSource creates one actor key for this activation. The key
@@ -69,6 +72,9 @@ type BrokerConfig struct {
 func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, error) {
 	if cfg.SocketPath == "" || cfg.CredentialBundlePath == "" || cfg.TrustBundlePath == "" || cfg.ExpectedActorUID == "" {
 		return nil, fmt.Errorf("atunnel: credential broker socket, credentials, trust bundle, and expected actor UID are required")
+	}
+	if cfg.AteletSPIFFEID == "" {
+		return nil, fmt.Errorf("atunnel: expected atelet SPIFFE ID is required")
 	}
 	localCert, err := credbundle.Parse(cfg.CredentialBundlePath)
 	if err != nil {
@@ -90,7 +96,7 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 	if err != nil {
 		return nil, fmt.Errorf("atunnel: generate actor private key: %w", err)
 	}
-	expectedURI := (&url.URL{Scheme: "spiffe", Host: "cluster.local", Path: path.Join("ns", "ate-system", "sa", "atelet")}).String()
+	expectedURI := cfg.AteletSPIFFEID
 	tlsConfig := &tls.Config{
 		MinVersion:           tls.VersionTLS13,
 		InsecureSkipVerify:   true, // Verification below supports SPIFFE Pod certificates without a DNS name.
