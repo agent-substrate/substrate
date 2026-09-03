@@ -94,6 +94,10 @@ const (
 	// image pull. Memory use is O(stream buffers) per slot, independent of
 	// layer size.
 	layerPullConcurrency = 4
+
+	// defaultPullTimeout is the default per-pull bound (see WithPullTimeout).
+	// Generous enough for multi-GiB images on a busy node.
+	defaultPullTimeout = 10 * time.Minute
 )
 
 // Store is atelet's handle to the on-disk layer pool. It is safe for
@@ -120,6 +124,11 @@ type Store struct {
 	// covering the window between a pull (or cache-hit stat) and the bundle
 	// spec write / ateom mount that roots it.
 	minAge time.Duration
+
+	// pullTimeout bounds each pull. Pulls run detached from the contexts of
+	// the callers waiting on them (see EnsureImage), so this is the only
+	// bound on how long one can run.
+	pullTimeout time.Duration
 
 	// meter, when set, is the meter the store reports on. See WithMeter.
 	meter metric.Meter
@@ -177,6 +186,11 @@ func WithMinAge(d time.Duration) Option {
 	return func(s *Store) { s.minAge = d }
 }
 
+// WithPullTimeout overrides the per-pull timeout (default 10m).
+func WithPullTimeout(d time.Duration) Option {
+	return func(s *Store) { s.pullTimeout = d }
+}
+
 // WithMeter attaches the meter the store reports ate.imagecache.requests on.
 // Without it the store records nothing, so a caller with no metrics pipeline
 // needs no meter provider.
@@ -209,7 +223,7 @@ type imageRecord struct {
 // startup recovery: verifying the layout version and sweeping temp dirs left
 // by unpacks that were in flight when a previous atelet died.
 func New(root string, opts ...Option) (*Store, error) {
-	s := &Store{root: root, minAge: defaultMinAge}
+	s := &Store{root: root, minAge: defaultMinAge, pullTimeout: defaultPullTimeout}
 	for _, o := range opts {
 		o(s)
 	}
@@ -366,16 +380,28 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 	slog.InfoContext(ctx, "Image cache miss", slog.String("ref", ref), slog.String("digest", digest.String()))
 
 	// Collapse concurrent pulls of the same digest (e.g. several containers of
-	// one actor, or several actors landing at once). The winning call's ctx
-	// governs the pull; if it is cancelled the waiters fail too and retry at
-	// the RPC level.
-	v, err, _ := s.imageSF.Do(digest.String(), func() (any, error) {
-		return s.pull(ctx, parsedRef, digest)
+	// one actor, or several actors landing at once). Callers with very
+	// different lifetimes share these flights — a serving Restore, a
+	// best-effort prewarm bounded by its own deadline, a caller whose daemon
+	// is draining — so the pull runs on a context detached from whichever
+	// caller happened to start the flight, bounded only by the store's pull
+	// timeout: a waiter must only ever see a real pull failure, never another
+	// caller's cancellation. Each caller stops waiting when its own ctx ends,
+	// while the pull runs on to warm the cache for the next attempt.
+	ch := s.imageSF.DoChan(digest.String(), func() (any, error) {
+		pullCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.pullTimeout)
+		defer cancel()
+		return s.pull(pullCtx, parsedRef, digest)
 	})
-	if err != nil {
-		return nil, err
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*Image), nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("while waiting for pull of %s: %w", digest, context.Cause(ctx))
 	}
-	return v.(*Image), nil
 }
 
 // cachedImageHit is the hit side of the hitMu contract: it verifies the
