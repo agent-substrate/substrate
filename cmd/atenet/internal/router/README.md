@@ -15,7 +15,7 @@ Router has several responsibilities:
 * Parks requests whose actor cannot be served immediately due to transient
   worker-pool saturation, retrying the resume until the actor is routable or a
   bounded wait elapses, instead of failing fast. See
-  [docs/request-parking.md](../../../../../docs/request-parking.md).
+  [docs/request-parking.md](../../../../docs/request-parking.md).
 * Drains gracefully on SIGTERM: flips `/readyz` so the Service stops sending
   new connections, waits out endpoint propagation (`--drain-delay`), drains the
   dataplane's established connections (Envoy only — driven over its admin API;

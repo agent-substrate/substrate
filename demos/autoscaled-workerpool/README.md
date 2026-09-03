@@ -33,7 +33,7 @@ currently assigned, using a Kubernetes HorizontalPodAutoscaler (HPA) fed by the
 ate-api-server :9090/metrics          (ate_workerpool_workers, OTel -> Prometheus gauge)
         │  scrape (prometheus.io/scrape annotation, 15s)
         ▼
-Prometheus                            manifests/ate-install/monitoring/prometheus.yaml
+Prometheus                            manifests/ate-install/kind/prometheus.yaml
         │  PromQL
         ▼
 prometheus-adapter                    demos/autoscaled-workerpool/prometheus-adapter.yaml

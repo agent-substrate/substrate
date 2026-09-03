@@ -11,7 +11,7 @@ In particular, all of the following currently apply:
 - There is no bug bounty.
 - There is no security mailing list for announcements.
 - There are no SLOs on fix timeline.
-- There are no embargos.
+- There are no embargoes.
 - Though we do wait to publish advisories until fixes have been merged,
   details may appear in PRs prior to publishing.
 
