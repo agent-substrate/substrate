@@ -40,6 +40,11 @@ fi
 # a relocated release (the chart's --namespace must match).
 ATE_NAMESPACE="${ATE_NAMESPACE:-ate-system}"
 
+# Service name fronting ateapi. It is the audience the API authentication config
+# accepts, so it has to match the Service the deployment actually creates; a
+# Helm release that prefixes resource names needs it set.
+ATE_API_SERVICE_NAME="${ATE_API_SERVICE_NAME:-api}"
+
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
@@ -621,7 +626,7 @@ create_api_authentication_config() {
       ;;
   esac
   local authentication_config
-  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.%s.svc]\n%s' "${jwt_issuer}" "${ATE_NAMESPACE}" "${discovery_config}")
+  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [%s.%s.svc]\n%s' "${jwt_issuer}" "${ATE_API_SERVICE_NAME}" "${ATE_NAMESPACE}" "${discovery_config}")
   run_kubectl create configmap -n "${ATE_NAMESPACE}" ate-api-authentication \
     --from-literal=authentication.yaml="${authentication_config}" \
     --dry-run=client -o yaml \

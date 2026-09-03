@@ -34,6 +34,9 @@ const (
 	RouterServiceName = "atenet-router"
 	// DNSServiceName is the Service name of substrate's CoreDNS.
 	DNSServiceName = "dns"
+	// ClientServiceAccount is the ServiceAccount an out-of-cluster client mints
+	// its ateapi bearer token from.
+	ClientServiceAccount = "ate-client"
 
 	// AteletTrustDomain, AteletServiceAccount and RouterServiceAccount are the
 	// trust-domain and service-account segments of the SPIFFE IDs that atelet

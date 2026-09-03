@@ -49,6 +49,31 @@ import (
 // namespace to fall back on.
 const NamespaceEnv = "ATE_NAMESPACE"
 
+// APIServiceEnv and ClientServiceAccountEnv override the ateapi Service and the
+// ServiceAccount the client mints its token from. The Helm chart prefixes both
+// names for a release not called "substrate", and the client has no way to
+// discover that from outside the cluster.
+const (
+	APIServiceEnv           = "ATE_API_SERVICE_NAME"
+	ClientServiceAccountEnv = "ATE_CLIENT_SERVICE_ACCOUNT"
+)
+
+// apiServiceName is the Service that fronts ateapi.
+func apiServiceName() string {
+	if n := os.Getenv(APIServiceEnv); n != "" {
+		return n
+	}
+	return installdefaults.APIServiceName
+}
+
+// clientServiceAccount is the ServiceAccount the bearer token is minted from.
+func clientServiceAccount() string {
+	if n := os.Getenv(ClientServiceAccountEnv); n != "" {
+		return n
+	}
+	return installdefaults.ClientServiceAccount
+}
+
 // systemNamespace is the namespace the client expects ateapi to be running in.
 func systemNamespace() string {
 	if ns := os.Getenv(NamespaceEnv); ns != "" {
@@ -61,7 +86,7 @@ func systemNamespace() string {
 // name checked on ateapi's serving cert and the audience of the bearer token
 // minted for it, so it has to track the namespace ateapi actually runs in.
 func apiServerName() string {
-	return fmt.Sprintf("%s.%s.svc", installdefaults.APIServiceName, systemNamespace())
+	return fmt.Sprintf("%s.%s.svc", apiServiceName(), systemNamespace())
 }
 
 const (
@@ -186,7 +211,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 
 	// TODO: Should we special-case a LoadBalancer "api" Service and dial its
 	// address directly instead of port-forwarding?
-	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, systemNamespace(), installdefaults.APIServiceName, 443)
+	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, systemNamespace(), apiServiceName(), 443)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +300,7 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
-	token, err := clientset.CoreV1().ServiceAccounts(systemNamespace()).CreateToken(ctx, "ate-client", tokenRequest, metav1.CreateOptions{})
+	token, err := clientset.CoreV1().ServiceAccounts(systemNamespace()).CreateToken(ctx, clientServiceAccount(), tokenRequest, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
 	}

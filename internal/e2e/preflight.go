@@ -38,8 +38,8 @@ func PreflightChecks() error {
 
 	// Check deployments.
 	deployments := []string{
-		"ate-controller",
-		"ate-api-server",
+		ResourceName("ate-controller"),
+		ResourceName("ate-api-server"),
 	}
 	namespace := SystemNamespace()
 	for _, depName := range deployments {

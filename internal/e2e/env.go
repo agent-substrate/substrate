@@ -48,3 +48,14 @@ func SystemNamespace() string {
 	}
 	return installdefaults.SystemNamespace
 }
+
+// ResourcePrefixEnv is the prefix the install under test puts on substrate's
+// resource names. The Helm chart prefixes them with the release name for any
+// release not called "substrate", which is what a subchart install produces,
+// and the harness addresses several of those resources by name.
+const ResourcePrefixEnv = "E2E_RESOURCE_PREFIX"
+
+// ResourceName returns name as the install under test renders it.
+func ResourceName(name string) string {
+	return os.Getenv(ResourcePrefixEnv) + name
+}

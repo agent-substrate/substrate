@@ -39,8 +39,7 @@ const (
 	// EgressTrustBundleObjectName is the reconciler-owned ClusterTrustBundle.
 	EgressTrustBundleObjectName = "egress-mitm.ate.dev:mitm:primary-bundle"
 
-	egressCAPoolSecretName = "egress-mitm-ca-pool"
-	egressCAPoolSecretKey  = "pool"
+	egressCAPoolSecretKey = "pool"
 )
 
 // EnsureEgressTrustBundle makes sure the egress trust bundle exists, then
@@ -67,7 +66,7 @@ func ReplaceEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients,
 	if !createEgressTrustPool(t, ctx, clients, secret) {
 		// Took over an existing pool: overwrite its contents without adopting
 		// its cleanup, since whoever created it registered one already.
-		existing, err := clients.K8s.CoreV1().Secrets(SystemNamespace()).Get(ctx, egressCAPoolSecretName, metav1.GetOptions{})
+		existing, err := clients.K8s.CoreV1().Secrets(SystemNamespace()).Get(ctx, ResourceName("egress-mitm-ca-pool"), metav1.GetOptions{})
 		if err != nil {
 			t.Fatalf("reading existing CA pool secret: %v", err)
 		}
@@ -102,7 +101,7 @@ func newEgressTrustPool(t *testing.T) (*corev1.Secret, string) {
 		t.Fatalf("encoding the egress CA private key: %v", err)
 	}
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: SystemNamespace(), Name: egressCAPoolSecretName},
+		ObjectMeta: metav1.ObjectMeta{Namespace: SystemNamespace(), Name: ResourceName("egress-mitm-ca-pool")},
 		Type:       corev1.SecretTypeTLS,
 		Data: map[string][]byte{
 			egressCAPoolSecretKey:   poolBytes,
@@ -121,12 +120,12 @@ func createEgressTrustPool(t *testing.T, ctx context.Context, clients *Clients, 
 	t.Helper()
 	if _, err := clients.K8s.CoreV1().Secrets(SystemNamespace()).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
-			t.Fatalf("creating CA pool secret %s/%s: %v", SystemNamespace(), egressCAPoolSecretName, err)
+			t.Fatalf("creating CA pool secret %s/%s: %v", SystemNamespace(), ResourceName("egress-mitm-ca-pool"), err)
 		}
 		return false
 	}
 	t.Cleanup(func() {
-		_ = clients.K8s.CoreV1().Secrets(SystemNamespace()).Delete(context.Background(), egressCAPoolSecretName, metav1.DeleteOptions{})
+		_ = clients.K8s.CoreV1().Secrets(SystemNamespace()).Delete(context.Background(), ResourceName("egress-mitm-ca-pool"), metav1.DeleteOptions{})
 	})
 	return true
 }
