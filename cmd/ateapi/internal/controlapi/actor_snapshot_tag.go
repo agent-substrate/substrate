@@ -269,6 +269,14 @@ func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.D
 	}
 	tagRef := resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag())
 
+	// Serializes against a create of the same tag, whose copy would otherwise
+	// keep writing into the prefix this is collecting.
+	ctx, lease, err := acquireActorSnapshotTagLease(ctx, s.impl, tagRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+
 	stored, err := s.impl.GetActorSnapshotTag(ctx, tagRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

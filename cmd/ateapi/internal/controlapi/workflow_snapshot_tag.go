@@ -52,13 +52,22 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, actorRef resources
 	}
 	defer lease.Close()
 
+	// Serializes against a delete of the tag this creates, which would
+	// otherwise collect the copy while it is being written.
+	tagRef := resources.ActorSnapshotTagRef{Atespace: actorRef.Atespace, Name: tag.GetMetadata().GetName()}
+	leaseCtx, tagLease, err := acquireActorSnapshotTagLease(leaseCtx, w.store, tagRef)
+	if err != nil {
+		return nil, err
+	}
+	defer tagLease.Close()
+
 	actor, actorTemplate, err := w.loadActorForTag(leaseCtx, actorRef)
 	if err != nil {
 		return nil, err
 	}
 	snapshot := actor.GetStatus().GetExternalSnapshot()
 
-	reserved, adoptedSnapshotURI, err := w.ensureTagReserved(leaseCtx, actorRef, actor, actorTemplate, tag)
+	reserved, adoptedSnapshotURI, err := w.ensureTagReserved(leaseCtx, tagRef, actor, actorTemplate, tag)
 	if err != nil {
 		return nil, err
 	}
@@ -102,12 +111,11 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 // URI; a fresh reservation returns "". A name held by a finished tag, or by
 // another actor's unfinished one, is AlreadyExists: adopting another actor's
 // pending create would let two sources interleave objects into one prefix.
-func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, tag *ateapipb.ActorSnapshotTag) (_ *ateapipb.ActorSnapshotTag, adoptedSnapshotURI string, err error) {
+func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.ActorSnapshotTagRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, tag *ateapipb.ActorSnapshotTag) (_ *ateapipb.ActorSnapshotTag, adoptedSnapshotURI string, err error) {
 	ctx, done := stepSpan(ctx, "ReserveSnapshotTag")
 	defer func() { err = done(err) }()
 
-	tagRef := resources.ActorSnapshotTagRef{Atespace: actorRef.Atespace, Name: tag.GetMetadata().GetName()}
-	dst, err := resources.NewTagSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), actorRef.Atespace, resources.NewSnapshotName())
+	dst, err := resources.NewTagSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), tagRef.Atespace, resources.NewSnapshotName())
 	if err != nil {
 		return nil, "", fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
 	}

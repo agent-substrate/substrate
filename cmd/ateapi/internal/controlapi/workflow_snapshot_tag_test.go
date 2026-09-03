@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -420,6 +421,63 @@ func TestTagActorSnapshot_RetryWhileActorRunning(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, strandedURI)); diff != "" {
 		t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestTagActorSnapshot_RacesDelete verifies that deleting a tag that's
+// still being created is aborted.
+func TestTagActorSnapshot_RacesDelete(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+	svc := &RPCService{impl: persistence, objectStore: objects}
+
+	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	actorRef := resources.ActorRefFromActor(actor)
+	tagRef := resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "v1"}
+
+	var once sync.Once
+	var pendingURI string
+	var deleteErr error
+	// Simulate deleting the tag that's just being created during
+	// the file copy to GCS/S3.
+	objects.OnCopy = func(_, _, _, _ string) error {
+		once.Do(func() {
+			reserved, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+			if err != nil {
+				t.Errorf("GetActorSnapshotTag during the copy: %v", err)
+				return
+			}
+			pendingURI = reserved.GetStatus().GetInProgressSnapshotUri()
+			_, deleteErr = svc.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef.ToObjectRef()})
+		})
+		return nil
+	}
+
+	tag, createErr := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	if pendingURI == "" {
+		t.Fatalf("the create never reserved a row to race with (TagActorSnapshot = %v)", createErr)
+	}
+	if createErr != nil {
+		t.Fatalf("TagActorSnapshot: %v", createErr)
+	}
+	// The delete is refused rather than queued behind the copy: the create
+	// holds the tag's lease until it has finished writing.
+	if code := status.Code(deleteErr); code != codes.Aborted {
+		t.Errorf("DeleteActorSnapshotTag during the copy = %v (code %v), want code Aborted", deleteErr, code)
+	}
+
+	// Nothing was collected out from under the copy, and the row in the store it
+	// is still there.
+	if got := tag.GetStatus().GetSnapshot().GetSnapshotUri(); got != pendingURI {
+		t.Errorf("snapshot uri = %q, want the prefix the create reserved, %q", got, pendingURI)
+	}
+	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, pendingURI))); diff != "" {
+		t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := persistence.GetActorSnapshotTag(ctx, tagRef); err != nil {
+		t.Errorf("GetActorSnapshotTag after the race: %v", err)
 	}
 }
 

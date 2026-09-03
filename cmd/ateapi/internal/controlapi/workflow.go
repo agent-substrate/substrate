@@ -158,16 +158,31 @@ type workerWorkflowStore interface {
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 }
 
-func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
-	leaseKey := "lease:actor:" + actorRef.Atespace + ":" + actorRef.Name
+// leaseHolder takes the distributed leases that serialize the operations on one
+// resource.
+type leaseHolder interface {
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
+}
 
-	lease, err := w.store.AcquireLease(ctx, leaseKey)
+// acquireLease takes the lease named by key and returns the context to run
+// under: it is cancelled if the lease is lost. subject names what the lease
+// covers, for the message a caller that loses the race gets.
+func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) (context.Context, *store.Lease, error) {
+	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
-			return nil, nil, status.Error(grpcCodes.Aborted, "another operation is in progress for this actor")
+			return nil, nil, status.Errorf(grpcCodes.Aborted, "another operation is in progress for this %s", subject)
 		}
 		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}
 
 	return lease.Context(), lease, nil
+}
+
+func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
+	return acquireLease(ctx, w.store, "lease:actor:"+actorRef.Atespace+":"+actorRef.Name, "actor")
+}
+
+func acquireActorSnapshotTagLease(ctx context.Context, holder leaseHolder, tagRef resources.ActorSnapshotTagRef) (context.Context, *store.Lease, error) {
+	return acquireLease(ctx, holder, "lease:actor-snapshot-tag:"+tagRef.Atespace+":"+tagRef.Name, "ActorSnapshotTag")
 }
