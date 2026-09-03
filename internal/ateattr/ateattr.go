@@ -121,9 +121,15 @@ const (
 	FailureDomainUnknown        = "unknown"
 )
 
-// workloadReasons describe what the actor did rather than what substrate did.
-// Membership, not a name prefix, decides the domain.
+// workloadReasons are the failures the actor's owner fixes rather than the
+// platform operator: a misdeclared ActorTemplate as much as a process that will
+// not start. Membership, not a name prefix, decides the domain.
+//
+// ReasonInvalidSandboxAsset is deliberately absent: it reads a SandboxConfig,
+// which is cluster-scoped, so no actor can cause it or fix it.
 var workloadReasons = []ateerrors.Reason{
+	ateerrors.ReasonInvalidContainerConfig,
+	ateerrors.ReasonInvalidObjectURL,
 	ateerrors.ReasonWorkloadNotReady,
 }
 

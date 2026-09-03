@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -42,6 +43,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 
 	ctx := context.Background()
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	records := crashRecords(t)
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
@@ -83,6 +85,18 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	}
 	if finalized.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("returned state = %v, want CRASHED", finalized.GetStatus().GetState())
+	}
+
+	// This site records the crash counter, so it must write the record too, or
+	// a pause-finalize crash is the one kind nothing can attribute to an actor.
+	if len(*records) != 1 {
+		t.Fatalf("got %d crash records, want 1", len(*records))
+	}
+	if got := (*records)[0][string(ateattr.ActorUIDKey)]; got == "" {
+		t.Error("crash record carries no ate.actor.uid")
+	}
+	if got := (*records)[0][string(ateattr.FailureDomainKey)]; got != ateattr.FailureDomainInfrastructure {
+		t.Errorf("ate.failure.domain = %q, want %q", got, ateattr.FailureDomainInfrastructure)
 	}
 }
 

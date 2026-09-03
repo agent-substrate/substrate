@@ -37,9 +37,10 @@ func maybeCrashActor(ctx context.Context, st crashActorStore, actorRef resources
 	}
 
 	if ateerrors.ActorCrashRequested(err) {
-		// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. If unclassified
-		// or unlisted, default to ateattr.ReasonUnknown to protect metric low-cardinality.
-		reason := ateerrors.ExtractReason(err)
+		// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. Normalized
+		// here rather than in crashActor alone, so the log and the counter cannot
+		// report a different reason for the same crash.
+		reason := ateattr.FailureReason(err)
 
 		// Only the ref is knowable here; crashActor logs the authoritative record.
 		attrs := ateattr.ActorRefLogAttrs(actorRef)

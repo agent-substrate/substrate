@@ -690,7 +690,13 @@ func TestFailureDomain(t *testing.T) {
 		reason string
 		want   string
 	}{
-		{"workload reason", string(ateerrors.ReasonWorkloadNotReady), FailureDomainWorkload},
+		{"runtime workload reason", string(ateerrors.ReasonWorkloadNotReady), FailureDomainWorkload},
+		// A misdeclared template is the actor owner's to fix, so it is a
+		// workload fault even though substrate is what detects it.
+		{"template resolves to no runnable process", string(ateerrors.ReasonInvalidContainerConfig), FailureDomainWorkload},
+		{"template storage_location unparseable", string(ateerrors.ReasonInvalidObjectURL), FailureDomainWorkload},
+		// SandboxConfig is cluster-scoped, so no actor owner can cause or fix this.
+		{"bad sandbox asset stays infrastructure", string(ateerrors.ReasonInvalidSandboxAsset), FailureDomainInfrastructure},
 		{"node infrastructure reason", string(ateerrors.ReasonTerminalFileSystemError), FailureDomainInfrastructure},
 		{"control-plane infrastructure reason", string(ateerrors.ReasonWorkerPodGone), FailureDomainInfrastructure},
 		{"unknown asserts no domain", ReasonUnknown, FailureDomainUnknown},

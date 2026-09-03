@@ -181,12 +181,14 @@ cardinality_rules:
       registry. Only live-check can see a component that sends one key.
   - id: workload-domain-is-a-report
     brief: >
-      A value of ate.failure.domain of workload says what the actor reported,
-      not what Substrate measured. The actor chooses its own exit code and can
-      hold memory until the kernel kills it, thus it decides this value. It can
-      raise the count of the failures of its own template and pool, and it can
-      exit 0 to hide a fault. A dashboard says "reported" and an alert on this
-      domain has a rate limit. One report for each activation is the bound.
+      Some of the reasons in the workload domain are what the actor reported
+      about itself: an exit code, or a probe that never passes. The actor
+      chooses those, thus it decides the value. It can raise the count of the
+      failures of its own template and pool, and it can exit 0 to hide a fault.
+      A dashboard says "reported" for those, and an alert on them has a rate
+      limit; one report for each activation is the bound. The reasons that
+      Substrate measures, such as a template that resolves to no runnable
+      process, carry no such caveat.
     enforced: false
     could_be_enforced_by: >
       Nothing. This is a property of a multi-tenant platform and not of the

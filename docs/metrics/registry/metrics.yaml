@@ -337,9 +337,13 @@ groups:
               stability: development
               value: workload
               brief: >
-                The actor failed. Substrate reports what the actor did; it does
-                not measure it. The actor chooses its own exit, thus this value
-                is a report and not a proof.
+                The owner of the actor fixes this, not the operator of the
+                platform. It covers a bad ActorTemplate as well as a process
+                that does not start. For the reasons that the actor reports
+                about itself, such as an exit or a probe that never passes,
+                this value is a report and not a proof: the actor chooses its
+                own exit. The reasons that Substrate measures, such as a
+                template that resolves to no runnable process, are not.
             - id: unknown
               stability: development
               value: unknown
@@ -869,6 +873,9 @@ groups:
       - ref: ate.failure.reason
         requirement_level:
           conditionally_required: The operation failed. The key occurs only on the phase that failed and on the total.
+      - ref: ate.failure.domain
+        requirement_level:
+          conditionally_required: ate.failure.reason occurs. The two keys always occur together.
 
   - id: metric.atelet.snapshot.size
     type: metric
