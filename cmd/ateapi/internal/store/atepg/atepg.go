@@ -144,6 +144,8 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
 	}
+	// Per-statement trace spans; the watch pool inherits this through Copy().
+	cfg.ConnConfig.Tracer = queryTracer{}
 	usesTLS := cfg.ConnConfig.TLSConfig != nil
 	for _, fallback := range cfg.ConnConfig.Fallbacks {
 		usesTLS = usesTLS || fallback.TLSConfig != nil
