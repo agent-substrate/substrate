@@ -36,8 +36,7 @@ import (
 )
 
 const (
-	routerNamespace = "ate-system"
-	routerService   = "atenet-router"
+	routerService = "atenet-router"
 	// routerConnectServicePort is atenet-router's Service port for
 	// CONNECT-tunneled traffic (see manifests/ate-install/atenet-router.yaml).
 	// It is a distinct listener from the plain HTTP one Get/PostJSON use:
@@ -79,7 +78,7 @@ func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, 80)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), routerService, 80)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +187,7 @@ func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef,
 // in one test don't each pay for a fresh port-forward.
 func (c *RouterClient) ensureConnectPortForward(ctx context.Context) error {
 	c.connectOnce.Do(func() {
-		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, routerNamespace, routerService, routerConnectServicePort)
+		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), routerService, routerConnectServicePort)
 		if err != nil {
 			c.connectErr = fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
 			return

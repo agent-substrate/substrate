@@ -1092,3 +1092,37 @@ func TestValidateMintCertRequest(t *testing.T) {
 		})
 	}
 }
+
+// TestAuthenticateAteletHonorsConfiguredNamespace checks that the namespace
+// the Server is configured with is the one it accepts, and that the canonical
+// namespace is rejected when the install lives elsewhere.
+//
+// The table in TestMintCertAuthorization covers a caller from the wrong
+// namespace, but its Server is always configured with the default, so it holds
+// against a hardcoded "ate-system" too. Only the relocated case distinguishes
+// "reads its configuration" from "happens to agree with the constant".
+func TestAuthenticateAteletHonorsConfiguredNamespace(t *testing.T) {
+	const relocated = "substrate-test"
+
+	srv := &Server{ateletNamespace: relocated}
+
+	t.Run("accepts atelet from the configured namespace", func(t *testing.T) {
+		id := podIdentityOn(testNode)
+		id.Namespace = relocated
+		cert := newTestCert(t, path.Join("ns", relocated, "sa", ateletSA), id)
+
+		if _, err := srv.authenticateAtelet(ctxWithCert(cert)); err != nil {
+			t.Errorf("authenticateAtelet() = %v, want success for an atelet in %q", err, relocated)
+		}
+	})
+
+	t.Run("rejects atelet from the canonical namespace", func(t *testing.T) {
+		id := podIdentityOn(testNode)
+		id.Namespace = installdefaults.SystemNamespace
+		cert := newTestCert(t, path.Join("ns", installdefaults.SystemNamespace, "sa", ateletSA), id)
+
+		if _, err := srv.authenticateAtelet(ctxWithCert(cert)); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("authenticateAtelet() code = %v, want PermissionDenied for an atelet in %q", status.Code(err), installdefaults.SystemNamespace)
+		}
+	})
+}

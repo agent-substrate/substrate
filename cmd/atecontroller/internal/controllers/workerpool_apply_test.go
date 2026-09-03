@@ -802,3 +802,35 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithLabels(map[string]string{"ate.dev/worker-pool": wp.Name}).
 				WithSpec(podSpecAC)))
 }
+
+// TestBuildDeploymentAtunnelIdentitiesRelocatedNamespace pins the SPIFFE
+// identities handed to ateom to the controller's namespace. atunnel runs in
+// the actor's pod, so it cannot derive atelet's or the router's namespace
+// itself; if these carry the wrong one, the credential broker handshake and
+// actor ingress both fail closed. Every other case here passes the canonical
+// namespace and so would pass against a hardcoded value too.
+func TestBuildDeploymentAtunnelIdentitiesRelocatedNamespace(t *testing.T) {
+	const relocated = "substrate-test"
+
+	c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{}, relocated).
+		Spec.Template.Spec.Containers[0]
+
+	want := map[string]string{
+		"--atunnel-client-identity=": "spiffe://cluster.local/ns/substrate-test/sa/atenet-router",
+		"--atunnel-broker-identity=": "spiffe://cluster.local/ns/substrate-test/sa/atelet",
+	}
+	for flag, wantVal := range want {
+		var got string
+		for _, arg := range c.Args {
+			if strings.HasPrefix(arg, flag) {
+				got = strings.TrimPrefix(arg, flag)
+			}
+		}
+		if got == "" {
+			t.Fatalf("no %s argument found in %v", flag, c.Args)
+		}
+		if got != wantVal {
+			t.Errorf("%s%s, want %s%s", flag, got, flag, wantVal)
+		}
+	}
+}

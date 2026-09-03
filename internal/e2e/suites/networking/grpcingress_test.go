@@ -305,7 +305,7 @@ func routerAddress(t *testing.T, ctx context.Context) string {
 	if err != nil {
 		t.Fatalf("creating k8s client: %v", err)
 	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, "ate-system", "atenet-router", 80)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, e2e.SystemNamespace(), "atenet-router", 80)
 	if err != nil {
 		t.Fatalf("port-forwarding to the router: %v", err)
 	}

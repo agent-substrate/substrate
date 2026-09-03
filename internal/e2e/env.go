@@ -17,6 +17,8 @@ package e2e
 import (
 	"fmt"
 	"os"
+
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 // CheckEnv checks the list of env vars exist and returns their value.
@@ -31,4 +33,18 @@ func CheckEnv(keys ...string) (map[string]string, error) {
 		env[key] = value
 	}
 	return env, nil
+}
+
+// SystemNamespaceEnv names the namespace the substrate control plane under test
+// was installed into. It mirrors the ATE_NAMESPACE hack/install-ate.sh
+// installed with, and the --namespace the chart was released into.
+const SystemNamespaceEnv = "E2E_SYSTEM_NAMESPACE"
+
+// SystemNamespace returns the namespace the control plane under test runs in,
+// falling back to the canonical install namespace.
+func SystemNamespace() string {
+	if ns := os.Getenv(SystemNamespaceEnv); ns != "" {
+		return ns
+	}
+	return installdefaults.SystemNamespace
 }

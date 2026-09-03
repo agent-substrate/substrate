@@ -35,16 +35,14 @@ const (
 	// DNSServiceName is the Service name of substrate's CoreDNS.
 	DNSServiceName = "dns"
 
-	// AteletTrustDomain and AteletServiceAccount are the trust-domain and
-	// service-account segments of the SPIFFE ID that atelet Pod certificates
-	// carry, as minted by the podidentity signer
-	// (cmd/podcertcontroller/internal/podidentitysigner). The namespace
-	// segment is the namespace atelet runs in, which callers resolve
-	// themselves rather than assume.
+	// AteletTrustDomain, AteletServiceAccount and RouterServiceAccount are the
+	// trust-domain and service-account segments of the SPIFFE IDs that atelet
+	// and atenet-router Pod certificates carry, as minted by the podidentity
+	// signer (cmd/podcertcontroller/internal/podidentitysigner). The namespace
+	// segment is the namespace they run in, which callers resolve themselves
+	// rather than assume.
 	AteletTrustDomain    = "cluster.local"
 	AteletServiceAccount = "atelet"
-	// RouterServiceAccount is the service-account segment of the SPIFFE ID
-	// that atenet-router presents when calling actor ingress.
 	RouterServiceAccount = "atenet-router"
 
 	// PodNamespaceEnv is the conventional env var name for the namespace
@@ -63,8 +61,7 @@ func NamespaceFromPodEnv() string {
 }
 
 // SPIFFEID returns the SPIFFE ID that Pod certificates for serviceAccount in
-// namespace carry, as minted by the podidentity signer. Peers authenticate by
-// comparing against this exact string.
+// namespace carry. Peers authenticate by comparing against this exact string.
 func SPIFFEID(namespace, serviceAccount string) string {
 	return (&url.URL{
 		Scheme: "spiffe",
@@ -73,7 +70,7 @@ func SPIFFEID(namespace, serviceAccount string) string {
 	}).String()
 }
 
-// AteletSPIFFEID returns the SPIFFE ID atelet presents when atelet runs in namespace.
+// AteletSPIFFEID returns the SPIFFE ID atelet presents when it runs in namespace.
 func AteletSPIFFEID(namespace string) string {
 	return SPIFFEID(namespace, AteletServiceAccount)
 }
