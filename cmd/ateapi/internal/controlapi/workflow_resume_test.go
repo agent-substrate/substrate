@@ -28,10 +28,12 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TestSchedulerRecordable guards the retry-dedup rule: the assignment loop
@@ -1233,6 +1235,61 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 	}
 }
 
+// TestLoadActorForResume_RepointResolvesGoldenSandboxConfigRef pins that a
+// repointed actor's boot source carries the SandboxConfig recorded on the
+// replacement template's golden ActorSnapshot, read from the snapshot itself.
+func TestLoadActorForResume_RepointResolvesGoldenSandboxConfigRef(t *testing.T) {
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	goldenRef := &ateapipb.SandboxConfigRef{Name: "gvisor-golden", Uid: "sandbox-uid-2"}
+
+	persistence := newTestPersistence(t)
+	snap := storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: "snap-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			SourceActor:      &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			ActorTemplateUid: "replaced-uid",
+			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:      "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+		},
+	})
+	storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:      "gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+			SandboxConfigRef: goldenRef,
+		},
+	})
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snap.GetMetadata().GetName()}
+	})
+
+	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		Status: &ateapipb.ActorTemplateStatus{
+			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+				GoldenSnapshot: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence}
+	_, _, src, err := w.loadActorForResume(ctx, actorRef, false)
+	if err != nil {
+		t.Fatalf("loadActorForResume: %v", err)
+	}
+	if !src.TemplateReplaced {
+		t.Fatal("src.TemplateReplaced = false, want true")
+	}
+	if got := src.RepointSandboxConfigRef; got.GetName() != goldenRef.GetName() || got.GetUid() != goldenRef.GetUid() {
+		t.Errorf("src.RepointSandboxConfigRef = %s/%s, want %s/%s", got.GetName(), got.GetUid(), goldenRef.GetName(), goldenRef.GetUid())
+	}
+}
+
 func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
@@ -1257,5 +1314,237 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 	if !src.SnapshotURI.IsZero() || !src.GoldenSnapshotURI.IsZero() {
 		t.Errorf("expected empty snapshot source, got %+v", src)
+	}
+}
+
+// TestLoadActorForResume_CarriesSandboxConfigRefs pins that the SandboxConfig
+// references recorded on the restored snapshots ride out on the resolved
+// boot source.
+func TestLoadActorForResume_CarriesSandboxConfigRefs(t *testing.T) {
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	ownRef := &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1"}
+	goldenRef := &ateapipb.SandboxConfigRef{Name: "gvisor-golden", Uid: "sandbox-uid-2"}
+
+	persistence := newTestPersistence(t)
+	snap := storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: "snap-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			SourceActor:      &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			SnapshotUri:      "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+			SandboxConfigRef: ownRef,
+		},
+	})
+	storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
+		Status: &ateapipb.ActorSnapshotStatus{
+			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:      "gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+			SandboxConfigRef: goldenRef,
+		},
+	})
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snap.GetMetadata().GetName()}
+	})
+
+	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{
+			OnResume: &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
+		},
+		Status: &ateapipb.ActorTemplateStatus{
+			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+				GoldenSnapshot: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence}
+	_, _, src, err := w.loadActorForResume(ctx, actorRef, false)
+	if err != nil {
+		t.Fatalf("loadActorForResume: %v", err)
+	}
+	if got := src.SandboxConfigRef; got.GetName() != ownRef.GetName() || got.GetUid() != ownRef.GetUid() {
+		t.Errorf("src.SandboxConfigRef = %s/%s, want %s/%s", got.GetName(), got.GetUid(), ownRef.GetName(), ownRef.GetUid())
+	}
+	if got := src.GoldenSandboxConfigRef; got.GetName() != goldenRef.GetName() || got.GetUid() != goldenRef.GetUid() {
+		t.Errorf("src.GoldenSandboxConfigRef = %s/%s, want %s/%s", got.GetName(), got.GetUid(), goldenRef.GetName(), goldenRef.GetUid())
+	}
+}
+
+// TestResolveSandboxAssetsForResume pins which SandboxConfig a resume
+// boots: the replacement template's golden config when repointed, else the
+// one recorded on the snapshot whose sandbox runs the guest, else the
+// pool's.
+func TestResolveSandboxAssetsForResume(t *testing.T) {
+	ownConfig := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-own", UID: "own-uid"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			PauseImage:   "registry.k8s.io/pause@sha256:own",
+			Assets:       testAssets(),
+		},
+	}
+	goldenConfig := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-golden", UID: "golden-uid"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			PauseImage:   "registry.k8s.io/pause@sha256:golden",
+			Assets:       testAssets(),
+		},
+	}
+	poolConfig := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-pool", UID: "pool-uid"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			Default:      true,
+			PauseImage:   "registry.k8s.io/pause@sha256:pool",
+			Assets:       testAssets(),
+		},
+	}
+	pool := &atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Name: "pool1", Namespace: "worker-ns"}}
+	poolLister, configLister := listersFor(t, []*atev1alpha1.WorkerPool{pool},
+		[]*atev1alpha1.SandboxConfig{ownConfig, goldenConfig, poolConfig})
+	w := &ActorWorkflow{workerPoolLister: poolLister, sandboxConfigLister: configLister}
+
+	ownRef := &ateapipb.SandboxConfigRef{Name: "gvisor-own", Uid: "own-uid"}
+	goldenRef := &ateapipb.SandboxConfigRef{Name: "gvisor-golden", Uid: "golden-uid"}
+	goldenURI, err := resources.ParseSnapshotURI("gs://bucket/golden-root/snapshots/ate-golden/golden-1")
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		actor    *ateapipb.Actor
+		src      resumeSnapshotSource
+		wantName string
+	}{
+		{
+			name:     "repointed actor boots the replacement template's golden config",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{TemplateReplaced: true, RepointSandboxConfigRef: goldenRef},
+			wantName: "gvisor-golden",
+		},
+		{
+			name:     "repointed actor falls back to the pool when the new golden records none",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{TemplateReplaced: true, SandboxConfigRef: ownRef},
+			wantName: "gvisor-pool",
+		},
+		{
+			name:     "golden data restore boots the golden snapshot's config",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{GoldenSnapshotURI: goldenURI, GoldenSandboxConfigRef: goldenRef, SandboxConfigRef: ownRef},
+			wantName: "gvisor-golden",
+		},
+		{
+			name: "local restore boots the pause snapshot's config",
+			actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+				LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{SandboxConfigRef: ownRef},
+			}},
+			src:      resumeSnapshotSource{},
+			wantName: "gvisor-own",
+		},
+		{
+			name:     "durable restore boots the snapshot's own config",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{SandboxConfigRef: ownRef},
+			wantName: "gvisor-own",
+		},
+		{
+			name:     "no references fall back to the pool",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{},
+			wantName: "gvisor-pool",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := w.resolveSandboxAssetsForResume(tc.actor, tc.src, "worker-ns", "pool1")
+			if err != nil {
+				t.Fatalf("resolveSandboxAssetsForResume: %v", err)
+			}
+			if got.GetSandboxConfigRef().GetName() != tc.wantName {
+				t.Errorf("SandboxConfig = %q, want %q", got.GetSandboxConfigRef().GetName(), tc.wantName)
+			}
+		})
+	}
+}
+
+// TestResolveSandboxAssetsForResumeExactRevision pins that every resume path
+// holds the recorded SandboxConfig to its exact resourceVersion: a stale
+// recorded revision is a FailedPrecondition instead of silently resolving
+// binaries the snapshot did not record.
+func TestResolveSandboxAssetsForResumeExactRevision(t *testing.T) {
+	config := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-prod", UID: "prod-uid", ResourceVersion: "43"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			PauseImage:   "registry.k8s.io/pause@sha256:prod",
+			Assets:       testAssets(),
+		},
+	}
+	pool := &atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Name: "pool1", Namespace: "worker-ns"}}
+	poolLister, configLister := listersFor(t, []*atev1alpha1.WorkerPool{pool}, []*atev1alpha1.SandboxConfig{config})
+	w := &ActorWorkflow{workerPoolLister: poolLister, sandboxConfigLister: configLister}
+
+	// The object was updated in place since the snapshot recorded it.
+	staleRef := &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "prod-uid", ResourceVersion: "42"}
+	currentRef := &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "prod-uid", ResourceVersion: "43"}
+	goldenURI, err := resources.ParseSnapshotURI("gs://bucket/golden-root/snapshots/ate-golden/golden-1")
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		actor    *ateapipb.Actor
+		src      resumeSnapshotSource
+		wantCode codes.Code
+	}{
+		{
+			name:     "repointed actor pins the new golden's revision",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{TemplateReplaced: true, RepointSandboxConfigRef: staleRef},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "golden data restore pins the golden's revision",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{GoldenSnapshotURI: goldenURI, GoldenSandboxConfigRef: staleRef},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name: "local restore pins the pause snapshot's revision",
+			actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+				LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{SandboxConfigRef: staleRef},
+			}},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "durable restore pins the snapshot's revision",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{SandboxConfigRef: staleRef},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "the recorded revision passes",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{SandboxConfigRef: currentRef},
+			wantCode: codes.OK,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := w.resolveSandboxAssetsForResume(tc.actor, tc.src, "worker-ns", "pool1")
+			if code := status.Code(err); code != tc.wantCode {
+				t.Fatalf("status.Code = %v (err %v), want %v", code, err, tc.wantCode)
+			}
+		})
 	}
 }

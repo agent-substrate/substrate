@@ -20,6 +20,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -63,6 +67,54 @@ func resolveSandboxAssets(
 	return sandboxAssetsProto(class, sc), nil
 }
 
+// resolveSandboxAssetsByRef resolves an actor's recorded SandboxConfig
+// reference. The object must still be exactly the recorded revision: a UID
+// mismatch means it was re-created under the same name, a resourceVersion
+// mismatch that it was updated in place — either way the binaries the
+// snapshot recorded are gone, and it must not silently resolve different
+// ones.
+func resolveSandboxAssetsByRef(
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
+	ref *ateapipb.SandboxConfigRef,
+) (*ateletpb.SandboxAssets, error) {
+	sc, err := sandboxConfigLister.Get(ref.GetName())
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil, status.Errorf(codes.FailedPrecondition, "actor's SandboxConfig %s not found", ref.GetName())
+		}
+		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", ref.GetName(), err)
+	}
+	if string(sc.UID) != ref.GetUid() {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"actor records SandboxConfig %s with uid %s, but the object now has uid %s",
+			ref.GetName(), ref.GetUid(), sc.UID)
+	}
+	if sc.ResourceVersion != ref.GetResourceVersion() {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"actor records SandboxConfig %s at resourceVersion %s, but the object is now at %s",
+			ref.GetName(), ref.GetResourceVersion(), sc.ResourceVersion)
+	}
+	class := sc.Spec.SandboxClass
+	if class == "" {
+		class = atev1alpha1.SandboxClassGvisor
+	}
+	return sandboxAssetsProto(class, sc), nil
+}
+
+// sandboxConfigRefFromAtelet converts the SandboxConfig reference atelet
+// reports (from its on-node record) into the control plane's proto. Nil when
+// atelet reports none — a record written before the reference existed.
+func sandboxConfigRefFromAtelet(ref *ateletpb.SandboxConfigRef) *ateapipb.SandboxConfigRef {
+	if ref == nil {
+		return nil
+	}
+	return &ateapipb.SandboxConfigRef{
+		Name:            ref.GetName(),
+		Uid:             ref.GetUid(),
+		ResourceVersion: ref.GetResourceVersion(),
+	}
+}
+
 // defaultSandboxConfig returns the single SandboxConfig marked Default for the
 // given class, erroring if there are zero or more than one.
 func defaultSandboxConfig(lister listersv1alpha1.SandboxConfigLister, class atev1alpha1.SandboxClass) (*atev1alpha1.SandboxConfig, error) {
@@ -92,6 +144,11 @@ func sandboxAssetsProto(class atev1alpha1.SandboxClass, sc *atev1alpha1.SandboxC
 		SandboxClass: string(class),
 		PauseImage:   sc.Spec.PauseImage,
 		Assets:       make(map[string]*ateletpb.ArchAssets, len(sc.Spec.Assets)),
+		SandboxConfigRef: &ateletpb.SandboxConfigRef{
+			Name:            sc.Name,
+			Uid:             string(sc.UID),
+			ResourceVersion: sc.ResourceVersion,
+		},
 	}
 	for arch, files := range sc.Spec.Assets {
 		archAssets := &ateletpb.ArchAssets{Files: make(map[string]*ateletpb.AssetFile, len(files))}

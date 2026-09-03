@@ -392,13 +392,13 @@ func TestRestoreSnapshotKind(t *testing.T) {
 	tests := []struct {
 		name string
 		req  *ateletpb.RestoreRequest
-		rec  *sandboxAssetsRecord
+		rec  *snapshotManifest
 		want string
 	}{
 		{
 			name: "local pause snapshot",
 			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
+			rec:  &snapshotManifest{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLocal,
 		},
 		{
@@ -410,19 +410,19 @@ func TestRestoreSnapshotKind(t *testing.T) {
 		{
 			name: "external snapshot written by a golden actor",
 			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
-			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			rec:  &snapshotManifest{Atespace: resources.GoldenActorAtespace},
 			want: ateattr.SnapshotKindGolden,
 		},
 		{
 			name: "external snapshot written by a tenant actor",
 			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
+			rec:  &snapshotManifest{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "manifest predating the identity fields",
 			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
-			rec:  &sandboxAssetsRecord{},
+			rec:  &snapshotManifest{},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
@@ -437,7 +437,7 @@ func TestRestoreSnapshotKind(t *testing.T) {
 				Type:  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
 			},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
+			rec:  &snapshotManifest{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLocal,
 		},
 	}

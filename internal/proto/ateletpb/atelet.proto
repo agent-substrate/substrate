@@ -91,8 +91,9 @@ message RunRequest {
   WorkloadSpec spec = 7;
 
   // The sandbox binaries to use for booting this actor from scratch. atelet
-  // fetches the relevant assets and records them with the actor's on-node state
-  // so a later Checkpoint can pin the same version into the snapshot manifest.
+  // fetches the relevant assets and records them (with their SandboxConfig
+  // reference) in the actor's on-node state so a later Checkpoint can pin the
+  // reference into the snapshot manifest.
   SandboxAssets sandbox_assets = 8;
 
   // When absent, actor traffic uses direct egress instead of atunnel.
@@ -127,6 +128,18 @@ message ArchAssets {
   map<string, AssetFile> files = 1; // asset name -> file
 }
 
+// SandboxConfigRef references a cluster-scoped SandboxConfig Kubernetes
+// object by name, UID, and resource version. The UID distinguishes an object
+// from a later re-creation under the same name; the resource version pins the
+// exact object version.
+message SandboxConfigRef {
+  string name = 1;
+  string uid = 2;
+  // resource_version is the object's metadata.resourceVersion at the time
+  // the control plane resolved the request from it.
+  string resource_version = 3;
+}
+
 // SandboxAssets is the generic, backend-agnostic description of the sandbox
 // an actor runs in: a sandbox class, the pause image holding its namespaces,
 // and binaries keyed first by architecture (GOARCH) and then by asset name.
@@ -137,10 +150,14 @@ message SandboxAssets {
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}
 
   // pause_image is the image for the sandbox's root container. Like the
-  // binaries above it is sandbox configuration, not workload configuration,
-  // and atelet pins it into the snapshot manifest so a restore rebuilds the
-  // sandbox from the same image.
+  // binaries above it is sandbox configuration, not workload configuration.
   string pause_image = 3;
+
+  // Reference to the SandboxConfig object these assets were resolved from.
+  // atelet keeps it in the actor's on-node record and pins it into the
+  // snapshot manifest; the control plane stores it on the ActorSnapshot and
+  // resolves a later restore's assets from it.
+  SandboxConfigRef sandbox_config_ref = 4;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -340,9 +357,10 @@ message CheckpointRequest {
   string actor_template_atespace = 5;
   string actor_template_name = 6;
 
-  // Sandbox binary config is not sent on checkpoint: atelet uses the version the
-  // actor is currently running (recorded with the actor's on-node state at
-  // Run/Restore) and records it into the snapshot manifest.
+  // Sandbox binary config is not sent on checkpoint: atelet uses the version
+  // the actor is currently running (recorded with the actor's on-node state
+  // at Run/Restore) and records its SandboxConfig reference into the snapshot
+  // manifest.
   WorkloadSpec spec = 7;
 
   CheckpointType type = 8;
@@ -358,6 +376,12 @@ message CheckpointRequest {
 }
 
 message CheckpointResponse {
+  // The SandboxConfig reference from the actor's on-node record — the
+  // sandbox the checkpoint was actually taken with, as pinned into the
+  // snapshot manifest. The control plane copies it onto the ActorSnapshot /
+  // LocalSnapshotInfo record it finalizes for this checkpoint. Unset when
+  // the record predates the reference.
+  SandboxConfigRef sandbox_config_ref = 1;
 }
 
 message UploadPausedCheckpointRequest {
@@ -397,9 +421,6 @@ message RestoreRequest {
   string actor_template_atespace = 5;
   string actor_template_name = 6;
 
-  // Sandbox binary config is not sent on restore: the snapshot is
-  // self-describing. atelet reads the snapshot manifest to recover the pinned
-  // sandbox version that created it.
   WorkloadSpec spec = 7;
 
   CheckpointType type = 8;
@@ -430,6 +451,11 @@ message RestoreRequest {
   // means "unset": keep the runtime default.
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.
+
+  // The sandbox binaries to restore this actor with. Required: the snapshot
+  // manifest carries only a SandboxConfig reference, never asset content,
+  // so this is the only source of binaries for a restore.
+  SandboxAssets sandbox_assets = 16;
 }
 
 message RestoreResponse {

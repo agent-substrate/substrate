@@ -78,10 +78,14 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		return nil, err
 	}
 	actor = marked
+	// sandboxConfigRef stays nil on the paused-origin path: no checkpoint runs
+	// there, and the finalize below reads the pause snapshot's recorded
+	// reference instead.
+	var sandboxConfigRef *ateapipb.SandboxConfigRef
 	if fromPaused {
 		wireSnapshotScope, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
 	} else {
-		wireSnapshotScope, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate)
+		wireSnapshotScope, sandboxConfigRef, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate)
 	}
 	if err != nil {
 		return nil, err
@@ -93,7 +97,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	// them here, as crash.go does for the crash counter.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate, fromPaused, sandboxConfigRef); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -204,7 +208,7 @@ func isPausedOriginSuspend(actor *ateapipb.Actor) bool {
 // once-minted snapshot location, so a re-entered workflow re-sends the same
 // semantic request; once atelet's Checkpoint is idempotent on those keys this
 // step becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, err error) {
+func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, sandboxConfigRef *ateapipb.SandboxConfigRef, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletSuspend")
 	defer func() { err = done(err) }()
 
@@ -214,7 +218,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateattr.ReasonCorruptedAssignment); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
-		return "", fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
+		return "", nil, fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
 	}
 
 	ateletConn, err := w.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
@@ -224,25 +228,25 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 			if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateattr.ReasonWorkerPodGone); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
-			return "", fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
+			return "", nil, fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
 		}
-		return "", fmt.Errorf("while getting atelet conn for worker pod: %w", err)
+		return "", nil, fmt.Errorf("while getting atelet conn for worker pod: %w", err)
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	snapshotURI, err := inProgressSnapshotURI(actorTemplate, actor.GetMetadata().GetAtespace(), actor.GetStatus().GetInProgressSnapshotName())
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
-	// Checkpoint does not carry the sandbox config: atelet uses the version the
-	// actor is currently running (recorded on-node at Run/Restore) and pins it
-	// into the snapshot manifest.
+	// Checkpoint does not carry the sandbox config: atelet uses the version
+	// the actor is currently running (recorded on-node at Run/Restore) and
+	// pins its SandboxConfig reference into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:        assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
@@ -261,8 +265,8 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
-	_, err = client.Checkpoint(ctx, req)
-	return wireSnapshotScope, maybeCrashActor(ctx, w.store, actorRef, err, "while checkpointing workload", ateattr.OperationSuspend)
+	resp, err := client.Checkpoint(ctx, req)
+	return wireSnapshotScope, sandboxConfigRefFromAtelet(resp.GetSandboxConfigRef()), maybeCrashActor(ctx, w.store, actorRef, err, "while checkpointing workload", ateattr.OperationSuspend)
 }
 
 // ensurePausedSnapshotUploaded suspends a PAUSED actor by telling the atelet
@@ -343,7 +347,10 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // single update. It re-reads the actor first so an out-of-band transition
 // (e.g. the syncer crashing the actor after its worker died) is not
 // overwritten: with no assignment left there is nothing to finalize.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
+// fromPaused selects the new snapshot's SandboxConfig provenance: the pause
+// snapshot's recorded reference when re-uploading its content, the
+// checkpoint-reported sandboxConfigRef otherwise.
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, fromPaused bool, sandboxConfigRef *ateapipb.SandboxConfigRef) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
@@ -400,6 +407,12 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		if err != nil {
 			return nil, err
 		}
+		// A paused-origin suspend re-uploads the pause snapshot's content, so
+		// its recorded reference is the provenance; no checkpoint ran to
+		// report one.
+		if fromPaused {
+			sandboxConfigRef = latestActor.GetStatus().GetLocalSnapshotInfo().GetSandboxConfigRef()
+		}
 		snapshot := &ateapipb.ActorSnapshot{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: snapshotName},
 			Status: &ateapipb.ActorSnapshotStatus{
@@ -410,6 +423,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 				ActorTemplateUid:   actorTemplate.GetMetadata().GetUid(),
 				ContentScope:       commitSnapshotScope(actorRef.Atespace, actorTemplate),
 				SnapshotUri:        snapshotURI.String(),
+				SandboxConfigRef:   sandboxConfigRef,
 			},
 		}
 		// ErrAlreadyExists means a previous attempt crashed after creating

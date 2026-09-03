@@ -25,8 +25,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	gzip "github.com/klauspost/compress/gzip"
-	"github.com/klauspost/compress/zstd"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -37,6 +35,9 @@ import (
 	"syscall"
 	"time"
 
+	gzip "github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
+
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -44,9 +45,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// sandboxManifestName is the object/file name of the per-snapshot manifest that
-// records the actor identity, snapshot files, and sandbox binaries. It is written
-// next to the checkpoint images so a snapshot is self-describing.
+// sandboxManifestName is the object/file name of the per-snapshot manifest
+// (see snapshotManifest) written next to the checkpoint images.
 const sandboxManifestName = "manifest.json"
 
 // maxAssetBytes guards disk against an unbounded download URL; a var so tests can lower it.
@@ -70,21 +70,40 @@ type assetEntry struct {
 	SHA256 string `json:"sha256"`
 }
 
-// sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
-// the local node's architecture: the sandbox class and pause image plus the
-// asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
-// asset; records written before the tarball release mechanism use a bare
-// "runsc" asset).
-// It is both the per-actor on-node record (written at Run/Restore, read at
-// Checkpoint) and the snapshot manifest (written at Checkpoint, read at
-// Restore).
+// sandboxAssetsRecord is the sandbox runtime an actor is running, projected
+// onto the local node's architecture: the sandbox class and pause image plus
+// the asset set keyed by asset name (gVisor uses a single "gvisor"
+// release-tarball asset; records written before the tarball release mechanism
+// use a bare "runsc" asset).
+// It is the per-actor on-node record, written at Run/Restore and read at
+// Checkpoint/Terminate. Only its SandboxConfig reference is durable:
+// Checkpoint pins that into the snapshot manifest, never the asset content.
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
-	// PauseImage is the root sandbox container's image. It is recorded here
-	// rather than taken from the request at Restore so a snapshot is rebuilt
-	// with the same sandbox it was captured from.
+	// PauseImage is the root sandbox container's image.
 	PauseImage string `json:"pauseImage"`
+	// SandboxConfigRef is the SandboxConfig object the assets were resolved
+	// from; zero in records written before the reference existed.
+	SandboxConfigRef sandboxConfigRef `json:"sandboxConfigRef"`
+}
+
+// sandboxConfigRef is the global object reference of a SandboxConfig: name,
+// Kubernetes UID (distinguishing an object from a re-creation under the same
+// name), and the object's metadata.resourceVersion at asset resolution time.
+type sandboxConfigRef struct {
+	Name            string `json:"name"`
+	UID             string `json:"uid"`
+	ResourceVersion string `json:"resourceVersion,omitempty"`
+}
+
+// snapshotManifest is the manifest.json written beside a snapshot's
+// checkpoint files. It carries no sandbox asset content — restores take
+// assets from the RestoreRequest — only the SandboxConfig reference the
+// control plane verifies before sending them. Old-format manifests carried
+// the asset set itself; their extra JSON keys are ignored.
+type snapshotManifest struct {
+	SandboxClass string `json:"sandboxClass"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
 	Atespace              string `json:"atespace,omitempty"`
@@ -94,19 +113,22 @@ type sandboxAssetsRecord struct {
 	ActorTemplateName     string `json:"actorTemplateName,omitempty"`
 	// SnapshotFiles are the (relative) names of the files ateom wrote into the
 	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
-	// in the snapshot manifest so Restore ships/downloads exactly this set
-	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
-	// on-node record written at Run/Restore; populated at Checkpoint.
+	// so Restore ships/downloads exactly this set (gVisor's image files,
+	// cloud-hypervisor's snapshot set, ...).
 	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
 	// Scope is the snapshot scope the checkpoint captured, as the shared
 	// ateattr label ("full" or "data"), so a snapshot's content is knowable
-	// from the manifest alone. Empty in the on-node record written at
-	// Run/Restore and in snapshot manifests written before this field existed.
+	// from the manifest alone. Empty in manifests written before this field
+	// existed.
 	Scope string `json:"scope,omitempty"`
+	// SandboxConfigRef is the SandboxConfig the snapshotted sandbox was
+	// booted from; the control plane resolves a later restore's assets from
+	// it. Nil in older manifests.
+	SandboxConfigRef *sandboxConfigRef `json:"sandboxConfigRef,omitempty"`
 }
 
-// recordFromRequest projects a request's per-architecture SandboxAssets onto the
-// local node's architecture.
+// recordFromRequest projects a request's per-architecture SandboxAssets
+// onto the local node's architecture.
 func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error) {
 	if sa == nil {
 		return nil, fmt.Errorf("missing sandbox_assets")
@@ -123,6 +145,11 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 		SandboxClass: sa.GetSandboxClass(),
 		PauseImage:   sa.GetPauseImage(),
 		Assets:       make(map[string]assetEntry, len(archAssets.GetFiles())),
+		SandboxConfigRef: sandboxConfigRef{
+			Name:            sa.GetSandboxConfigRef().GetName(),
+			UID:             sa.GetSandboxConfigRef().GetUid(),
+			ResourceVersion: sa.GetSandboxConfigRef().GetResourceVersion(),
+		},
 	}
 	for name, f := range archAssets.GetFiles() {
 		rec.Assets[name] = assetEntry{URL: f.GetUrl(), SHA256: f.GetSha256()}
@@ -454,8 +481,9 @@ func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser,
 }
 
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a
-// later Checkpoint (whose request no longer carries the sandbox config) can
-// re-fetch the same binaries and pin them into the snapshot manifest.
+// later Checkpoint/Terminate (whose requests carry no sandbox config) can
+// re-fetch the same binaries, and Checkpoint can pin their SandboxConfig
+// reference into the snapshot manifest.
 func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -485,15 +513,25 @@ func readSandboxRecord(actorUID string) (*sandboxAssetsRecord, error) {
 func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
-		return nil, fmt.Errorf("%w: while parsing sandbox record/manifest: %w", ateerrors.ReasonInvalidSandboxAsset, err)
+		return nil, fmt.Errorf("%w: while parsing sandbox record: %w", ateerrors.ReasonInvalidSandboxAsset, err)
 	}
 	// Fail loudly rather than let an empty image reach the image pull: a record
 	// without one predates the pause image moving into the sandbox config, and
-	// its snapshot cannot be rebuilt with a known-matching sandbox.
+	// its sandbox cannot be rebuilt with a known-matching image.
 	if rec.PauseImage == "" {
-		return nil, fmt.Errorf("%w: sandbox record/manifest has no pauseImage", ateerrors.ReasonInvalidSandboxAsset)
+		return nil, fmt.Errorf("%w: sandbox record has no pauseImage", ateerrors.ReasonInvalidSandboxAsset)
 	}
 	return rec, nil
+}
+
+// unmarshalSandboxManifest parses a snapshot manifest; old-format asset keys
+// are ignored.
+func unmarshalSandboxManifest(data []byte) (*snapshotManifest, error) {
+	man := &snapshotManifest{}
+	if err := json.Unmarshal(data, man); err != nil {
+		return nil, fmt.Errorf("%w: while parsing snapshot manifest: %w", ateerrors.ReasonInvalidSandboxAsset, err)
+	}
+	return man, nil
 }
 
 func wrapFileSystemErr(msg string, err error) error {

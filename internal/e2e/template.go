@@ -42,6 +42,10 @@ type SubstrateTemplateOptions struct {
 	// k8s namespace.
 	PoolName     string
 	PoolReplicas int32
+	// PoolSandboxConfigName, when set, replaces the source pool's
+	// SandboxConfigName on the new WorkerPool, pointing its workers (and the
+	// golden snapshot built on them) at a different SandboxConfig.
+	PoolSandboxConfigName string
 	// Labels tie the template's workerSelector to the pool, keeping this
 	// pool's workers invisible to other namespaces' actors.
 	Labels map[string]string
@@ -90,6 +94,9 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 			SandboxClass:      existingWp.Spec.SandboxClass,
 			SandboxConfigName: existingWp.Spec.SandboxConfigName,
 		},
+	}
+	if opts.PoolSandboxConfigName != "" {
+		wp.Spec.SandboxConfigName = opts.PoolSandboxConfigName
 	}
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
