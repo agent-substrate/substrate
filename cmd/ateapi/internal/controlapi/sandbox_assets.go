@@ -68,8 +68,11 @@ func resolveSandboxAssets(
 }
 
 // resolveSandboxAssetsByRef resolves an actor's recorded SandboxConfig
-// reference. The UID must still match: an object re-created under the same
-// name is a different config.
+// reference. The object must still be exactly the recorded revision: a UID
+// mismatch means it was re-created under the same name, a resourceVersion
+// mismatch that it was updated in place — either way the binaries the
+// snapshot recorded are gone, and it must not silently resolve different
+// ones.
 func resolveSandboxAssetsByRef(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	ref *ateapipb.SandboxConfigRef,
@@ -86,7 +89,11 @@ func resolveSandboxAssetsByRef(
 			"actor records SandboxConfig %s with uid %s, but the object now has uid %s",
 			ref.GetName(), ref.GetUid(), sc.UID)
 	}
-	// TODO: we also need to get the correct revision or make sure the revision matches.
+	if sc.ResourceVersion != ref.GetResourceVersion() {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"actor records SandboxConfig %s at resourceVersion %s, but the object is now at %s",
+			ref.GetName(), ref.GetResourceVersion(), sc.ResourceVersion)
+	}
 	class := sc.Spec.SandboxClass
 	if class == "" {
 		class = atev1alpha1.SandboxClassGvisor

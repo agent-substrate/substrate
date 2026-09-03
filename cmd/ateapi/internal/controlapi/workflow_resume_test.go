@@ -1475,3 +1475,76 @@ func TestResolveSandboxAssetsForResume(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveSandboxAssetsForResumeExactRevision pins that every resume path
+// holds the recorded SandboxConfig to its exact resourceVersion: a stale
+// recorded revision is a FailedPrecondition instead of silently resolving
+// binaries the snapshot did not record.
+func TestResolveSandboxAssetsForResumeExactRevision(t *testing.T) {
+	config := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-prod", UID: "prod-uid", ResourceVersion: "43"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			PauseImage:   "registry.k8s.io/pause@sha256:prod",
+			Assets:       testAssets(),
+		},
+	}
+	pool := &atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Name: "pool1", Namespace: "worker-ns"}}
+	poolLister, configLister := listersFor(t, []*atev1alpha1.WorkerPool{pool}, []*atev1alpha1.SandboxConfig{config})
+	w := &ActorWorkflow{workerPoolLister: poolLister, sandboxConfigLister: configLister}
+
+	// The object was updated in place since the snapshot recorded it.
+	staleRef := &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "prod-uid", ResourceVersion: "42"}
+	currentRef := &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "prod-uid", ResourceVersion: "43"}
+	goldenURI, err := resources.ParseSnapshotURI("gs://bucket/golden-root/snapshots/ate-golden/golden-1")
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		actor    *ateapipb.Actor
+		src      resumeSnapshotSource
+		wantCode codes.Code
+	}{
+		{
+			name:     "repointed actor pins the new golden's revision",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{TemplateReplaced: true, RepointSandboxConfigRef: staleRef},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "golden data restore pins the golden's revision",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{GoldenSnapshotURI: goldenURI, GoldenSandboxConfigRef: staleRef},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name: "local restore pins the pause snapshot's revision",
+			actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{
+				LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{SandboxConfigRef: staleRef},
+			}},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "durable restore pins the snapshot's revision",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{SandboxConfigRef: staleRef},
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "the recorded revision passes",
+			actor:    &ateapipb.Actor{},
+			src:      resumeSnapshotSource{SandboxConfigRef: currentRef},
+			wantCode: codes.OK,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := w.resolveSandboxAssetsForResume(tc.actor, tc.src, "worker-ns", "pool1")
+			if code := status.Code(err); code != tc.wantCode {
+				t.Fatalf("status.Code = %v (err %v), want %v", code, err, tc.wantCode)
+			}
+		})
+	}
+}

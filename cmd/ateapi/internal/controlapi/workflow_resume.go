@@ -737,17 +737,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
-		// The wire scope describes the restore OPERATION: DATA_ON_GOLDEN when
-		// loadActorForResume resolved a golden URI per the template's onResume
-		// configuration, else what the pause captured.
-		switch {
-		case src.TemplateReplaced:
-			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-		case !src.GoldenSnapshotURI.IsZero():
-			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+		req.Scope = resumeWireScope(actor, actorTemplate, src)
+		if req.Scope == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
 			req.GoldenSnapshotUri = src.GoldenSnapshotURI.String()
-		default:
-			req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
@@ -761,17 +753,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if actor.GetStatus().GetLatestSnapshot() != nil {
 			tele.SnapshotKind = ateattr.SnapshotKindLatest
 		}
-		// Same wire-scope derivation as the local branch above.
-		var scope ateletpb.SnapshotScope
+		scope := resumeWireScope(actor, actorTemplate, src)
 		var goldenSnapshotURI string
-		switch {
-		case src.TemplateReplaced:
-			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-		case !src.GoldenSnapshotURI.IsZero():
-			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+		if scope == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
 			goldenSnapshotURI = src.GoldenSnapshotURI.String()
-		default:
-			scope = actorSnapshotContentScopeToAtelet(src.Scope)
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
@@ -826,7 +811,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 // the restored guest (the golden's for a DATA_ON_GOLDEN restore, the actor's
 // local or durable snapshot's otherwise). Boots from scratch, and snapshots
 // recorded before the reference existed, fall back to the assigned pool's
-// SandboxConfig.
+// SandboxConfig. The recorded config is pinned to its exact revision — the
+// resolve fails rather than silently serving binaries the snapshot did not
+// record.
 func (w *ActorWorkflow) resolveSandboxAssetsForResume(actor *ateapipb.Actor, src resumeSnapshotSource, poolNamespace, poolName string) (*ateletpb.SandboxAssets, error) {
 	var ref *ateapipb.SandboxConfigRef
 	switch {
@@ -843,6 +830,25 @@ func (w *ActorWorkflow) resolveSandboxAssetsForResume(actor *ateapipb.Actor, src
 		return resolveSandboxAssets(w.workerPoolLister, w.sandboxConfigLister, poolNamespace, poolName)
 	}
 	return resolveSandboxAssetsByRef(w.sandboxConfigLister, ref)
+}
+
+// resumeWireScope derives the wire scope of the pending restore — the
+// restore OPERATION, not the stored snapshot's scope: DATA when the actor
+// was repointed (the guest cold-boots from the spec), DATA_ON_GOLDEN when
+// loadActorForResume resolved a golden URI per the template's onResume
+// configuration, else the scope the snapshot holds (what the pause captures
+// for a local snapshot, the stored scope for a durable one).
+func resumeWireScope(actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) ateletpb.SnapshotScope {
+	switch {
+	case src.TemplateReplaced:
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	case !src.GoldenSnapshotURI.IsZero():
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+	case actor.GetStatus().GetLocalSnapshotInfo() != nil:
+		return actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotsConfig().GetOnPause())
+	default:
+		return actorSnapshotContentScopeToAtelet(src.Scope)
+	}
 }
 
 func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {

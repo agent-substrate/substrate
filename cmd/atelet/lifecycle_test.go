@@ -386,6 +386,22 @@ func TestRestoreSandboxAssetsSource(t *testing.T) {
 		}
 	})
 
+	t.Run("manifest revision mismatch is rejected", func(t *testing.T) {
+		// Same SandboxConfig object, updated in place since the checkpoint:
+		// the request's assets no longer describe the binaries the memory
+		// image was captured under.
+		man, err := unmarshalSandboxManifest(strippedManifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		man.SandboxConfigRef.ResourceVersion = "41"
+		writeManifest(t, man)
+		_, err = s.Restore(ctx, restoreReq(sandboxAssets))
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
+		}
+	})
+
 	t.Run("manifest ref mismatch is rejected", func(t *testing.T) {
 		man, err := unmarshalSandboxManifest(strippedManifest)
 		if err != nil {

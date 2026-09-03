@@ -1104,10 +1104,20 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// image (e.g. after a repoint at a template with a different config), so
 	// the snapshot's recorded config does not constrain the request.
 	if req.GetScope() != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
-		if manRef := guestMan.SandboxConfigRef; manRef != nil && manRef.UID != "" && manRef.UID != runtimeRec.SandboxConfigRef.UID {
-			return nil, status.Errorf(codes.FailedPrecondition,
-				"snapshot manifest records SandboxConfig %s (uid %s) but the request's assets come from %s (uid %s)",
-				manRef.Name, manRef.UID, runtimeRec.SandboxConfigRef.Name, runtimeRec.SandboxConfigRef.UID)
+		if manRef := guestMan.SandboxConfigRef; manRef != nil && manRef.UID != "" {
+			reqRef := runtimeRec.SandboxConfigRef
+			if manRef.UID != reqRef.UID {
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"snapshot manifest records SandboxConfig %s (uid %s) but the request's assets come from %s (uid %s)",
+					manRef.Name, manRef.UID, reqRef.Name, reqRef.UID)
+			}
+			// Same object, different revision: an in-place update swapped the
+			// binaries under the memory image.
+			if manRef.ResourceVersion != reqRef.ResourceVersion {
+				return nil, status.Errorf(codes.FailedPrecondition,
+					"snapshot manifest records SandboxConfig %s at resourceVersion %s but the request's assets come from resourceVersion %s",
+					manRef.Name, manRef.ResourceVersion, reqRef.ResourceVersion)
+			}
 		}
 	}
 

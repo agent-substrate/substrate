@@ -133,11 +133,12 @@ func TestResolveSandboxAssetsCarriesConfigRef(t *testing.T) {
 }
 
 // TestResolveSandboxAssetsByRef pins that the named SandboxConfig is used
-// only while its UID still matches; a missing or re-created object is a
-// FailedPrecondition.
+// only while it is exactly the recorded object revision; a missing,
+// re-created, or in-place-updated object is a FailedPrecondition rather
+// than silently resolving different binaries.
 func TestResolveSandboxAssetsByRef(t *testing.T) {
 	config := &atev1alpha1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-prod", UID: "sandbox-uid-1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-prod", UID: "sandbox-uid-1", ResourceVersion: "42"},
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass: atev1alpha1.SandboxClassGvisor,
 			PauseImage:   "registry.k8s.io/pause@sha256:abc",
@@ -151,9 +152,11 @@ func TestResolveSandboxAssetsByRef(t *testing.T) {
 		ref      *ateapipb.SandboxConfigRef
 		wantCode codes.Code
 	}{
-		{name: "match", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1"}, wantCode: codes.OK},
-		{name: "object gone", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-gone", Uid: "sandbox-uid-1"}, wantCode: codes.FailedPrecondition},
-		{name: "uid mismatch (object recreated under the same name)", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-0"}, wantCode: codes.FailedPrecondition},
+		{name: "match", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1", ResourceVersion: "42"}, wantCode: codes.OK},
+		{name: "object gone", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-gone", Uid: "sandbox-uid-1", ResourceVersion: "42"}, wantCode: codes.FailedPrecondition},
+		{name: "uid mismatch (object recreated under the same name)", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-0", ResourceVersion: "42"}, wantCode: codes.FailedPrecondition},
+		{name: "revision mismatch (object updated in place)", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1", ResourceVersion: "41"}, wantCode: codes.FailedPrecondition},
+		{name: "ref recorded without a revision", ref: &ateapipb.SandboxConfigRef{Name: "gvisor-prod", Uid: "sandbox-uid-1"}, wantCode: codes.FailedPrecondition},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
