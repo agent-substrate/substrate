@@ -802,10 +802,6 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
 		// Recorded at sprint start so the next resume can detect a repointed
 		// template by UID; the snapshot it restores was taken under this one.
-		toUpdate.Status.CurrentActorTemplate = &ateapipb.ObjectRef{
-			Atespace: actorTemplate.GetMetadata().GetAtespace(),
-			Name:     actorTemplate.GetMetadata().GetName(),
-		}
 		toUpdate.Status.CurrentActorTemplateUid = actorTemplate.GetMetadata().GetUid()
 		return nil
 	})

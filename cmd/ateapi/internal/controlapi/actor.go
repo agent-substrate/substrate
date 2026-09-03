@@ -109,6 +109,12 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		// suspend writes a snapshot under its own prefix and takes over from
 		// there.
 		outActor.Status.ExternalSnapshot = proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
+		// The Actor is born with guest state, so stamp the template that state
+		// was built on now rather than at the first resume. Left empty, a
+		// repoint before that first resume reads as "no guest state" instead of
+		// "replaced template", and the resume restores the old template's
+		// memory and rootfs in full instead of the volume data alone.
+		outActor.Status.CurrentActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
 	}
 	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
@@ -155,12 +161,12 @@ func (s *ServiceImpl) resolveSnapshotTagSource(ctx context.Context, actorAtespac
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
-		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
+		return nil, status.Errorf(codes.FailedPrecondition, "source ActorSnapshotTag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
 	}
 	for _, volume := range template.GetVolumes() {
 		if volume.GetExternalVolumeTemplate() != nil {
 			// TODO: Permit cloning after CSI volume snapshots are supported.
-			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot cloning does not support external volumes")
+			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshotTag cloning does not support ActorTemplates with external volumes")
 		}
 	}
 	return tag, nil

@@ -104,7 +104,6 @@ func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
 		Status: &ateapipb.ActorStatus{
 			State:                   ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
 			CurrentActorTemplateUid: "tmpl-uid-1",
 		},
 	})
@@ -118,10 +117,6 @@ func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
-	}
-	want := &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"}
-	if ref := got.GetStatus().GetCurrentActorTemplate(); !proto.Equal(ref, want) {
-		t.Errorf("CurrentActorTemplate = %v, want %v", ref, want)
 	}
 	if uid := got.GetStatus().GetCurrentActorTemplateUid(); uid != "tmpl-uid-2" {
 		t.Errorf("CurrentActorTemplateUid = %q, want %q", uid, "tmpl-uid-2")
@@ -1088,12 +1083,10 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 	}
 }
 
-// TestLoadActorForResume_TemplateReplaced covers the snapshot-side detection
-// of a repointed actor: the durable snapshot records the template UID it was
-// captured under, and a mismatch with the actor's current template marks the
-// source TemplateReplaced, forcing the restore to data-only. The detection
-// must not depend on the actor's boot-time template stamp, which is absent
-// on actors created from a snapshot clone.
+// TestLoadActorForResume_TemplateReplaced covers the detection of a repointed
+// actor: the actor records the template UID its guest state was built on, and
+// a mismatch with its current template marks the source TemplateReplaced,
+// forcing the restore to data-only.
 func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 

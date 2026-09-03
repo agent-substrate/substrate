@@ -45,6 +45,7 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	objects.PutSnapshot(t, uri, objectNames...)
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+		s.CurrentActorTemplateUid = template.GetMetadata().GetUid()
 	})
 	return actor, uri
 }
@@ -126,6 +127,39 @@ func TestTagActorSnapshot(t *testing.T) {
 	}
 }
 
+func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	builtOn := seedSubstrateTemplate(t, ctx, persistence, "tmpl-a")
+	repointedTo := seedSubstrateTemplate(t, ctx, persistence, "tmpl-b")
+	w, objects := newFinalizeWorkflow(persistence)
+
+	actor, _ := seedTagSource(t, ctx, persistence, objects, builtOn, "actor-1", "manifest.json", "memory.zst")
+	actorRef := resources.ActorRefFromActor(actor)
+
+	// Repoint the suspended actor, the way UpdateActor does. Its recorded
+	// built-on UID stays at tmpl-a: only a resume moves that.
+	if _, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.ActorTemplate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-b"}
+		return nil
+	}); err != nil {
+		t.Fatalf("repointing actor %s: %v", actorRef, err)
+	}
+
+	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	if err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+
+	if builtOn.GetMetadata().GetUid() == repointedTo.GetMetadata().GetUid() {
+		t.Fatal("the two templates share a UID; the assertion below would be vacuous")
+	}
+	if got, want := tag.GetStatus().GetActorTemplateUid(), builtOn.GetMetadata().GetUid(); got != want {
+		t.Errorf("actor template uid = %q, want the template the snapshot was built under %q (the actor now points at %q)",
+			got, want, repointedTo.GetMetadata().GetUid())
+	}
+}
+
 // TestTagActorSnapshot_Preconditions verifies what a tag may be taken from:
 // a suspended actor's finished external snapshot, and nothing else.
 func TestTagActorSnapshot_Preconditions(t *testing.T) {
@@ -133,15 +167,29 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 		name         string
 		state        ateapipb.ActorState
 		withSnapshot bool
+		// builtOnTemplate records the template the seeded snapshot was taken
+		// under, as every real path to holding one does. Only the case that
+		// exercises the missing record leaves it false.
+		builtOnTemplate bool
+		wantCode        codes.Code
 	}{
 		{
-			name:         "the actor is not suspended",
-			state:        ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			withSnapshot: true,
+			name:            "the actor is not suspended",
+			state:           ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			withSnapshot:    true,
+			builtOnTemplate: true,
+			wantCode:        codes.FailedPrecondition,
 		},
 		{
-			name:  "the actor holds no external snapshot",
-			state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			name:     "the actor holds no external snapshot",
+			state:    ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:         "the actor records no template its snapshot was built under",
+			state:        ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			withSnapshot: true,
+			wantCode:     codes.Internal,
 		},
 	}
 
@@ -163,12 +211,15 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 				objects.PutSnapshot(t, uri, "manifest.json")
 				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String()}
+					if tt.builtOnTemplate {
+						s.CurrentActorTemplateUid = template.GetMetadata().GetUid()
+					}
 				})
 			}
 
 			_, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
-			if code := status.Code(err); code != codes.FailedPrecondition {
-				t.Fatalf("TagActorSnapshot error = %v (code %v), want code FailedPrecondition", err, code)
+			if code := status.Code(err); code != tt.wantCode {
+				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
 			// A rejected create takes the name with it.
 			if _, err := persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "v1"}); !errors.Is(err, store.ErrNotFound) {
@@ -241,6 +292,51 @@ func TestTagActorSnapshot_RetriesAfterCopyFailure(t *testing.T) {
 	_, err = w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot over the finished tag = %v (code %v), want code AlreadyExists", err, code)
+	}
+}
+
+// TestTagActorSnapshot_RetryWithAnotherScope verifies that a retry naming a
+// different scope is rejected rather than adopted. Scope is fixed when the row
+// is reserved, so adopting would return the reserved scope and silently ignore
+// the one the caller asked for.
+func TestTagActorSnapshot_RetryWithAnotherScope(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	w, objects := newFinalizeWorkflow(persistence)
+
+	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json")
+	actorRef := resources.ActorRefFromActor(actor)
+	tagRef := resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "v1"}
+
+	// Leave a pending row behind: the reservation lands, the copy does not.
+	objects.OnCopy = func(_, _, _, _ string) error { return errObjectStore }
+	if _, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1")); !errors.Is(err, errObjectStore) {
+		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	objects.OnCopy = nil
+
+	published := tagToCreate("v1")
+	published.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+	_, err := w.TagActorSnapshot(ctx, actorRef, published)
+	if code := status.Code(err); code != codes.AlreadyExists {
+		t.Errorf("TagActorSnapshot with another scope = %v (code %v), want code AlreadyExists", err, code)
+	}
+	stored, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetActorSnapshotTag after the rejected retry: %v", err)
+	}
+	if got, want := stored.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE; got != want {
+		t.Errorf("pending tag scope = %v, want the reserved %v", got, want)
+	}
+
+	// The reserved scope still adopts, so the rejection did not cost idempotency.
+	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	if err != nil {
+		t.Fatalf("retried TagActorSnapshot with the reserved scope: %v", err)
+	}
+	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+		t.Error("snapshot uri after the retry is empty, want the adopted row finished")
 	}
 }
 

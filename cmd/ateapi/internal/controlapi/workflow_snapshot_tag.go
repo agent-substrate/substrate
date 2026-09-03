@@ -96,6 +96,13 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if snapshotURI == "" {
 		return nil, nil, status.Errorf(codes.FailedPrecondition, "Actor %s holds no external snapshot to tag", actorRef)
 	}
+	// Every way an Actor comes to hold guest state records the template that
+	// state was built under: a boot through finalizeRunning, a create from a
+	// tag through the tag's own UID. A snapshot without one is a broken row,
+	// and tagging it would mint a tag that names no template.
+	if actor.GetStatus().GetCurrentActorTemplateUid() == "" {
+		return nil, nil, status.Errorf(codes.Internal, "Actor %s holds an external snapshot but records no template it was built under", actorRef)
+	}
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
 		return nil, nil, err
@@ -110,7 +117,9 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 // row's rather than a freshly minted one, and it returns that row's in-progress
 // URI; a fresh reservation returns "". A name held by a finished tag, or by
 // another actor's unfinished one, is AlreadyExists: adopting another actor's
-// pending create would let two sources interleave objects into one prefix.
+// pending create would let two sources interleave objects into one prefix. So
+// is a pending row reserved with a different scope, which is a different
+// request rather than a retry of this one.
 func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.ActorSnapshotTagRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, tag *ateapipb.ActorSnapshotTag) (_ *ateapipb.ActorSnapshotTag, adoptedSnapshotURI string, err error) {
 	ctx, done := stepSpan(ctx, "ReserveSnapshotTag")
 	defer func() { err = done(err) }()
@@ -123,7 +132,12 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
 		Scope:    tag.GetScope(),
 		Status: &ateapipb.ActorSnapshotTagStatus{
-			ActorTemplateUid:      actorTemplate.GetMetadata().GetUid(),
+			// The tag records the template the snapshot's guest state was built under, not
+			// the one the actor currently points at. A suspended actor can be repointed,
+			// and a tag that claimed the new template would hand clones the old template's
+			// memory under the new one's identity, past the data-only downgrade a resume of
+			// the actor itself would take.
+			ActorTemplateUid:      actor.GetStatus().GetCurrentActorTemplateUid(),
 			InProgressSnapshotUri: dst.String(),
 			SourceActorUid:        actor.GetMetadata().GetUid(),
 		},
@@ -161,6 +175,11 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 	case existing.GetStatus().GetSourceActorUid() != actor.GetMetadata().GetUid():
 		// This tag already exists and is final.
 		return nil, "", status.Errorf(codes.AlreadyExists, "ActorSnapshotTag %s already exists", tagRef)
+	case existing.GetScope() != tag.GetScope():
+		// Same actor, but not a retry of this request: scope is fixed when the
+		// row is reserved, so adopting would return the reserved scope and
+		// silently ignore the one asked for.
+		return nil, "", status.Errorf(codes.AlreadyExists, "ActorSnapshotTag %s already exists with scope %s", tagRef, existing.GetScope())
 	case existing.GetStatus().GetInProgressSnapshotUri() == "":
 		// Neither finished nor in progress: the row points to no objects at all, so
 		// there is nothing this workflow can safely resume or collect. This should never happen.

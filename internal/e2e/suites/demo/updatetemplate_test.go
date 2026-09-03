@@ -140,9 +140,6 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	if got, want := suspended.GetStatus().GetCurrentActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("suspended Actor current_actor_template_uid = %q, want template A's %q", got, want)
 	}
-	if got := suspended.GetStatus().GetCurrentActorTemplate().GetName(); got != nameA {
-		t.Errorf("suspended Actor current_actor_template = %q, want %q", got, nameA)
-	}
 	if suspended.GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
 		t.Error("suspended Actor has no external snapshot")
 	}
