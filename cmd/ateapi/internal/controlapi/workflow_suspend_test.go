@@ -457,6 +457,76 @@ func TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure(t *testing.T) {
 	}
 }
 
+// crashAfterWorkerReleaseStore models DeleteWorker having loaded its Worker
+// before suspend releases it, then crashing the bound Actor immediately after
+// the release. The stale Worker is intentional: it is the snapshot the
+// concurrent delete workflow already holds.
+type crashAfterWorkerReleaseStore struct {
+	store.Interface
+}
+
+func (s *crashAfterWorkerReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapipb.Worker, error) {
+	staleWorker, err := s.Interface.GetWorker(ctx, workerName)
+	if err != nil {
+		return nil, err
+	}
+	staleAssignment, err := s.Interface.GetWorkerAssignment(ctx, workerName, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	released, err := s.Interface.ReleaseActorFromWorker(ctx, workerName, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	if err := NewWorkerWorkflow(s.Interface).releaseBoundActor(ctx, staleWorker, staleAssignment); err != nil {
+		return nil, err
+	}
+	return released, nil
+}
+
+func TestEnsureSuspendedFinalized_WorkerDeleteDuringReleasePreservesCrash(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	workerName := testWorkerUID("pod-1")
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:       &ateapipb.ObjectRef{Name: workerName},
+				WorkerPodUid: workerName,
+			},
+			InProgressSnapshotName: "snapshot-1",
+		},
+	})
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:     &ateapipb.ResourceMetadata{Name: workerName},
+		SandboxClass: "gvisor",
+	}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+	seedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
+		Actor:    actorRef.ToObjectRef(),
+		ActorUid: actor.GetMetadata().GetUid(),
+	})
+
+	w := &ActorWorkflow{store: &crashAfterWorkerReleaseStore{Interface: persistence}}
+	_, err := w.ensureSuspendedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{
+		SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"},
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ensureSuspendedFinalized error = %v, want FailedPrecondition", err)
+	}
+	got, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+}
+
 func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	tests := []struct {
 		name               string
