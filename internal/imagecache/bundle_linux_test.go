@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -288,6 +289,102 @@ func TestSetupBundleRootfs_ManyLayers(t *testing.T) {
 
 	if err := UnmountAllUnder(bundle); err != nil {
 		t.Fatalf("UnmountAllUnder: %v", err)
+	}
+}
+
+// Legacy mount(2) path, exercised directly so it is covered even on kernels
+// where mountOverlay's lowerdir+ attempt succeeds and never falls back to
+// it. Needs CAP_SYS_ADMIN.
+func TestMountOverlayLegacy(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+	layer := t.TempDir()
+	writeLayer(t, layer, map[string]string{"from-layer.txt": "hello"}, nil)
+
+	bundle := t.TempDir()
+	rootfs := filepath.Join(bundle, "rootfs")
+	upper := filepath.Join(bundle, "upper")
+	work := filepath.Join(bundle, "work")
+	for _, d := range []string{rootfs, upper, work} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := FinalizeLayer(layer); err != nil {
+		t.Fatalf("FinalizeLayer: %v", err)
+	}
+
+	if err := mountOverlayLegacy(rootfs, overlayLowerDirs([]string{layer}), upper, work); err != nil {
+		t.Fatalf("mountOverlayLegacy: %v", err)
+	}
+	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+	if got, err := os.ReadFile(filepath.Join(rootfs, "from-layer.txt")); err != nil || string(got) != "hello" {
+		t.Errorf("layer content not visible through overlay: %q (%v)", got, err)
+	}
+}
+
+// Forces mountOverlay's first fsconfig call to fail with an unrecognized
+// parameter name, the same failure a pre-6.5 kernel gives for real, and
+// checks it falls back to a working legacy mount rather than erroring out.
+// Needs CAP_SYS_ADMIN.
+func TestMountOverlay_FallsBackOnUnsupportedLowerdirPlus(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+	orig := lowerdirPlusOption
+	lowerdirPlusOption = "not-a-real-overlay-option+"
+	t.Cleanup(func() { lowerdirPlusOption = orig })
+
+	layer := t.TempDir()
+	writeLayer(t, layer, map[string]string{"from-layer.txt": "hello"}, nil)
+	if err := FinalizeLayer(layer); err != nil {
+		t.Fatalf("FinalizeLayer: %v", err)
+	}
+
+	bundle := t.TempDir()
+	rootfs := filepath.Join(bundle, "rootfs")
+	upper := filepath.Join(bundle, "upper")
+	work := filepath.Join(bundle, "work")
+	for _, d := range []string{rootfs, upper, work} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	if err := mountOverlay(rootfs, overlayLowerDirs([]string{layer}), upper, work); err != nil {
+		t.Fatalf("mountOverlay: %v", err)
+	}
+	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+	if got, err := os.ReadFile(filepath.Join(rootfs, "from-layer.txt")); err != nil || string(got) != "hello" {
+		t.Errorf("layer content not visible through overlay after fallback: %q (%v)", got, err)
+	}
+}
+
+func TestOverlayMountOptions(t *testing.T) {
+	if _, err := overlayMountOptions([]string{"a:b"}, "/upper", "/work"); err == nil {
+		t.Error("lower path with separator: want error, got nil")
+	}
+	if _, err := overlayMountOptions([]string{"/a"}, "up,per", "/work"); err == nil {
+		t.Error("upper path with separator: want error, got nil")
+	}
+
+	opts, err := overlayMountOptions([]string{"/a", "/b"}, "/upper", "/work")
+	if err != nil {
+		t.Fatalf("overlayMountOptions: %v", err)
+	}
+	if want := "lowerdir=/a:/b,upperdir=/upper,workdir=/work"; opts != want {
+		t.Errorf("opts = %q, want %q", opts, want)
+	}
+
+	long := make([]string, 64)
+	for i := range long {
+		long[i] = filepath.Join("/sha256", fmt.Sprintf("%064d", i), "fs")
+	}
+	_, err = overlayMountOptions(long, "/upper", "/work")
+	if err == nil {
+		t.Fatal("over-page-cap options: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "lowerdir+") {
+		t.Errorf("over-page-cap error = %q, want a mention of lowerdir+ / kernel upgrade", err.Error())
 	}
 }
 
