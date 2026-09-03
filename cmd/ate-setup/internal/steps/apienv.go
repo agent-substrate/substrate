@@ -44,7 +44,7 @@ const envHashAnnotation = "ate.dev/env-hash"
 // previous installer left in the ConfigMap.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
-	if err := e.Kube.EnsureNamespace(ctx, NamespaceAteSystem); err != nil {
+	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
 
@@ -77,10 +77,10 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	dsn = withPoolMaxConns(dsn, e.Cfg.PostgresPoolMaxConns, dsnFromOperator)
 	log.Infof("POSTGRES_CONNECTION_STRING: %s", redactDSN(dsn))
 
-	if err := e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, cloudSQLEnvVars(cloudsql)); err != nil {
+	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, cloudSQLEnvVars(cloudsql)); err != nil {
 		return err
 	}
-	if err := e.Kube.ApplySecret(ctx, NamespaceAteSystem, SecretAPIEnvVars,
+	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars,
 		buildAPIServerEnvVars(dsn, e.Cfg.PostgresSchemaName())); err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func buildAPIServerEnvVars(connString, schema string) map[string]string {
 
 // recordedDSN reads the connection string the cluster currently runs with.
 func (e *Env) recordedDSN(ctx context.Context) (string, error) {
-	secret, err := e.Kube.GetSecret(ctx, NamespaceAteSystem, SecretAPIEnvVars)
+	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 	if err != nil || secret == nil {
 		return "", err
 	}
@@ -129,7 +129,7 @@ func (e *Env) applyPostgresServerCA(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reading ATE_API_POSTGRES_SERVER_CA_FILE: %w", err)
 	}
-	return e.Kube.ApplySecret(ctx, NamespaceAteSystem, SecretPostgresServerCA, map[string]string{
+	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresServerCA, map[string]string{
 		"server-ca.pem": string(pem),
 	})
 }
@@ -184,7 +184,7 @@ func redactDSN(dsn string) string {
 // running Deployment without a DSN on its next restart. A full deploy is safe
 // because it updates the Deployment in the same run.
 func (e *Env) EnsureEnvVarsSafeStandalone(ctx context.Context) error {
-	dep, err := e.Kube.GetDeployment(ctx, NamespaceAteSystem, "ate-api-server")
+	dep, err := e.Kube.GetDeployment(ctx, e.Namespace(), "ate-api-server")
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func (e *Env) EnsureEnvVarsSafeStandalone(ctx context.Context) error {
 // apiserver's environment, so that a changed DSN starts a rollout. Kubernetes
 // does not restart pods when an envFrom ConfigMap or Secret changes.
 func (e *Env) annotateAPIServerEnvHash(ctx context.Context) error {
-	dep, err := e.Kube.GetDeployment(ctx, NamespaceAteSystem, "ate-api-server")
+	dep, err := e.Kube.GetDeployment(ctx, e.Namespace(), "ate-api-server")
 	if err != nil {
 		return err
 	}
@@ -218,11 +218,11 @@ func (e *Env) annotateAPIServerEnvHash(ctx context.Context) error {
 		return nil
 	}
 
-	cm, err := e.Kube.GetConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars)
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars)
 	if err != nil {
 		return err
 	}
-	secret, err := e.Kube.GetSecret(ctx, NamespaceAteSystem, SecretAPIEnvVars)
+	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func (e *Env) annotateAPIServerEnvHash(ctx context.Context) error {
 
 	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{%q:%q}}}}}`,
 		envHashAnnotation, envHash(cmData, secretData))
-	return e.Kube.PatchDeployment(ctx, NamespaceAteSystem, "ate-api-server", []byte(patch))
+	return e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", []byte(patch))
 }
 
 // envHash digests the apiserver's environment sources. Only changes matter, so

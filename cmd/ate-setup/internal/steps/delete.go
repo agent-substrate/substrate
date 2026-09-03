@@ -45,7 +45,7 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	}
 
 	// atelet DaemonSet names carry a version suffix.
-	if err := e.Kube.Typed.AppsV1().DaemonSets(NamespaceAteSystem).DeleteCollection(ctx,
+	if err := e.Kube.Typed.AppsV1().DaemonSets(e.Namespace()).DeleteCollection(ctx,
 		metav1.DeleteOptions{}, metav1.ListOptions{LabelSelector: "app=atelet"}); err != nil {
 		return fmt.Errorf("while deleting atelet daemonsets: %w", err)
 	}

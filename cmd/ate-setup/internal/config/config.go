@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -73,6 +74,13 @@ type Config struct {
 
 	// Kind selects the local Kind install profile (ATE_INSTALL_KIND).
 	Kind bool
+
+	// Namespace is the namespace the control plane is installed into, from
+	// ATE_NAMESPACE. It defaults to the canonical installdefaults.SystemNamespace,
+	// so an install that does not set it is unaffected. The checked-in manifests
+	// under manifests/ate-install/ name that namespace literally, so the
+	// manifest-applying steps refuse any other value; see Env.RequireCanonicalNamespace.
+	Namespace string
 
 	// Kubeconfig and Context select the target cluster. Empty Context means
 	// "use the current context" (the KUBECTL_CONTEXT convention).
@@ -301,6 +309,7 @@ func Load(opts Options) (*Config, error) {
 	cfg := &Config{
 		Root:                     root,
 		Kind:                     kind,
+		Namespace:                firstNonEmpty(env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
 		Kubeconfig:               kubeconfig,
 		Context:                  firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
 		ProjectID:                env["PROJECT_ID"],

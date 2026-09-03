@@ -54,32 +54,32 @@ const caValidity = 365 * 24 * time.Hour
 // to kubectl-ate for.
 func (e *Env) CreateJWTAuthorityPoolSecret(ctx context.Context) error {
 	log.Step("create_jwt_authority_pool_secret")
-	return e.createJWTPool(ctx, NamespaceAteSystem, SecretActorIDJWTPool)
+	return e.createJWTPool(ctx, e.Namespace(), SecretActorIDJWTPool)
 }
 
 // CreateActorIDCAPoolSecret generates the actor-identity CA pool.
 func (e *Env) CreateActorIDCAPoolSecret(ctx context.Context) error {
 	log.Step("create_actor_id_ca_pool_secret")
-	return e.createCAPool(ctx, NamespaceAteSystem, SecretActorIDCAPool)
+	return e.createCAPool(ctx, e.Namespace(), SecretActorIDCAPool)
 }
 
 // CreateEgressMITMCAPoolSecret generates the egress MITM CA pool.
 func (e *Env) CreateEgressMITMCAPoolSecret(ctx context.Context) error {
 	log.Step("create_egress_mitm_ca_pool_secret")
-	exists, err := e.Kube.SecretExists(ctx, NamespaceAteSystem, SecretEgressMITMCAPool)
+	exists, err := e.Kube.SecretExists(ctx, e.Namespace(), SecretEgressMITMCAPool)
 	if err != nil {
 		return err
 	}
 	if exists {
-		log.Infof("  CA pool %s/%s already exists; keeping it", NamespaceAteSystem, SecretEgressMITMCAPool)
+		log.Infof("  CA pool %s/%s already exists; keeping it", e.Namespace(), SecretEgressMITMCAPool)
 		return nil
 	}
 
 	data, err := newCAPoolSecretData(poolKeyID, localca.KeyTypeECDSAP256)
 	if err != nil {
-		return fmt.Errorf("while generating the CA pool for %s/%s: %w", NamespaceAteSystem, SecretEgressMITMCAPool, err)
+		return fmt.Errorf("while generating the CA pool for %s/%s: %w", e.Namespace(), SecretEgressMITMCAPool, err)
 	}
-	return e.createPoolSecret(ctx, NamespaceAteSystem, SecretEgressMITMCAPool, corev1.SecretTypeTLS, data)
+	return e.createPoolSecret(ctx, e.Namespace(), SecretEgressMITMCAPool, corev1.SecretTypeTLS, data)
 }
 
 // EnsureEgressMITMCAPoolSecret creates the egress MITM CA pool secret if
@@ -89,7 +89,7 @@ func (e *Env) EnsureEgressMITMCAPoolSecret(ctx context.Context) error {
 	if !e.Cfg.ExperimentalUseSDSMint {
 		return nil
 	}
-	return e.ensureSecret(ctx, NamespaceAteSystem, SecretEgressMITMCAPool, e.CreateEgressMITMCAPoolSecret)
+	return e.ensureSecret(ctx, e.Namespace(), SecretEgressMITMCAPool, e.CreateEgressMITMCAPoolSecret)
 }
 
 // CreatePodCertificateControllerCAs generates the two signer pools the
@@ -113,11 +113,11 @@ func (e *Env) CreatePodCertificateControllerCAs(ctx context.Context) error {
 // root.
 func (e *Env) CreateActorIDCACertsSecret(ctx context.Context) error {
 	log.Step("create_actor_id_ca_certs_secret")
-	root, err := e.Kube.CAPoolRootPEM(ctx, NamespaceAteSystem, SecretActorIDCAPool)
+	root, err := e.Kube.CAPoolRootPEM(ctx, e.Namespace(), SecretActorIDCAPool)
 	if err != nil {
 		return fmt.Errorf("while building %s: %w", SecretActorIDCACerts, err)
 	}
-	return e.Kube.ApplySecret(ctx, NamespaceAteSystem, SecretActorIDCACerts, map[string]string{
+	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretActorIDCACerts, map[string]string{
 		"ca.crt": string(root),
 	})
 }
@@ -126,7 +126,7 @@ func (e *Env) CreateActorIDCACertsSecret(ctx context.Context) error {
 // authentication config, pointing it at the cluster's service account issuer.
 func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
 	log.Step("create_api_authentication_config")
-	if err := e.Kube.EnsureNamespace(ctx, NamespaceAteSystem); err != nil {
+	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
 
@@ -137,7 +137,7 @@ func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
 	for _, line := range strings.Split(authnConfig, "\n") {
 		log.Infof("  | %s", line)
 	}
-	return e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIAuthn, map[string]string{
+	return e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIAuthn, map[string]string{
 		"authentication.yaml": authnConfig,
 	})
 }

@@ -104,7 +104,7 @@ func cloudSQLSettingsFrom(c config.CloudSQLConfig, recorded map[string]string) c
 // recordedAPIServerEnvVars returns the ate-api-server-envvars ConfigMap data,
 // or nil when the ConfigMap does not exist.
 func (e *Env) recordedAPIServerEnvVars(ctx context.Context) (map[string]string, error) {
-	cm, err := e.Kube.GetConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars)
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars)
 	if err != nil || cm == nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (e *Env) resolveCloudSQL(ctx context.Context) (cloudSQLSettings, error) {
 
 	s.GSA = e.Cfg.CloudSQL.GSA
 	if s.GSA == "" {
-		gsa, err := e.Kube.ServiceAccountAnnotation(ctx, NamespaceAteSystem, "ate-api-server", workloadIdentityAnnotation)
+		gsa, err := e.Kube.ServiceAccountAnnotation(ctx, e.Namespace(), "ate-api-server", workloadIdentityAnnotation)
 		if err != nil {
 			return cloudSQLSettings{}, err
 		}
@@ -220,7 +220,7 @@ func (e *Env) reconcileCloudSQLProxySidecar(ctx context.Context) error {
 	if s.Instance != "" {
 		log.Step("reconcile_cloudsql_proxy_sidecar (add)")
 		if s.GSA != "" {
-			if err := e.Kube.SetServiceAccountAnnotation(ctx, NamespaceAteSystem, "ate-api-server",
+			if err := e.Kube.SetServiceAccountAnnotation(ctx, e.Namespace(), "ate-api-server",
 				workloadIdentityAnnotation, s.GSA); err != nil {
 				return err
 			}
@@ -229,7 +229,7 @@ func (e *Env) reconcileCloudSQLProxySidecar(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("reading the Cloud SQL proxy sidecar patch: %w", err)
 		}
-		return e.Kube.PatchDeployment(ctx, NamespaceAteSystem, "ate-api-server", patch)
+		return e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", patch)
 	}
 
 	installed, err := e.cloudSQLProxyInstalled(ctx)
@@ -239,17 +239,17 @@ func (e *Env) reconcileCloudSQLProxySidecar(ctx context.Context) error {
 	log.Step("reconcile_cloudsql_proxy_sidecar (remove)")
 	const removePatch = `{"spec":{"template":{"spec":{"initContainers":[{"name":"` +
 		cloudSQLProxyContainer + `","$patch":"delete"}]}}}}`
-	if err := e.Kube.PatchDeployment(ctx, NamespaceAteSystem, "ate-api-server", []byte(removePatch)); err != nil {
+	if err := e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", []byte(removePatch)); err != nil {
 		return err
 	}
-	return e.Kube.SetServiceAccountAnnotation(ctx, NamespaceAteSystem, "ate-api-server",
+	return e.Kube.SetServiceAccountAnnotation(ctx, e.Namespace(), "ate-api-server",
 		workloadIdentityAnnotation, "")
 }
 
 // cloudSQLProxyInstalled reports whether ate-api-server currently runs the
 // proxy sidecar.
 func (e *Env) cloudSQLProxyInstalled(ctx context.Context) (bool, error) {
-	dep, err := e.Kube.GetDeployment(ctx, NamespaceAteSystem, "ate-api-server")
+	dep, err := e.Kube.GetDeployment(ctx, e.Namespace(), "ate-api-server")
 	if err != nil || dep == nil {
 		return false, err
 	}

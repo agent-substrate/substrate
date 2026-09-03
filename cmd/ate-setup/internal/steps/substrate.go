@@ -124,7 +124,7 @@ func WaitActorTemplateGolden(ctx context.Context, client *ateclient.Client, ref 
 // atespaces. A cluster without a reachable
 // ate-api-server is not an error -- there is nothing to clean up.
 func (e *Env) DeleteSubstrateDemo(ctx context.Context, refs []resources.ActorTemplateRef, atespaces []string) error {
-	present, err := e.Kube.DeploymentExists(ctx, NamespaceAteSystem, "ate-api-server")
+	present, err := e.Kube.DeploymentExists(ctx, e.Namespace(), "ate-api-server")
 	if err != nil {
 		return err
 	}

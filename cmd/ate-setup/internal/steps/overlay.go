@@ -315,7 +315,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 		return err
 	}
 
-	running, err := e.Kube.DeploymentExists(ctx, NamespaceAteSystem, "atenet-egress")
+	running, err := e.Kube.DeploymentExists(ctx, e.Namespace(), "atenet-egress")
 	if err != nil {
 		return err
 	}
@@ -325,7 +325,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 	}
 
 	if running && (e.Cfg.AdditionalEgressExtprocService != "" || e.Cfg.ExperimentalEgressCredentialInjection) {
-		if err := e.Kube.RolloutRestartDeployment(ctx, NamespaceAteSystem, "atenet-egress", time.Now()); err != nil {
+		if err := e.Kube.RolloutRestartDeployment(ctx, e.Namespace(), "atenet-egress", time.Now()); err != nil {
 			return err
 		}
 	}
@@ -382,7 +382,7 @@ func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
 		return nil
 	}
 
-	cm, err := e.Kube.GetConfigMap(ctx, NamespaceAteSystem, otelConfigMap)
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), otelConfigMap)
 	if err != nil {
 		return err
 	}
@@ -391,25 +391,25 @@ func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
 	}
 
 	log.Infof("Overriding %s with %s", otelEndpointKey, endpoint)
-	if err := e.Kube.MergePatchConfigMap(ctx, NamespaceAteSystem, otelConfigMap,
+	if err := e.Kube.MergePatchConfigMap(ctx, e.Namespace(), otelConfigMap,
 		map[string]string{otelEndpointKey: endpoint}); err != nil {
 		return err
 	}
 
 	now := time.Now()
 	for _, name := range otelOverrideDeployments {
-		if err := e.Kube.RolloutRestartDeployment(ctx, NamespaceAteSystem, name, now); err != nil {
+		if err := e.Kube.RolloutRestartDeployment(ctx, e.Namespace(), name, now); err != nil {
 			return err
 		}
 	}
 	// atelet DaemonSet names carry a version suffix; restart whichever
 	// versions are installed.
-	daemonSets, err := e.Kube.DaemonSetNames(ctx, NamespaceAteSystem, "app=atelet")
+	daemonSets, err := e.Kube.DaemonSetNames(ctx, e.Namespace(), "app=atelet")
 	if err != nil {
 		return err
 	}
 	for _, name := range daemonSets {
-		if err := e.Kube.RolloutRestart(ctx, NamespaceAteSystem, name, now); err != nil {
+		if err := e.Kube.RolloutRestart(ctx, e.Namespace(), name, now); err != nil {
 			return err
 		}
 	}

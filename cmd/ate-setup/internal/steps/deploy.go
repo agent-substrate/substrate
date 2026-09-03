@@ -61,6 +61,11 @@ func (o DeployOptions) Validate() error {
 func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	log.Step("deploy_ate_system")
 
+	// This step applies the checked-in manifests, so it refuses a relocated
+	// namespace before creating anything.
+	if err := e.RequireCanonicalNamespace("deploy ate-system"); err != nil {
+		return err
+	}
 	// Fail fast on an unusable build version before touching the cluster.
 	if _, _, err := e.SubstrateVersion(); err != nil {
 		return err
@@ -189,7 +194,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		rollout{kube.KindDaemonSet, ateletName},
 	)
 	for _, w := range waits {
-		if err := e.Kube.RolloutStatus(ctx, w.kind, NamespaceAteSystem, w.name, e.Cfg.RolloutTimeout); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, w.kind, e.Namespace(), w.name, e.Cfg.RolloutTimeout); err != nil {
 			return err
 		}
 	}
@@ -265,7 +270,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-api-server", e.Cfg.RolloutTimeout)
+	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-api-server", e.Cfg.RolloutTimeout)
 }
 
 // DeployAteController redeploys only ate-controller.
@@ -284,7 +289,7 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-controller", e.Cfg.RolloutTimeout)
+	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-controller", e.Cfg.RolloutTimeout)
 }
 
 // DeployAtelet redeploys only the atelet DaemonSet.
@@ -329,7 +334,7 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, NamespaceAteSystem, ateletName, e.Cfg.RolloutTimeout)
+	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, e.Namespace(), ateletName, e.Cfg.RolloutTimeout)
 }
 
 // DeployAtenet redeploys the atenet dataplane: router and egress.
@@ -364,7 +369,7 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	}
 
 	for _, name := range []string{"atenet-router", "atenet-egress"} {
-		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, name, e.Cfg.RolloutTimeout); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.Cfg.RolloutTimeout); err != nil {
 			return err
 		}
 	}
