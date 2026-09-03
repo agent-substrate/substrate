@@ -45,23 +45,10 @@ func testAssets() map[string]map[string]atev1alpha1.AssetFile {
 }
 
 // TestResolveSandboxAssets pins the template-side resolution: the config the
-// template names wins (with its class checked), an empty name resolves the
-// class default, and the pause image travels with the sandbox binaries in
-// both cases.
+// template names is resolved (with its class checked), an empty name is an
+// error, and the pause image travels with the sandbox binaries.
 func TestResolveSandboxAssets(t *testing.T) {
-	const (
-		defaultPause = "registry.k8s.io/pause@sha256:default"
-		namedPause   = "gcr.io/gke-release/pause@sha256:named"
-	)
-	defaultConfig := &atev1alpha1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
-		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			Default:      true,
-			PauseImage:   defaultPause,
-			Assets:       testAssets(),
-		},
-	}
+	const namedPause = "gcr.io/gke-release/pause@sha256:named"
 	namedConfig := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-custom"},
 		Spec: atev1alpha1.SandboxConfigSpec{
@@ -78,11 +65,6 @@ func TestResolveSandboxAssets(t *testing.T) {
 		wantPauseImage string
 		wantErr        string
 	}{{
-		name:           "class default",
-		sandbox:        &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
-		wantName:       "gvisor-default",
-		wantPauseImage: defaultPause,
-	}, {
 		name: "named config",
 		sandbox: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -105,13 +87,13 @@ func TestResolveSandboxAssets(t *testing.T) {
 		},
 		wantErr: `while getting SandboxConfig "does-not-exist"`,
 	}, {
-		name:    "no default for class",
-		sandbox: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM},
-		wantErr: "no default SandboxConfig",
+		name:    "empty config name",
+		sandbox: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		wantErr: "names no sandbox_config.config_name",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			configLister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{defaultConfig, namedConfig})
+			configLister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{namedConfig})
 
 			got, gotName, err := resolveSandboxAssets(configLister, tt.sandbox)
 			if tt.wantErr != "" {

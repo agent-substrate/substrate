@@ -34,9 +34,6 @@ spec:
     - jsonPath: .spec.sandboxClass
       name: Class
       type: string
-    - jsonPath: .spec.default
-      name: Default
-      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -46,7 +43,7 @@ spec:
         description: |-
           SandboxConfig is cluster-scoped configuration describing the sandbox binaries
           for a sandbox runtime family. It is referenced by an ActorTemplate's
-          sandbox_config.config_name (required for now; see spec.default) and decouples
+          sandbox_config.config_name (required) and decouples
           sandbox binary selection from the workload definition.
         properties:
           apiVersion:
@@ -105,14 +102,6 @@ spec:
                   intentionally generic; per-class requirements are enforced by a
                   ValidatingAdmissionPolicy.
                 type: object
-              default:
-                description: |-
-                  Default marks this SandboxConfig as the cluster-wide default for its
-                  SandboxClass. Not resolved yet: an ActorTemplate's
-                  sandbox_config.config_name is currently required, so nothing falls back
-                  to the default; the field is retained while the defaulting design is
-                  worked out. At most one default is expected per SandboxClass.
-                type: boolean
               pauseImage:
                 description: |-
                   PauseImage is the container image used as the root sandbox container.

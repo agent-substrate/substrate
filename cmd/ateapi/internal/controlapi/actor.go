@@ -281,8 +281,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// Update actor template is only allowed while the actor is suspended.
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
-		// cleanly), and the replacement's sandbox config, volumes, and volume
-		// mounts must match the old template's.
+		// cleanly), the replacement must name the SandboxConfig the actor's
+		// guest state was booted with, and its volumes and volume mounts must
+		// match the old template's.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return status.Errorf(codes.FailedPrecondition,
@@ -292,22 +293,22 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			if err != nil {
 				return err
 			}
+			// Updating SandboxConfig is not allowed yet.
+			if name := oldVal.GetStatus().GetSandboxConfigName(); name != "" && name != newTemplate.GetSandboxConfig().GetConfigName() {
+				return status.Errorf(codes.FailedPrecondition,
+					"actor's guest state was booted with SandboxConfig %q but the new actor template names %q; the sandbox config must be identical to repoint an actor",
+					name, newTemplate.GetSandboxConfig().GetConfigName())
+			}
+
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
 			switch {
 			case err == nil:
-				if err := validateTemplateSandboxConfigUnchanged(oldTemplate, newTemplate); err != nil {
-					return err
-				}
 				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
 					return err
 				}
 			case errors.Is(err, errActorTemplateNotFound):
-				// Only allow updating ActorTemplate to the same SandboxConfig for now.
-				if name := oldVal.GetStatus().GetSandboxConfigName(); name != "" && name != newTemplate.GetSandboxConfig().GetConfigName() {
-					return status.Errorf(codes.FailedPrecondition,
-						"actor's guest state was booted with SandboxConfig %q but the new actor template names %q; the sandbox config must be identical to repoint an actor",
-						name, newTemplate.GetSandboxConfig().GetConfigName())
-				}
+				// The old template is gone, so there is no volume layout left
+				// to compare against.
 			default:
 				return err
 			}
@@ -336,23 +337,6 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
 	return storedActor, nil
-}
-
-// validateTemplateSandboxConfigUnchanged rejects a template repoint that
-// changes the sandbox config: snapshots are not portable across sandbox
-// runtime families, and the actor's guest state was booted with the sandbox
-// binaries of the config resolved at its first Run — restores keep that
-// config, so a template naming a different one would silently diverge from
-// the state being restored.
-func validateTemplateSandboxConfigUnchanged(oldTemplate, newTemplate *ateapipb.ActorTemplate) error {
-	oldConfig := oldTemplate.GetSandboxConfig()
-	newConfig := newTemplate.GetSandboxConfig()
-	if !proto.Equal(oldConfig, newConfig) {
-		return status.Errorf(codes.FailedPrecondition,
-			"sandbox config differs between the current (class %s, config %q) and the new (class %s, config %q) actor template; the sandbox config must be identical to repoint an actor",
-			oldConfig.GetSandboxClass(), oldConfig.GetConfigName(), newConfig.GetSandboxClass(), newConfig.GetConfigName())
-	}
-	return nil
 }
 
 // validateTemplateVolumesUnchanged rejects a template repoint that changes

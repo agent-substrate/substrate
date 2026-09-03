@@ -185,7 +185,6 @@ func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			Default:      true,
 			PauseImage:   "registry.k8s.io/pause@sha256:x",
 			Assets:       testAssets(),
 		},

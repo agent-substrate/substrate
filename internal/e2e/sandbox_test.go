@@ -119,7 +119,7 @@ func memoryLimit(tmpl *ateapipb.ActorTemplate) string {
 
 // TestRenderSubstrateFixtures_GVisor pins the default rendering: every
 // micro-VM block is gone, no placeholder survives, and the templates name the
-// cluster-wide default SandboxConfig.
+// cluster-wide gvisor-default SandboxConfig.
 func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, fixture := range substrateFixtures {
@@ -141,8 +141,8 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR {
 					t.Errorf("template %s sandboxClass = %v, want GVISOR", name, got)
 				}
-				// The templates name the cluster-wide default SandboxConfig
-				// explicitly: config_name is required.
+				// The templates name the cluster-wide gvisor-default
+				// SandboxConfig explicitly: config_name is required.
 				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "gvisor-default" {
 					t.Errorf("template %s configName = %q, want gvisor-default", name, got)
 				}
@@ -190,8 +190,8 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
 					t.Errorf("template %s sandboxClass = %v, want MICROVM — it must match the pool's or no worker is eligible", name, got)
 				}
-				// Deliberately not the class default (see fixture.go), so a
-				// missing or stale microvm install fails loudly.
+				// Named explicitly (see fixture.go), so a missing or stale
+				// microvm install fails loudly.
 				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "microvm" {
 					t.Errorf("template %s configName = %q, want microvm", name, got)
 				}

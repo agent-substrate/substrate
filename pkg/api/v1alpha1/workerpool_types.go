@@ -97,7 +97,7 @@ type WorkerPoolSpec struct {
 	// the worker pod shape (KVM/vhost device mounts and node placement). The
 	// concrete binary is still selected by WorkerImage. Defaults to gvisor.
 	// The sandbox binaries themselves come from the SandboxConfig each
-	// ActorTemplate names (required for now; see SandboxConfig spec.default).
+	// ActorTemplate names (required).
 	//
 	// See Also: TODOs in ActorTemplate SandboxClass
 	//

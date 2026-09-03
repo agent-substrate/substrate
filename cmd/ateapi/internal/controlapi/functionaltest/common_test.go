@@ -305,8 +305,8 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	t.Helper()
 
 	// Sandbox binaries live on a (cluster-scoped) SandboxConfig the template
-	// names. Create a default gvisor SandboxConfig so a boot-from-spec Run can
-	// resolve its assets.
+	// names. Create the gvisor-default SandboxConfig so a boot-from-spec Run
+	// can resolve its assets.
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 
@@ -371,22 +371,21 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 // it is what a resolved WorkloadSpec's sandbox assets should name.
 const testPauseImage = "pause@sha256:abc"
 
-// ensureDefaultGvisorSandboxConfig creates the cluster-scoped default gvisor
+// ensureDefaultGvisorSandboxConfig creates the cluster-scoped "gvisor-default"
 // SandboxConfig (idempotently) and waits for it to appear in the lister.
 func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
 	t.Helper()
-	ensureGvisorSandboxConfig(t, tc, "gvisor-default", true)
+	ensureGvisorSandboxConfig(t, tc, "gvisor-default")
 }
 
 // ensureGvisorSandboxConfig creates a cluster-scoped gvisor SandboxConfig
 // (idempotently) and waits for it to appear in the lister.
-func ensureGvisorSandboxConfig(t *testing.T, tc *testContext, name string, isDefault bool) {
+func ensureGvisorSandboxConfig(t *testing.T, tc *testContext, name string) {
 	t.Helper()
 	sc := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			Default:      isDefault,
 			PauseImage:   testPauseImage,
 			Assets: map[string]map[string]atev1alpha1.AssetFile{
 				"amd64": {"runsc": {

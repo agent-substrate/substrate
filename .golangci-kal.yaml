@@ -96,7 +96,7 @@ linters:
       - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
         text: '^requiredfields: .*\bAssetFile\.(SHA256|URL)\b'
       - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
-        text: '^(nomaps|optionalfields|requiredfields): .*\bSandboxConfigSpec\.(Assets|Default|PauseImage|SandboxClass)\b'
+        text: '^(nomaps|optionalfields|requiredfields): .*\bSandboxConfigSpec\.(Assets|PauseImage|SandboxClass)\b'
       - path: 'pkg/api/v1alpha1/sandboxconfig_types\.go'
         text: '^(nonpointerstructs|requiredfields): .*\bSandboxConfig\.Spec\b'
       - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'

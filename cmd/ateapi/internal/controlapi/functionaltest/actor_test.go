@@ -691,7 +691,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 
 			ctx := context.Background()
 			ensureDefaultGvisorSandboxConfig(t, tc)
-			ensureGvisorSandboxConfig(t, tc, "gvisor-nightly", false)
+			ensureGvisorSandboxConfig(t, tc, "gvisor-nightly")
 			// tmpl-a and tmpl-b are volume-compatible; tmpl-c mounts the data
 			// volume elsewhere, tmpl-d declares an extra volume, and tmpl-e
 			// names a different SandboxConfig.

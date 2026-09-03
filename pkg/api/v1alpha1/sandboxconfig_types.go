@@ -60,15 +60,6 @@ type SandboxConfigSpec struct {
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
 
-	// Default marks this SandboxConfig as the cluster-wide default for its
-	// SandboxClass. Not resolved yet: an ActorTemplate's
-	// sandbox_config.config_name is currently required, so nothing falls back
-	// to the default; the field is retained while the defaulting design is
-	// worked out. At most one default is expected per SandboxClass.
-	//
-	// +optional
-	Default bool `json:"default,omitempty"`
-
 	// PauseImage is the container image used as the root sandbox container.
 	// It holds the sandbox's namespaces and runs no workload code, so it is an
 	// implementation detail of the sandbox rather than something actor authors
@@ -101,7 +92,7 @@ type SandboxConfigSpec struct {
 
 // SandboxConfig is cluster-scoped configuration describing the sandbox binaries
 // for a sandbox runtime family. It is referenced by an ActorTemplate's
-// sandbox_config.config_name (required for now; see spec.default) and decouples
+// sandbox_config.config_name (required) and decouples
 // sandbox binary selection from the workload definition.
 //
 // +genclient
@@ -110,7 +101,6 @@ type SandboxConfigSpec struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=sandboxconfig
 // +kubebuilder:printcolumn:name="Class",type=string,JSONPath=`.spec.sandboxClass`
-// +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SandboxConfig struct {
 	metav1.TypeMeta `json:",inline"`

@@ -101,15 +101,15 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 
 	// Enforce per-class SandboxConfig asset requirements. This is applied
-	// before any SandboxConfig so the default below is validated too.
+	// before any SandboxConfig so the config below is validated too.
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
 		return err
 	}
 
-	// Install the cluster-wide default sandbox config. Sandbox binaries live
-	// on cluster-scoped SandboxConfigs resolved via each WorkerPool's
-	// SandboxClass, decoupled from ActorTemplate; gVisor pools resolve to this
-	// default unless they name their own SandboxConfig.
+	// Install the cluster-wide sandbox config. Sandbox binaries live on
+	// cluster-scoped SandboxConfigs each ActorTemplate names via
+	// sandboxConfig.configName; gVisor templates name this one unless they
+	// create their own SandboxConfig.
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml")); err != nil {
 		return err
 	}
