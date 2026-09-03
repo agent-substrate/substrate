@@ -189,6 +189,37 @@ func TestPrewarmProcessRetries(t *testing.T) {
 	}
 }
 
+// TestPrewarmProcessReappliesClassGate covers the gap between enqueue and
+// processing: sandboxClass is mutable, so a config that passed the enqueue
+// filter as gVisor may be micro-VM by the time the worker resolves it, and a
+// node without KVM must skip it rather than download guest assets.
+func TestPrewarmProcessReappliesClassGate(t *testing.T) {
+	origDir := ateompath.StaticFilesDir
+	ateompath.StaticFilesDir = t.TempDir()
+	t.Cleanup(func() { ateompath.StaticFilesDir = origDir })
+
+	ctx := context.Background()
+	// Enqueued while gVisor, edited to micro-VM before the worker ran.
+	cfg := gvisorConfig("mutating-config", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("runsc"))))
+	cfg.Spec.SandboxClass = v1alpha1.SandboxClassMicroVM
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(cfg); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	// Any fetch would fail and requeue, so NumRequeues distinguishes
+	// "skipped" from "attempted and failed".
+	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
+
+	p.queue.Add(cfg.Name)
+	name, _ := p.queue.Get()
+	p.process(ctx, name)
+	if got := p.queue.NumRequeues(cfg.Name); got != 0 {
+		t.Errorf("NumRequeues after a class change to micro-VM on a non-KVM node = %d, want 0 (skipped, not retried)", got)
+	}
+}
+
 // TestMicrovmNodeCapable covers the detectable negative cases; the positive
 // case needs a /dev/kvm character device, which a test cannot mknod.
 func TestMicrovmNodeCapable(t *testing.T) {

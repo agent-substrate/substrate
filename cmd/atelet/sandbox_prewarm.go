@@ -138,26 +138,39 @@ func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInf
 	return nil
 }
 
-func (p *sandboxPrewarmer) enqueue(ctx context.Context, obj any) {
-	cfg, ok := obj.(*v1alpha1.SandboxConfig)
-	if !ok {
-		return
-	}
+// skipConfig reports whether this node has nothing to prewarm for cfg,
+// logging why. Both enqueue and process apply it: sandboxClass is mutable,
+// so the class observed at enqueue time can be stale by the time the worker
+// resolves the name after jitter or backoff, and the gate must hold for the
+// revision actually prewarmed.
+func (p *sandboxPrewarmer) skipConfig(ctx context.Context, cfg *v1alpha1.SandboxConfig) bool {
 	switch cfg.Spec.SandboxClass {
 	case v1alpha1.SandboxClassGvisor:
 		// Every node runs gVisor workers; always prewarm.
+		return false
 	case v1alpha1.SandboxClassMicroVM:
 		if !p.microvmCapable {
 			slog.DebugContext(ctx, "Skipping sandbox asset prewarm: node has no /dev/kvm, cannot run micro-VM workers",
 				slog.String("config", cfg.Name))
-			return
+			return true
 		}
+		return false
 	default:
 		// An unknown class has no backend in this atelet (likely version skew
 		// with a newer control plane); nothing to prewarm.
 		slog.InfoContext(ctx, "Skipping sandbox asset prewarm: unknown sandbox class",
 			slog.String("config", cfg.Name),
 			slog.String("sandboxClass", string(cfg.Spec.SandboxClass)))
+		return true
+	}
+}
+
+func (p *sandboxPrewarmer) enqueue(ctx context.Context, obj any) {
+	cfg, ok := obj.(*v1alpha1.SandboxConfig)
+	if !ok {
+		return
+	}
+	if p.skipConfig(ctx, cfg) {
 		return
 	}
 	if prewarmMaxJitter > 0 {
@@ -190,6 +203,12 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 	cfg, err := p.lister.Get(name)
 	if apierrors.IsNotFound(err) {
 		// Deleted since it was enqueued; nothing to prewarm anymore.
+		p.queue.Forget(name)
+		return
+	}
+	if err == nil && p.skipConfig(ctx, cfg) {
+		// The class gate re-applies to the revision resolved now, which may
+		// differ from the one that passed enqueue's filter.
 		p.queue.Forget(name)
 		return
 	}
