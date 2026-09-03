@@ -51,7 +51,14 @@ type systemInfoVolume struct {
 }
 
 type registeredActor struct {
-	ref     resources.ActorRef
+	uid string
+	ref resources.ActorRef
+
+	// mu covers the volumes' file writes, appliedHashes, and stale.
+	// Deregister and replacement set stale under mu, fencing refreshers
+	// that snapshotted this entry from writing into retired directories.
+	mu      sync.Mutex
+	stale   bool
 	volumes []*systemInfoVolume
 }
 
@@ -68,7 +75,8 @@ type systemInfoVolumeRefresher struct {
 	// queue carries bundle names from informer events to the run loop.
 	queue workqueue.TypedRateLimitingInterface[string]
 
-	// mu covers actors.
+	// mu covers actors and nothing else: it is never held across I/O or
+	// another lock acquisition. Writes serialize per actor on its own mu.
 	mu sync.Mutex
 	// TODO(#1372): in-memory only, so an atelet restart drops the registry
 	// and refresh pauses until each actor's next Run/Restore re-registers it.
@@ -95,24 +103,47 @@ func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, i
 // state, replacing any prior registration. Fail-closed: an actor that
 // declared a projection must not start without it.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) error {
+	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
+	// Locked before publication: a refresher that snapshots the new entry
+	// blocks until the initial population below finishes.
+	actor.mu.Lock()
+	defer actor.mu.Unlock()
+
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	old := r.actors[actorUID]
+	r.actors[actorUID] = actor
+	r.mu.Unlock()
+
+	if old != nil {
+		// Same actor, same directories: drain any refresh mid-write under
+		// the superseded registration and fence late snapshots of it.
+		old.mu.Lock()
+		old.stale = true
+		old.mu.Unlock()
+	}
+
 	for _, v := range volumes {
 		if err := r.write(ref, actorUID, v); err != nil {
+			actor.stale = true // half-populated; the caller deregisters on failure
 			return fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
 		}
 	}
-	r.actors[actorUID] = &registeredActor{ref: ref, volumes: volumes}
 	return nil
 }
 
 // Deregister drops actorUID's registration once the sandbox is down (or
-// never came up). It returns only after any in-flight refresh finishes, so
-// Checkpoint/Terminate can wipe the actor's directories safely afterwards.
+// never came up). It returns only after any in-flight write to the actor's
+// volumes finishes, so Checkpoint/Terminate can wipe its directories safely.
 func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	actor := r.actors[actorUID]
 	delete(r.actors, actorUID)
+	r.mu.Unlock()
+	if actor != nil {
+		actor.mu.Lock()
+		actor.stale = true
+		actor.mu.Unlock()
+	}
 }
 
 // collectData builds the complete contents of one system-info volume, keyed
@@ -210,7 +241,7 @@ func writeSystemInfoFile(root *os.Root, relPath string, data []byte) error {
 }
 
 // writeFileAtomicRoot is writeFileAtomic confined to root. The fixed temp
-// name is safe under the single-writer mu contract.
+// name is safe because writers of an actor's volumes serialize on its lock.
 func writeFileAtomicRoot(root *os.Root, relPath string, data []byte, perm os.FileMode) error {
 	dir, base := filepath.Dir(relPath), filepath.Base(relPath)
 	tmp := filepath.Join(dir, "."+base+".tmp")
@@ -271,7 +302,7 @@ func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 }
 
 // run drains the refresh queue until ctx ends, in the repo's controller
-// form (signercontroller). One worker: writes serialize under mu anyway.
+// form (signercontroller). One worker: rotations are rare and coalesced.
 // wait.UntilWithContext gives a worker panic the standard logged-stack crash.
 func (r *systemInfoVolumeRefresher) run(ctx context.Context) {
 	defer r.queue.ShutDown()
@@ -307,9 +338,8 @@ func (r *systemInfoVolumeRefresher) processNextWorkItem(ctx context.Context) boo
 // failure: resolution errors wait for the next event, write errors requeue.
 // A bundle no registered actor projects is not even resolved.
 func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleName string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.projectsLocked(bundleName) {
+	targets := r.projecting(bundleName)
+	if len(targets) == 0 {
 		return nil
 	}
 	_, raw, err := rawTrustBundle(r.lister, bundleName)
@@ -320,18 +350,24 @@ func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleNam
 	h := trustBundleHash(raw)
 	var writeErr error
 	refreshed := 0
-	for actorUID, actor := range r.actors {
+	for _, actor := range targets {
+		actor.mu.Lock()
+		if actor.stale {
+			actor.mu.Unlock()
+			continue
+		}
 		for _, v := range actor.volumes {
 			if !projectsBundle(v.Spec, bundleName) || v.appliedHashes[bundleName] == h {
 				continue
 			}
-			if err := r.write(actor.ref, actorUID, v); err != nil {
-				slog.ErrorContext(ctx, "Failed to refresh system-info volume", slog.String("actor_uid", actorUID), slog.String("volume", v.Name), slog.String("bundle", bundleName), slog.Any("err", err))
+			if err := r.write(actor.ref, actor.uid, v); err != nil {
+				slog.ErrorContext(ctx, "Failed to refresh system-info volume", slog.String("actor_uid", actor.uid), slog.String("volume", v.Name), slog.String("bundle", bundleName), slog.Any("err", err))
 				writeErr = err
 				continue
 			}
 			refreshed++
 		}
+		actor.mu.Unlock()
 	}
 	if refreshed > 0 {
 		slog.InfoContext(ctx, "Refreshed projected trust bundle under running actors", slog.String("bundle", bundleName), slog.Int("volumes", refreshed))
@@ -349,13 +385,20 @@ func projectsBundle(si *ateletpb.SystemInfoVolume, bundleName string) bool {
 	return false
 }
 
-func (r *systemInfoVolumeRefresher) projectsLocked(bundleName string) bool {
+// projecting snapshots the registered actors with a volume projecting
+// bundleName. Volume specs are immutable after construction, so the walk
+// needs only the registry lock.
+func (r *systemInfoVolumeRefresher) projecting(bundleName string) []*registeredActor {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var targets []*registeredActor
 	for _, actor := range r.actors {
 		for _, v := range actor.volumes {
 			if projectsBundle(v.Spec, bundleName) {
-				return true
+				targets = append(targets, actor)
+				break
 			}
 		}
 	}
-	return false
+	return targets
 }

@@ -17,9 +17,11 @@ package main
 import (
 	"context"
 	"encoding/pem"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -483,6 +485,123 @@ func TestSystemInfoVolumeRegister_StableRealPaths(t *testing.T) {
 			t.Errorf("pre-rewrite real path %q gone after regeneration: %v; find-paths re-open of a suspend-time path would fail", realBefore[p], err)
 		}
 	}
+}
+
+// TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh pins the
+// two-level locking: a refresh stuck writing one actor must not block
+// Register or Deregister of other actors.
+func TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh(t *testing.T) {
+	ctx := context.Background()
+	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
+	store := newCTBStore(t)
+	store.set(t, certA)
+	r := newSystemInfoVolumeRefresher(store.lister, nil)
+	dir := t.TempDir()
+	registerTrustVolume(t, r, dir, "uid-a")
+	registerTrustVolume(t, r, dir, "uid-b")
+
+	// Pin uid-a's lock so the rotation's refresh blocks mid-walk on it.
+	stuck := r.actors["uid-a"]
+	stuck.mu.Lock()
+	store.set(t, certB)
+	refreshDone := make(chan error, 1)
+	go func() { refreshDone <- r.refreshBundle(ctx, EgressTrustBundleName) }()
+
+	lifecycleDone := make(chan struct{})
+	go func() {
+		defer close(lifecycleDone)
+		registerTrustVolume(t, r, dir, "uid-c")
+		r.Deregister("uid-b")
+	}()
+	select {
+	case <-lifecycleDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Register/Deregister of other actors blocked behind an in-flight refresh")
+	}
+	select {
+	case err := <-refreshDone:
+		t.Fatalf("refreshBundle returned (err=%v) while uid-a's lock was still held", err)
+	default:
+	}
+
+	stuck.mu.Unlock()
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("refreshBundle: %v", err)
+	}
+	if got := readProjected(t, dir, "uid-a", "trust", "ca.pem"); got != certB {
+		t.Errorf("stuck actor's file = %q, want the rotation applied once unblocked", got)
+	}
+}
+
+// TestSystemInfoVolumeRefresher_StaleFence pins the fence closing the
+// snapshot race: an entry superseded by Register or removed by Deregister is
+// marked stale, so a refresh that snapshotted it earlier skips it instead of
+// writing into directories being replaced or wiped.
+func TestSystemInfoVolumeRefresher_StaleFence(t *testing.T) {
+	certA := string(testCertPEM(t))
+	store := newCTBStore(t)
+	store.set(t, certA)
+	r := newSystemInfoVolumeRefresher(store.lister, nil)
+	dir := t.TempDir()
+
+	registerTrustVolume(t, r, dir, "uid-1")
+	old := r.actors["uid-1"]
+	registerTrustVolume(t, r, dir, "uid-1")
+	if !old.stale {
+		t.Error("replacement left the superseded entry unfenced")
+	}
+
+	cur := r.actors["uid-1"]
+	r.Deregister("uid-1")
+	if !cur.stale {
+		t.Error("Deregister left the removed entry unfenced")
+	}
+}
+
+// TestSystemInfoVolumeRefresher_ConcurrentLifecycle hammers Register,
+// Deregister, rotation, and refresh together; the race detector guards the
+// two-level locking.
+func TestSystemInfoVolumeRefresher_ConcurrentLifecycle(t *testing.T) {
+	ctx := context.Background()
+	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
+	store := newCTBStore(t)
+	store.set(t, certA)
+	r := newSystemInfoVolumeRefresher(store.lister, nil)
+	dir := t.TempDir()
+
+	var wg sync.WaitGroup
+	for i := range 4 {
+		uid := fmt.Sprintf("uid-%d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				vol := &systemInfoVolume{
+					Name: "trust",
+					Root: filepath.Join(dir, uid, "system-info", "trust"),
+					Spec: trustVolumeSpec("ca.pem"),
+				}
+				if err := r.Register(uid, resources.ActorRef{Atespace: "team-a", Name: uid}, []*systemInfoVolume{vol}); err != nil {
+					t.Errorf("Register(%s): %v", uid, err)
+					return
+				}
+				r.Deregister(uid)
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for n := range 40 {
+			cert := certA
+			if n%2 == 0 {
+				cert = certB
+			}
+			_ = store.indexer.Add(store.object(cert))
+			_ = r.refreshBundle(ctx, EgressTrustBundleName)
+		}
+	}()
+	wg.Wait()
 }
 
 // TestWriteSystemInfoFile_ConfinedToRoot pins os.Root confinement: a
