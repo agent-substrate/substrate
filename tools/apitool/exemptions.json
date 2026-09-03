@@ -21,11 +21,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorMetadataItem.path",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.TagScope",
     "message": "enum has no doc comment"
   },
@@ -392,11 +387,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.TrustBundleDataSource.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.TrustBundleDataSource.path",
     "message": "field has no doc comment"
   },
   {
