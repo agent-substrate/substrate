@@ -251,7 +251,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend:   1,
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 		{
@@ -268,7 +267,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend:   1,
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 		{
@@ -312,7 +310,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				suspendWhilePaused:       true,
-				microVMOnly:              true,
 			},
 		},
 	}
@@ -377,7 +374,6 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				checkSecondFileCounter:   true,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 	}
@@ -1070,7 +1066,7 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 	// The whole suite shares demoAtespace, so the per-test suffix keeps
 	// template names unique.
 	name := base + "-" + nsObj.Name
-	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateCounterTemplateOptions{
+	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace:     demoAtespace,
 		Name:         name,
 		PoolName:     base,
@@ -1092,13 +1088,9 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 }
 
 func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause ateapipb.SnapshotContentScope, fromData ateapipb.ResumeSource) (*ateapipb.ActorTemplate, error) {
-	var scName string
-	switch {
-	// TODO: add support for other storage classes in e2e environment (e.g. csi-nfs-sc)
-	case hasStorageClass(ctx, clients, "csi-hostpath-sc"):
-		scName = "csi-hostpath-sc"
-	default:
-		t.Skip("Skipping TestExternalVolumeLifecycle: neither csi-hostpath-sc nor csi-nfs-sc StorageClass found")
+	scName := e2e.StorageClass
+	if !hasStorageClass(ctx, clients, scName) {
+		t.Fatalf("StorageClass %q not found in cluster; provide a valid --storage-class or install the CSI driver via --setup-csi", scName)
 	}
 
 	modify := func(at *ateapipb.ActorTemplate) {
@@ -1133,7 +1125,6 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 		if !hasExtVol {
 			at.Volumes = append(at.Volumes, &ateapipb.Volume{
 				Name: "external-data",
-				Type: "ExternalVolumeTemplate",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					Capacity:         "1Gi",
 					StorageClassName: scName,
@@ -1170,7 +1161,6 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 		}
 		at.Volumes = append(at.Volumes, &ateapipb.Volume{
 			Name:       secondDurableDirVolume,
-			Type:       "DurableDir",
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
 		})
 	}

@@ -35,6 +35,7 @@ const (
 	WriteDiskRoute = "/writedisk"
 	ReadDiskRoute  = "/readdisk"
 	WriteRAMRoute  = "/writeram"
+	ReadRAMRoute   = "/readram"
 )
 
 // Server is an httptest-backed stand-in for a glutton actor holding one file.
@@ -62,6 +63,7 @@ type Server struct {
 	readModes     []gluttonpb.ReadMode
 	ramWriteSizes []string
 	ramWriteModes []gluttonpb.WriteMode
+	ramReadSizes  []string
 }
 
 func (s *Server) reportedDigest() []byte {
@@ -116,6 +118,13 @@ func (s *Server) RecordedRAMWriteModes() []gluttonpb.WriteMode {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]gluttonpb.WriteMode(nil), s.ramWriteModes...)
+}
+
+// RecordedRAMReadSizes returns each /readram request's size string.
+func (s *Server) RecordedRAMReadSizes() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.ramReadSizes...)
 }
 
 func (s *Server) Start(t *testing.T) *httptest.Server {
@@ -201,6 +210,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 
 		resp, _ := proto.Marshal(&gluttonpb.WriteRAMResponse{})
+		_, _ = w.Write(resp)
+
+	case ReadRAMRoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.ReadRAMRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.ramReadSizes = append(s.ramReadSizes, req.GetSize())
+		s.mu.Unlock()
+
+		resp, _ := proto.Marshal(&gluttonpb.ReadRAMResponse{Size: int64(len(s.Data))})
 		_, _ = w.Write(resp)
 
 	default:

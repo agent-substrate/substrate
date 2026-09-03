@@ -38,11 +38,17 @@ type Config struct {
 
 	BucketName string
 
+	CloudSQLInstance  string
+	CloudSQLTier      string
+	CloudSQLEdition   string
+	CloudSQLStorageGB int64
+	CloudSQLGSAName   string
+
 	DashboardDir string
 }
 
 type getEnvType interface {
-	string | bool
+	string | bool | int64
 }
 
 // getEnv retrieves an environment variable by key and parses it into the specified type.
@@ -61,6 +67,8 @@ func getEnv[T getEnvType](key string, fallback T) T {
 		ret = val
 	case bool:
 		ret, err = strconv.ParseBool(val)
+	case int64:
+		ret, err = strconv.ParseInt(val, 10, 64)
 	}
 
 	if err == nil {

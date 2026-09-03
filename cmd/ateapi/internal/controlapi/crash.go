@@ -37,13 +37,22 @@ func maybeCrashActor(ctx context.Context, st crashActorStore, actorRef resources
 	}
 
 	if ateerrors.ActorCrashRequested(err) {
-		slog.ErrorContext(ctx, "Setting Actor to crashed due to error", slog.Any("error", err))
-		// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. If unclassified
-		// or unlisted, default to ateattr.ReasonUnknown to protect metric low-cardinality.
-		reason := ateerrors.ExtractReason(err)
+		// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. Normalized
+		// here rather than in crashActor alone, so the log and the counter cannot
+		// report a different reason for the same crash.
+		reason := ateattr.FailureReason(err)
+
+		// Only the ref is knowable here; crashActor logs the authoritative record.
+		attrs := ateattr.ActorRefLogAttrs(actorRef)
+		attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
+		attrs = append(attrs,
+			slog.String(string(ateattr.ErrorTypeKey), status.Code(err).String()),
+			slog.Any("err", err),
+		)
+		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error", attrs...)
 
 		if cerr := crashActor(ctx, st, actorRef, opName, reason); cerr != nil {
-			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("cerr", cerr))
+			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("err", cerr))
 			return cerr
 		}
 		return status.Errorf(codes.DataLoss, "actor %s crashed", actorRef)
@@ -97,10 +106,21 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 
 	// Increment metric only after a successful UpdateActor, and only if the actor was not already crashed.
 	if !wasAlreadyCrashed {
+		logActorCrashed(ctx, actor, opName, reason)
 		recordActorCrash(ctx, crashAttrs)
 	}
 
 	return nil
+}
+
+// logActorCrashed carries the identity ate.actor.crashes cannot: actor identity
+// is barred from metric labels, so this record is the only way to attribute a
+// crash to one agent. Call it beside recordActorCrash, under the same guard.
+func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName, reason string) {
+	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
+	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), opName))
+	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
+	slog.LogAttrs(ctx, slog.LevelError, "Actor crashed", attrs...)
 }
 
 // crashActorStore encapsulates the subset of store operations needed to crash

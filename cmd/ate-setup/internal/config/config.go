@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -46,6 +48,10 @@ const DefaultRolloutTimeout = 60 * time.Second
 // podcertificate controller's projected servicedns trust bundle and its own
 // podidentity credential bundle.
 const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+
+// DefaultPostgresSchema mirrors the shell installer's default for
+// ATE_API_POSTGRES_SCHEMA, the PostgreSQL schema holding the Substrate tables.
+const DefaultPostgresSchema = "public"
 
 // devEnvFile is the optional per-developer environment script at the repo root.
 const devEnvFile = ".ate-dev-env.sh"
@@ -85,11 +91,18 @@ type Config struct {
 	// KODefaultPlatforms constrains ko's build platforms.
 	KODefaultPlatforms string
 
+	// Images selects where container images come from. Its zero value builds
+	// them from source with ko, which is what a developer install does.
+	Images images.Source
+
 	// Router selects the atenet router dataplane.
 	Router string
 	// PostgresConnectionString is the apiserver's store connection string.
 	// Empty means use DefaultPostgresConnectionString.
 	PostgresConnectionString string
+	// PostgresSchema is the PostgreSQL schema for the Substrate tables
+	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
+	PostgresSchema string
 
 	// RolloutTimeout is the timeout duration for rollout status checks.
 	RolloutTimeout time.Duration
@@ -133,6 +146,10 @@ type Options struct {
 	PodcertWorkersPerSigner        int
 	ExperimentalUseSDSMint         bool
 	AdditionalEgressExtprocService string
+
+	// Image source selection.
+	ImageRepo string
+	ImageTag  string
 
 	// NoDevEnv skips sourcing .ate-dev-env.sh even when it exists.
 	NoDevEnv bool
@@ -202,7 +219,9 @@ func Load(opts Options) (*Config, error) {
 		BucketName:                     env["BUCKET_NAME"],
 		KODockerRepo:                   env["KO_DOCKER_REPO"],
 		KODefaultPlatforms:             env["KO_DEFAULTPLATFORMS"],
+		Images:                         loadImageSource(opts, env),
 		PostgresConnectionString:       env["ATE_API_POSTGRES_CONNECTION_STRING"],
+		PostgresSchema:                 env["ATE_API_POSTGRES_SCHEMA"],
 		RolloutTimeout:                 rolloutTimeout,
 		rolloutTimeoutSet:              timeoutStr != "",
 		PodcertWorkersPerSigner:        podcertWorkers,
@@ -226,6 +245,14 @@ func Load(opts Options) (*Config, error) {
 	return cfg, nil
 }
 
+// loadImageSource resolves where images come from.
+func loadImageSource(opts Options, env map[string]string) images.Source {
+	return images.Source{
+		Repo: strings.TrimSuffix(firstNonEmpty(opts.ImageRepo, env["ATE_IMAGE_REPO"]), "/"),
+		Tag:  firstNonEmpty(opts.ImageTag, env["ATE_IMAGE_TAG"]),
+	}
+}
+
 func applyKindDefaults(cfg *Config) {
 	cfg.ProjectID = ""
 	cfg.ClusterLocation = ""
@@ -237,6 +264,9 @@ func applyKindDefaults(cfg *Config) {
 }
 
 func validate(cfg *Config) error {
+	if err := cfg.Images.Validate(); err != nil {
+		return err
+	}
 	switch cfg.Router {
 	case RouterEnvoy, RouterAgentgateway:
 	default:
@@ -288,6 +318,15 @@ func (c *Config) PostgresConnString() string {
 		return c.PostgresConnectionString
 	}
 	return DefaultPostgresConnectionString
+}
+
+// PostgresSchemaName returns the configured schema, falling back to the
+// shell installer's default. ate-api-server rejects an empty value.
+func (c *Config) PostgresSchemaName() string {
+	if c.PostgresSchema != "" {
+		return c.PostgresSchema
+	}
+	return DefaultPostgresSchema
 }
 
 // WaitTimeout returns how long to wait for a workload whose historical timeout

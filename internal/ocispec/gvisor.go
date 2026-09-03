@@ -17,7 +17,6 @@ package ocispec
 import (
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -48,12 +47,6 @@ func ShapeGVisor(spec *specs.Spec, o GVisorOptions) {
 	spec.Annotations["io.kubernetes.cri.container-name"] = o.ContainerName
 	if o.ContainerName == PauseContainer {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "sandbox"
-		// One mount hint per durable-dir volume, keyed by name.
-		for _, v := range o.DurableVolumes {
-			spec.Annotations["dev.gvisor.spec.mount."+v+".type"] = "bind"
-			spec.Annotations["dev.gvisor.spec.mount."+v+".share"] = "container"
-			spec.Annotations["dev.gvisor.spec.mount."+v+".source"] = ateompath.DurableDirVolumeMountPoint(o.ActorUID, v)
-		}
 	} else {
 		spec.Annotations["io.kubernetes.cri.container-type"] = "container"
 		spec.Annotations["io.kubernetes.cri.sandbox-id"] = PauseContainer

@@ -67,8 +67,10 @@ class AteAPIUser(User):
                         metadata=ateapi_pb2.ResourceMetadata(
                             atespace=ATESPACE, name=self.actor_name
                         ),
-                        actor_template_namespace="ate-demo-counter",
-                        actor_template_name="counter",
+                        actor_template=ateapi_pb2.ObjectRef(
+                            atespace="ate-demo-counter",
+                            name="counter",
+                        ),
                     )
                 )
             )

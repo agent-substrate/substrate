@@ -19,6 +19,7 @@
 package ateattr
 
 import (
+	"log/slog"
 	"slices"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -51,7 +52,7 @@ const (
 	ActorUIDKey           = attribute.Key("ate.actor.uid")
 	ActorContainerNameKey = attribute.Key("ate.actor.container.name")
 	TemplateNameKey       = attribute.Key("ate.template.name")
-	TemplateNamespaceKey  = attribute.Key("ate.template.namespace")
+	TemplateAtespaceKey   = attribute.Key("ate.template.atespace")
 	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
 
@@ -106,8 +107,61 @@ const (
 	RouterResumeKey         = attribute.Key("ate.router.resume")
 	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
 	FailureReasonKey        = attribute.Key("ate.failure.reason")
+	FailureDomainKey        = attribute.Key("ate.failure.domain")
 	StatsSourceKey          = attribute.Key("ate.stats.source")
 )
+
+// Values for FailureDomainKey. A strict function of the reason, so it costs no
+// series. Emitted rather than derived downstream: a component ahead of ateapi
+// can report a reason this build rejects, which ExtractReason turns into
+// Unknown, and a consumer matching on the reason would file it as infrastructure.
+const (
+	FailureDomainInfrastructure = "infrastructure"
+	FailureDomainWorkload       = "workload"
+	FailureDomainUnknown        = "unknown"
+)
+
+// workloadReasons are the failures the actor's owner fixes rather than the
+// platform operator: a misdeclared ActorTemplate as much as a process that will
+// not start. Membership, not a name prefix, decides the domain.
+//
+// ReasonInvalidSandboxAsset is deliberately absent: it reads a SandboxConfig,
+// which is cluster-scoped, so no actor can cause it or fix it.
+var workloadReasons = []ateerrors.Reason{
+	ateerrors.ReasonInvalidContainerConfig,
+	ateerrors.ReasonInvalidObjectURL,
+	ateerrors.ReasonWorkloadNotReady,
+}
+
+// FailureAttributes returns the reason and its domain together, so no producer
+// can emit half the pair. Same rule as WorkerPoolAttributes.
+func FailureAttributes(reason string) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		FailureReasonKey.String(reason),
+		FailureDomainKey.String(FailureDomain(reason)),
+	}
+}
+
+// FailureLogAttrs is FailureAttributes for a slog record.
+func FailureLogAttrs(reason string) []slog.Attr {
+	return []slog.Attr{
+		slog.String(string(FailureReasonKey), reason),
+		slog.String(string(FailureDomainKey), FailureDomain(reason)),
+	}
+}
+
+// FailureDomain classifies a reason value. An unrecognized reason reports
+// FailureDomainUnknown rather than infrastructure, so a taxonomy gap stays
+// visible instead of inflating one side.
+func FailureDomain(reason string) string {
+	if slices.Contains(workloadReasons, ateerrors.Reason(reason)) {
+		return FailureDomainWorkload
+	}
+	if ateerrors.IsValidReason(reason) && reason != ReasonUnknown {
+		return FailureDomainInfrastructure
+	}
+	return FailureDomainUnknown
+}
 
 // Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
 // not measure the same thing (the cgroup source charges the sandbox runtime's
@@ -178,10 +232,6 @@ const (
 	OperationDelete  = "delete"
 	OperationUnknown = "unknown"
 )
-
-// TemplateUnknown is the placeholder for the template labels when the Actor
-// record does not carry its template ref.
-const TemplateUnknown = "unknown"
 
 // AllOperations lists all registered bounded actor lifecycle operations.
 var AllOperations = []string{
@@ -327,8 +377,8 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
 		ActorUIDKey.String(a.GetMetadata().GetUid()),
-		TemplateNameKey.String(a.GetActorTemplateName()),
-		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplate().GetName()),
+		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
 }
@@ -339,16 +389,40 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 // emitting it empty, so a consumer filtering on it gets container output only.
 func ActorLogLabels(a resources.ActorAttribution, containerName string) map[string]string {
 	labels := map[string]string{
-		string(AtespaceKey):          a.Ref.Atespace,
-		string(ActorNameKey):         a.Ref.Name,
-		string(ActorUIDKey):          a.UID,
-		string(TemplateNamespaceKey): a.TemplateNamespace,
-		string(TemplateNameKey):      a.TemplateName,
+		string(AtespaceKey):         a.Ref.Atespace,
+		string(ActorNameKey):        a.Ref.Name,
+		string(ActorUIDKey):         a.UID,
+		string(TemplateAtespaceKey): a.TemplateAtespace,
+		string(TemplateNameKey):     a.TemplateName,
 	}
 	if containerName != "" {
 		labels[string(ActorContainerNameKey)] = containerName
 	}
 	return labels
+}
+
+// ActorLogAttrs is the same identity for a component's own slog record, which
+// needs no envelope: a collector lifts flat keys straight onto the record's OTLP
+// attributes. It must agree with ActorLogLabels key for key, or joining a
+// component record to the actor lifecycle stream takes two spellings.
+func ActorLogAttrs(a resources.ActorAttribution) []slog.Attr {
+	return []slog.Attr{
+		slog.String(string(AtespaceKey), a.Ref.Atespace),
+		slog.String(string(ActorNameKey), a.Ref.Name),
+		slog.String(string(ActorUIDKey), a.UID),
+		slog.String(string(TemplateAtespaceKey), a.TemplateAtespace),
+		slog.String(string(TemplateNameKey), a.TemplateName),
+	}
+}
+
+// ActorRefLogAttrs is ActorLogAttrs for a record written before the Actor
+// resolves, mirroring ActorRefAttributes on the span side. The uid is unknown
+// until the record loads, so it is omitted rather than emitted empty.
+func ActorRefLogAttrs(actorRef resources.ActorRef) []slog.Attr {
+	return []slog.Attr{
+		slog.String(string(AtespaceKey), actorRef.Atespace),
+		slog.String(string(ActorNameKey), actorRef.Name),
+	}
 }
 
 // ActorMetricAttributes returns the metric labels for an Actor.
@@ -367,24 +441,13 @@ func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reaso
 	}
 	operationName = NormalizeOperationName(operationName)
 
-	// TODO(zoez7): actors created via the ActorTemplate resource path do not carry
-	// the template ref yet, so report "unknown" rather than an empty label.
-	templateNamespace := a.GetActorTemplateNamespace()
-	if templateNamespace == "" {
-		templateNamespace = TemplateUnknown
-	}
-	templateName := a.GetActorTemplateName()
-	if templateName == "" {
-		templateName = TemplateUnknown
-	}
-
 	ass := a.GetStatus().GetWorkerAssignment()
 	attrs := []attribute.KeyValue{
-		TemplateNamespaceKey.String(templateNamespace),
-		TemplateNameKey.String(templateName),
+		TemplateAtespaceKey.String(a.GetActorTemplate().GetAtespace()),
+		TemplateNameKey.String(a.GetActorTemplate().GetName()),
 		SandboxClassKey.String(sandboxClass),
 		ActorOperationNameKey.String(operationName),
-		FailureReasonKey.String(reason),
 	}
+	attrs = append(attrs, FailureAttributes(reason)...)
 	return append(attrs, WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
 }

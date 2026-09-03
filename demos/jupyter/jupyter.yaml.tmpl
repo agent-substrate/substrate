@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Worker pool and router-proxy plumbing for the jupyter demo. The
+# ActorTemplate is not a CRD: it lives in jupyter-template.yaml.tmpl and is
+# created through the ate API with `kubectl ate create actor-template`.
+
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -31,37 +35,6 @@ spec:
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
 
 ---
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: jupyter
-  namespace: ate-demo-jupyter
-spec:
-  containers:
-  - name: jupyter
-    image: "quay.io/jupyter/base-notebook@sha256:23fbe16371af3c0fdc833fa0962b42fd07811e152b821ff51d19a8d6e9cc86cf"
-    command:
-    - jupyter
-    - lab
-    - "--allow-root"
-    - "--ServerApp.token=''"
-    - "--ServerApp.password=''"
-    - "--ServerApp.allow_origin='*'"
-    - "--ServerApp.disable_check_xsrf=True"
-    - "--port=80"
-    - "--ip=0.0.0.0"
-    readyz:
-      httpGet:
-        path: /api
-        port: 80
-  workerSelector:
-    matchLabels:
-      workload: jupyter
-  snapshotsConfig:
-    onPause: Full
-    location: gs://${BUCKET_NAME}/ate-demo-jupyter/
----
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -75,7 +48,7 @@ data:
         listen 80;
         location / {
           proxy_pass http://atenet-router.ate-system.svc.cluster.local;
-          proxy_set_header Host jupyter-notebook.demo.actors.resources.substrate.ate.dev;
+          proxy_set_header Host jupyter-notebook.ate-demo-jupyter.actors.resources.substrate.ate.dev;
           proxy_set_header X-Real-IP $remote_addr;
           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
           proxy_set_header Upgrade $http_upgrade;

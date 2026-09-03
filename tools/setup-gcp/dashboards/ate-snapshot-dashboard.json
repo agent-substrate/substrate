@@ -14,7 +14,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, ate_template_name) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\", file_name=\"pages.img\"}[1h])))",
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, \"ate.template.name\") (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\", \"file.name\"=\"pages.img\"}[1h])))",
                   "unitOverride": "By"
                 },
                 "plotType": "LINE",
@@ -83,7 +83,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (ate_template_name) (rate({\"atelet.snapshot.size_count\", top_level_controller_name=\"atelet\", file_name=\"pages.img\"}[1h]))",
+                  "prometheusQuery": "sum by (\"ate.template.name\") (rate({\"atelet.snapshot.size_count\", top_level_controller_name=\"atelet\", \"file.name\"=\"pages.img\"}[1h]))",
                   "unitOverride": "1/s"
                 },
                 "plotType": "LINE",
@@ -109,7 +109,7 @@
               {
                 "timeSeriesQuery": {
                   "timeSeriesFilter": {
-                    "filter": "metric.type=\"prometheus.googleapis.com/atelet.snapshot.size/histogram\" resource.type=\"prometheus_target\" metric.labels.file_name=\"pages.img\"",
+                    "filter": "metric.type=\"prometheus.googleapis.com/atelet.snapshot.size/histogram\" resource.type=\"prometheus_target\" metric.labels.\"file.name\"=\"pages.img\"",
                     "aggregation": {
                       "alignmentPeriod": "60s",
                       "perSeriesAligner": "ALIGN_DELTA",

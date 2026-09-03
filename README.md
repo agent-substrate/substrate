@@ -102,9 +102,9 @@ hack/install-ate-kind.sh --deploy-demo-counter
 # install kubectl-ate
 go install ./cmd/kubectl-ate
 
-# create an atespace (required before creating actors), then a counter actor in it
-kubectl ate create atespace demo
-kubectl ate create actor my-counter-1 -a demo --template=ate-demo-counter/counter
+# create a counter actor in the demo's atespace (--template-ref names the
+# actor template, resolved in the actor's atespace)
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template-ref counter
 
 # port-forward the network router to bind to local port `8000`
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
@@ -112,8 +112,17 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i http://localhost:8000/
+curl -X POST -H "Host: my-counter-1.ate-demo-counter.actors.resources.substrate.ate.dev" -i http://localhost:8000/
 ```
+
+Worker capacity is versioned: the dataplane (the atelet DaemonSet and the
+worker pods) schedules only on nodes that carry the
+`ate.dev/substrate-version` label, and the install stamps it on every node
+that exists when it runs. A node added later hosts no workers until you label
+it with the installed version
+(`kubectl label node <node> ate.dev/substrate-version=<build version>`).
+`kubectl get ds -n ate-system -l app=atelet -L ate.dev/substrate-version`
+prints the installed version, off the atelet DaemonSet the install created.
 
 ### GKE Quickstart (Development)
 
@@ -147,6 +156,11 @@ curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i 
    ./hack/install-ate.sh --deploy-ate-system
    ```
 
+   Nodes that GKE adds later (autoscaling, auto-repair, node upgrades) are
+   born with the node pool's labels, so the pool needs
+   `ate.dev/substrate-version` too; see
+   [Node version labels](tools/setup-gcp/README.md).
+
 5. You can then deploy the sample applications. See [demos/counter/README.md](demos/counter/README.md) or [demos/sandbox/README.md](demos/sandbox/README.md) for detailed walkthroughs.
    ```bash
    ./hack/install-ate.sh --deploy-demo-counter
@@ -159,6 +173,9 @@ You can run individual setup steps to create GCP resources as needed. See `go ru
 go run ./tools/setup-gcp create cluster
 go run ./tools/setup-gcp create bucket
 ```
+
+To run the PostgreSQL store backend on Cloud SQL — with IAM database
+authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
 
 Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
 ```bash
@@ -206,7 +223,9 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Integration Repositories](docs/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 * [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
+* [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
+* [Rolling Upgrade Runbook](docs/upgrade.md): Upgrade a running substrate node by node without losing actor state.
 * [Threat Model](docs/threat-model.md): Trust boundaries, assumptions, and known risks.
 * [Roadmap](docs/roadmap.md): Current limitations and what is planned next.
 * [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
@@ -217,7 +236,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 
 * `cmd/ateapi`: The core control plane API server exposing gRPC endpoints to manage actor and worker lifecycles.
 * `cmd/atelet`: A node-level DaemonSet that supervises physical worker pods, coordinates snapshotting, and manages state transfers.
-* `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool and ActorTemplate custom resources.
+* `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool custom resources.
 * `cmd/atenet`: A combined networking controller providing DNS, Envoy routing, and proxy sidecars.
 * `cmd/ateom-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
 * `cmd/ateom-microvm`: The micro-VM peer of `ateom-gvisor`, running actors as cloud-hypervisor VMs.

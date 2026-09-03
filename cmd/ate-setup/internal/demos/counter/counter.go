@@ -23,69 +23,70 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 const (
 	namespace = "ate-demo-counter"
-	template  = "demos/counter/counter.yaml.tmpl"
+	template  = "demos/counter/counter-template.yaml.tmpl"
+
+	defaultStorageClass = "standard"
 )
 
 func (d *demo) externalVolumeValues(e *steps.Env) map[string]string {
-	storageClass := "standard"
-	if e.Cfg.Kind {
-		storageClass = "csi-hostpath-sc"
+	sc := defaultStorageClass
+	if d.storageClass != "" {
+		sc = d.storageClass
 	}
 	return map[string]string{
-		"VALIDATE_EXISTING_FILE_PATH_ARG": "    - --validate-existing-file-path=/external-data/test.txt",
-		"EXTERNAL_VOLUME_MOUNTS": "    - name: external-data\n" +
-			"      mountPath: /external-data",
-		"EXTERNAL_VOLUMES": "  - name: external-data\n" +
-			"    externalVolumeTemplate:\n" +
-			"      capacity: 1Gi\n" +
-			"      storageClassName: " + storageClass,
+		"VALIDATE_EXISTING_FILE_PATH_ARG": "  - --validate-existing-file-path=/external-data/test.txt",
+		"EXTERNAL_VOLUME_MOUNTS": "  - name: external-data\n" +
+			"    mountPath: /external-data",
+		"EXTERNAL_VOLUMES": "- name: external-data\n" +
+			"  externalVolumeTemplate:\n" +
+			"    capacity: 1Gi\n" +
+			"    storageClassName: " + sc,
 	}
 }
 
 // demo is the counter demo, which can optionally be deployed with an external
 // volume attached.
 type demo struct {
-	demos.Simple
+	demos.Substrate
 
 	withExternalVolume bool
+	storageClass       string
 }
 
 func init() {
-	demos.Register(&demo{Simple: demos.Simple{
-		DemoName:       "demo-counter",
-		Short:          "A counter actor exercising snapshot, resume, and atenet ingress",
-		Template:       template,
-		Deployments:    []steps.TemplateRef{{Namespace: namespace, Name: "counter"}},
-		ActorTemplates: []steps.TemplateRef{{Namespace: namespace, Name: "counter"}},
-	}})
+	d := &demo{}
+	d.Substrate = demos.Substrate{
+		DemoName:           "demo-counter",
+		Short:              "A counter actor exercising snapshot, resume, and atenet ingress",
+		WorkerPoolManifest: "demos/counter/counter.yaml.tmpl",
+		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "counter"}},
+		Templates: []demos.SubstrateTemplate{{
+			Manifest: "demos/counter/counter-template.yaml.tmpl",
+			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "counter"},
+		}},
+		RenderValues: d.renderValues,
+	}
+	demos.Register(d)
 }
 
 func (d *demo) Flags(fs *pflag.FlagSet) {
 	fs.BoolVar(&d.withExternalVolume, "with-external-volume", false,
 		"Attach an external volume and validate a pre-seeded file on it (run \"setup csi\" first)")
+	fs.StringVar(&d.storageClass, "storage-class", defaultStorageClass,
+		"StorageClass backing the external volume, e.g. csi-nfs-sc or csi-hostpath-sc. Must be used --with-external-volume=true.")
 }
 
-func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
+// renderValues opts the template's external-volume lines in when the flag is
+// set; with no values they are dropped.
+func (d *demo) renderValues(_ context.Context, e *steps.Env) (map[string]string, error) {
 	if !d.withExternalVolume {
-		return d.Simple.Deploy(ctx, e)
+		return nil, nil
 	}
-
-	log.Step(d.DemoName + "_deploy (with_external_volume=true)")
-	if err := e.EnsureCRDs(ctx); err != nil {
-		return err
-	}
-	manifest, err := demos.Render(e, d.Template, d.externalVolumeValues(e), nil)
-	if err != nil {
-		return err
-	}
-	if err := e.KoApplyBytes(ctx, manifest); err != nil {
-		return err
-	}
-	return d.WaitReady(ctx, e)
+	return d.externalVolumeValues(e), nil
 }

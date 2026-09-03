@@ -115,3 +115,17 @@ func koApply(t *testing.T, manifest string) {
 	}
 	RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
 }
+
+// koResolve builds and pushes the ko:// images named in manifest and returns
+// the manifest with those references replaced by pushed digests. Same pinned
+// ko and KO_CONFIG_PATH rules as koApply; resolve is how a manifest that is
+// not destined for kubectl (a protojson ActorTemplate document) still gets
+// its image built.
+func koResolve(t *testing.T, manifest string) []byte {
+	t.Helper()
+	root, err := FindRepoRoot()
+	if err != nil {
+		t.Fatalf("FindRepoRoot: %v", err)
+	}
+	return RunCmdOutput(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), "ko", "resolve", "-f", manifest)
+}

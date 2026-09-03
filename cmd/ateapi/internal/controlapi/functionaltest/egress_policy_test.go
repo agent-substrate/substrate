@@ -36,9 +36,8 @@ func setupEgressPolicyActor(t *testing.T, testName string) (*testContext, *ateap
 	createTemplate(t, tc, ns)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "egress-actor"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "egress-actor"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}
 	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)

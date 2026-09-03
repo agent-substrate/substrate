@@ -60,6 +60,16 @@ const (
 	// its state is unrecoverable.
 	ReasonLocalSnapshotGone Reason = "LOCAL_SNAPSHOT_GONE"
 
+	// ReasonWorkloadNotReady marks a container that started but never passed its
+	// readyz probe before the probe's deadline. First reason in the workload
+	// fault domain (ateattr.FailureDomain); the operation it failed under is
+	// ate.actor.operation.name, not part of this value.
+	//
+	// Confounded by a slow node: a cold image or a throttled CPU also runs the
+	// probe out of time. ate.actor.restore.duration.* on the same record
+	// separates the two.
+	ReasonWorkloadNotReady Reason = "WORKLOAD_NOT_READY"
+
 	// Control-plane failure reasons for ate.actor.crashes metric.
 	ReasonCorruptedAssignment Reason = "CORRUPTED_ASSIGNMENT"
 	ReasonWorkerReassigned    Reason = "WORKER_REASSIGNED"
@@ -77,6 +87,7 @@ var AllReasons = []Reason{
 	ReasonFailedGetExternalObject,
 	ReasonInvalidContainerConfig,
 	ReasonLocalSnapshotGone,
+	ReasonWorkloadNotReady,
 	ReasonCorruptedAssignment,
 	ReasonWorkerReassigned,
 	ReasonWorkerPodGone,

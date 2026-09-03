@@ -18,21 +18,12 @@ import (
 	"context"
 
 	"github.com/spf13/pflag"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/render"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 )
-
-// actorTemplateGVK identifies the resource the demos wait on: an ActorTemplate
-// goes Ready once its golden snapshot has been built.
-var actorTemplateGVK = schema.GroupVersionKind{
-	Group:   "ate.dev",
-	Version: "v1alpha1",
-	Kind:    "ActorTemplate",
-}
 
 // bucketNamePlaceholder is substituted into every demo template with the
 // snapshot bucket for this environment.
@@ -48,20 +39,21 @@ var ExternalVolumePlaceholders = []string{
 	"EXTERNAL_VOLUMES",
 }
 
-// Render expands a demo template with the configured bucket name.
+// Render expands a demo template with the configured bucket name and the
+// build version (pool templates pin worker pods to version-labeled nodes).
 func Render(e *steps.Env, relPath string, extraValues map[string]string, drop []string) ([]byte, error) {
-	values := map[string]string{bucketNamePlaceholder: e.Cfg.BucketName}
+	version, _, err := e.SubstrateVersion()
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]string{
+		bucketNamePlaceholder: e.Cfg.BucketName,
+		"SUBSTRATE_VERSION":   version,
+	}
 	for k, v := range extraValues {
 		values[k] = v
 	}
 	return render.Template(e.Cfg.Path(relPath), values, drop)
-}
-
-// WaitActorTemplateReady blocks until an ActorTemplate's golden snapshot is
-// built, the `kubectl wait --for=condition=Ready actortemplate/...` of the demo
-// scripts.
-func WaitActorTemplateReady(ctx context.Context, e *steps.Env, namespace, name string) error {
-	return e.Kube.WaitCondition(ctx, actorTemplateGVK, namespace, name, "Ready", steps.DemoTimeout)
 }
 
 // Simple covers the demos that are one template plus a fixed set of readiness
@@ -87,11 +79,6 @@ type Simple struct {
 	// ActorTemplates are the demo's ActorTemplates. Their actors are removed
 	// before the manifests at delete time.
 	ActorTemplates []steps.TemplateRef
-
-	// SkipReadinessWait deploys without blocking on the ActorTemplates. The
-	// sandbox demo sets this: it has no long-lived workload, and its template
-	// is exercised on demand by the client rather than at install time.
-	SkipReadinessWait bool
 }
 
 func (d *Simple) Name() string        { return d.DemoName }
@@ -123,31 +110,17 @@ func (d *Simple) DeployWorkload(ctx context.Context, e *steps.Env) error {
 	if err != nil {
 		return err
 	}
-	return e.KoApplyBytes(ctx, manifest)
+	return e.ResolveAndApplyBytes(ctx, manifest)
 }
 
-// WaitReady blocks until the demo's workloads and templates are usable.
-//
-// On a cold cluster the first ActorTemplate pays one-time costs: downloading
-// the gVisor runsc binary, the first gVisor pod start, and image pulls.
-// Blocking here means callers -- notably the e2e suite, which creates its own
-// ActorTemplate with a tight readiness deadline -- run against an already-warm
-// node instead of racing that cold-start work.
+// WaitReady blocks until the demo's Deployments are rolled out.
 func (d *Simple) WaitReady(ctx context.Context, e *steps.Env) error {
-	if d.SkipReadinessWait {
-		return nil
-	}
-	if len(d.Deployments) == 0 && len(d.ActorTemplates) == 0 {
+	if len(d.Deployments) == 0 {
 		return nil
 	}
 	log.Stepf("Waiting for %s to be ready...", d.DemoName)
 	for _, ref := range d.Deployments {
-		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, ref.Namespace, ref.Name, steps.DemoTimeout); err != nil {
-			return err
-		}
-	}
-	for _, ref := range d.ActorTemplates {
-		if err := WaitActorTemplateReady(ctx, e, ref.Namespace, ref.Name); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, ref.Atespace, ref.Name, steps.DemoTimeout); err != nil {
 			return err
 		}
 	}

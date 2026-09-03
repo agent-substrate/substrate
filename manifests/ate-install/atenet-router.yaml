@@ -21,33 +21,6 @@ metadata:
     app: atenet-router
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: atenet-router
-rules:
-- apiGroups:
-  - "ate.dev"
-  resources:
-  - actortemplates
-  verbs:
-  - get
-  - watch
-  - list
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: atenet-router
-subjects:
-- kind: ServiceAccount
-  name: atenet-router
-  namespace: ate-system
-roleRef:
-  kind: ClusterRole
-  name: atenet-router
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: atenet-router-endpointslices
@@ -173,9 +146,9 @@ spec:
         args:
         - "router"
         # Serve the ingress direction only: the ingress ext_proc handler, plus
-        # the xDS server and ActorTemplate controller that configure the
-        # dataplane in this pod when it is Envoy (the agentgateway overlay is
-        # statically configured and starts neither).
+        # the xDS server that configures the dataplane in this pod when it is
+        # Envoy (the agentgateway overlay is statically configured and does
+        # not start it).
         # Egress runs the same binary with --mode=egress in its own
         # Deployment (manifests/ate-install/atenet-egress.yaml), because the two
         # directions scale independently.

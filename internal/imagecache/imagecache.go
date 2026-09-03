@@ -94,7 +94,86 @@ const (
 	// image pull. Memory use is O(stream buffers) per slot, independent of
 	// layer size.
 	layerPullConcurrency = 4
+
+	// defaultPullTimeout is the default per-pull bound (see WithPullTimeout).
+	// Generous enough for multi-GiB images on a busy node.
+	defaultPullTimeout = 10 * time.Minute
 )
+
+// Pull retry backoffs, chosen per registry by retryBackoffFor. Both replace
+// go-containerregistry's default (3 attempts over ~4s, jitter 0.1), which is
+// tuned for a single flaky client, and both apply to every request of a pull,
+// including the /v2/ auth ping. The retryable status codes stay at the
+// library default, which already includes 429. Vars so tests can shrink the
+// waits.
+//
+// The backoff applies per request, so under a sustained throttle a
+// multi-layer pull can accumulate far more wall clock than one request's
+// worst case (~14s shared). The caller's ctx still bounds the total: every
+// request carries it (remote.WithContext in remoteOpts), a canceled ctx
+// fails the next attempt immediately and is never retried, so retrying
+// overshoots a deadline by at most one backoff sleep. Production pulls run
+// under the Run/Restore RPC ctx, which ateapi's resume path caps at its
+// server-wide max RPC deadline — a throttled shared-registry pull surfaces
+// as that RPC's deadline error, not a hang.
+var (
+	// dedicatedRegistryBackoff covers registries where the deployment has
+	// its own quota (Artifact Registry, ECR, Harbor, self-hosted, …): the
+	// server absorbs retry bursts and nobody else competes for the limit,
+	// and pulls sit on the Run/Restore critical path, so retries start fast
+	// and come often — more attempts in less total wall clock, still quick
+	// enough to surface a real outage to the RPC-level retry.
+	dedicatedRegistryBackoff = remote.Backoff{
+		Duration: 200 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   1.0,
+		Steps:    4,
+		Cap:      2 * time.Second,
+	}
+	// sharedRegistryBackoff covers communal registries (registry.k8s.io,
+	// Docker Hub, …), where pulls are anonymous and rate limits are shared:
+	// a whole fleet can be throttled at once, so retries must outlast the
+	// throttling wave and full jitter must de-synchronize the herd rather
+	// than replay it.
+	sharedRegistryBackoff = remote.Backoff{
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+		Jitter:   1.0,
+		Steps:    4,
+		Cap:      10 * time.Second,
+	}
+)
+
+// sharedRegistries are the well-known communal registries whose rate limits
+// are shared across all anonymous clients. Everything not listed here is
+// assumed dedicated: fleet-scale pulls realistically hit either the pause
+// image (registry.k8s.io) or the customer's own registry, and enumerating
+// the small stable set of communal hosts beats guessing at every private
+// registry vendor.
+var sharedRegistries = map[string]bool{
+	"registry.k8s.io": true,
+	// Pulls only ever present index.docker.io here: name.ParseReference
+	// normalizes docker.io (and bare refs like "ubuntu") to it before
+	// retryBackoffFor runs. The docker.io entry is kept so a lookup by the
+	// canonical name classifies the same way.
+	"docker.io":            true,
+	"index.docker.io":      true,
+	"registry-1.docker.io": true,
+	"quay.io":              true,
+	"ghcr.io":              true,
+	"public.ecr.aws":       true,
+	"mcr.microsoft.com":    true,
+	"registry.gitlab.com":  true,
+	"cgr.dev":              true,
+}
+
+// retryBackoffFor picks the pull retry backoff for a registry host.
+func retryBackoffFor(registry string) remote.Backoff {
+	if sharedRegistries[registry] {
+		return sharedRegistryBackoff
+	}
+	return dedicatedRegistryBackoff
+}
 
 // Store is atelet's handle to the on-disk layer pool. It is safe for
 // concurrent use; concurrent pulls of the same image or layer are collapsed.
@@ -120,6 +199,11 @@ type Store struct {
 	// covering the window between a pull (or cache-hit stat) and the bundle
 	// spec write / ateom mount that roots it.
 	minAge time.Duration
+
+	// pullTimeout bounds each pull. Pulls run detached from the contexts of
+	// the callers waiting on them (see EnsureImage), so this is the only
+	// bound on how long one can run.
+	pullTimeout time.Duration
 
 	// meter, when set, is the meter the store reports on. See WithMeter.
 	meter metric.Meter
@@ -177,6 +261,11 @@ func WithMinAge(d time.Duration) Option {
 	return func(s *Store) { s.minAge = d }
 }
 
+// WithPullTimeout overrides the per-pull timeout (default 10m).
+func WithPullTimeout(d time.Duration) Option {
+	return func(s *Store) { s.pullTimeout = d }
+}
+
 // WithMeter attaches the meter the store reports ate.imagecache.requests on.
 // Without it the store records nothing, so a caller with no metrics pipeline
 // needs no meter provider.
@@ -209,7 +298,7 @@ type imageRecord struct {
 // startup recovery: verifying the layout version and sweeping temp dirs left
 // by unpacks that were in flight when a previous atelet died.
 func New(root string, opts ...Option) (*Store, error) {
-	s := &Store{root: root, minAge: defaultMinAge}
+	s := &Store{root: root, minAge: defaultMinAge, pullTimeout: defaultPullTimeout}
 	for _, o := range opts {
 		o(s)
 	}
@@ -366,16 +455,28 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 	slog.InfoContext(ctx, "Image cache miss", slog.String("ref", ref), slog.String("digest", digest.String()))
 
 	// Collapse concurrent pulls of the same digest (e.g. several containers of
-	// one actor, or several actors landing at once). The winning call's ctx
-	// governs the pull; if it is cancelled the waiters fail too and retry at
-	// the RPC level.
-	v, err, _ := s.imageSF.Do(digest.String(), func() (any, error) {
-		return s.pull(ctx, parsedRef, digest)
+	// one actor, or several actors landing at once). Callers with very
+	// different lifetimes share these flights — a serving Restore, a
+	// best-effort prewarm bounded by its own deadline, a caller whose daemon
+	// is draining — so the pull runs on a context detached from whichever
+	// caller happened to start the flight, bounded only by the store's pull
+	// timeout: a waiter must only ever see a real pull failure, never another
+	// caller's cancellation. Each caller stops waiting when its own ctx ends,
+	// while the pull runs on to warm the cache for the next attempt.
+	ch := s.imageSF.DoChan(digest.String(), func() (any, error) {
+		pullCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.pullTimeout)
+		defer cancel()
+		return s.pull(pullCtx, parsedRef, digest)
 	})
-	if err != nil {
-		return nil, err
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*Image), nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("while waiting for pull of %s: %w", digest, context.Cause(ctx))
 	}
-	return v.(*Image), nil
 }
 
 // cachedImageHit is the hit side of the hitMu contract: it verifies the
@@ -672,14 +773,15 @@ func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference) []remo
 	if s.platform != nil {
 		platform = *s.platform
 	}
+	registry := parsedRef.Context().Registry.RegistryStr()
 	opts := []remote.Option{
 		// Propagate caller ctx into go-containerregistry so cancellation tears
 		// down in-flight layer-blob HTTP requests instead of letting them run
 		// to completion in background goroutines.
 		remote.WithContext(ctx),
 		remote.WithPlatform(platform),
+		remote.WithRetryBackoff(retryBackoffFor(registry)),
 	}
-	registry := parsedRef.Context().Registry.RegistryStr()
 	if s.authenticator != nil && registryUsesGCPAuth(registry) {
 		opts = append(opts, remote.WithAuth(s.authenticator))
 	}

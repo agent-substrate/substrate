@@ -38,10 +38,10 @@ const (
 )
 
 var testAttribution = resources.ActorAttribution{
-	Ref:               resources.ActorRef{Atespace: testAtespace, Name: testActorName},
-	UID:               testActorUID,
-	TemplateNamespace: testTemplateNS,
-	TemplateName:      testTemplateName,
+	Ref:              resources.ActorRef{Atespace: testAtespace, Name: testActorName},
+	UID:              testActorUID,
+	TemplateAtespace: testTemplateNS,
+	TemplateName:     testTemplateName,
 }
 
 // The registry owns the spellings (pinned by ateattr.TestKeySpellings), so the
@@ -51,7 +51,7 @@ var (
 	actorNameLabel     = string(ateattr.ActorNameKey)
 	actorUIDLabel      = string(ateattr.ActorUIDKey)
 	containerNameLabel = string(ateattr.ActorContainerNameKey)
-	templateNSLabel    = string(ateattr.TemplateNamespaceKey)
+	templateNSLabel    = string(ateattr.TemplateAtespaceKey)
 	templateNameLabel  = string(ateattr.TemplateNameKey)
 )
 

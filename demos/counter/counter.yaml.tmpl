@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Worker pool for the counter demo. The ActorTemplate is not a CRD: it lives
+# in counter-template.yaml.tmpl and is created through the ate API with
+# `kubectl ate create actor-template`.
+
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -35,9 +39,12 @@ spec:
   replicas: 3
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
   template:
+    nodeSelector:
+      ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The sandbox itself is sized by
-    # the ActorTemplate's spec.resources below, not by these (see internal/sizing).
+    # the ActorTemplate's resources in counter-template.yaml.tmpl, not by these
+    # (see internal/sizing).
     #
     # Capacity comes from the limits (workerCapacity reads limits only), while the
     # kube-scheduler packs nodes by the requests — so the CPU request is set well
@@ -51,54 +58,3 @@ spec:
       requests:
         cpu: 250m
         memory: 1Gi
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: counter
-  namespace: ate-demo-counter
-spec:
-  containers:
-  - name: counter
-    image: ko://github.com/agent-substrate/substrate/demos/counter
-    command:
-    - /ko-app/counter
-    # Exercises atenet-router's arbitrary-port ingress support: a second
-    # listener a test can address by CONNECTing to <actor-dns>:9090, distinct
-    # from the primary port 80 every other assertion in this demo uses.
-    - --extra-port=9090
-    - --tcp-port=9091
-${VALIDATE_EXISTING_FILE_PATH_ARG}
-    readyz:
-      httpGet:
-        path: /readyz
-        port: 80
-    volumeMounts:
-    - name: data
-      mountPath: /home/counter
-${EXTERNAL_VOLUME_MOUNTS}
-  # Sandbox size: an actor occupies its whole worker, so size it at (or below)
-  # the pool's per-worker capacity above. ateom writes these to the OCI spec
-  # (cgroup CPU quota + memory limit) — see internal/sizing.
-  resources:
-    limits:
-      cpu: "1"
-      memory: 512Mi
-  workerSelector:
-    matchLabels:
-      workload: counter
-  snapshotsConfig:
-    onPause: Full
-    # Full, so a suspend captures process memory as well as the durable
-    # volumes and the tutorial's in-memory counter really does continue
-    # across suspend/resume. Data-scope behavior (durable volumes only,
-    # memory cold-boots) is exercised by the e2e demo suite's own
-    # parameterized templates, not by this one.
-    onCommit: Full
-    location: gs://${BUCKET_NAME}/ate-demo-counter/
-  volumes:
-  - name: data
-    durableDir: {}
-${EXTERNAL_VOLUMES}

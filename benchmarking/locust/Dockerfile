@@ -21,24 +21,25 @@ WORKDIR /app
 COPY benchmarking/locust/requirements.txt .
 RUN pip install --no-cache-dir --target=/app/deps -r requirements.txt
 
-# Stage 2: Go build of the boomer-glutton worker. Lives in the same image so
+# Stage 2: Go build of the boomer-worker worker. Lives in the same image so
 # runner.py can spawn it as a subprocess during headless runs of glutton.
 # CGO_ENABLED=0 keeps us on boomer's pure-Go ZMQ (gomq), no libzmq needed.
 FROM golang:1.26-bookworm AS goboomer
+ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY vendor ./vendor
 COPY cmd ./cmd
 COPY internal ./internal
 COPY pkg ./pkg
-RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -o /out/boomer-glutton ./cmd/benchmarking/boomer-glutton
+RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -o /out/boomer-worker ./cmd/benchmarking/boomer-worker
 
 # Stage 3: Distroless runner. Carries the locust install AND the boomer
 # binary; the manifest decides which to launch via the `args` field.
 FROM gcr.io/distroless/python3-debian12
 WORKDIR /app
 COPY --from=pydeps /app/deps /app/deps
-COPY --from=goboomer /out/boomer-glutton /app/boomer-glutton
+COPY --from=goboomer /out/boomer-worker /app/boomer-worker
 COPY benchmarking/locust/common/ /app/common/
 COPY benchmarking/locust/shapes/ /app/shapes/
 COPY benchmarking/locust/tests/ /app/tests/

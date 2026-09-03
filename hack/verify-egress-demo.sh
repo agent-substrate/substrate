@@ -29,7 +29,9 @@ ROOT="$(git rev-parse --show-toplevel)"; cd "${ROOT}"
 
 CTX="${KUBECTL_CONTEXT:-kind-kind}"
 K="kubectl --context ${CTX}"
-ATESPACE="${ATESPACE:-demo}"
+# The actor lives in the demo's atespace: --template-ref resolves the
+# template by name within the actor's own atespace.
+ATESPACE="${ATESPACE:-ate-demo-egress}"
 ACTOR="${ACTOR:-egress-demo}"
 TARGET_URL="${TARGET_URL:-http://example.com/}"
 
@@ -39,8 +41,10 @@ ${K} -n ate-system rollout status deployment/atenet-egress --timeout=120s
 echo "== create atespace + actor =="
 kubectl-ate --context "${CTX}" create atespace "${ATESPACE}" 2>/dev/null || true
 kubectl-ate --context "${CTX}" create actor "${ACTOR}" \
-  --atespace "${ATESPACE}" --template ate-demo-egress/egress 2>/dev/null || true
-${K} -n ate-system wait --for=condition=Ready "actor/${ACTOR}" 2>/dev/null || sleep 10
+  --atespace "${ATESPACE}" --template-ref egress 2>/dev/null || true
+# The router resumes the actor on demand; give the control plane a beat to
+# register it before driving traffic.
+sleep 10
 
 echo "== snapshot gateway authentication log offset =="
 BEFORE=$(${K} -n ate-system logs deployment/atenet-egress -c ext-proc --tail=-1 2>/dev/null | wc -l | tr -d ' ')

@@ -27,8 +27,11 @@ import (
 // against it because the demo manifests own the template, not the actors that
 // were created from it.
 type TemplateRef struct {
-	Namespace string
-	Name      string
+	// Atespace the object lives in. The demos name each atespace after the
+	// k8s namespace holding its worker pool, so this field also addresses
+	// the namespaced objects a demo waits on, such as pool Deployments.
+	Atespace string
+	Name     string
 }
 
 // DeleteDemoActors removes every actor created from the given ActorTemplates.
@@ -66,9 +69,9 @@ func (e *Env) DeleteDemoActors(ctx context.Context, refs ...TemplateRef) error {
 	}
 
 	for _, ref := range refs {
-		log.Stepf("Deleting actors for %s/%s", ref.Namespace, ref.Name)
+		log.Stepf("Deleting actors for %s/%s", ref.Atespace, ref.Name)
 		for _, actor := range actors {
-			if actor.GetActorTemplateNamespace() != ref.Namespace || actor.GetActorTemplateName() != ref.Name {
+			if actor.GetActorTemplate().GetAtespace() != ref.Atespace || actor.GetActorTemplate().GetName() != ref.Name {
 				continue
 			}
 			actorRef := resources.ActorRefFromActor(actor)

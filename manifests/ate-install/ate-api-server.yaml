@@ -23,7 +23,7 @@ rules:
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
-  resources: ["actortemplates", "workerpools", "sandboxconfigs", "csidriverconfigs"]
+  resources: ["workerpools", "sandboxconfigs", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
@@ -90,6 +90,7 @@ spec:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
           - --postgres-connection-string=@env
+          - --postgres-schema=@env
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
@@ -131,6 +132,12 @@ spec:
         - configMapRef:
             name: ate-api-server-envvars
             optional: true
+        # Sensitive env vars (e.g. a Postgres DSN carrying a password) live in
+        # a Secret rather than the ConfigMap above. Listed last so a key
+        # present in both takes its value from the Secret.
+        - secretRef:
+            name: ate-api-server-secret-envvars
+            optional: true
         volumeMounts:
         # servicedns: the apiserver's own gRPC serving cert (DNS SAN api.ate-system.svc).
         - name: "servicedns"
@@ -148,6 +155,15 @@ spec:
         - name: "authentication-config"
           mountPath: "/etc/ateapi/authentication"
           readOnly: true
+        # postgres-server-ca: server CA for an external Postgres, referenced
+        # by the DSN via sslrootcert (sslmode=verify-ca). Empty unless the
+        # postgres-server-ca Secret exists. Cloud SQL does not need this: it
+        # uses the Auth Proxy sidecar (see
+        # manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml), which handles TLS
+        # itself.
+        - name: "postgres-server-ca"
+          mountPath: "/run/postgres-server-ca"
+          readOnly: true
         ports:
         - containerPort: 443
         - name: prometheus
@@ -159,6 +175,21 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3
+        # :9090 is bound near the end of boot, after the store connect and
+        # the schema migrations, so nothing answers here until both finish.
+        # The store connect alone budgets 60s (30 attempts, 2s apart) and the
+        # migrations serialize across replicas on an advisory lock. Without a
+        # startup probe the liveness probe below SIGTERMs the container at
+        # ~30s, halfway through that budget: the retry loop is rooted in the
+        # signal context, so it reports "context canceled" and the process
+        # exits into CrashLoopBackOff instead of waiting out a store that is
+        # merely slow to return. A booting replica is not a dead one.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          periodSeconds: 5
+          failureThreshold: 24
         # /healthz stays 200 while a terminating pod drains; /readyz
         # turns 503, so liveness and readiness diverge correctly during
         # shutdown.
@@ -214,6 +245,10 @@ spec:
       - name: "authentication-config"
         configMap:
           name: "ate-api-authentication"
+      - name: "postgres-server-ca"
+        secret:
+          secretName: "postgres-server-ca"
+          optional: true
 ---
 # Allow voluntary disruptions (node drains, cluster upgrades) to take
 # at most one API server pod at a time, at any replica count.

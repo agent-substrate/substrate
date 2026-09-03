@@ -31,12 +31,8 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
@@ -44,7 +40,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/serverboot"
-	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -52,21 +47,11 @@ import (
 // data plane requests; OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG override it.
 const dataPlaneTraceRatio = 0.01
 
-var (
-	scheme = runtime.NewScheme()
-)
-
-func init() {
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(v1alpha1.AddToScheme(scheme))
-}
-
 // RouterServer instantiates and coordinates runtime threads executing system modules.
 type RouterServer struct {
 	cfg routerConfig
 
 	Cmd       *cobra.Command
-	k8sClient client.Client
 	clientset kubernetes.Interface
 	apiClient ateapipb.ControlClient
 	// extprocSrv is the ext_proc mux. Which handlers it carries — ingress,
@@ -76,56 +61,39 @@ type RouterServer struct {
 	// the status page's parking snapshot. Nil in egress-only mode.
 	ingressHandler *ingress.Handler
 	health         *routerHealth
-	atStore        atStore
 }
 
 func NewRouterServer(cfg routerConfig) (*RouterServer, error) {
-	var k8sClient client.Client
 	var clientset kubernetes.Interface
-	var store atStore
 
-	// Only ingress needs Kubernetes: it is the ActorTemplate controller and the
-	// xDS server that read from it. An egress-only instance is pure ext_proc and
-	// deliberately runs without any cluster access at all, so do not even build
-	// the clients — in-cluster config would only fail for want of RBAC.
+	// Only ingress needs Kubernetes: the EndpointSlice resolver for the ateapi
+	// connection, the health checker, and the status page read from it. An
+	// egress-only instance is pure ext_proc and deliberately runs without any
+	// cluster access at all, so do not even build the client — in-cluster
+	// config would only fail for want of RBAC.
 	if cfg.Mode.ServesIngress() {
-		if cfg.TemplatesFile == "" {
-			k8sCfg, err := config.GetConfig()
-			if err != nil {
-				if cfg.Kubeconfig != "" {
-					k8sCfg, err = clientcmd.BuildConfigFromFlags("", cfg.Kubeconfig)
-					if err != nil {
-						return nil, fmt.Errorf("failed to read config from path %s: %w", cfg.Kubeconfig, err)
-					}
-				} else {
-					return nil, fmt.Errorf("unable to establish Kubernetes configuration parameters: %w", err)
+		k8sCfg, err := config.GetConfig()
+		if err != nil {
+			if cfg.Kubeconfig != "" {
+				k8sCfg, err = clientcmd.BuildConfigFromFlags("", cfg.Kubeconfig)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read config from path %s: %w", cfg.Kubeconfig, err)
 				}
+			} else {
+				return nil, fmt.Errorf("unable to establish Kubernetes configuration parameters: %w", err)
 			}
-			slog.Info("Connecting to Kubernetes API server", slog.String("host", k8sCfg.Host))
+		}
+		slog.Info("Connecting to Kubernetes API server", slog.String("host", k8sCfg.Host))
 
-			k8sClient, err = client.New(k8sCfg, client.Options{
-				Scheme: scheme,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("failed to initialize cluster client: %w", err)
-			}
-
-			clientset, err = kubernetes.NewForConfig(k8sCfg)
-			if err != nil {
-				return nil, fmt.Errorf("failed to initialize core client: %w", err)
-			}
-
-			store = newk8sATStore(k8sClient)
-		} else {
-			store = newFileATStore(cfg.TemplatesFile)
+		clientset, err = kubernetes.NewForConfig(k8sCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize core client: %w", err)
 		}
 	}
 
 	return &RouterServer{
 		cfg:       cfg,
-		k8sClient: k8sClient,
 		clientset: clientset,
-		atStore:   store,
 	}, nil
 }
 
@@ -260,10 +228,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	// The ingress control plane — the xDS server and the ActorTemplate
-	// controller — configures the *ingress* dataplane. The egress gateway is
-	// statically configured, so an egress-only instance runs neither and needs
-	// no Kubernetes access.
+	// The ingress control plane — the xDS server — configures the *ingress*
+	// dataplane. The egress gateway is statically configured, so an egress-only
+	// instance does not run it.
 	if s.cfg.Mode.ServesIngress() {
 		if err := s.startDataplane(ctx, g, parkCfg, sampling.RootSamplingPercent()); err != nil {
 			return err

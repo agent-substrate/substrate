@@ -18,37 +18,31 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 	tests := []struct {
 		name     string
-		template *atev1alpha1.ActorTemplate
+		template *ateapipb.ActorTemplate
 		want     *ateletpb.WorkloadSpec
 	}{
 		{
 			name: "converts DurableDir volume and mounts",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
-					},
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							VolumeMounts: []atev1alpha1.VolumeMount{
-								{Name: "home", MountPath: "/home/user"},
-								{Name: "home", MountPath: "/workspace"},
-							},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Volumes: []*ateapipb.Volume{
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+				},
+				Containers: []*ateapipb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateapipb.VolumeMount{
+							{Name: "home", MountPath: "/home/user"},
+							{Name: "home", MountPath: "/workspace"},
 						},
 					},
 				},
@@ -74,34 +68,30 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		},
 		{
 			name: "converts SystemInfo volume with actorMetadata items",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{
-							Name: "system-info",
-							VolumeSource: atev1alpha1.VolumeSource{
-								SystemInfo: &atev1alpha1.SystemInfoVolumeSource{
-									DataSources: []atev1alpha1.SystemInfoDataSource{
-										{ActorMetadata: &atev1alpha1.ActorMetadataDataSource{
-											Items: []atev1alpha1.ActorMetadataItem{
-												{Field: atev1alpha1.ActorMetadataFieldName, Path: "actor-name"},
-												{Field: atev1alpha1.ActorMetadataFieldAtespace, Path: "atespace"},
-												{Field: atev1alpha1.ActorMetadataFieldUID, Path: "identity/actor-uid"},
-											},
-										}},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Volumes: []*ateapipb.Volume{
+					{
+						Name: "system-info",
+						SystemInfo: &ateapipb.SystemInfoVolumeSource{
+							DataSources: []*ateapipb.SystemInfoDataSource{
+								{ActorMetadata: &ateapipb.ActorMetadataDataSource{
+									Items: []*ateapipb.ActorMetadataItem{
+										{Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+										{Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+										{Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
 									},
-								},
+								}},
 							},
 						},
 					},
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							VolumeMounts: []atev1alpha1.VolumeMount{
-								{Name: "system-info", MountPath: "/run/ate"},
-							},
+				},
+				Containers: []*ateapipb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateapipb.VolumeMount{
+							{Name: "system-info", MountPath: "/run/ate"},
 						},
 					},
 				},
@@ -140,21 +130,19 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		},
 		{
 			name: "converts Image volume and mounts",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
-						{Name: "agent", VolumeSource: atev1alpha1.VolumeSource{Image: &atev1alpha1.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}}},
-					},
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							VolumeMounts: []atev1alpha1.VolumeMount{
-								{Name: "home", MountPath: "/home/user"},
-								{Name: "agent", MountPath: "/ate"},
-							},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Volumes: []*ateapipb.Volume{
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+					{Name: "agent", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/agent@sha256:abc"}},
+				},
+				Containers: []*ateapipb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateapipb.VolumeMount{
+							{Name: "home", MountPath: "/home/user"},
+							{Name: "agent", MountPath: "/ate"},
 						},
 					},
 				},
@@ -184,28 +172,24 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		},
 		{
 			name: "converts trustBundle data sources carrying the name for node-side resolution",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{
-							Name: "system-info",
-							VolumeSource: atev1alpha1.VolumeSource{
-								SystemInfo: &atev1alpha1.SystemInfoVolumeSource{
-									DataSources: []atev1alpha1.SystemInfoDataSource{
-										{TrustBundle: &atev1alpha1.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"}},
-									},
-								},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Volumes: []*ateapipb.Volume{
+					{
+						Name: "system-info",
+						SystemInfo: &ateapipb.SystemInfoVolumeSource{
+							DataSources: []*ateapipb.SystemInfoDataSource{
+								{TrustBundle: &ateapipb.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"}},
 							},
 						},
 					},
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							VolumeMounts: []atev1alpha1.VolumeMount{
-								{Name: "system-info", MountPath: "/run/substrate/certs"},
-							},
+				},
+				Containers: []*ateapipb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateapipb.VolumeMount{
+							{Name: "system-info", MountPath: "/run/substrate/certs"},
 						},
 					},
 				},
@@ -240,20 +224,18 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		},
 		{
 			name: "skips non-DurableDir volumes",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{Name: "unsupported", VolumeSource: atev1alpha1.VolumeSource{}},
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
-					},
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							VolumeMounts: []atev1alpha1.VolumeMount{
-								{Name: "home", MountPath: "/workspace"},
-							},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Volumes: []*ateapipb.Volume{
+					{Name: "unsupported"},
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+				},
+				Containers: []*ateapipb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateapipb.VolumeMount{
+							{Name: "home", MountPath: "/workspace"},
 						},
 					},
 				},
@@ -278,15 +260,13 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		},
 		{
 			name: "container without volume mounts has none",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Volumes: []atev1alpha1.Volume{
-						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
-					},
-					Containers: []atev1alpha1.Container{
-						{Name: "main", Image: "main"},
-					},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Volumes: []*ateapipb.Volume{
+					{Name: "home", DurableDir: &ateapipb.DurableDirVolumeSource{}},
+				},
+				Containers: []*ateapipb.Container{
+					{Name: "main", Image: "main"},
 				},
 			},
 			want: &ateletpb.WorkloadSpec{
@@ -301,17 +281,15 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		},
 		{
 			name: "maps literal env",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							Env: []atev1alpha1.EnvVar{
-								{Name: "LITERAL", Value: "plain"},
-								{Name: "EMPTY", Value: ""},
-							},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Containers: []*ateapipb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						Env: []*ateapipb.EnvVar{
+							{Name: "LITERAL", Value: "plain"},
+							{Name: "EMPTY", Value: ""},
 						},
 					},
 				},
@@ -329,16 +307,14 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 		},
 		{
 			name: "maps command and args",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Containers: []atev1alpha1.Container{
-						{
-							Name:    "main",
-							Image:   "main",
-							Command: []string{"/entrypoint"},
-							Args:    []string{"--foo", "--bar"},
-						},
+			template: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl1"},
+				Containers: []*ateapipb.Container{
+					{
+						Name:    "main",
+						Image:   "main",
+						Command: []string{"/entrypoint"},
+						Args:    []string{"--foo", "--bar"},
 					},
 				},
 			},
@@ -355,7 +331,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(tt.template), nil)
+			got, err := workloadSpecFromActorTemplate(tt.template, nil)
 			if err != nil {
 				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 			}
@@ -367,25 +343,23 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 }
 
 func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
-	got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-readyz", Namespace: "agent-ns"},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Containers: []atev1alpha1.Container{
-				{
-					Name:  "with-probe",
-					Image: "main",
-					Readyz: &atev1alpha1.ContainerReadyz{
-						HTTPGet:        &atev1alpha1.HTTPGetAction{Path: "/health", Port: 8080},
-						TimeoutSeconds: 45,
-					},
-				},
-				{
-					Name:  "without-probe",
-					Image: "side",
+	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-readyz"},
+		Containers: []*ateapipb.Container{
+			{
+				Name:  "with-probe",
+				Image: "main",
+				Readyz: &ateapipb.ContainerReadyz{
+					HttpGet:        &ateapipb.HTTPGetAction{Path: "/health", Port: 8080},
+					TimeoutSeconds: 45,
 				},
 			},
+			{
+				Name:  "without-probe",
+				Image: "side",
+			},
 		},
-	}), nil)
+	}, nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -412,42 +386,34 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 }
 
 func TestAppendExternalVolumes(t *testing.T) {
-	template := mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Containers: []atev1alpha1.Container{
-				{
-					Name: "main",
-					VolumeMounts: []atev1alpha1.VolumeMount{
-						{Name: "vol-1", MountPath: "/mnt/vol1"},
-					},
-				},
-			},
-			Volumes: []atev1alpha1.Volume{
-				{
-					Name: "vol-1",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "pd-standard",
-						},
-					},
-				},
-				{
-					Name: "vol-2",
-					VolumeSource: atev1alpha1.VolumeSource{
-						DurableDir: &atev1alpha1.DurableDirVolumeSource{},
-					},
-				},
-				{
-					Name: "unmounted-vol",
-					VolumeSource: atev1alpha1.VolumeSource{
-						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
-							StorageClassName: "pd-standard",
-						},
-					},
+	template := &ateapipb.ActorTemplate{
+		Containers: []*ateapipb.Container{
+			{
+				Name: "main",
+				VolumeMounts: []*ateapipb.VolumeMount{
+					{Name: "vol-1", MountPath: "/mnt/vol1"},
 				},
 			},
 		},
-	})
+		Volumes: []*ateapipb.Volume{
+			{
+				Name: "vol-1",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "pd-standard",
+				},
+			},
+			{
+				Name:       "vol-2",
+				DurableDir: &ateapipb.DurableDirVolumeSource{},
+			},
+			{
+				Name: "unmounted-vol",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "pd-standard",
+				},
+			},
+		},
+	}
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
@@ -504,34 +470,32 @@ func TestAppendExternalVolumes(t *testing.T) {
 }
 
 func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
-	got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-caps", Namespace: "agent-ns"},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Containers: []atev1alpha1.Container{
-				{
-					Name:  "adjusted",
-					Image: "main",
-					SecurityContext: &atev1alpha1.SecurityContext{
-						Capabilities: &atev1alpha1.Capabilities{
-							Add:  []atev1alpha1.Capability{"NET_ADMIN"},
-							Drop: []atev1alpha1.Capability{"ALL"},
-						},
+	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-caps"},
+		Containers: []*ateapipb.Container{
+			{
+				Name:  "adjusted",
+				Image: "main",
+				SecurityContext: &ateapipb.SecurityContext{
+					Capabilities: &ateapipb.Capabilities{
+						Add:  []string{"NET_ADMIN"},
+						Drop: []string{"ALL"},
 					},
 				},
-				{
-					Name:  "unset",
-					Image: "side",
-				},
-				{
-					// An empty capabilities block asks for no adjustment, so
-					// nothing is put on the wire for it.
-					Name:            "empty",
-					Image:           "third",
-					SecurityContext: &atev1alpha1.SecurityContext{Capabilities: &atev1alpha1.Capabilities{}},
-				},
+			},
+			{
+				Name:  "unset",
+				Image: "side",
+			},
+			{
+				// An empty capabilities block asks for no adjustment, so
+				// nothing is put on the wire for it.
+				Name:            "empty",
+				Image:           "third",
+				SecurityContext: &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{}},
 			},
 		},
-	}), nil)
+	}, nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -634,25 +598,21 @@ func TestToAteletResources(t *testing.T) {
 // literal leaves every test in the repository green while limits never leave
 // ate-api-server.
 func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
-	got, err := workloadSpecFromActorTemplate(mustTemplateFromCRD(&atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-limits", Namespace: "agent-ns"},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			SandboxClass: atev1alpha1.SandboxClassMicroVM,
-			Containers: []atev1alpha1.Container{
-				{
-					Name:  "limited",
-					Image: "main",
-					Resources: &atev1alpha1.ContainerResources{
-						Limits: atev1alpha1.ContainerResourceList{
-							corev1.ResourceMemory: resource.MustParse("256Mi"),
-							corev1.ResourceCPU:    resource.MustParse("200m"),
-						},
-					},
-				},
-				{Name: "unlimited", Image: "main"},
+	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-limits"},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM},
+		Containers: []*ateapipb.Container{
+			{
+				Name:  "limited",
+				Image: "main",
+				Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
+					{Name: "cpu", Quantity: "200m"},
+					{Name: "memory", Quantity: "256Mi"},
+				}},
 			},
+			{Name: "unlimited", Image: "main"},
 		},
-	}), nil)
+	}, nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}

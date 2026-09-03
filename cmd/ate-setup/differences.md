@@ -73,9 +73,9 @@ Still required, and why:
 
 | Binary | Used for |
 |---|---|
-| `ko` | building and publishing images (`ko resolve` only) |
-| `go` | locating the pinned `ko` tool, exactly as `hack/run-tool.sh` does |
-| `git` | the `git describe` version stamp passed to ko |
+| `ko` | building and publishing images (`ko resolve` only); not used with `--image-repo` |
+| `go` | locating the pinned `ko` tool, exactly as `hack/run-tool.sh` does; not used with `--image-repo` |
+| `git` | the `git describe` version stamp passed to ko; not used with `--image-repo` |
 | `docker` | the kind CSI setup (`docker exec` into the node) and the claude-code-multiplex workload build |
 | `gcloud` | GKE `get-credentials`, only when `PROJECT_ID` is set and no context was given |
 | `bash` | sourcing `.ate-dev-env.sh` |
@@ -91,6 +91,56 @@ made ko shell out to kubectl and forced the awkward `-- --context=` special case
 (only `apply`/`create`/`delete`/`run` accept args after `--`; `resolve` rejects
 them). Now ko only resolves, and the resulting manifest is applied through
 client-go.
+
+## Image sources
+
+The shell installer had exactly one: build every image from the checkout with
+`ko` and push it to `KO_DOCKER_REPO`. That is still the default and is
+unchanged. `--image-repo` adds a second, in which nothing is built.
+
+Manifests carry `ko://<import path>` references either way. With `--image-repo`
+each is looked up in `images.Components` and rewritten to
+`<repo>/<base of the import path>:<tag>`, which is ko's own
+`--base-import-paths` naming and so is how the release images are already
+published — `ateapi`, `atelet`, `atenet`, `ateom-gvisor`, and the rest.
+`--image-tag` supplies the tag. Each of the two requires the other: a tag with
+no repository to pull from would be dropped, leaving a build from source that
+looks like the release the tag names.
+
+The rewritten reference then keeps that tag and adds the digest it names, as
+`<repo>/<image>:<tag>@sha256:...`, which is the shape ko itself produces for a
+tagged release. Resolving the digest is one HEAD request per image, cached for
+the install, so `--image-repo` needs read access to the registry from wherever
+`ate-setup` runs rather than only from the cluster. It is not optional: an
+ActorTemplate's container image, an image volume's reference, and a
+SandboxConfig's `pauseImage` each carry the CEL rule `self.contains('@')`, so an
+unpinned reference is rejected by admission and every demo fails to deploy.
+Pinning also gives a pre-built install the property a `ko` install had for free,
+that a tag moving afterwards cannot change what is running.
+
+That tag also becomes the substrate version, which names the atelet DaemonSet
+and sets the node label partitioning nodes across coexisting versions. It has
+to: that label must describe the atelet actually running, which came from the
+image, not the checkout `git describe` happens to be sitting on. `VERSION`
+overrides it, as it always has.
+
+The rewrite is textual, one token at a time, matching `SubstituteVersion` above.
+A reference is replaced wherever it appears, so the code needs no list of which
+fields hold images — `workerImage:` in a CRD spec is rewritten like any other —
+and the applied manifest differs from the checked-in YAML only in the image
+references.
+
+Every reference must be in the list. A reference outside the module path, one
+carrying an unexpanded `${PLACEHOLDER}`, and one naming a package that is not
+installable all fail the same way — an error naming every unmapped reference at
+once, rather than an unpullable image reaching the cluster and failing as
+`ImagePullBackOff` twenty minutes later. Matching whole references rather than
+replacing the listed ones is what makes that hold: a reference extending a
+listed package would otherwise inherit its image. `images.Components` is checked
+against the real manifests by a test, so adding a component fails a test rather
+than an install — though only the list is checked that way. The release also has
+to publish the new image under the same repository and tag as the rest, and
+until it does, the component can only be installed by building it.
 
 ## Cluster access
 
@@ -209,14 +259,23 @@ stdout/stderr split matches under CI log capture.
 
 ## Known differences worth flagging
 
-**`--setup-csi` on a non-Kind cluster.** The shell warns and continues;
-`ate-setup setup csi` is a hard error. CSI setup only ever worked on Kind, so
-the warning had nothing to offer a GKE caller but a slower path to the same
-outcome.
+**`--setup-csi` on a non-Kind cluster.** Both installers now accept `nfs` off
+Kind — only the hostpath plugin is patched for the single-node Kind layout, and
+both reject `hostpath` and `both` there with a hard error rather than the
+shell's old warn-and-continue.
+
+**Cloud SQL is shell-only.** `hack/install-ate.sh` automates Cloud SQL setup
+with IAM authentication, synthesized DSNs, and the Auth Proxy sidecar
+([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)). `ate-setup` does not yet
+port this: while it honors `ATE_API_POSTGRES_CONNECTION_STRING` for generic
+external databases, it ignores `ATE_API_POSTGRES_CLOUDSQL_*` and deploys the
+bundled StatefulSet. Running `ate-setup` on a Cloud SQL cluster reverts the DSN
+to the in-cluster database, leaving behind an orphaned proxy. Use
+`hack/install-ate.sh` for Cloud SQL clusters until ported.
 
 ## Testing
 
 The shell installer had no tests. `cmd/ate-setup` has unit tests for template
 rendering, overlay selection, config resolution, the authentication config, the
 apiserver environment ConfigMap, delegated script arguments, manifest deletion,
-and per-demo rendering.
+per-demo rendering, and image reference rewriting.

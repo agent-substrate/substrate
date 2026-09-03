@@ -37,6 +37,12 @@ This installs the CRDs and RBAC, the podcertificate controller and the secrets
 it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
 the atelet DaemonSet, then waits for each to roll out.
 
+The bundled PostgreSQL StatefulSet is skipped when
+ATE_API_POSTGRES_CONNECTION_STRING selects an external database. Cloud SQL is
+not supported here — the ATE_API_POSTGRES_CLOUDSQL_* variables are ignored, so
+use hack/install-ate.sh for a Cloud SQL install (see
+cmd/ate-setup/differences.md).
+
 Shape the install with the global --atenet-router flag.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -63,6 +69,16 @@ var deployAPIServerCmd = &cobra.Command{
 	},
 }
 
+var deployControllerCmd = &cobra.Command{
+	Use:     "ate-controller",
+	Aliases: []string{"controller"},
+	Short:   "Deploy ate-controller only, with the CRDs it serves",
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.DeployAteController(cmd.Context())
+	},
+}
+
 var deployAtenetCmd = &cobra.Command{
 	Use:   "atenet",
 	Short: "Deploy the atenet dataplane only: router, egress, and DNS",
@@ -77,8 +93,13 @@ var deployPostgresCmd = &cobra.Command{
 	Short: "Deploy the single-replica PostgreSQL StatefulSet",
 	Long: `Deploy the experimental single-replica PostgreSQL StatefulSet on its own.
 
-"deploy ate-system" already brings PostgreSQL up as part of the rendered
-bundle; this subcommand is for bringing the StatefulSet up by itself.`,
+"deploy ate-system" already brings PostgreSQL up, unless
+ATE_API_POSTGRES_CONNECTION_STRING selects an external database; this
+subcommand is for bringing the StatefulSet up by itself.
+
+ate-setup has no Cloud SQL support: the ATE_API_POSTGRES_CLOUDSQL_* variables
+are ignored here, so a Cloud SQL install needs hack/install-ate.sh (see
+cmd/ate-setup/differences.md).`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployPostgres(cmd.Context())
@@ -91,10 +112,12 @@ func init() {
 		deployAteSystemCmd,
 		deployAteletCmd,
 		deployAPIServerCmd,
+		deployControllerCmd,
 		deployAtenetCmd,
 		deployPostgresCmd,
 	)
 
-	deployAteSystemCmd.Flags().BoolVar(&deployOpts.SetupCSI, "setup-csi", false,
-		"Also install the hostpath and NFS CSI drivers (Kind only)")
+	deployAteSystemCmd.Flags().StringVar(&deployOpts.SetupCSI, "setup-csi", "none",
+		"Also install CSI driver (nfs, hostpath, both, none; default: none)")
+	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
 }

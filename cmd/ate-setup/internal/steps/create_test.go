@@ -23,21 +23,25 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 )
 
-// ate-api-server resolves --postgres-connection-string=@env from this
-// ConfigMap. It is the only key the shell installer wrote, and an empty value
-// makes the apiserver exit with "--postgres-connection-string is required", so
-// both the key set and the value are pinned here.
+// ate-api-server resolves --postgres-connection-string=@env and
+// --postgres-schema=@env from this ConfigMap. These are the keys the shell
+// installer writes, and an empty value for either makes the apiserver exit
+// ("--postgres-connection-string is required", "PostgreSQL schema must not be
+// empty"), so both the key set and the values are pinned here.
 func TestBuildAPIServerEnvVars(t *testing.T) {
 	const dsn = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full"
 
-	got := buildAPIServerEnvVars(dsn)
+	got := buildAPIServerEnvVars(dsn, "public")
 
-	want := []string{"ATE_API_POSTGRES_CONNECTION_STRING"}
+	want := []string{"ATE_API_POSTGRES_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Errorf("keys = %v, want %v", keys, want)
 	}
 	if got["ATE_API_POSTGRES_CONNECTION_STRING"] != dsn {
 		t.Errorf("ATE_API_POSTGRES_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_CONNECTION_STRING"], dsn)
+	}
+	if got["ATE_API_POSTGRES_SCHEMA"] != "public" {
+		t.Errorf("ATE_API_POSTGRES_SCHEMA = %q, want %q", got["ATE_API_POSTGRES_SCHEMA"], "public")
 	}
 }
 

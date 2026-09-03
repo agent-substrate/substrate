@@ -22,8 +22,9 @@ See [docs/request-parking.md](../../docs/request-parking.md) for the design.
 ### 1. Build and Deploy
 
 > [!NOTE]
-> Do not manually edit `demos/parking/parking.yaml.tmpl`. The installation script
-> automatically injects your `${BUCKET_NAME}` environment variable during deployment.
+> Do not manually edit the `demos/parking/*.yaml.tmpl` manifests. The installation
+> script automatically injects your `${BUCKET_NAME}` environment variable during
+> deployment.
 
 ```bash
 ./hack/install-ate.sh --deploy-demo-parking
@@ -31,24 +32,25 @@ See [docs/request-parking.md](../../docs/request-parking.md) for the design.
 
 This command will:
 - Build the `counter` workload image using `ko`.
-- Create the `ate-demo-parking` namespace.
-- Create a **2-replica** `WorkerPool` (`parking`) and the `parking` `ActorTemplate`.
-- Wait until the pool is rolled out and the template is `Ready`.
+- Create the `ate-demo-parking` namespace and a **2-replica** `WorkerPool`
+  (`parking`, from `parking.yaml.tmpl`).
+- Create the `ate-demo-parking` atespace and the `parking` actor template in it
+  (`parking-template.yaml.tmpl`, applied with `kubectl ate create actor-template`).
+- Wait until the pool is rolled out and the template's golden snapshot is built.
 
 ### 2. Create more actors than workers
 
-Actors live in an **atespace**, and their DNS names embed it
-(`<id>.<atespace>.actors.resources.substrate.ate.dev`), so create one first:
+Actors live in the demo's **atespace** (`ate-demo-parking`), and their DNS names
+embed it (`<id>.<atespace>.actors.resources.substrate.ate.dev`). `--template-ref`
+names the template, resolved in the actor's atespace:
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-kubectl ate create atespace parking
-
 # 4 actors share a 2-worker pool -> oversubscribed.
 for id in p1 p2 p3 p4; do
-  kubectl ate create actor "$id" --atespace parking --template ate-demo-parking/parking
+  kubectl ate create actor "$id" --atespace ate-demo-parking --template-ref parking
 done
 ```
 
@@ -68,8 +70,8 @@ Parking is **on by default** (`--parked-request-budget=5s`,
 Fill both workers by requesting two actors, leaving them `RUNNING`:
 
 ```bash
-curl -s -H "Host: p1.parking.actors.resources.substrate.ate.dev" http://localhost:8000
-curl -s -H "Host: p2.parking.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "Host: p1.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "Host: p2.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
 
 kubectl ate get workers   # both workers are now bound to p1 and p2
 kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
@@ -80,14 +82,14 @@ the `curl` hangs while the router retries the resume:
 
 ```bash
 curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
-  -H "Host: p3.parking.actors.resources.substrate.ate.dev" http://localhost:8000
+  -H "Host: p3.ate-demo-parking.actors.resources.substrate.ate.dev" http://localhost:8000
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1
 (within the 5s park budget):
 
 ```bash
-kubectl ate suspend actor p1 --atespace parking
+kubectl ate suspend actor p1 --atespace ate-demo-parking
 ```
 
 Back in the first terminal, the parked request now completes with **`HTTP 200`**,
@@ -160,7 +162,7 @@ kubectl -n ate-system rollout undo deployment/atenet-router
 ## How to Uninstall
 
 Remove the demo — this deletes the demo's actors (suspending running ones
-first) and then the template, pool, and namespace:
+first) and then the template, atespace, pool, and namespace:
 
 ```bash
 ./hack/install-ate.sh --delete-demo-parking

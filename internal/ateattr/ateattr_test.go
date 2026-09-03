@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -78,29 +79,28 @@ func TestActorAttributes(t *testing.T) {
 		{
 			name: "full actor",
 			actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
-				ActorTemplateNamespace: "ate-agents",
-				ActorTemplateName:      "support-agent",
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"},
 			},
 			want: map[attribute.Key]any{
-				AtespaceKey:          "team-a",
-				ActorNameKey:         "support-agent-42",
-				ActorUIDKey:          "uid-abc",
-				TemplateNameKey:      "support-agent",
-				TemplateNamespaceKey: "ate-agents",
-				ActorVersionKey:      int64(7),
+				AtespaceKey:         "team-a",
+				ActorNameKey:        "support-agent-42",
+				ActorUIDKey:         "uid-abc",
+				TemplateNameKey:     "support-agent",
+				TemplateAtespaceKey: "ate-agents",
+				ActorVersionKey:     int64(7),
 			},
 		},
 		{
 			name:  "nil actor yields zero values, not a panic",
 			actor: nil,
 			want: map[attribute.Key]any{
-				AtespaceKey:          "",
-				ActorNameKey:         "",
-				ActorUIDKey:          "",
-				TemplateNameKey:      "",
-				TemplateNamespaceKey: "",
-				ActorVersionKey:      int64(0),
+				AtespaceKey:         "",
+				ActorNameKey:        "",
+				ActorUIDKey:         "",
+				TemplateNameKey:     "",
+				TemplateAtespaceKey: "",
+				ActorVersionKey:     int64(0),
 			},
 		},
 	}
@@ -156,7 +156,7 @@ func TestKeySpellings(t *testing.T) {
 		{ActorUIDKey, "ate.actor.uid"},
 		{ActorContainerNameKey, "ate.actor.container.name"},
 		{TemplateNameKey, "ate.template.name"},
-		{TemplateNamespaceKey, "ate.template.namespace"},
+		{TemplateAtespaceKey, "ate.template.atespace"},
 		{ActorVersionKey, "ate.actor.version"},
 		{ActorOperationNameKey, "ate.actor.operation.name"},
 		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
@@ -170,6 +170,7 @@ func TestKeySpellings(t *testing.T) {
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
 		{ErrorTypeKey, "error.type"},
 		{FailureReasonKey, "ate.failure.reason"},
+		{FailureDomainKey, "ate.failure.domain"},
 		{OTLPRelayKey, "ate.otlp.relay"},
 	}
 	for _, tt := range tests {
@@ -206,10 +207,10 @@ func TestActorLogLabels(t *testing.T) {
 	const containerName = "counter"
 
 	attribution := resources.ActorAttribution{
-		Ref:               resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
-		UID:               "uid-abc",
-		TemplateNamespace: "ate-agents",
-		TemplateName:      "support-agent",
+		Ref:              resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
+		UID:              "uid-abc",
+		TemplateAtespace: "ate-agents",
+		TemplateName:     "support-agent",
 	}
 
 	tests := []struct {
@@ -227,7 +228,7 @@ func TestActorLogLabels(t *testing.T) {
 				"ate.actor.name":           "support-agent-42",
 				"ate.actor.uid":            "uid-abc",
 				"ate.actor.container.name": containerName,
-				"ate.template.namespace":   "ate-agents",
+				"ate.template.atespace":    "ate-agents",
 				"ate.template.name":        "support-agent",
 			},
 		},
@@ -236,11 +237,11 @@ func TestActorLogLabels(t *testing.T) {
 			attribution:   attribution,
 			containerName: "",
 			want: map[string]string{
-				"ate.atespace":           "team-a",
-				"ate.actor.name":         "support-agent-42",
-				"ate.actor.uid":          "uid-abc",
-				"ate.template.namespace": "ate-agents",
-				"ate.template.name":      "support-agent",
+				"ate.atespace":          "team-a",
+				"ate.actor.name":        "support-agent-42",
+				"ate.actor.uid":         "uid-abc",
+				"ate.template.atespace": "ate-agents",
+				"ate.template.name":     "support-agent",
 			},
 		},
 		{
@@ -248,11 +249,11 @@ func TestActorLogLabels(t *testing.T) {
 			attribution:   resources.ActorAttribution{},
 			containerName: "",
 			want: map[string]string{
-				"ate.atespace":           "",
-				"ate.actor.name":         "",
-				"ate.actor.uid":          "",
-				"ate.template.namespace": "",
-				"ate.template.name":      "",
+				"ate.atespace":          "",
+				"ate.actor.name":        "",
+				"ate.actor.uid":         "",
+				"ate.template.atespace": "",
+				"ate.template.name":     "",
 			},
 		},
 	}
@@ -271,6 +272,97 @@ func TestActorLogLabels(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestActorLogAttrs(t *testing.T) {
+	tests := []struct {
+		name        string
+		attribution resources.ActorAttribution
+		want        map[string]string
+	}{
+		{
+			name: "identity reaches a component record under the same keys as the label envelope",
+			attribution: resources.ActorAttribution{
+				Ref:              resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
+				UID:              "uid-abc",
+				TemplateAtespace: "ate-agents",
+				TemplateName:     "support-agent",
+			},
+			want: map[string]string{
+				"ate.atespace":          "team-a",
+				"ate.actor.name":        "support-agent-42",
+				"ate.actor.uid":         "uid-abc",
+				"ate.template.atespace": "ate-agents",
+				"ate.template.name":     "support-agent",
+			},
+		},
+		{
+			name:        "zero attribution still produces the five identity keys",
+			attribution: resources.ActorAttribution{},
+			want: map[string]string{
+				"ate.atespace":          "",
+				"ate.actor.name":        "",
+				"ate.actor.uid":         "",
+				"ate.template.atespace": "",
+				"ate.template.name":     "",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ActorLogAttrs(tt.attribution)
+			if len(got) != len(tt.want) {
+				t.Errorf("got %d attrs, want %d: %v", len(got), len(tt.want), got)
+			}
+			for _, attr := range got {
+				want, ok := tt.want[attr.Key]
+				if !ok {
+					t.Errorf("unexpected attr %s", attr.Key)
+					continue
+				}
+				if v := attr.Value.String(); v != want {
+					t.Errorf("%s = %q, want %q", attr.Key, v, want)
+				}
+			}
+		})
+	}
+}
+
+// TestActorLogAttrsMatchesActorLogLabels is what keeps the two log shapes
+// joinable. A component record and an actor's own output describe the same actor,
+// so a consumer that filters on ate.actor.uid must find it in both; a key renamed
+// on one side only would otherwise split the stream in two silently.
+func TestActorLogAttrsMatchesActorLogLabels(t *testing.T) {
+	t.Parallel()
+
+	attribution := resources.ActorAttribution{
+		Ref:              resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
+		UID:              "uid-abc",
+		TemplateAtespace: "ate-agents",
+		TemplateName:     "support-agent",
+	}
+
+	// The empty container name is the lifecycle-record form: ActorLogAttrs has no
+	// container to name, so that is the shape the two must match on.
+	labels := ActorLogLabels(attribution, "")
+	attrs := ActorLogAttrs(attribution)
+
+	if len(attrs) != len(labels) {
+		t.Fatalf("ActorLogAttrs has %d keys, ActorLogLabels has %d", len(attrs), len(labels))
+	}
+	for _, attr := range attrs {
+		want, ok := labels[attr.Key]
+		if !ok {
+			t.Errorf("key %s is in ActorLogAttrs and not in ActorLogLabels", attr.Key)
+			continue
+		}
+		if v := attr.Value.String(); v != want {
+			t.Errorf("%s = %q as an attr and %q as a label", attr.Key, v, want)
+		}
 	}
 }
 
@@ -336,8 +428,7 @@ func TestMetricLabelValues(t *testing.T) {
 
 func TestActorMetricAttributes(t *testing.T) {
 	actor := &ateapipb.Actor{
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "counter-template",
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "counter-template"},
 		Status: &ateapipb.ActorStatus{
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				WorkerNamespace: "ate-workers",
@@ -349,13 +440,14 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("explicit operation and reason", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   "default",
+			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationResume,
 			FailureReasonKey:       ReasonCorruptedAssignment,
+			FailureDomainKey:       FailureDomainInfrastructure,
 		}
 
 		assertAttrs(t, got, want)
@@ -364,13 +456,14 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("default unknown values", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   "default",
+			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationUnknown,
 			FailureReasonKey:       ReasonUnknown,
+			FailureDomainKey:       FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -379,19 +472,20 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   "default",
+			TemplateAtespaceKey:    "default",
 			TemplateNameKey:        "counter-template",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationUnknown,
 			FailureReasonKey:       ReasonUnknown,
+			FailureDomainKey:       FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
 	})
 
-	t.Run("empty template ref reports unknown", func(t *testing.T) {
+	t.Run("empty template ref reports empty labels", func(t *testing.T) {
 		noTemplate := &ateapipb.Actor{
 			Status: &ateapipb.ActorStatus{
 				WorkerAssignment: &ateapipb.WorkerAssignment{
@@ -402,13 +496,14 @@ func TestActorMetricAttributes(t *testing.T) {
 		}
 		got := toMap(ActorMetricAttributes(noTemplate, "gvisor", OperationResume, ReasonUnknown))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:   TemplateUnknown,
-			TemplateNameKey:        TemplateUnknown,
+			TemplateAtespaceKey:    "",
+			TemplateNameKey:        "",
 			WorkerPoolNamespaceKey: "ate-workers",
 			WorkerPoolNameKey:      "default-pool",
 			SandboxClassKey:        "gvisor",
 			ActorOperationNameKey:  OperationResume,
 			FailureReasonKey:       ReasonUnknown,
+			FailureDomainKey:       FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -419,16 +514,16 @@ func TestActorMetricAttributes(t *testing.T) {
 	// series that looks like a real pool.
 	t.Run("unassigned actor omits both pool keys", func(t *testing.T) {
 		unassigned := &ateapipb.Actor{
-			ActorTemplateNamespace: "default",
-			ActorTemplateName:      "counter-template",
+			ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "counter-template"},
 		}
 		got := toMap(ActorMetricAttributes(unassigned, "gvisor", OperationCreate, ReasonUnknown))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey:  "default",
+			TemplateAtespaceKey:   "default",
 			TemplateNameKey:       "counter-template",
 			SandboxClassKey:       "gvisor",
 			ActorOperationNameKey: OperationCreate,
 			FailureReasonKey:      ReasonUnknown,
+			FailureDomainKey:      FailureDomainUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -586,5 +681,92 @@ func TestNormalizeOperationName(t *testing.T) {
 		if got := NormalizeOperationName(tt.op); got != tt.want {
 			t.Errorf("NormalizeOperationName(%q) = %q, want %q", tt.op, got, tt.want)
 		}
+	}
+}
+
+func TestFailureDomain(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{"runtime workload reason", string(ateerrors.ReasonWorkloadNotReady), FailureDomainWorkload},
+		// A misdeclared template is the actor owner's to fix, so it is a
+		// workload fault even though substrate is what detects it.
+		{"template resolves to no runnable process", string(ateerrors.ReasonInvalidContainerConfig), FailureDomainWorkload},
+		{"template storage_location unparseable", string(ateerrors.ReasonInvalidObjectURL), FailureDomainWorkload},
+		// SandboxConfig is cluster-scoped, so no actor owner can cause or fix this.
+		{"bad sandbox asset stays infrastructure", string(ateerrors.ReasonInvalidSandboxAsset), FailureDomainInfrastructure},
+		{"node infrastructure reason", string(ateerrors.ReasonTerminalFileSystemError), FailureDomainInfrastructure},
+		{"control-plane infrastructure reason", string(ateerrors.ReasonWorkerPodGone), FailureDomainInfrastructure},
+		{"unknown asserts no domain", ReasonUnknown, FailureDomainUnknown},
+		{"empty", "", FailureDomainUnknown},
+		{"unregistered reason", "SOMETHING_ELSE", FailureDomainUnknown},
+		{"workload prefix is not what decides", "WORKLOAD_NOT_A_REAL_REASON", FailureDomainUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FailureDomain(tt.reason); got != tt.want {
+				t.Errorf("FailureDomain(%q) = %q, want %q", tt.reason, got, tt.want)
+			}
+		})
+	}
+}
+
+// Every registered reason must classify, so adding one to AllReasons without
+// deciding its domain fails here rather than silently reporting unknown.
+func TestFailureDomainCoversAllReasons(t *testing.T) {
+	for _, r := range ateerrors.AllReasons {
+		got := FailureDomain(string(r))
+		if r == ateerrors.ReasonUnknown {
+			if got != FailureDomainUnknown {
+				t.Errorf("FailureDomain(%q) = %q, want %q", r, got, FailureDomainUnknown)
+			}
+			continue
+		}
+		if got == FailureDomainUnknown {
+			t.Errorf("FailureDomain(%q) = %q; add it to workloadReasons or confirm it is infrastructure", r, got)
+		}
+	}
+}
+
+func TestFailureAttributesAlwaysPaired(t *testing.T) {
+	reason := string(ateerrors.ReasonWorkloadNotReady)
+
+	kvs := FailureAttributes(reason)
+	if len(kvs) != 2 {
+		t.Fatalf("FailureAttributes() returned %d attributes, want 2", len(kvs))
+	}
+	if kvs[0].Key != FailureReasonKey || kvs[0].Value.AsString() != reason {
+		t.Errorf("FailureAttributes()[0] = %v, want %s=%s", kvs[0], FailureReasonKey, reason)
+	}
+	if kvs[1].Key != FailureDomainKey || kvs[1].Value.AsString() != FailureDomainWorkload {
+		t.Errorf("FailureAttributes()[1] = %v, want %s=%s", kvs[1], FailureDomainKey, FailureDomainWorkload)
+	}
+
+	attrs := FailureLogAttrs(reason)
+	if len(attrs) != len(kvs) {
+		t.Fatalf("FailureLogAttrs() returned %d attributes, FailureAttributes() returned %d; they must agree", len(attrs), len(kvs))
+	}
+	for i, a := range attrs {
+		if a.Key != string(kvs[i].Key) || a.Value.String() != kvs[i].Value.AsString() {
+			t.Errorf("FailureLogAttrs()[%d] = %s=%s, want %s=%s", i, a.Key, a.Value, kvs[i].Key, kvs[i].Value.AsString())
+		}
+	}
+}
+
+func TestActorRefLogAttrs(t *testing.T) {
+	attrs := ActorRefLogAttrs(resources.ActorRef{Atespace: "space-1", Name: "actor-1"})
+
+	got := make(map[string]string, len(attrs))
+	for _, a := range attrs {
+		got[a.Key] = a.Value.String()
+	}
+	want := map[string]string{
+		string(AtespaceKey):  "space-1",
+		string(ActorNameKey): "actor-1",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("ActorRefLogAttrs() = %v, want %v", got, want)
 	}
 }

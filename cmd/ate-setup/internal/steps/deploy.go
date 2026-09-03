@@ -39,15 +39,14 @@ var crdGVK = schema.GroupVersionKind{
 // ateCRDs are the custom resources the control plane and demos depend on.
 var ateCRDs = []string{
 	"workerpools.ate.dev",
-	"actortemplates.ate.dev",
 	"sandboxconfigs.ate.dev",
 }
 
 // DeployOptions carries the per-invocation choices for DeployAteSystem.
 type DeployOptions struct {
-	// SetupCSI additionally installs the hostpath and NFS CSI drivers. Kind
-	// only.
-	SetupCSI bool
+	// SetupCSI additionally installs the CSI driver (nfs, hostpath, both, none).
+	// Kind only. The hostpath driver is Kind only.
+	SetupCSI string
 }
 
 // DeployAteSystem installs the whole control plane: CRDs, RBAC, the
@@ -56,8 +55,19 @@ type DeployOptions struct {
 func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	log.Step("deploy_ate_system")
 
+	// Fail fast on an unusable build version before touching the cluster.
+	if _, _, err := e.SubstrateVersion(); err != nil {
+		return err
+	}
+
 	// The namespace has to exist before RBAC or CRDs are applied.
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
+		return err
+	}
+
+	// Before the bundle: the atelet DaemonSet applied below and the demo
+	// WorkerPools' version-pinned pods schedule only to version-labeled nodes.
+	if err := e.LabelNodesSubstrateVersion(ctx); err != nil {
 		return err
 	}
 
@@ -74,7 +84,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 
 	// The podcertificate controller goes first so it starts signing and
 	// publishing trust bundles immediately.
-	if err := e.KoApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
 		return err
 	}
 	if err := e.applyPodcertWorkersOverride(ctx); err != nil {
@@ -86,13 +96,8 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.WaitForPodCertificateTrustBundles(ctx); err != nil {
 		return err
 	}
-
-	if opts.SetupCSI {
-		if !e.Cfg.Kind {
-			log.Warnf("CSI setup is only supported for Kind local installations. Skipping.")
-		} else if err := e.SetupCSI(ctx); err != nil {
-			return err
-		}
+	if err := e.SetupCSI(ctx, opts.SetupCSI); err != nil {
+		return err
 	}
 
 	// Enforce per-class SandboxConfig asset requirements. This is applied
@@ -116,7 +121,17 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
+	if err := e.applyBundledPostgres(ctx); err != nil {
+		return err
+	}
+
 	manifests, err := e.renderSystemManifests(ctx)
+	if err != nil {
+		return err
+	}
+	// The atelet DaemonSet in the bundle is version-keyed; fill its
+	// placeholders after the render (kustomize and ko pass them through).
+	manifests, err = e.SubstituteVersion(manifests)
 	if err != nil {
 		return err
 	}
@@ -132,15 +147,27 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
+	ateletName, err := e.AteletDaemonSetName()
+	if err != nil {
+		return err
+	}
 	log.Step("Waiting for ATE system components to be ready...")
-	for _, w := range []struct{ kind, name string }{
-		{kube.KindStatefulSet, "postgres"},
-		{kube.KindDeployment, "ate-api-server"},
-		{kube.KindDeployment, "ate-controller"},
-		{kube.KindDeployment, "atenet-router"},
-		{kube.KindDeployment, "atenet-egress"},
-		{kube.KindDaemonSet, "atelet"},
-	} {
+	type rollout struct{ kind, name string }
+	var waits []rollout
+	// Only when the bundled StatefulSet was applied above; an external
+	// database means it never gets deployed, and waiting on it would block
+	// until the timeout on an object that will never exist.
+	if e.useBundledPostgres() {
+		waits = append(waits, rollout{kube.KindStatefulSet, "postgres"})
+	}
+	waits = append(waits,
+		rollout{kube.KindDeployment, "ate-api-server"},
+		rollout{kube.KindDeployment, "ate-controller"},
+		rollout{kube.KindDeployment, "atenet-router"},
+		rollout{kube.KindDeployment, "atenet-egress"},
+		rollout{kube.KindDaemonSet, ateletName},
+	)
+	for _, w := range waits {
 		if err := e.Kube.RolloutStatus(ctx, w.kind, NamespaceAteSystem, w.name, e.Cfg.RolloutTimeout); err != nil {
 			return err
 		}
@@ -207,10 +234,29 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	if err := e.KoApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err
 	}
 	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-api-server", e.Cfg.RolloutTimeout)
+}
+
+// DeployAteController redeploys only ate-controller.
+func (e *Env) DeployAteController(ctx context.Context) error {
+	log.Step("deploy_ate_controller")
+
+	if err := e.DeployCRDs(ctx); err != nil {
+		return err
+	}
+	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
+		return err
+	}
+	if err := e.applyOtelConfig(ctx); err != nil {
+		return err
+	}
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {
+		return err
+	}
+	return e.Kube.RolloutStatus(ctx, kube.KindDeployment, NamespaceAteSystem, "ate-controller", e.Cfg.RolloutTimeout)
 }
 
 // DeployAtelet redeploys only the atelet DaemonSet.
@@ -223,6 +269,9 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err
 	}
+	if err := e.LabelNodesSubstrateVersion(ctx); err != nil {
+		return err
+	}
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
@@ -233,15 +282,23 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 		// The kind overlay patches the DaemonSet for the local node layout.
 		manifest, err = e.KustomizeResolve(ctx, installDir+"/kind/atelet")
 	} else {
-		manifest, err = e.KoResolve(ctx, e.Cfg.Manifest("atelet.yaml"))
+		manifest, err = e.ResolveManifest(ctx, e.Cfg.Manifest("atelet.yaml"))
 	}
+	if err != nil {
+		return err
+	}
+	manifest, err = e.SubstituteVersion(manifest)
 	if err != nil {
 		return err
 	}
 	if err := e.Kube.ApplyBytes(ctx, manifest); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, NamespaceAteSystem, "atelet", e.Cfg.RolloutTimeout)
+	ateletName, err := e.AteletDaemonSetName()
+	if err != nil {
+		return err
+	}
+	return e.Kube.RolloutStatus(ctx, kube.KindDaemonSet, NamespaceAteSystem, ateletName, e.Cfg.RolloutTimeout)
 }
 
 // DeployAtenet redeploys the atenet dataplane: router, egress, and DNS.
@@ -271,7 +328,7 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err := e.applyAtenetEgress(ctx); err != nil {
 		return err
 	}
-	if err := e.KoApply(ctx, e.Cfg.Manifest("atenet-dns.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("atenet-dns.yaml")); err != nil {
 		return err
 	}
 
@@ -308,7 +365,7 @@ func (e *Env) EnsureCRDs(ctx context.Context) error {
 // DeployCRDs applies the generated CRDs and RBAC, waiting for them to reach Established condition.
 func (e *Env) DeployCRDs(ctx context.Context) error {
 	log.Step("deploy_crds")
-	if err := e.KoApply(ctx, e.Cfg.Manifest("generated")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("generated")); err != nil {
 		return err
 	}
 	for _, name := range ateCRDs {

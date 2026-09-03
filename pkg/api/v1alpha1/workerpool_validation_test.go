@@ -187,52 +187,11 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.template.tolerations: Too many",
 	}, {
-		name: "gpu on a gvisor pool",
-		mutate: func(wp *WorkerPool) {
-			wp.Spec.SandboxClass = SandboxClassGvisor
-			wp.Spec.Template = gpuTemplate(corev1.ResourceList{gpuResourceName: resource.MustParse("1")}, nil)
-		},
-		wantErr: false,
-	}, {
-		name: "gpu limit on a micro-VM pool",
+		// Devices are no longer interpreted: the limit only places the pod.
+		name: "extended resource on a pool is not interpreted",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.SandboxClass = SandboxClassMicroVM
 			wp.Spec.Template = gpuTemplate(corev1.ResourceList{gpuResourceName: resource.MustParse("1")}, nil)
-		},
-		wantErr: true,
-		errMsg:  "nvidia.com/gpu is only supported when sandboxClass is 'gvisor'",
-	}, {
-		// The pod shape keys off limits OR requests, so the rule must reject both.
-		name: "gpu request on a micro-VM pool",
-		mutate: func(wp *WorkerPool) {
-			wp.Spec.SandboxClass = SandboxClassMicroVM
-			wp.Spec.Template = gpuTemplate(nil, corev1.ResourceList{gpuResourceName: resource.MustParse("1")})
-		},
-		wantErr: true,
-		errMsg:  "nvidia.com/gpu is only supported when sandboxClass is 'gvisor'",
-	}, {
-		// Kubernetes refuses a pod that requests an extended resource without a
-		// matching limit, so a pool like this would shape a worker the Deployment
-		// then rejects. Catch it on the WorkerPool the user wrote.
-		name: "gpu in requests only",
-		mutate: func(wp *WorkerPool) {
-			wp.Spec.Template = gpuTemplate(nil, corev1.ResourceList{gpuResourceName: resource.MustParse("1")})
-		},
-		wantErr: true,
-		errMsg:  "nvidia.com/gpu must be set in limits",
-	}, {
-		name: "gpu in both limits and requests",
-		mutate: func(wp *WorkerPool) {
-			wp.Spec.Template = gpuTemplate(
-				corev1.ResourceList{gpuResourceName: resource.MustParse("1")},
-				corev1.ResourceList{gpuResourceName: resource.MustParse("1")})
-		},
-		wantErr: false,
-	}, {
-		name: "micro-VM pool without a gpu",
-		mutate: func(wp *WorkerPool) {
-			wp.Spec.SandboxClass = SandboxClassMicroVM
-			wp.Spec.Template = gpuTemplate(corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")}, nil)
 		},
 		wantErr: false,
 	}}

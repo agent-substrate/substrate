@@ -13,23 +13,30 @@
 // limitations under the License.
 
 // Package multitemplate installs the multi-template demo, where two
-// ActorTemplates share a single WorkerPool.
+// ActorTemplates in two different atespaces share a single WorkerPool.
 package multitemplate
 
 import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 func init() {
-	demos.Register(&demos.Simple{
-		DemoName:    "demo-multi-template",
-		Short:       "Two ActorTemplates sharing one WorkerPool",
-		Template:    "demos/multi-template/multi-template.yaml.tmpl",
-		Deployments: []steps.TemplateRef{{Namespace: "ate-demo-multi-template-pool", Name: "shared-pool"}},
-		ActorTemplates: []steps.TemplateRef{
-			{Namespace: "ate-demo-multi-template-counter", Name: "counter"},
-			{Namespace: "ate-demo-multi-template-fspersist", Name: "fspersist"},
+	demos.Register(&demos.Substrate{
+		DemoName:           "demo-multi-template",
+		Short:              "Two ActorTemplates sharing one WorkerPool",
+		WorkerPoolManifest: "demos/multi-template/multi-template.yaml.tmpl",
+		Deployments:        []steps.TemplateRef{{Atespace: "ate-demo-multi-template-pool", Name: "shared-pool"}},
+		Templates: []demos.SubstrateTemplate{
+			{
+				Manifest: "demos/multi-template/counter-template.yaml.tmpl",
+				Ref:      resources.ActorTemplateRef{Atespace: "ate-demo-multi-template-counter", Name: "counter"},
+			},
+			{
+				Manifest: "demos/multi-template/fspersist-template.yaml.tmpl",
+				Ref:      resources.ActorTemplateRef{Atespace: "ate-demo-multi-template-fspersist", Name: "fspersist"},
+			},
 		},
 	})
 }

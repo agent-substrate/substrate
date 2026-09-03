@@ -1,0 +1,48 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the jupyter
+# demo. Applied with `kubectl ate create actor-template -f -`; the
+# ate-demo-jupyter atespace must exist. The image is already pinned by
+# digest, so ko resolve passes it through unchanged.
+metadata:
+  atespace: ate-demo-jupyter
+  name: jupyter
+workerSelector:
+  matchLabels:
+    workload: jupyter
+containers:
+- name: jupyter
+  image: "quay.io/jupyter/base-notebook@sha256:23fbe16371af3c0fdc833fa0962b42fd07811e152b821ff51d19a8d6e9cc86cf"
+  command:
+  - jupyter
+  - lab
+  - "--allow-root"
+  - "--ServerApp.token=''"
+  - "--ServerApp.password=''"
+  - "--ServerApp.allow_origin='*'"
+  - "--ServerApp.disable_check_xsrf=True"
+  - "--port=80"
+  - "--ip=0.0.0.0"
+  readyz:
+    httpGet:
+      path: /api
+      port: 80
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/ate-demo-jupyter/
+sandboxConfig:
+  sandboxClass: SANDBOX_CLASS_GVISOR
+  configName: gvisor-default

@@ -27,10 +27,8 @@ fi
 ROOT="$(git rev-parse --show-toplevel)"
 
 # 1. Deploy NFS Server (In-Cluster)
-echo "Deploying sample NFS server..."
-kubectl apply -f "${ROOT}/hack/third_party/csi-driver-nfs/deploy/example/nfs-provisioner/nfs-server.yaml"
-echo "Patching NFS server to use emptyDir..."
-kubectl patch deployment nfs-server -n default --type=json -p='[{"op": "replace", "path": "/spec/template/spec/volumes/0", "value": {"name": "nfs-vol", "emptyDir": {}}}]'
+echo "Deploying NFS server..."
+kubectl apply -f "${ROOT}/hack/csi/nfs-server.yaml"
 
 
 # 2. Deploy CSI NFS Driver
@@ -98,6 +96,8 @@ EOF
 # 6. Create NFS StorageClass (pointing to the in-cluster NFS server)
 # We wait for the NFS server service to get an IP first, but we can use its DNS name
 # since kube-dns should resolve it. The CSI driver will resolve it when provisioning.
+# The share is "/" because hack/csi/nfs-server.yaml exports a single directory with
+# fsid=0, which NFSv4 presents as the pseudo-root.
 echo "Creating csi-nfs-sc StorageClass..."
 cat <<EOF | kubectl apply -f -
 apiVersion: storage.k8s.io/v1
@@ -111,8 +111,7 @@ parameters:
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 mountOptions:
-  - nfsvers=3
-  - nolock
+  - nfsvers=4.1
 EOF
 
 # 7. Wait for deployments to be ready
@@ -134,8 +133,9 @@ spec:
   nodeSocketOverride: unix:///var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
 EOF
 
-# 9. Restart atelet to ensure it reconnects to the new CSI socket
+# 9. Restart atelet to ensure it reconnects to the new CSI socket.
+# atelet DaemonSet names carry a build-version suffix, so select by label.
 echo "Restarting atelet DaemonSet (if present)..."
-kubectl rollout restart daemonset/atelet -n ate-system >/dev/null 2>&1 || true
+kubectl rollout restart daemonset -l app=atelet -n ate-system >/dev/null 2>&1 || true
 
 echo "CSI NFS setup complete!"

@@ -28,10 +28,10 @@ import (
 // catch is a field being wired to the wrong source, which same-looking
 // placeholders would hide.
 var fullAttribution = resources.ActorAttribution{
-	Ref:               resources.ActorRef{Atespace: "atespace-a", Name: "actor-b"},
-	UID:               "uid-c",
-	TemplateNamespace: "template-ns-d",
-	TemplateName:      "template-name-e",
+	Ref:              resources.ActorRef{Atespace: "atespace-a", Name: "actor-b"},
+	UID:              "uid-c",
+	TemplateAtespace: "template-ns-d",
+	TemplateName:     "template-name-e",
 }
 
 func TestActorAttributionFromRequest(t *testing.T) {
@@ -43,11 +43,11 @@ func TestActorAttributionFromRequest(t *testing.T) {
 		{
 			name: "run request",
 			req: &ateompb.RunWorkloadRequest{
-				Atespace:               "atespace-a",
-				ActorName:              "actor-b",
-				ActorUid:               "uid-c",
-				ActorTemplateNamespace: "template-ns-d",
-				ActorTemplateName:      "template-name-e",
+				Atespace:              "atespace-a",
+				ActorName:             "actor-b",
+				ActorUid:              "uid-c",
+				ActorTemplateAtespace: "template-ns-d",
+				ActorTemplateName:     "template-name-e",
 			},
 			want: fullAttribution,
 		},
@@ -57,33 +57,33 @@ func TestActorAttributionFromRequest(t *testing.T) {
 			// it was taken before the checkpoint.
 			name: "restore request",
 			req: &ateompb.RestoreWorkloadRequest{
-				Atespace:               "atespace-a",
-				ActorName:              "actor-b",
-				ActorUid:               "uid-c",
-				ActorTemplateNamespace: "template-ns-d",
-				ActorTemplateName:      "template-name-e",
+				Atespace:              "atespace-a",
+				ActorName:             "actor-b",
+				ActorUid:              "uid-c",
+				ActorTemplateAtespace: "template-ns-d",
+				ActorTemplateName:     "template-name-e",
 			},
 			want: fullAttribution,
 		},
 		{
 			name: "checkpoint request",
 			req: &ateompb.CheckpointWorkloadRequest{
-				Atespace:               "atespace-a",
-				ActorName:              "actor-b",
-				ActorUid:               "uid-c",
-				ActorTemplateNamespace: "template-ns-d",
-				ActorTemplateName:      "template-name-e",
+				Atespace:              "atespace-a",
+				ActorName:             "actor-b",
+				ActorUid:              "uid-c",
+				ActorTemplateAtespace: "template-ns-d",
+				ActorTemplateName:     "template-name-e",
 			},
 			want: fullAttribution,
 		},
 		{
 			name: "terminate request",
 			req: &ateompb.TerminateWorkloadRequest{
-				Atespace:               "atespace-a",
-				ActorName:              "actor-b",
-				ActorUid:               "uid-c",
-				ActorTemplateNamespace: "template-ns-d",
-				ActorTemplateName:      "template-name-e",
+				Atespace:              "atespace-a",
+				ActorName:             "actor-b",
+				ActorUid:              "uid-c",
+				ActorTemplateAtespace: "template-ns-d",
+				ActorTemplateName:     "template-name-e",
 			},
 			want: fullAttribution,
 		},

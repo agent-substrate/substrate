@@ -19,16 +19,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // defaultCapabilities mirrors atelet's default set (cmd/atelet/oci.go). It is
@@ -62,7 +58,7 @@ func TestActorCapabilities(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	namespace := deployFixture(t, env["BUCKET_NAME"])
+	namespace := deployFixture(t, ctx, clients, env["BUCKET_NAME"])
 
 	tests := []struct {
 		name     string
@@ -84,7 +80,6 @@ func TestActorCapabilities(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			waitForGolden(t, ctx, clients, namespace, tt.template)
 			actor := tt.template + "-actor"
 			createAndResumeActor(t, ctx, clients, namespace, tt.template, actor)
 
@@ -131,74 +126,27 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 	}
 }
 
-// deployFixture renders and applies the fixture for the sandbox class under
-// test and returns the namespace it created. The namespace carries the class
-// suffix so the gVisor and micro-VM lanes never share one.
-func deployFixture(t *testing.T, bucket string) string {
+// deployFixture installs the fixture for the sandbox class under test and
+// returns its atespace (which also names the namespace it created, carrying
+// the class suffix so the gVisor and micro-VM lanes never share one). Both
+// templates are golden-snapshotted when this returns; a template whose
+// container cannot start — for example because a needed capability was
+// dropped — fails the deploy with the template's error message rather than
+// timing out per subtest.
+func deployFixture(t *testing.T, ctx context.Context, clients *e2e.Clients, bucket string) string {
 	t.Helper()
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
-
-	namespace := e2e.FixtureName("ate-e2e") + "-capabilities"
-
-	// One manifest, rendered for the sandbox class under test (mirrors the
-	// sizing suite).
-	manifest := e2e.RenderFixtureManifest(t, "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl", bucket, "capabilities")
-
-	// Build/push the probe image and apply through the repo's pinned ko, as the
-	// identity suite does; CI does not install ko on PATH, and KO_CONFIG_PATH is
-	// required because ko resolves .ko.yaml from its working directory.
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
-	t.Cleanup(func() {
-		delArgs := []string{"delete", "--ignore-not-found", "-f", manifest}
-		if e2e.KubeContext != "" {
-			delArgs = append([]string{"--context=" + e2e.KubeContext}, delArgs...)
-		}
-		e2e.RunCmd(t, "kubectl", delArgs...)
-	})
-
-	return namespace
-}
-
-func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, template string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Minute)
-	for time.Now().Before(deadline) {
-		at, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(namespace).Get(ctx, template, metav1.GetOptions{})
-		if err == nil {
-			switch at.Status.Phase {
-			case v1alpha1.PhaseReady:
-				t.Logf("ActorTemplate %s ready, golden=%s", template, at.Status.GoldenActorID)
-				return
-			case v1alpha1.PhaseFailed:
-				// A template whose container cannot start — for example because
-				// a needed capability was dropped — lands here rather than
-				// timing out, so say so plainly.
-				t.Fatalf("ActorTemplate %s entered PhaseFailed; its container never became ready", template)
-			}
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("timed out waiting for ActorTemplate %s to be Ready", template)
+	atespace, _ := e2e.DeploySubstrateFixture(t, ctx, clients, e2e.SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
+		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
+	}, bucket, "capabilities", false)
+	return atespace
 }
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, namespace, template, id string) {
 	t.Helper()
-	// CreateActor requires the atespace to exist first.
-	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
-		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: namespace}},
-	})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: namespace, Name: id},
-		ActorTemplateNamespace: namespace,
-		ActorTemplateName:      template,
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: namespace, Name: id},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: namespace, Name: template},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}

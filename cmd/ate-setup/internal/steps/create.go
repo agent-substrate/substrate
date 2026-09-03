@@ -121,7 +121,8 @@ func (e *Env) CreateActorIDCACertsSecret(ctx context.Context) error {
 
 // CreateAPIServerEnvVars writes the ConfigMap that tells ate-api-server how to
 // reach its PostgreSQL store. ate-api-server.yaml pulls it in via an optional
-// envFrom and resolves --postgres-connection-string=@env from it.
+// envFrom and resolves --postgres-connection-string=@env and
+// --postgres-schema=@env from it.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
 	if err := e.Kube.EnsureNamespace(ctx, NamespaceAteSystem); err != nil {
@@ -131,16 +132,19 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	connString := e.Cfg.PostgresConnString()
 	log.Infof("POSTGRES_CONNECTION_STRING: %s", connString)
 
-	return e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars, buildAPIServerEnvVars(connString))
+	return e.Kube.ApplyConfigMap(ctx, NamespaceAteSystem, ConfigMapAPIEnvVars,
+		buildAPIServerEnvVars(connString, e.Cfg.PostgresSchemaName()))
 }
 
-// buildAPIServerEnvVars is the ConfigMap payload. ate-api-server takes only the
-// connection string from it; an unrecognized key here reaches the container as
-// a stray environment variable, so the set stays exactly what the shell
-// installer's create_api_server_env_vars wrote.
-func buildAPIServerEnvVars(connString string) map[string]string {
+// buildAPIServerEnvVars is the ConfigMap payload. ate-api-server takes the
+// connection string and the schema from it, and exits on an empty schema; an
+// unrecognized key here reaches the container as a stray environment variable,
+// so the set stays exactly what the shell installer's
+// create_api_server_env_vars writes.
+func buildAPIServerEnvVars(connString, schema string) map[string]string {
 	return map[string]string{
 		"ATE_API_POSTGRES_CONNECTION_STRING": connString,
+		"ATE_API_POSTGRES_SCHEMA":            schema,
 	}
 }
 
@@ -255,8 +259,9 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 	if err != nil {
 		return fmt.Errorf("while generating the JWT authority for %s/%s: %w", namespace, name, err)
 	}
-	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.Pool{
-		Authorities: []*localjwtauthority.Authority{authority},
+	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.ConcretePool{
+		Authorities:      []*localjwtauthority.Authority{authority},
+		ActiveForSigning: poolKeyID,
 	})
 	if err != nil {
 		return fmt.Errorf("while marshaling the JWT pool for %s/%s: %w", namespace, name, err)

@@ -35,20 +35,13 @@ demo-jupyter_cmdline() {
 
 demo-jupyter_deploy() {
   log_step "demo-jupyter_deploy"
-  ensure_crds
-
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      demos/jupyter/jupyter.yaml.tmpl \
-    | run_ko apply -f -
-
-  log_step "Waiting for jupyter demo to be ready..."
-  run_kubectl wait --for=condition=Ready actortemplate/jupyter -n ate-demo-jupyter --timeout=300s
+  deploy_substrate_demo render_demo_manifest \
+    demos/jupyter/jupyter.yaml.tmpl ate-demo-jupyter jupyter 300 \
+    demos/jupyter/jupyter-template.yaml.tmpl jupyter
 }
 
 demo-jupyter_delete() {
   log_step "demo-jupyter_delete"
-  delete_demo_actors ate-demo-jupyter jupyter
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      demos/jupyter/jupyter.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo render_demo_manifest \
+    demos/jupyter/jupyter.yaml.tmpl ate-demo-jupyter jupyter
 }

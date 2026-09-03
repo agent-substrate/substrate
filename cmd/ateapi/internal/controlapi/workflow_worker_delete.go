@@ -129,8 +129,9 @@ func (w *WorkerWorkflow) ensureBoundActorReleased(ctx context.Context, worker *a
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
-	slog.InfoContext(ctx, "Releasing actor from a worker whose pod is gone",
-		slog.String("worker", name), slog.String("actor", actorRef.String()))
+	slog.LogAttrs(ctx, slog.LevelInfo, "Releasing actor from a worker whose pod is gone",
+		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
+			slog.String("worker", name))...)
 	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		toUpdate.Status.WorkerAssignment = nil
@@ -152,6 +153,7 @@ func (w *WorkerWorkflow) ensureBoundActorReleased(ctx context.Context, worker *a
 	}
 
 	if !wasAlreadyCrashed {
+		logActorCrashed(ctx, actor, opName, ateattr.ReasonWorkerPodGone)
 		recordActorCrash(ctx, crashAttrs)
 	}
 	return nil

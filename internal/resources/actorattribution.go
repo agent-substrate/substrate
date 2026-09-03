@@ -14,6 +14,8 @@
 
 package resources
 
+import "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+
 // ActorAttribution is what telemetry about an actor is attributed to: an
 // ActorRef plus the two things a ref does not carry, the server-assigned uid and
 // the template the actor was built from. Shared by ateattr, actorlog, and
@@ -23,8 +25,19 @@ package resources
 // (ateapi's ActorIdentity service, substratex509, ateompath.ActorIdentityDirPath)
 // — nothing here is a secret or is presented as proof of anything.
 type ActorAttribution struct {
-	Ref               ActorRef
-	UID               string
-	TemplateNamespace string
-	TemplateName      string
+	Ref              ActorRef
+	UID              string
+	TemplateAtespace string
+	TemplateName     string
+}
+
+// ActorAttributionFromActor builds the attribution for a loaded Actor. Nil-safe;
+// a nil Actor yields zero-valued fields.
+func ActorAttributionFromActor(a *ateapipb.Actor) ActorAttribution {
+	return ActorAttribution{
+		Ref:              ActorRefFromActor(a),
+		UID:              a.GetMetadata().GetUid(),
+		TemplateAtespace: a.GetActorTemplate().GetAtespace(),
+		TemplateName:     a.GetActorTemplate().GetName(),
+	}
 }

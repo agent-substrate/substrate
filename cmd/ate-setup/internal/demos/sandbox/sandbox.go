@@ -19,18 +19,22 @@ package sandbox
 import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
+// namespace is the pool's k8s namespace; it doubles as the atespace holding
+// the demo's ActorTemplate.
 const namespace = "ate-demo-sandbox"
 
 func init() {
-	demos.Register(&demos.Simple{
-		DemoName:       "demo-sandbox",
-		Short:          "An on-demand sandbox actor driven by the sandbox client",
-		Template:       "demos/sandbox/sandbox.yaml.tmpl",
-		ActorTemplates: []steps.TemplateRef{{Namespace: namespace, Name: "sandbox-template"}},
-		// There is no workload to come up, and the template is exercised on
-		// demand, so the install does not block on readiness.
-		SkipReadinessWait: true,
+	demos.Register(&demos.Substrate{
+		DemoName:           "demo-sandbox",
+		Short:              "An on-demand sandbox actor driven by the sandbox client",
+		WorkerPoolManifest: "demos/sandbox/sandbox.yaml.tmpl",
+		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "sandbox-workerpool"}},
+		Templates: []demos.SubstrateTemplate{{
+			Manifest: "demos/sandbox/sandbox-template.yaml.tmpl",
+			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "sandbox-template"},
+		}},
 	})
 }

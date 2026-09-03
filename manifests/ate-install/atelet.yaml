@@ -31,6 +31,11 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["csidriverconfigs"]
   verbs: ["get", "list", "watch"]
+# SandboxConfigs are watched to pre-download sandbox assets into the node's
+# cache before the first actor needs them (see cmd/atelet/sandbox_prewarm.go).
+- apiGroups: ["ate.dev"]
+  resources: ["sandboxconfigs"]
+  verbs: ["get", "list", "watch"]
 # ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
 # resolved on the node: atelet reads them through an informer and projects
 # the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
@@ -78,26 +83,40 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 ---
 # 4. Create DaemonSet
+#
+# ${SUBSTRATE_VERSION} and ${SUBSTRATE_VERSION_SUFFIX} are placeholders that
+# hack/install-ate.sh fills in after kustomize/ko.
+#
+# During a rolling upgrade both old/new version DaemonSets coexist, each pinned 
+# to nodes carrying a version label while the operator flip nodes from old version
+# label to new versio label one at a time.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: atelet
+  name: atelet-${SUBSTRATE_VERSION_SUFFIX}
   namespace: ate-system
   labels:
     app: atelet
+    ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
 spec:
   selector:
     matchLabels:
       app: atelet
+      ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
   template:
     metadata:
       labels:
         app: atelet
+        ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
+      # Pin to nodes labelled with this substrate version. install-ate.sh labels unlabeled
+      # nodes at install time; the operator owns the label afterwards.
+      nodeSelector:
+        ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
       # Budget for the full shutdown sequence: --drain-delay (0 for atelet) +
       # --drain-timeout (5m). Sized long because Checkpoint/Restore stream
       # multi-GiB snapshots and must not be force-cancelled mid-upload. The sum
@@ -159,7 +178,7 @@ spec:
             fieldRef:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
-          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
         # OTLP exporter settings are shared by every control plane component;

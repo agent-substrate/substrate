@@ -278,7 +278,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapipb.ActorTemplate) {
 	t.Helper()
 	const poolName = "counter"
-	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns, e2e.SubstrateCounterTemplateOptions{
+	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns, e2e.SubstrateTemplateOptions{
 		Atespace:     ns,
 		Name:         "counter",
 		PoolName:     poolName,
