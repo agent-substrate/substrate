@@ -76,7 +76,7 @@
               },
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "histogram_quantile(0.99, sum by (le) (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=\"atelet\", \"rpc.method\"=\"atelet.AteomHerder/Restore\"}[5m])))",
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le) (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=~\"atelet-.*\", \"rpc.method\"=\"atelet.AteomHerder/Restore\"}[5m])))",
                   "unitOverride": "s"
                 },
                 "plotType": "LINE",
