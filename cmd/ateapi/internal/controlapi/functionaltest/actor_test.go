@@ -1853,6 +1853,40 @@ func TestResumeActor(t *testing.T) {
 	}
 }
 
+func TestResumeActor_WorkerDeletedAfterRestorePreservesCrash(t *testing.T) {
+	ns := namespaceForTest("ns-resume-worker-delete")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.GetAtespace(), Name: actorRef.GetName()},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	tc.fakeAtelet.AfterRestore = func(ctx context.Context) error {
+		_, err := tc.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: &ateapipb.ObjectRef{Name: workerName}})
+		return err
+	}
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ResumeActor error = %v, want FailedPrecondition", err)
+	}
+	got, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("worker assignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
+	}
+}
+
 func TestResumeActorPassesLiteralEnv(t *testing.T) {
 	ns := namespaceForTest("ns-resume-literal-env")
 	tc := setupTest(t, ns)
@@ -2472,6 +2506,80 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 				t.Errorf("restore request to atelet had golden snapshot uri = %q, want empty", got)
 			}
 		})
+	}
+}
+
+func TestSuspendActor_WorkerDeletedAfterCheckpointPreservesCrash(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-worker-delete")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.GetAtespace(), Name: actorRef.GetName()},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	tc.fakeAtelet.AfterCheckpoint = func(ctx context.Context) error {
+		_, err := tc.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: &ateapipb.ObjectRef{Name: workerName}})
+		return err
+	}
+
+	if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("SuspendActor error = %v, want FailedPrecondition", err)
+	}
+	got, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if got.GetStatus().GetExternalSnapshot() != nil {
+		t.Errorf("external snapshot = %v, want nil", got.GetStatus().GetExternalSnapshot())
+	}
+}
+
+func TestPauseActor_WorkerDeletedAfterCheckpointPreservesCrash(t *testing.T) {
+	ns := namespaceForTest("ns-pause-worker-delete")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.GetAtespace(), Name: actorRef.GetName()},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	tc.fakeAtelet.AfterCheckpoint = func(ctx context.Context) error {
+		_, err := tc.client.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: &ateapipb.ObjectRef{Name: workerName}})
+		return err
+	}
+
+	if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{Actor: actorRef}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("PauseActor error = %v, want FailedPrecondition", err)
+	}
+	got, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("worker assignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
 	}
 }
 

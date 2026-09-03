@@ -787,8 +787,10 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 	return &ateletpb.EgressGateway{Address: w.egressGatewayAddress}
 }
 
-// finalizeRunning re-reads the actor for a fresh version and commits RUNNING,
-// recording the template the sprint booted with.
+// finalizeRunning re-reads the actor for a fresh version and commits RUNNING
+// only if it is still RESUMING. Worker deletion can crash the actor while the
+// restore RPC is in flight; that terminal state must not be overwritten. A
+// successful finalization also records the template the sprint booted with.
 func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeRunning")
 	defer func() { err = done(err) }()
@@ -796,6 +798,9 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	latestActor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
+	}
+	if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
+		return nil, status.Errorf(codes.FailedPrecondition, "FinalizeRunning prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_RESUMING)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
