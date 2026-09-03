@@ -207,7 +207,7 @@ func newDanglingDialer() *AteletDialer {
 	empty := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
 		byNode: func(obj any) ([]string, error) { return nil, nil },
 	})
-	return NewAteletDialer(empty, installdefaults.SystemNamespace, "", "")
+	return NewAteletDialer(empty, installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "")
 }
 
 func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {

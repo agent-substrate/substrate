@@ -55,6 +55,15 @@ func TestRouterSPIFFEID(t *testing.T) {
 	}
 }
 
+func TestEgressSPIFFEID(t *testing.T) {
+	// Matches the --injector-identity default the credential provider ships
+	// with, which is what it authenticates the egress injector against.
+	const want = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
+	if got := EgressSPIFFEID(SystemNamespace); got != want {
+		t.Errorf("EgressSPIFFEID(%q) = %q, want %q", SystemNamespace, got, want)
+	}
+}
+
 func TestNamespaceFromPodEnv(t *testing.T) {
 	t.Run("falls back to the install default when unset", func(t *testing.T) {
 		t.Setenv(PodNamespaceEnv, "")

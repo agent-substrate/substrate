@@ -20,7 +20,6 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -34,15 +33,15 @@ type Caller struct {
 	NodeName string
 }
 
-// Authenticate verifies that the RPC arrived over mTLS from an atelet running
-// in ateletNamespace, and returns the identity that atelet's certificate
-// asserts.
+// Authenticate verifies that the RPC arrived over mTLS from an atelet
+// presenting ateletSPIFFEID, and returns the identity that atelet's
+// certificate asserts.
 //
 // The certificate chain is already verified by the TLS layer against the
 // pod-identity CA (see buildServerCreds in cmd/ateapi/main.go), so the
 // extensions read here are trustworthy: only the pod-identity signer can mint
 // a certificate carrying a given pod's node name.
-func Authenticate(ctx context.Context, ateletNamespace string) (*Caller, error) {
+func Authenticate(ctx context.Context, ateletSPIFFEID string) (*Caller, error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return nil, status.Errorf(codes.Unauthenticated, "no peer transport information found")
@@ -61,7 +60,7 @@ func Authenticate(ctx context.Context, ateletNamespace string) (*Caller, error) 
 	// Only atelet may call these RPCs. Everything else with a valid
 	// pod-identity certificate — including the actor workloads themselves — is
 	// rejected here.
-	expected := installdefaults.AteletSPIFFEID(ateletNamespace)
+	expected := ateletSPIFFEID
 	if len(leaf.URIs) == 0 || leaf.URIs[0].String() != expected {
 		slog.WarnContext(ctx, "Denied: caller is not atelet",
 			slog.Any("uris", leaf.URIs), slog.String("expected", expected))

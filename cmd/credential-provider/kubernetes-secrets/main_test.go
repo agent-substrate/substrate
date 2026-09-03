@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"google.golang.org/grpc/credentials"
 )
 
@@ -48,7 +49,7 @@ func certWithURIs(t *testing.T, uris ...string) *x509.Certificate {
 }
 
 func TestVerifyClientSAN(t *testing.T) {
-	const injector = injectorSPIFFEID
+	injector := installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace)
 
 	tests := []struct {
 		name    string
@@ -118,8 +119,8 @@ func TestBuildServerCredsReloadsClientCA(t *testing.T) {
 		t.Fatalf("buildServerCreds() error = %v", err)
 	}
 
-	fromCA1 := clientCA1.issue(t, certOpts{uris: []string{injectorSPIFFEID}})
-	fromCA2 := clientCA2.issue(t, certOpts{uris: []string{injectorSPIFFEID}})
+	fromCA1 := clientCA1.issue(t, certOpts{uris: []string{installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace)}})
+	fromCA2 := clientCA2.issue(t, certOpts{uris: []string{installdefaults.EgressSPIFFEID(installdefaults.SystemNamespace)}})
 	wrongSAN := clientCA1.issue(t, certOpts{uris: []string{"spiffe://cluster.local/ns/ate-system/sa/impostor"}})
 
 	// Before rotation only CA1 is trusted.

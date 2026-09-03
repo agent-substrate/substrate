@@ -33,15 +33,16 @@ const (
 	// RouterServiceName is the Service name of atenet-router.
 	RouterServiceName = "atenet-router"
 
-	// AteletTrustDomain, AteletServiceAccount and RouterServiceAccount are the
-	// trust-domain and service-account segments of the SPIFFE IDs that atelet
-	// and atenet-router Pod certificates carry, as minted by the podidentity
-	// signer (cmd/podcertcontroller/internal/podidentitysigner). The namespace
-	// segment is the namespace they run in, which callers resolve themselves
-	// rather than assume.
+	// AteletTrustDomain and the ServiceAccount constants are the trust-domain
+	// and service-account segments of the SPIFFE IDs that atelet,
+	// atenet-router and atenet-egress Pod certificates carry, as minted by the
+	// podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
+	// The namespace segment is the namespace they run in, which callers
+	// resolve themselves rather than assume.
 	AteletTrustDomain    = "cluster.local"
 	AteletServiceAccount = "atelet"
 	RouterServiceAccount = "atenet-router"
+	EgressServiceAccount = "atenet-egress"
 
 	// PodNamespaceEnv is the conventional env var name for the namespace
 	// a pod is running in, exposed via Kubernetes' downward API.
@@ -76,4 +77,10 @@ func AteletSPIFFEID(namespace string) string {
 // RouterSPIFFEID returns the SPIFFE ID atenet-router presents when it runs in namespace.
 func RouterSPIFFEID(namespace string) string {
 	return SPIFFEID(namespace, RouterServiceAccount)
+}
+
+// EgressSPIFFEID returns the SPIFFE ID atenet-egress presents when it runs in
+// namespace. The credential provider verifies it on the injector connection.
+func EgressSPIFFEID(namespace string) string {
+	return SPIFFEID(namespace, EgressServiceAccount)
 }

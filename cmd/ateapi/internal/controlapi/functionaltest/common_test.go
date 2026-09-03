@@ -161,7 +161,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 
 	// Dial the fake atelet over insecure transport instead of per-atelet mTLS,
 	// so DialForAteletOnNode's real lookup/dial/cache path is exercised under test.
-	dialer := controlapi.NewAteletDialer(ateletInformer.GetIndexer(), installdefaults.SystemNamespace, "", "",
+	dialer := controlapi.NewAteletDialer(ateletInformer.GetIndexer(), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
 		controlapi.WithDialCredentials(func(_ string) (credentials.TransportCredentials, error) {
 			return insecure.NewCredentials(), nil
 		}))
