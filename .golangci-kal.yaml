@@ -108,7 +108,7 @@ linters:
       - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
         text: '^optionalfields: .*\bCSIDriverTLSConfig\.(ServerName|UsePodIdentity)\b'
       - path: 'pkg/api/v1alpha1/csidriverconfig_types\.go'
-        text: '^nonpointerstructs: .*\bCSIDriverConfig\.Spec\b'
+        text: '^(nonpointerstructs|requiredfields): .*\bCSIDriverConfig\.Spec\b'
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'
         text: '^optionalfields: .*\bWorkerPoolPodTemplate\.PriorityClassName\b'
       - path: 'pkg/api/v1alpha1/workerpool_types\.go'

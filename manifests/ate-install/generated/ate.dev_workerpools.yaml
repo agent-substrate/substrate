@@ -69,14 +69,14 @@ spec:
             description: spec defines the desired state of WorkerPool
             properties:
               replicas:
-                description: Replicas is the number of worker pods to run.
+                description: replicas is the number of worker pods to run.
                 format: int32
                 minimum: 0
                 type: integer
               sandboxClass:
                 default: gvisor
                 description: |-
-                  SandboxClass selects the sandbox runtime family for this pool, which drives
+                  sandboxClass selects the sandbox runtime family for this pool, which drives
                   the worker pod shape (KVM/vhost device mounts and node placement) and which
                   SandboxConfigs are eligible. The concrete binary is still selected by
                   WorkerImage. Defaults to gvisor.
@@ -88,21 +88,21 @@ spec:
                 type: string
               sandboxConfigName:
                 description: |-
-                  SandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
+                  sandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
                   sandbox binaries. It overrides the cluster-wide default SandboxConfig for
                   this pool's SandboxClass. The referenced config's SandboxClass must match
                   this pool's SandboxClass. If empty, the default SandboxConfig for the
                   SandboxClass is used.
                 type: string
               template:
-                description: Template holds optional metadata, scheduling, and resource
+                description: template holds optional metadata, scheduling, and resource
                   settings for worker workloads.
                 properties:
                   annotations:
                     additionalProperties:
                       type: string
                     description: |-
-                      Annotations are added to the generated Deployment and worker pods. Keys
+                      annotations are added to the generated Deployment and worker pods. Keys
                       in the ate.dev domain and its subdomains are reserved for controllers.
                     maxProperties: 64
                     type: object
@@ -121,7 +121,7 @@ spec:
                       pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
                       type: string
                     description: |-
-                      Labels are added to the generated Deployment and worker pods. Keys in
+                      labels are added to the generated Deployment and worker pods. Keys in
                       the ate.dev domain and its subdomains are reserved for controllers.
                     maxProperties: 64
                     type: object
@@ -132,7 +132,7 @@ spec:
                       rule: self.all(key, !format.qualifiedName().validate(key).hasValue())
                   nodeAffinity:
                     description: |-
-                      NodeAffinity scheduling rules for the worker pods. Mapped to
+                      nodeAffinity scheduling rules for the worker pods. Mapped to
                       spec.affinity.nodeAffinity on the pod.
                     properties:
                       preferredDuringSchedulingIgnoredDuringExecution:
@@ -333,14 +333,14 @@ spec:
                   nodeSelector:
                     additionalProperties:
                       type: string
-                    description: NodeSelector is a selector which must be true for
+                    description: nodeSelector is a selector which must be true for
                       the pod to fit on a node.
                     type: object
                   priorityClassName:
-                    description: PriorityClassName for the worker pods.
+                    description: priorityClassName for the worker pods.
                     type: string
                   resources:
-                    description: Resources are the compute resources allocated for
+                    description: resources are the compute resources allocated for
                       each worker pod.
                     properties:
                       claims:
@@ -400,7 +400,7 @@ spec:
                         type: object
                     type: object
                   tolerations:
-                    description: Tolerations for the worker pods.
+                    description: tolerations for the worker pods.
                     items:
                       description: |-
                         The pod this Toleration is attached to tolerates any taint that matches
@@ -442,8 +442,19 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                 type: object
+              terminationGracePeriodSeconds:
+                default: 300
+                description: |-
+                  terminationGracePeriodSeconds is the termination grace period applied to
+                  this pool's worker pods. On eviction, ateom traps SIGTERM and forwards it
+                  to the actor so it can save state and exit cleanly before the kubelet
+                  sends SIGKILL. Tune this to the maximum time your actors need to shut
+                  down gracefully. Defaults to 300 (5 minutes).
+                format: int32
+                minimum: 1
+                type: integer
               workerImage:
-                description: WorkerImage is the ateom container image to deploy as
+                description: workerImage is the ateom container image to deploy as
                   workers.
                 minLength: 1
                 type: string
@@ -455,17 +466,17 @@ spec:
             description: status is the observed state of WorkerPool
             properties:
               readyReplicas:
-                description: ReadyReplicas is the number of ready worker pods.
+                description: readyReplicas is the number of ready worker pods.
                 format: int32
                 minimum: 0
                 type: integer
               replicas:
-                description: Replicas is the total number of worker pods.
+                description: replicas is the total number of worker pods.
                 format: int32
                 minimum: 0
                 type: integer
               selector:
-                description: Selector is the label selector for the worker pods.
+                description: selector is the label selector for the worker pods.
                 type: string
             type: object
         required:

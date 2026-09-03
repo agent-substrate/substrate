@@ -20,7 +20,7 @@ import (
 
 // CSIDriverConfigSpec defines the desired state of CSIDriverConfig
 type CSIDriverConfigSpec struct {
-	// DriverName is the standard CSI driver name (e.g. "hostpath.csi.k8s.io").
+	// driverName is the standard CSI driver name (e.g. "hostpath.csi.k8s.io").
 	// Matches the StorageClass referenced in ActorTemplate volume definitions.
 	//
 	// +required
@@ -29,7 +29,7 @@ type CSIDriverConfigSpec struct {
 	// +kubebuilder:validation:Pattern=`^(substrate\.io/)?([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)$`
 	DriverName string `json:"driverName"`
 
-	// ControllerEndpoint is the gRPC endpoint for the CSI Controller service.
+	// controllerEndpoint is the gRPC endpoint for the CSI Controller service.
 	// Must be a valid network URI (e.g. dns:///csi-service:9000 or tcp://127.0.0.1:9000).
 	// TODO: Harden endpoint validation to prevent invalid or unsafe URI inputs.
 	//
@@ -37,14 +37,14 @@ type CSIDriverConfigSpec struct {
 	// +kubebuilder:validation:Pattern=`^(tcp|dns)://.+$`
 	ControllerEndpoint string `json:"controllerEndpoint"`
 
-	// NodeSocketOverride is an optional override for the CSI Node service socket
+	// nodeSocketOverride is an optional override for the CSI Node service socket
 	// on the worker nodes. If empty, ATE defaults to unix:///var/lib/kubelet/plugins/[DriverName]/csi.sock.
 	//
 	// +optional
 	// +kubebuilder:validation:Pattern=`^unix://.+$`
 	NodeSocketOverride string `json:"nodeSocketOverride,omitempty"`
 
-	// TLS configures TLS/mTLS for the connection to the ControllerEndpoint.
+	// tls configures TLS/mTLS for the connection to the ControllerEndpoint.
 	// +optional
 	TLS *CSIDriverTLSConfig `json:"tls,omitempty"`
 }
@@ -52,16 +52,16 @@ type CSIDriverConfigSpec struct {
 // CSIDriverTLSConfig holds TLS and mTLS configuration for CSI driver connections.
 // +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.usePodIdentity) && self.usePodIdentity)",message="tls.usePodIdentity must be true when tls.enabled is true; manual certificates are not yet supported"
 type CSIDriverTLSConfig struct {
-	// Enabled controls whether TLS is used.
+	// enabled controls whether TLS is used.
 	// +required
 	Enabled bool `json:"enabled"`
 
+	// usePodIdentity indicates whether to reuse Substrate's Pod Identity (SPIFFE) certificates.
 	// TODO: Add alternative support for manual certs by adding SecretReference fields.
-	// UsePodIdentity indicates whether to reuse Substrate's Pod Identity (SPIFFE) certificates.
 	// +optional
 	UsePodIdentity bool `json:"usePodIdentity,omitempty"`
 
-	// ServerName override for TLS verification.
+	// serverName override for TLS verification.
 	// +optional
 	ServerName string `json:"serverName,omitempty"`
 }
@@ -76,9 +76,14 @@ type CSIDriverTLSConfig struct {
 // +kubebuilder:printcolumn:name="Driver",type=string,JSONPath=`.spec.driverName`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type CSIDriverConfig struct {
-	metav1.TypeMeta   `json:",inline"`
+	metav1.TypeMeta `json:",inline"`
+
+	// metadata is a standard object metadata
+	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
+	// spec defines the desired state of CSIDriverConfig
+	// +required
 	Spec CSIDriverConfigSpec `json:"spec"`
 }
 
