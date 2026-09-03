@@ -508,7 +508,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}()
 
 	// Launch a bare VMM (CH + api-socket); ateom owns this process for teardown.
-	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api.sock")
+	apiSocket := kata.CLHSocketPath(actorUID)
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
 		Binary:    rr.chBinary,
 		APISocket: apiSocket,
