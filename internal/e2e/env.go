@@ -37,7 +37,7 @@ func CheckEnv(keys ...string) (map[string]string, error) {
 
 // SystemNamespaceEnv names the namespace the substrate control plane under test
 // was installed into. It mirrors the ATE_NAMESPACE hack/install-ate.sh
-// installed with, and the --namespace the chart was released into.
+// installed with, and the namespace the deployment was installed into.
 const SystemNamespaceEnv = "E2E_SYSTEM_NAMESPACE"
 
 // SystemNamespace returns the namespace the control plane under test runs in,
@@ -47,4 +47,14 @@ func SystemNamespace() string {
 		return ns
 	}
 	return installdefaults.SystemNamespace
+}
+
+// ResourcePrefixEnv is the prefix the install under test puts on substrate's
+// resource names. A packaging layer that renames resources prefixes them, and
+// the harness addresses several of those resources by name.
+const ResourcePrefixEnv = "E2E_RESOURCE_PREFIX"
+
+// ResourceName returns name as the install under test renders it.
+func ResourceName(name string) string {
+	return os.Getenv(ResourcePrefixEnv) + name
 }
