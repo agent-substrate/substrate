@@ -61,7 +61,7 @@ import (
 //
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
-func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (resp *ateompb.CheckpointWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -119,6 +119,20 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while pausing guest: %w", err)
 	}
 	dPause := time.Since(tPause)
+
+	// Everything below runs against a paused guest. If any of it fails, the
+	// guest would otherwise be left paused with nothing watching it: tear it
+	// down instead of stranding it, since the checkpoint attempt already
+	// failed and there is no snapshot on disk worth protecting by leaving the
+	// guest running.
+	defer func() {
+		if retErr != nil {
+			if err := s.terminateWorkload(ctx, actorUID); err != nil {
+				slog.WarnContext(ctx, "failed to terminate workload after a failed checkpoint",
+					slog.String("actorUID", actorUID), slog.Any("err", err))
+			}
+		}
+	}()
 
 	checkpointDir := ateompath.CheckpointStateDir(actorUID)
 	// Start from a clean dir so CH's snapshot files are the only contents.
