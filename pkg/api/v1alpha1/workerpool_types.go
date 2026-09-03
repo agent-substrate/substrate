@@ -30,7 +30,7 @@ type WorkerPoolLabelValue string
 // settings for worker workloads. NodeAffinity is mapped to
 // spec.affinity.nodeAffinity on the pod.
 type WorkerPoolPodTemplate struct {
-	// Labels are added to the generated Deployment and worker pods. Keys in
+	// labels are added to the generated Deployment and worker pods. Keys in
 	// the ate.dev domain and its subdomains are reserved for controllers.
 	//
 	// +optional
@@ -39,7 +39,7 @@ type WorkerPoolPodTemplate struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(key, !format.qualifiedName().validate(key).hasValue())",message="label keys must be valid Kubernetes qualified names"
 	Labels map[string]WorkerPoolLabelValue `json:"labels,omitempty"`
 
-	// Annotations are added to the generated Deployment and worker pods. Keys
+	// annotations are added to the generated Deployment and worker pods. Keys
 	// in the ate.dev domain and its subdomains are reserved for controllers.
 	//
 	// +optional
@@ -48,52 +48,52 @@ type WorkerPoolPodTemplate struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(key, !format.qualifiedName().validate(key).hasValue())",message="annotation keys must be valid Kubernetes qualified names"
 	Annotations map[string]string `json:"annotations,omitempty"`
 
-	// NodeSelector is a selector which must be true for the pod to fit on a node.
+	// nodeSelector is a selector which must be true for the pod to fit on a node.
 	//
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
-	// Tolerations for the worker pods.
+	// tolerations for the worker pods.
 	//
 	// +optional
 	// +kubebuilder:validation:MaxItems=16
 	// +listType=atomic
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
-	// PriorityClassName for the worker pods.
+	// priorityClassName for the worker pods.
 	//
 	// +optional
 	PriorityClassName string `json:"priorityClassName,omitempty"`
 
-	// NodeAffinity scheduling rules for the worker pods. Mapped to
+	// nodeAffinity scheduling rules for the worker pods. Mapped to
 	// spec.affinity.nodeAffinity on the pod.
 	//
 	// +optional
 	NodeAffinity *corev1.NodeAffinity `json:"nodeAffinity,omitempty"`
 
-	// Resources are the compute resources allocated for each worker pod.
+	// resources are the compute resources allocated for each worker pod.
 	//
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 type WorkerPoolSpec struct {
-	// Replicas is the number of worker pods to run.
+	// replicas is the number of worker pods to run.
 	// +required
 	// +kubebuilder:validation:Minimum=0
 	Replicas int32 `json:"replicas"`
 
-	// WorkerImage is the ateom container image to deploy as workers.
+	// workerImage is the ateom container image to deploy as workers.
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	WorkerImage string `json:"workerImage"`
 
-	// Template holds optional metadata, scheduling, and resource settings for worker workloads.
+	// template holds optional metadata, scheduling, and resource settings for worker workloads.
 	//
 	// +optional
 	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
 
-	// SandboxClass selects the sandbox runtime family for this pool, which drives
+	// sandboxClass selects the sandbox runtime family for this pool, which drives
 	// the worker pod shape (KVM/vhost device mounts and node placement) and which
 	// SandboxConfigs are eligible. The concrete binary is still selected by
 	// WorkerImage. Defaults to gvisor.
@@ -105,27 +105,38 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
 
-	// SandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
+	// sandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
 	// sandbox binaries. It overrides the cluster-wide default SandboxConfig for
 	// this pool's SandboxClass. The referenced config's SandboxClass must match
 	// this pool's SandboxClass. If empty, the default SandboxConfig for the
 	// SandboxClass is used.
 	// +optional
 	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
+
+	// terminationGracePeriodSeconds is the termination grace period applied to
+	// this pool's worker pods. On eviction, ateom traps SIGTERM and forwards it
+	// to the actor so it can save state and exit cleanly before the kubelet
+	// sends SIGKILL. Tune this to the maximum time your actors need to shut
+	// down gracefully. Defaults to 300 (5 minutes).
+	//
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=300
+	TerminationGracePeriodSeconds *int32 `json:"terminationGracePeriodSeconds,omitempty"`
 }
 
 type WorkerPoolStatus struct {
-	// Replicas is the total number of worker pods.
+	// replicas is the total number of worker pods.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Replicas int32 `json:"replicas"`
 
-	// ReadyReplicas is the number of ready worker pods.
+	// readyReplicas is the number of ready worker pods.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
-	// Selector is the label selector for the worker pods.
+	// selector is the label selector for the worker pods.
 	// +optional
 	Selector string `json:"selector,omitempty"`
 }

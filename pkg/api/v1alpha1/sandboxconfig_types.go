@@ -33,7 +33,7 @@ const (
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
 // runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
 type AssetFile struct {
-	// URL is where to download the asset from (e.g. a gs:// URL). It may be
+	// url is where to download the asset from (e.g. a gs:// URL). It may be
 	// fetched anonymously or with credentials depending on atelet's
 	// configuration.
 	//
@@ -41,7 +41,7 @@ type AssetFile struct {
 	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
 
-	// SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
+	// sha256 is the lower-case hex SHA256 of the asset. It both names the cached
 	// file (preventing collisions) and verifies the download's integrity.
 	//
 	// +required
@@ -51,15 +51,16 @@ type AssetFile struct {
 
 // SandboxConfigSpec is the desired state of a SandboxConfig.
 type SandboxConfigSpec struct {
-	// SandboxClass is the sandbox runtime family this config applies to. A
+	// sandboxClass is the sandbox runtime family this config applies to. A
 	// WorkerPool only uses SandboxConfigs whose SandboxClass matches its own.
+	// Defaults to gvisor.
 	//
-	// +required
+	// +optional
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor
-	SandboxClass SandboxClass `json:"sandboxClass"`
+	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
 
-	// Default marks this SandboxConfig as the cluster-wide default for its
+	// default marks this SandboxConfig as the cluster-wide default for its
 	// SandboxClass. A WorkerPool with no explicit SandboxConfigName resolves to
 	// the default config for its SandboxClass. At most one default is expected
 	// per SandboxClass.
@@ -67,7 +68,7 @@ type SandboxConfigSpec struct {
 	// +optional
 	Default bool `json:"default,omitempty"`
 
-	// PauseImage is the container image used as the root sandbox container.
+	// pauseImage is the container image used as the root sandbox container.
 	// It holds the sandbox's namespaces and runs no workload code, so it is an
 	// implementation detail of the sandbox rather than something actor authors
 	// choose. It is captured in the snapshot manifest alongside the sandbox
@@ -83,7 +84,7 @@ type SandboxConfigSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
 	PauseImage string `json:"pauseImage"`
 
-	// Assets is the set of files atelet fetches for this runtime, keyed first by
+	// assets is the set of files atelet fetches for this runtime, keyed first by
 	// architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
 	// asset names are interpreted by the sandbox backend: gVisor expects a
 	// "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
