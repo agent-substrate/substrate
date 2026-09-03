@@ -365,6 +365,10 @@ func Validate_ActorMetadataItem(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_ActorMetadataItem_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 255); len(e) != 0 {
 				errs = append(errs, e...)
 			}
@@ -6017,6 +6021,10 @@ func Validate_SystemInfoVolumeSource(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_SystemInfoVolumeSource_DataSources(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_SystemInfoDataSource); len(e) != 0 {
 				errs = append(errs, e...)
@@ -6309,6 +6317,10 @@ func Validate_TrustBundleDataSource(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_TrustBundleDataSource_Path(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 255); len(e) != 0 {
 				errs = append(errs, e...)

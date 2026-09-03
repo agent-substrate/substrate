@@ -735,6 +735,78 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 			s.DataSources[0].ActorMetadata.Items[0].Path = strings.Repeat("p", 256)
 		}),
 		want: field.ErrorList{field.TooLong(itemsPath.Index(0).Child("path"), nil, 255).WithOrigin("maxLength")},
+	}, {
+		name: "valid: nested item path",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "meta/actor-name"
+		}),
+	}, {
+		name: "item path traversal",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "../../traversal-escape"
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+	}, {
+		name: "absolute item path",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "/escaped"
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+	}, {
+		name: "item path with dot segment",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "./actor-name"
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+	}, {
+		name: "item path with trailing slash",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "actor-name/"
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+	}, {
+		name: "item path with empty segment",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "meta//actor-name"
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+	}, {
+		name: "item path with control character",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "actor\nname"
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+	}, {
+		name: "trust bundle path traversal",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[1].TrustBundle.Path = "../escape"
+		}),
+		want: field.ErrorList{field.Invalid(dsPath.Index(1).Child("trust_bundle", "path"), nil, "")},
+	}, {
+		name: "duplicate path within items",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[1].Path = "actor-name"
+		}),
+		want: field.ErrorList{field.Duplicate(itemsPath.Index(1).Child("path"), nil)},
+	}, {
+		name: "duplicate path across data sources",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[1].TrustBundle.Path = "actor-uid"
+		}),
+		want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("trust_bundle", "path"), nil)},
+	}, {
+		name: "path nested under another projected path",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[1].TrustBundle.Path = "actor-name/ca.pem"
+		}),
+		want: field.ErrorList{field.Invalid(dsPath.Index(1).Child("trust_bundle", "path"), nil, "")},
+	}, {
+		name: "path is a directory of another projected path",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "certs/actor-name"
+			s.DataSources[1].TrustBundle.Path = "certs"
+		}),
+		want: field.ErrorList{field.Invalid(dsPath.Index(1).Child("trust_bundle", "path"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -780,6 +852,17 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 		name: "path too long",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = strings.Repeat("p", 256) }),
 		want: field.ErrorList{field.TooLong(field.NewPath("path"), nil, 255).WithOrigin("maxLength")},
+	}, {
+		name: "valid: nested path",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "certs/ca.pem" }),
+	}, {
+		name: "path traversal",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
+	}, {
+		name: "absolute path",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "/escaped" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

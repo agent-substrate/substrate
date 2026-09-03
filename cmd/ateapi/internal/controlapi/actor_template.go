@@ -221,6 +221,82 @@ func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operati
 	return nil
 }
 
+// validateSystemInfoPath requires a clean relative Unix path for a file
+// projected into a system-info volume: no leading '/', no empty, '.' or
+// '..' segments, and no control characters. Mirrors the defensive check in
+// atelet's writeSystemInfoFile, which is otherwise only hit at actor start.
+func validateSystemInfoPath(fldPath *field.Path, p string) field.ErrorList {
+	bad := strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") ||
+		strings.Contains(p, "//") || mountPathBadSegmentRE.MatchString(p)
+	if !bad {
+		for _, r := range p {
+			if r < 0x20 || r == 0x7f {
+				bad = true
+				break
+			}
+		}
+	}
+	if bad {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a clean relative Unix path: must not start with '/', and contain no '..', '.', '//', trailing '/', or control characters")}
+	}
+	return nil
+}
+
+func ValidateCustom_ActorMetadataItem_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSystemInfoPath(fldPath, *value)
+}
+
+func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validateSystemInfoPath(fldPath, *value)
+}
+
+// ValidateCustom_SystemInfoVolumeSource_DataSources requires every projected
+// file path to be unique across all data sources, and no path to name a
+// directory of another. atelet writes the files in order into one tree, so a
+// repeated path silently clobbers the earlier file and a file/directory
+// clash fails the actor start.
+func ValidateCustom_SystemInfoVolumeSource_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.SystemInfoDataSource) field.ErrorList {
+	var errs field.ErrorList
+	type projected struct {
+		path    string
+		fldPath *field.Path
+	}
+	var seen []projected
+	check := func(fldPath *field.Path, path string) {
+		if path == "" {
+			return // required is enforced by tags
+		}
+		for _, prev := range seen {
+			switch {
+			case prev.path == path:
+				errs = append(errs, field.Duplicate(fldPath, path))
+				return
+			case strings.HasPrefix(prev.path, path+"/"), strings.HasPrefix(path, prev.path+"/"):
+				errs = append(errs, field.Invalid(fldPath, path, fmt.Sprintf("must not be a directory of, or nested under, another projected path (%s)", prev.fldPath)))
+				return
+			}
+		}
+		seen = append(seen, projected{path: path, fldPath: fldPath})
+	}
+	for i, ds := range value {
+		if ds == nil {
+			continue
+		}
+		if tb := ds.TrustBundle; tb != nil {
+			check(fldPath.Index(i).Child("trust_bundle", "path"), tb.Path)
+		}
+		if am := ds.ActorMetadata; am != nil {
+			for j, item := range am.Items {
+				if item == nil {
+					continue
+				}
+				check(fldPath.Index(i).Child("actor_metadata", "items").Index(j).Child("path"), item.Path)
+			}
+		}
+	}
+	return errs
+}
+
 // ValidateCustom_ImageVolumeSource_Reference requires image references to
 // be pinned by digest, because changing the image content under a fixed
 // reference invalidates snapshots.
