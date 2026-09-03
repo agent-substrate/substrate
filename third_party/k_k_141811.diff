@@ -1,0 +1,286 @@
+diff --git a/staging/src/k8s.io/apimachinery/pkg/api/validate/limits.go b/staging/src/k8s.io/apimachinery/pkg/api/validate/limits.go
+index 768546f6bc22f..42734bcf391c2 100644
+--- a/staging/src/k8s.io/apimachinery/pkg/api/validate/limits.go
++++ b/staging/src/k8s.io/apimachinery/pkg/api/validate/limits.go
+@@ -70,6 +70,15 @@ func MaxBytes[T ~string](_ context.Context, _ operation.Operation, fldPath *fiel
+ 	return nil
+ }
+ 
++// MaxBytesSlice verifies that the specified byte slice is not longer than max
++// bytes.
++func MaxBytesSlice[T ~byte](_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []T, max int) field.ErrorList {
++	if len(value) > max {
++		return field.ErrorList{field.TooLong(fldPath, "", max).WithOrigin("maxBytes")}
++	}
++	return nil
++}
++
+ // MaxItems verifies that the specified slice is not longer than max items.
+ func MaxItems[T any](_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []T, max int) field.ErrorList {
+ 	if len(value) > max {
+diff --git a/staging/src/k8s.io/apimachinery/pkg/api/validate/limits_test.go b/staging/src/k8s.io/apimachinery/pkg/api/validate/limits_test.go
+index 934b876f8fa37..595a64c234f63 100644
+--- a/staging/src/k8s.io/apimachinery/pkg/api/validate/limits_test.go
++++ b/staging/src/k8s.io/apimachinery/pkg/api/validate/limits_test.go
+@@ -585,6 +585,40 @@ func TestMaxBytes(t *testing.T) {
+ 	}
+ }
+ 
++func TestMaxBytesSlice(t *testing.T) {
++	cases := []struct {
++		name     string
++		value    []byte
++		max      int
++		wantErrs field.ErrorList
++	}{{
++		name:     "nil slice",
++		value:    nil,
++		max:      0,
++		wantErrs: nil,
++	}, {
++		name:     "exactly max bytes",
++		value:    []byte("abcdefghij"),
++		max:      10,
++		wantErrs: nil,
++	}, {
++		name:  "more bytes than max",
++		value: []byte("abcdefghijk"),
++		max:   10,
++		wantErrs: field.ErrorList{
++			field.TooLong(field.NewPath("fldpath"), "", 10).WithOrigin("maxBytes"),
++		},
++	}}
++
++	matcher := field.ErrorMatcher{}.ByOrigin().ByDetailSubstring().ByField().ByType()
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			gotErrs := MaxBytesSlice(context.Background(), operation.Operation{}, field.NewPath("fldpath"), tc.value, nil, tc.max)
++			matcher.Test(t, tc.wantErrs, gotErrs)
++		})
++	}
++}
++
+ func TestMinLength(t *testing.T) {
+ 	cases := []struct {
+ 		name     string
+diff --git a/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc.go b/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc.go
+index 6859a1c5c5f99..0ede23d48381f 100644
+--- a/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc.go
++++ b/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc.go
+@@ -63,6 +63,15 @@ type Struct struct {
+ 
+ 	// Note: no validation here
+ 	Max10ValidatedTypedefPtrField *Max10Type `json:"max10ValidatedTypedefPtrField"`
++
++	// Byte slices are strings on the wire, so they are limited in bytes, too.
++	// Note: pointers to slices are not supported.
++
++	// +k8s:maxBytes=10
++	Max10BytesField []byte `json:"max10BytesField"`
++
++	// Note: no validation here
++	Max10ValidatedTypedefBytesField Max10BytesType `json:"max10ValidatedTypedefBytesField"`
+ }
+ 
+ // Note: no validation here
+@@ -79,3 +88,9 @@ type Max0Type string
+ // that use the type definition.
+ // +k8s:maxBytes=10
+ type Max10Type string
++
++// This tests that markers on type definitions
++// are pulled through the validations of fields
++// that use the type definition.
++// +k8s:maxBytes=10
++type Max10BytesType []byte
+diff --git a/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc_test.go b/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc_test.go
+index 47bc3f416d9be..b14ef91e7c7d0 100644
+--- a/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc_test.go
++++ b/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/doc_test.go
+@@ -17,6 +17,7 @@ limitations under the License.
+ package maxbytes
+ 
+ import (
++	"bytes"
+ 	"strings"
+ 	"testing"
+ 
+@@ -56,6 +57,8 @@ func Test(t *testing.T) {
+ 		Max10UnvalidatedTypedefPtrField: ptr.To(UnvalidatedStringType(strings.Repeat("x", 10))),
+ 		Max10ValidatedTypedefField:      Max10Type(strings.Repeat("x", 10)),
+ 		Max10ValidatedTypedefPtrField:   ptr.To(Max10Type(strings.Repeat("x", 10))),
++		Max10BytesField:                 bytes.Repeat([]byte("x"), 10),
++		Max10ValidatedTypedefBytesField: Max10BytesType(bytes.Repeat([]byte("x"), 10)),
+ 	}).ExpectValid()
+ 
+ 	testVal := &Struct{
+@@ -71,6 +74,8 @@ func Test(t *testing.T) {
+ 		Max0ValidatedTypedefPtrField:    ptr.To(Max0Type(strings.Repeat("x", 1))),
+ 		Max10ValidatedTypedefField:      Max10Type(strings.Repeat("x", 11)),
+ 		Max10ValidatedTypedefPtrField:   ptr.To(Max10Type(strings.Repeat("x", 11))),
++		Max10BytesField:                 bytes.Repeat([]byte("x"), 11),
++		Max10ValidatedTypedefBytesField: Max10BytesType(bytes.Repeat([]byte("x"), 11)),
+ 	}
+ 	st.Value(testVal).ExpectMatches(field.ErrorMatcher{}.ByType().ByField(), field.ErrorList{
+ 		field.TooLong(field.NewPath("max0Field"), "", 0),
+@@ -85,6 +90,8 @@ func Test(t *testing.T) {
+ 		field.TooLong(field.NewPath("max0ValidatedTypedefPtrField"), "", 0),
+ 		field.TooLong(field.NewPath("max10ValidatedTypedefField"), "", 10),
+ 		field.TooLong(field.NewPath("max10ValidatedTypedefPtrField"), "", 10),
++		field.TooLong(field.NewPath("max10BytesField"), "", 10),
++		field.TooLong(field.NewPath("max10ValidatedTypedefBytesField"), "", 10),
+ 	})
+ 
+ 	// Test validation ratcheting
+@@ -101,6 +108,8 @@ func Test(t *testing.T) {
+ 		Max0ValidatedTypedefPtrField:    ptr.To(Max0Type(strings.Repeat("x", 1))),
+ 		Max10ValidatedTypedefField:      Max10Type(strings.Repeat("x", 11)),
+ 		Max10ValidatedTypedefPtrField:   ptr.To(Max10Type(strings.Repeat("x", 11))),
++		Max10BytesField:                 bytes.Repeat([]byte("x"), 11),
++		Max10ValidatedTypedefBytesField: Max10BytesType(bytes.Repeat([]byte("x"), 11)),
+ 	}).OldValue(&Struct{
+ 		Max0Field:                       strings.Repeat("x", 1),
+ 		Max0PtrField:                    ptr.To(strings.Repeat("x", 1)),
+@@ -114,5 +123,7 @@ func Test(t *testing.T) {
+ 		Max0ValidatedTypedefPtrField:    ptr.To(Max0Type(strings.Repeat("x", 1))),
+ 		Max10ValidatedTypedefField:      Max10Type(strings.Repeat("x", 11)),
+ 		Max10ValidatedTypedefPtrField:   ptr.To(Max10Type(strings.Repeat("x", 11))),
++		Max10BytesField:                 bytes.Repeat([]byte("x"), 11),
++		Max10ValidatedTypedefBytesField: Max10BytesType(bytes.Repeat([]byte("x"), 11)),
+ 	}).ExpectValid()
+ }
+diff --git a/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/zz_generated.validations.go b/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/zz_generated.validations.go
+index 2235d12c352cb..32c68032e6894 100644
+--- a/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/zz_generated.validations.go
++++ b/staging/src/k8s.io/code-generator/cmd/validation-gen/output_tests/tags/maxbytes/zz_generated.validations.go
+@@ -25,6 +25,7 @@ import (
+ 	context "context"
+ 	fmt "fmt"
+ 
++	equality "k8s.io/apimachinery/pkg/api/equality"
+ 	operation "k8s.io/apimachinery/pkg/api/operation"
+ 	safe "k8s.io/apimachinery/pkg/api/safe"
+ 	validate "k8s.io/apimachinery/pkg/api/validate"
+@@ -68,6 +69,19 @@ func Validate_Max0Type(
+ 	return errs
+ }
+ 
++// Validate_Max10BytesType validates an instance of Max10BytesType according
++// to declarative validation rules in the API schema.
++func Validate_Max10BytesType(
++	ctx context.Context, op operation.Operation, fldPath *field.Path,
++	obj, oldObj Max10BytesType) (errs field.ErrorList) {
++
++	if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 10); len(e) != 0 {
++		errs = append(errs, e...)
++	}
++
++	return errs
++}
++
+ // Validate_Max10Type validates an instance of Max10Type according
+ // to declarative validation rules in the API schema.
+ func Validate_Max10Type(
+@@ -369,5 +383,51 @@ func Validate_Struct(
+ 		errs = append(errs, fn(fldPath.Child("max10ValidatedTypedefPtrField"), obj.Max10ValidatedTypedefPtrField, oldVal, oldObj != nil)...)
+ 	}
+ 
++	{ // field Struct.Max10BytesField
++		fn := func(
++			fldPath *field.Path,
++			obj, oldObj []byte,
++			oldValueCorrelated bool) (errs field.ErrorList) {
++			// don't revalidate unchanged data
++			if oldValueCorrelated && op.Type == operation.Update {
++				if equality.Semantic.DeepEqual(obj, oldObj) {
++					return nil
++				}
++			}
++			// call field-attached validations
++			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 10); len(e) != 0 {
++				errs = append(errs, e...)
++			}
++			return
++		}
++		oldVal := safe.Field(oldObj,
++			func(oldObj *Struct) []byte {
++				return oldObj.Max10BytesField
++			})
++		errs = append(errs, fn(fldPath.Child("max10BytesField"), obj.Max10BytesField, oldVal, oldObj != nil)...)
++	}
++
++	{ // field Struct.Max10ValidatedTypedefBytesField
++		fn := func(
++			fldPath *field.Path,
++			obj, oldObj Max10BytesType,
++			oldValueCorrelated bool) (errs field.ErrorList) {
++			// don't revalidate unchanged data
++			if oldValueCorrelated && op.Type == operation.Update {
++				if equality.Semantic.DeepEqual(obj, oldObj) {
++					return nil
++				}
++			}
++			// call the type's validation function
++			errs = append(errs, Validate_Max10BytesType(ctx, op, fldPath, obj, oldObj)...)
++			return
++		}
++		oldVal := safe.Field(oldObj,
++			func(oldObj *Struct) Max10BytesType {
++				return oldObj.Max10ValidatedTypedefBytesField
++			})
++		errs = append(errs, fn(fldPath.Child("max10ValidatedTypedefBytesField"), obj.Max10ValidatedTypedefBytesField, oldVal, oldObj != nil)...)
++	}
++
+ 	return errs
+ }
+diff --git a/staging/src/k8s.io/code-generator/cmd/validation-gen/validators/limits.go b/staging/src/k8s.io/code-generator/cmd/validation-gen/validators/limits.go
+index 999c19e78131f..5a81be3d63217 100644
+--- a/staging/src/k8s.io/code-generator/cmd/validation-gen/validators/limits.go
++++ b/staging/src/k8s.io/code-generator/cmd/validation-gen/validators/limits.go
+@@ -118,15 +118,23 @@ func (maxBytesTagValidator) ValidScopes() sets.Set[Scope] {
+ 	return maxBytesTagValidScopes
+ }
+ 
+-var maxBytesValidator = types.Name{Package: libValidationPkg, Name: "MaxBytes"}
++var (
++	maxBytesValidator      = types.Name{Package: libValidationPkg, Name: "MaxBytes"}
++	maxBytesSliceValidator = types.Name{Package: libValidationPkg, Name: "MaxBytesSlice"}
++)
+ 
+ func (maxBytesTagValidator) GetValidations(context Context, tag codetags.Tag) (Validations, error) {
+ 	var result Validations
+ 
+ 	// This tag can apply to value and pointer fields, as well as typedefs
+ 	// (which should never be pointers). We need to check the concrete type.
+-	if t := util.NonPointer(util.NativeType(context.Type)); t != types.String {
+-		return Validations{}, fmt.Errorf("can only be used on string types (%s)", rootTypeString(context.Type, t))
++	// Byte slices are strings on the wire, so they are limited in bytes, too.
++	t := util.NonPointer(util.NativeType(context.Type))
++	validator := maxBytesValidator
++	if t.Kind == types.Slice && util.NativeType(t.Elem) == types.Byte {
++		validator = maxBytesSliceValidator
++	} else if t != types.String {
++		return Validations{}, fmt.Errorf("can only be used on string and []byte types (%s)", rootTypeString(context.Type, t))
+ 	}
+ 
+ 	intVal, err := util.ParseInt(tag.Value)
+@@ -136,7 +144,7 @@ func (maxBytesTagValidator) GetValidations(context Context, tag codetags.Tag) (V
+ 	if intVal < 0 {
+ 		return result, fmt.Errorf("must be greater than or equal to zero")
+ 	}
+-	result.AddFunction(Function(maxBytesTagName, DefaultFlags, maxBytesValidator, intVal).
++	result.AddFunction(Function(maxBytesTagName, DefaultFlags, validator, intVal).
+ 		WithEmits(Emission{field.ErrorTypeTooLong, "maxBytes", ""}))
+ 	return result, nil
+ }
+@@ -146,8 +154,8 @@ func (mbtv maxBytesTagValidator) Docs() TagDoc {
+ 		Tag:            mbtv.TagName(),
+ 		StabilityLevel: TagStabilityLevelStable,
+ 		Scopes:         sets.List(mbtv.ValidScopes()),
+-		Description: `Indicates that a string field has a limit on its length in bytes.
+-		This could only allow as few as N/4 multi-byte characters.
++		Description: `Indicates that a string or []byte field has a limit on its length in bytes.
++		For strings, this could only allow as few as N/4 multi-byte characters.
+ 		If you want to limit length of characters specifically, use maxLength.`,
+ 		Payloads: []TagPayloadDoc{{
+ 			Description: "<non-negative integer>",
