@@ -47,6 +47,11 @@ fi
 # below refuses the combination that would half-install.
 ATE_NAMESPACE="${ATE_NAMESPACE:-ate-system}"
 
+# Service name fronting ateapi. It is the audience the API authentication config
+# accepts, so it has to match the Service the deployment actually creates; a
+# deployment that prefixes resource names needs it set.
+ATE_API_SERVICE_NAME="${ATE_API_SERVICE_NAME:-api}"
+
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
@@ -117,6 +122,19 @@ function usage() {
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
+  echo ""
+  echo "Install layout (each defaults to the canonical name, so a canonical"
+  echo "install needs none of them):"
+  echo ""
+  echo "  ATE_NAMESPACE                          Namespace the control plane is installed into"
+  echo "                                         (default: ate-system)"
+  echo "  ATE_API_SERVICE_NAME                   Service name fronting ateapi; the accepted token"
+  echo "                                         audience names it (default: api)"
+  echo ""
+  echo "  Both are refused by the manifest-applying subcommands: manifests/ate-install/"
+  echo "  names ate-system and api literally, so overriding them would half-install."
+  echo "  A renamed install is rendered by the deployment; this script serves"
+  echo "  its bootstrap steps."
   echo ""
   echo "PostgreSQL configuration (either of the first two selects an external"
   echo "database and skips the bundled instance):"
@@ -345,6 +363,14 @@ require_default_namespace_for_manifests() {
     echo "       manifests/ate-install/ hardcodes the ate-system namespace. Install into" >&2
     echo "       another namespace with a deployment that renders them, then use" >&2
     echo "       this script only for the --create-* bootstrap steps." >&2
+    exit 1
+  fi
+  if [[ "${ATE_API_SERVICE_NAME}" != "api" ]]; then
+    echo "error: ATE_API_SERVICE_NAME=${ATE_API_SERVICE_NAME} cannot be used with the manifest-applying subcommands." >&2
+    echo "       manifests/ate-install/ creates the Service literally named api, so tokens" >&2
+    echo "       minted for this audience would all be rejected. A renamed Service comes" >&2
+    echo "       from a renaming deployment; use this script only for the" >&2
+    echo "       --create-* bootstrap steps." >&2
     exit 1
   fi
 }
@@ -870,7 +896,7 @@ create_api_authentication_config() {
       ;;
   esac
   local authentication_config
-  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.%s.svc]\n%s' "${jwt_issuer}" "${ATE_NAMESPACE}" "${discovery_config}")
+  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [%s.%s.svc]\n%s' "${jwt_issuer}" "${ATE_API_SERVICE_NAME}" "${ATE_NAMESPACE}" "${discovery_config}")
   echo "ate-api-authentication authentication.yaml:"
   echo "  | ${authentication_config//$'\n'/$'\n'  | }"
   run_kubectl create configmap -n "${ATE_NAMESPACE}" ate-api-authentication \

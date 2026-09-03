@@ -1220,7 +1220,7 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 	t.Helper()
 	clients := e2e.GetClients()
 
-	svc, err := clients.K8s.CoreV1().Services(e2e.SystemNamespace()).Get(context.Background(), "atenet-router", metav1.GetOptions{})
+	svc, err := clients.K8s.CoreV1().Services(e2e.SystemNamespace()).Get(context.Background(), e2e.ResourceName("atenet-router"), metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get atenet-router service: %w", err)
 	}
