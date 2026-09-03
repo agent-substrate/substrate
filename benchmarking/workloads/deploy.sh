@@ -29,6 +29,12 @@ if [[ -z "${BUCKET_NAME:-}" ]]; then
   exit 1
 fi
 
+# Ensure PROJECT_ID is set
+if [[ -z "${PROJECT_ID:-}" ]]; then
+  echo "Error: PROJECT_ID environment variable is not set." >&2
+  exit 1
+fi
+
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
 # The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
@@ -127,6 +133,7 @@ substitute() {
     microvm) sandbox_config_name="microvm"        sandbox_class_enum="SANDBOX_CLASS_MICROVM" ;;
   esac
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "s|\${PROJECT_ID}|${PROJECT_ID}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
       -e "s|\${SANDBOX_CLASS_ENUM}|${sandbox_class_enum}|g" \
