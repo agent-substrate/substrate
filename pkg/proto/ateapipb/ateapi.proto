@@ -923,17 +923,15 @@ message Container {
   // +k8s:optional
   ContainerReadyz readyz = 6;
 
-  // Each volume may be mounted at most once per container.
-  //
-  // TODO: Kubernetes permits mounting a single volume at multiple paths (which
-  // requires keying by mountPath). We restrict it to one mount per volume (keyed
-  // by name). Note that keying by name means DV will not catch
-  // two different volumes mounted to the same path.
+  // TODO: Kubernetes permits mounting a single volume at multiple paths
+  // (which requires keying by mountPath). We restrict it to one mount per
+  // volume (keyed by name).
   //
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=map
   // +k8s:listMapKey=name
+  // +k8s:customValidation # mount_path must be unique within the container
   repeated VolumeMount volume_mounts = 7;
 
   // security_context adjusts the container's security settings. Unset leaves
@@ -1236,6 +1234,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
+  // +k8s:customValidation # volume_mounts must reference declared volumes
   ActorTemplate actor_template = 1;
 }
 

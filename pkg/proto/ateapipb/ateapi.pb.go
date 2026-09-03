@@ -2701,17 +2701,15 @@ type Container struct {
 	//
 	// +k8s:optional
 	Readyz *ContainerReadyz `protobuf:"bytes,6,opt,name=readyz,proto3" json:"readyz,omitempty"`
-	// Each volume may be mounted at most once per container.
-	//
-	// TODO: Kubernetes permits mounting a single volume at multiple paths (which
-	// requires keying by mountPath). We restrict it to one mount per volume (keyed
-	// by name). Note that keying by name means DV will not catch
-	// two different volumes mounted to the same path.
+	// TODO: Kubernetes permits mounting a single volume at multiple paths
+	// (which requires keying by mountPath). We restrict it to one mount per
+	// volume (keyed by name).
 	//
 	// +k8s:optional
 	// +k8s:maxItems=32
 	// +k8s:listType=map
 	// +k8s:listMapKey=name
+	// +k8s:customValidation # mount_path must be unique within the container
 	VolumeMounts []*VolumeMount `protobuf:"bytes,7,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
 	// security_context adjusts the container's security settings. Unset leaves
 	// the default capability set.
@@ -3984,6 +3982,7 @@ type CreateActorTemplateRequest struct {
 	// version, timestamps) is ignored, as are the status fields.
 	//
 	// +k8s:required
+	// +k8s:customValidation # volume_mounts must reference declared volumes
 	ActorTemplate *ActorTemplate `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -357,3 +357,58 @@ func actorTemplateObjectRef(actor *ateapipb.Actor) *ateapipb.ObjectRef {
 	}
 	return &ateapipb.ObjectRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
 }
+
+// ValidateCustom_Container_VolumeMounts rejects two mounts at the same path
+// within one container. The list is keyed by volume name (one mount per
+// volume), so path uniqueness cannot come from the list-map key
+func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
+	var errs field.ErrorList
+	seen := make(map[string]bool, len(value))
+	for i, m := range value {
+		path := m.GetMountPath()
+		if path == "" {
+			continue // required is enforced by tags
+		}
+		if seen[path] {
+			errs = append(errs, field.Duplicate(fldPath.Index(i).Child("mount_path"), path))
+		}
+		// Nested mounts are unsupported (volumes cannot mount onto
+		// other volumes).
+		for j := 0; j < i; j++ {
+			prior := value[j].GetMountPath()
+			if prior == "" || prior == path {
+				continue
+			}
+			if strings.HasPrefix(path, prior+"/") || strings.HasPrefix(prior, path+"/") {
+				errs = append(errs, field.Invalid(fldPath.Index(i).Child("mount_path"), path,
+					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
+			}
+		}
+		seen[path] = true
+	}
+	return errs
+}
+
+// ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects container
+// volume mounts that reference volumes the template does not declare.
+func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
+	declared := make(map[string]bool, len(value.GetVolumes()))
+	for _, vol := range value.GetVolumes() {
+		declared[vol.GetName()] = true
+	}
+	var errs field.ErrorList
+	for i, ctr := range value.GetContainers() {
+		for j, mount := range ctr.GetVolumeMounts() {
+			name := mount.GetName()
+			if name == "" {
+				continue // required is enforced by tags
+			}
+			if !declared[name] {
+				errs = append(errs, field.Invalid(
+					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
+					name, "must reference a volume declared in the template"))
+			}
+		}
+	}
+	return errs
+}

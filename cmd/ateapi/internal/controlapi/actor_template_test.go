@@ -122,6 +122,19 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "containers").Index(0).Child("image"), "")},
 	}, {
+		"volume mount referencing a declared volume",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+		})},
+		nil,
+	}, {
+		"volume mount referencing an undeclared volume",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "ghost-vol", MountPath: "/var/data"}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
+	}, {
 		"missing snapshots_config",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotsConfig = nil
@@ -487,6 +500,32 @@ func TestValidateActorTemplate(t *testing.T) {
 			}
 		},
 		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1), nil)},
+	}, {
+		name: "two volumes at the same path are rejected",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "other", MountPath: "/var/data"},
+			}
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil)},
+	}, {
+		name: "nested mount paths are rejected",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data"},
+				{Name: "config", MountPath: "/data/config"},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "shared path prefix without nesting is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data"},
+				{Name: "other", MountPath: "/database"},
+			}
+		},
 	}, {
 		name: "two volumes at distinct paths are allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
