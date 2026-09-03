@@ -56,7 +56,7 @@ func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey s
 	// Absence means success, as on the instruments. There is no ate.snapshot.phase:
 	// on a datapoint it names the one step timed, and this record carries them all.
 	if err != nil {
-		attrs = append(attrs, slog.String(string(ateattr.FailureReasonKey), ateattr.FailureReason(err)))
+		attrs = append(attrs, ateattr.FailureLogAttrs(ateattr.FailureReason(err))...)
 	}
 
 	for _, p := range phases {

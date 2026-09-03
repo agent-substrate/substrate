@@ -17,6 +17,8 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"maps"
 	"strings"
 	"testing"
 
@@ -587,5 +589,97 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	}
 	if worker.GetStatus().GetAssignment() == nil {
 		t.Error("worker assignment = nil, want still assigned (release failed, must remain retriable)")
+	}
+}
+
+// crashRecords captures the "Actor crashed" records a crash emits, so a test can
+// assert the identity that ate.actor.crashes is barred from carrying. crashActor
+// logs through the slog default, so this swaps it and the caller cannot be parallel.
+func crashRecords(t *testing.T) *[]map[string]string {
+	t.Helper()
+
+	var records []map[string]string
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slogHandlerFunc(func(r slog.Record) {
+		if r.Message != "Actor crashed" {
+			return
+		}
+		fields := map[string]string{}
+		r.Attrs(func(a slog.Attr) bool {
+			fields[a.Key] = a.Value.String()
+			return true
+		})
+		records = append(records, fields)
+	})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &records
+}
+
+type slogHandlerFunc func(slog.Record)
+
+func (f slogHandlerFunc) Enabled(context.Context, slog.Level) bool { return true }
+func (f slogHandlerFunc) Handle(_ context.Context, r slog.Record) error {
+	f(r)
+	return nil
+}
+func (f slogHandlerFunc) WithAttrs([]slog.Attr) slog.Handler { return f }
+func (f slogHandlerFunc) WithGroup(string) slog.Handler      { return f }
+
+// The crash record is the only signal carrying actor identity, so it must fire
+// exactly when the counter does. A crash counted but not logged is unattributable;
+// one logged but not counted double-counts on a retry.
+func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	if err := RegisterActorCrashes(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")); err != nil {
+		t.Fatalf("RegisterActorCrashes: %v", err)
+	}
+	records := crashRecords(t)
+
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
+	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo-ns", Name: "counter-template"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	})
+
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
+		t.Fatalf("crashActor: %v", err)
+	}
+	if len(*records) != 1 {
+		t.Fatalf("got %d crash records, want 1", len(*records))
+	}
+
+	got := (*records)[0]
+	stored, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	want := map[string]string{
+		string(ateattr.AtespaceKey):           actorRef.Atespace,
+		string(ateattr.ActorNameKey):          actorRef.Name,
+		string(ateattr.ActorUIDKey):           stored.GetMetadata().GetUid(),
+		string(ateattr.TemplateAtespaceKey):   "demo-ns",
+		string(ateattr.TemplateNameKey):       "counter-template",
+		string(ateattr.ActorOperationNameKey): ateattr.OperationResume,
+		string(ateattr.FailureReasonKey):      ateattr.ReasonWorkerPodGone,
+		string(ateattr.FailureDomainKey):      ateattr.FailureDomainInfrastructure,
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("crash record = %v, want %v", got, want)
+	}
+	if got[string(ateattr.ActorUIDKey)] == "" {
+		t.Error("crash record carries no ate.actor.uid; it cannot survive a name reuse")
+	}
+
+	// Re-crashing an already-crashed actor must move neither signal.
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); err != nil {
+		t.Fatalf("second crashActor: %v", err)
+	}
+	if len(*records) != 1 {
+		t.Errorf("got %d crash records after re-crashing, want 1", len(*records))
 	}
 }
