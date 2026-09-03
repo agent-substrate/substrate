@@ -15,6 +15,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `sandboxClass` | `string` | Optional. The sandbox runtime family for the pool: `gvisor` (default) or `microvm`. Drives the worker pod shape (e.g. KVM device mounts, node placement) and which `SandboxConfig`s are eligible. |
 | `sandboxConfigName` | `string` | Optional. Name of a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) providing the sandbox binaries and pause image. If empty, the cluster default `SandboxConfig` for the pool's `sandboxClass` is used. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
+| `terminationGracePeriodSeconds` | `int32` | Optional. Termination grace period for the pool's worker pods, default `300`. On eviction `ateom` forwards `SIGTERM` to the actor so it can save state before the kubelet sends `SIGKILL`. Set it to the longest shutdown your actors need. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
 
@@ -120,7 +121,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshots Config](#snapshots-config-snapshotsconfig). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-specresources). Immutable, like the rest of the spec. |
 
@@ -204,6 +205,19 @@ spec:
 
 atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer dynamic refresh will later hang off) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated, with block headers stripped and the anchors deliberately shuffled — order carries no meaning, so consumers must not depend on it. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if the name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates. Bundle contents are re-resolved on every Run/Restore.
 
+### Snapshots Config (`snapshotsConfig`)
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `location` | `string` | **Required.** Object store URL where snapshots are written, e.g. `gs://my-bucket/snapshots/my-template/`. |
+| `onPause` | `SnapshotScope` | Optional. What a Pause captures (kept on the node). `Full` (default) or `Data`. |
+| `onCommit` | `SnapshotScope` | Optional. What a Suspend captures (uploaded to storage). `Full` (default) or `Data`, and must be a subset of `onPause`. |
+
+`Full` captures process memory, the rootfs delta, and any attached volumes that
+support snapshots. `Data` captures only those volumes, so the actor cold-boots
+from the image on the next resume with its `durableDir` contents restored. See
+the [glossary](glossary.md#snapshots) for the full definitions.
+
 ### Container Fields
 
 Each entry in `containers` describes one process to run in the actor's sandbox.
@@ -211,16 +225,16 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `name` | `string` | **Required.** DNS-label-safe container name. |
-| `image` | `string` | **Required.** Must be pinned by digest (`...@sha256:...`) — changing the image invalidates snapshots. |
+| `image` | `string` | **Required.** Must be pinned by digest (`...@sha256:...`), changing the image invalidates snapshots. |
 | `command` | `[]string` | Optional. Entrypoint array. If unset, the image's `ENTRYPOINT` is used. If set, it replaces **both** the image's `ENTRYPOINT` and `CMD`. |
 | `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
 | `env` | `[]EnvVar` | Optional. Literal `value` entries. |
-| `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe, see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `spec.volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
 | `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |
 
-`command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty — the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args` — `Run`/`Restore` fails.
+`command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty, the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args`, `Run`/`Restore` fails.
 
 ### Container Capabilities (`securityContext.capabilities`)
 
@@ -281,13 +295,13 @@ Each entry in `containers` may declare an optional **HTTP readiness probe** so t
 
 How it behaves:
 
-- **Where the probe runs.** ateom (gVisor or microvm) reaches the container at the actor's interior IP (`169.254.17.2` today) — one network hop, no DNS, no router involved.
+- **Where the probe runs.** ateom (gVisor or microvm) reaches the container at the actor's interior IP (`169.254.17.2` today), one network hop, no DNS, no router involved.
 - **Block-until-ready semantics.** `RunWorkload` (cold start) and `RestoreWorkload` (resume from snapshot) only return successfully after every container with a `readyz` block returns HTTP 200. A failure surfaces as a Run/Restore error and is retried by the control plane; the overall wait is bounded by an internal 30s deadline.
 - **Aggressive polling.** The poll loop is tuned for single-millisecond detection latency: a keep-alive HTTP client with a ~500µs interval and 250ms per-request timeout. While the workload is still booting, kernel `RST`s return in microseconds, so the loop spends almost no time blocked; once the listener is up, the next attempt completes on veth-local latency.
-- **Golden snapshot warm-up shortcut.** When **every** container in a template declares `readyz`, the actor template controller skips its default ~20s "give the workload time to settle" delay before taking the golden snapshot — `ResumeActor` already blocked until the workload reported 200, so the workload is known to be initialized. Templates that omit `readyz` on any container keep the 20s warm-up as a safety net.
+- **Golden snapshot warm-up shortcut.** When **every** container in a template declares `readyz`, the actor template controller skips its default ~20s "give the workload time to settle" delay before taking the golden snapshot, `ResumeActor` already blocked until the workload reported 200, so the workload is known to be initialized. Templates that omit `readyz` on any container keep the 20s warm-up as a safety net.
 - **Snapshot/restore interaction.** The TCP listener is part of the checkpointed RAM, so on resume `readyz` typically returns 200 on the first attempt, with no observable latency penalty.
 
-If `readyz` is omitted from a container, the prior "started == ready" behavior is preserved — the platform considers the container ready as soon as `runsc start` / `vm.boot` returns.
+If `readyz` is omitted from a container, the prior "started == ready" behavior is preserved, the platform considers the container ready as soon as `runsc start` / `vm.boot` returns.
 
 ### Example
 
@@ -330,7 +344,7 @@ snapshotsConfig:
 <location>/snapshots/<atespace>/<snapshot name>
 ```
 
-and the objects of that snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot named `f47ac10b-…` of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/snapshots/team-a/f47ac10b-…`, and the template's golden snapshot — the golden actor lives in the reserved `ate-golden` atespace — at `gs://my-bucket/secret-agent/snapshots/ate-golden/<name>`.
+and the objects of that snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot named `f47ac10b-…` of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/snapshots/team-a/f47ac10b-…`, and the template's golden snapshot, the golden actor lives in the reserved `ate-golden` atespace, at `gs://my-bucket/secret-agent/snapshots/ate-golden/<name>`.
 
 Each `ActorSnapshot` reports its own address in the server-managed `status.snapshotUri` field. It is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. Do not send it on input; parse it only against the scheme above.
 
@@ -349,14 +363,14 @@ An `ActorTemplate` belongs to one atespace, but one `storageLocation` still hold
 
 Two consequences worth planning for:
 
-- **A published snapshot is read from the atespace that took it.** Cloning across atespaces via a `PUBLISHED` tag reads the source atespace's prefix, so the reader needs a grant covering it — the target atespace's grant is not enough.
+- **A published snapshot is read from the atespace that took it.** Cloning across atespaces via a `PUBLISHED` tag reads the source atespace's prefix, so the reader needs a grant covering it, the target atespace's grant is not enough.
 - **A location containing its own `snapshots` segment is legal but confusing.** `gs://my-bucket/snapshots/secret-agent` yields `gs://my-bucket/snapshots/secret-agent/snapshots/<atespace>/<name>`. It parses correctly; it just reads badly in a policy.
 
 ---
 
 ## 3. SandboxConfig: The Sandbox Itself
 
-`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox — its binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) and the `pauseImage` that holds the sandbox's namespaces — from the `ActorTemplate`. A `WorkerPool` resolves its sandbox from a `SandboxConfig` — either the one named by `spec.sandboxConfigName`, or the cluster default for the pool's `sandboxClass`.
+`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox, its binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) and the `pauseImage` that holds the sandbox's namespaces, from the `ActorTemplate`. A `WorkerPool` resolves its sandbox from a `SandboxConfig`, either the one named by `spec.sandboxConfigName`, or the cluster default for the pool's `sandboxClass`.
 
 This means a single, cluster-managed config pins the sandbox runtime version for many templates: snapshots stay restorable because the version is recorded in each snapshot's manifest, and operators upgrade the runtime in one place.
 
@@ -365,7 +379,7 @@ This means a single, cluster-managed config pins the sandbox runtime version for
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. A `WorkerPool` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
-| `pauseImage` | `string` | **Required.** The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must be pinned by digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
+| `pauseImage` | `string` | **Required.** The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must be pinned by digest (`...@sha256:...`), it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
 | `default` | `bool` | Optional. Marks this as the cluster default for its `sandboxClass`. A `WorkerPool` with no `sandboxConfigName` resolves to the default for its class. At most one default per class. |
 | `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
 
@@ -456,6 +470,12 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
     *   `actor`: `ObjectRef` of the actor to suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`.
 
+#### `PauseActor`
+Checkpoint a running actor but keep its snapshots on the node VM, so the next resume can be prioritized back onto that node.
+*   **Request:** `PauseActorRequest`
+    *   `actor`: `ObjectRef` of the actor to pause.
+*   **Response:** `PauseActorResponse` containing the updated `Actor`.
+
 #### `DeleteActor`
 Removes an actor from the registry and cleans up associated resources.
 *   **Request:** `DeleteActorRequest`
@@ -465,13 +485,20 @@ Removes an actor from the registry and cleans up associated resources.
 
 #### `GetActor` / `ListActors`
 Query the state of logical actors.
-*   **GetActor:** Retrieves a single actor by ID.
-*   **ListActors:** Lists all actors currently tracked in the database.
+*   **GetActor:** Retrieves a single actor by `ObjectRef`, which carries its atespace and name.
+*   **ListActors:** Lists actors in one atespace, or across all of them when `atespace` is empty. Paginated through `page_size` and `page_token`.
 
 #### `ListWorkers`
 Query the physical resource pool.
-*   **Request:** `ListWorkersRequest`
+*   **Request:** `ListWorkersRequest`, paginated through `page_size` and `page_token`.
 *   **Response:** `ListWorkersResponse` containing a list of `Worker` objects (Pods) and their current assignment status.
+
+#### Atespaces
+An **atespace** is the isolation boundary an actor belongs to. It must exist before any actor can be created in it.
+*   **`CreateAtespace`:** takes the `Atespace` to create, returns the created one. Atespaces are global-scoped, so the name must be unique across the cluster.
+*   **`GetAtespace`:** takes an `ObjectRef`, returns the `Atespace`.
+*   **`ListAtespaces`:** returns `ListAtespacesResponse`, paginated through `page_size` and `page_token`.
+*   **`DeleteAtespace`:** takes an `ObjectRef` and returns the deleted `Atespace`. It rejects with `FailedPrecondition` if any actors remain; there is no cascade delete.
 
 ---
 
