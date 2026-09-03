@@ -15,7 +15,6 @@
 package e2e
 
 import (
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -35,16 +34,24 @@ import (
 // silently has no readiness gate or no credentials.
 func renderServerPodDocs(t *testing.T, spec ServerPod) (*corev1.Pod, *corev1.Service) {
 	t.Helper()
-	raw, err := os.ReadFile(renderServerPod(t, spec, "test-namespace"))
-	if err != nil {
-		t.Fatalf("reading the rendered server manifest: %v", err)
+	pods, services := decodeServerPodManifest(t, renderServerPod(t, spec, "test-namespace"))
+	if len(pods) != 1 || len(services) != 1 {
+		t.Fatalf("rendered %d Pods and %d Services, want one of each", len(pods), len(services))
 	}
-	if strings.Contains(string(raw), "${") {
+	return pods[0], services[0]
+}
+
+// decodeServerPodManifest decodes every Pod and Service out of a rendered
+// server manifest, in the order they appear.
+func decodeServerPodManifest(t *testing.T, raw string) ([]*corev1.Pod, []*corev1.Service) {
+	t.Helper()
+	if strings.Contains(raw, "${") {
 		t.Errorf("rendered server manifest still carries a placeholder:\n%s", raw)
 	}
 
-	pod, service := &corev1.Pod{}, &corev1.Service{}
-	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
+	var pods []*corev1.Pod
+	var services []*corev1.Service
+	for doc := range strings.SplitSeq(raw, "\n---\n") {
 		if strings.TrimSpace(doc) == "" {
 			continue
 		}
@@ -57,20 +64,19 @@ func renderServerPodDocs(t *testing.T, spec ServerPod) (*corev1.Pod, *corev1.Ser
 		var into any
 		switch meta.Kind {
 		case "Pod":
-			into = pod
+			pod := &corev1.Pod{}
+			pods, into = append(pods, pod), pod
 		case "Service":
-			into = service
+			service := &corev1.Service{}
+			services, into = append(services, service), service
 		default:
-			continue
+			t.Fatalf("rendered server manifest carries an unexpected %q document:\n%s", meta.Kind, doc)
 		}
 		if err := yaml.UnmarshalStrict([]byte(doc), into); err != nil {
 			t.Fatalf("rendered server %s does not match the API type: %v\n%s", meta.Kind, err, doc)
 		}
 	}
-	if pod.Name == "" || service.Name == "" {
-		t.Fatalf("rendered server manifest is missing a Pod or a Service:\n%s", raw)
-	}
-	return pod, service
+	return pods, services
 }
 
 // TestRenderServerPod_GRPCProbe covers the shape the networking suite deploys:
@@ -152,6 +158,92 @@ func TestRenderServerPod_HTTPProbe(t *testing.T) {
 	}
 	if probe.GRPC != nil {
 		t.Errorf("readinessProbe also carries a gRPC probe: %+v", probe.GRPC)
+	}
+}
+
+// TestRenderServerPod_TCPProbe covers the third probe kind, for an origin that
+// speaks neither HTTP nor gRPC, and the arg quoting a raw-TCP server needs: its
+// greeting is a command-line flag, and the CRLF in it has to survive the
+// round trip through YAML or the origin greets with something the suite is not
+// expecting.
+func TestRenderServerPod_TCPProbe(t *testing.T) {
+	const banner = "TESTBANNER/1.0\r\n"
+	pod, _ := renderServerPodDocs(t, ServerPod{
+		Name:       "tcpbanner",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho", "--banner=" + banner},
+		Port:       2222,
+		TCPProbe:   true,
+	})
+
+	container := pod.Spec.Containers[0]
+	if got, want := container.Args, []string{"tcpecho", "--banner=" + banner, "--listen=:2222"}; !slices.Equal(got, want) {
+		t.Errorf("container args = %q, want %q", got, want)
+	}
+
+	probe := container.ReadinessProbe
+	if probe == nil || probe.TCPSocket == nil {
+		t.Fatalf("readinessProbe = %+v, want a tcpSocket probe", probe)
+	}
+	if got := probe.TCPSocket.Port.IntValue(); got != 2222 {
+		t.Errorf("tcpSocket probe port = %d, want 2222", got)
+	}
+	// Either of the others would probe an origin that speaks no HTTP and no
+	// gRPC, so the pod would never go ready.
+	if probe.HTTPGet != nil || probe.GRPC != nil {
+		t.Errorf("readinessProbe also carries httpGet %+v / gRPC %+v", probe.HTTPGet, probe.GRPC)
+	}
+}
+
+// TestRenderServerPods covers the manifest a batched deploy applies: the whole
+// point of it is that one ko invocation and one apply cover every server, so
+// what matters is that the documents concatenate into something that still
+// decodes as separate objects, each keeping the name and port its caller asked
+// for and all of them landing in the shared namespace.
+func TestRenderServerPods(t *testing.T) {
+	specs := []ServerPod{{
+		Name:       "tcpbanner",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho", "--banner=TESTBANNER/1.0\r\n"},
+		Port:       2222,
+		TCPProbe:   true,
+	}, {
+		Name:       "tcpquiet",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"tcpecho"},
+		Port:       2223,
+		TCPProbe:   true,
+	}}
+	pods, services := decodeServerPodManifest(t, renderServerPods(t, specs, "test-namespace"))
+
+	if len(pods) != len(specs) || len(services) != len(specs) {
+		t.Fatalf("rendered %d Pods and %d Services, want %d of each", len(pods), len(services), len(specs))
+	}
+	for i, spec := range specs {
+		pod, service := pods[i], services[i]
+		if pod.Name != spec.Name || service.Name != spec.Name {
+			t.Errorf("document %d is Pod %q / Service %q, want both named %q", i, pod.Name, service.Name, spec.Name)
+		}
+		// A shared namespace is what makes one apply legal in the first place.
+		if pod.Namespace != "test-namespace" || service.Namespace != "test-namespace" {
+			t.Errorf("%s landed in namespace %q / %q, want test-namespace", spec.Name, pod.Namespace, service.Namespace)
+		}
+		// Distinct ports per server, since the suite tells them apart by the
+		// port in the egress gateway's access log.
+		if got := int(pod.Spec.Containers[0].Ports[0].ContainerPort); got != spec.Port {
+			t.Errorf("%s containerPort = %d, want %d", spec.Name, got, spec.Port)
+		}
+		if got := int(service.Spec.Ports[0].Port); got != spec.Port {
+			t.Errorf("%s service port = %d, want %d", spec.Name, got, spec.Port)
+		}
+		if got := service.Spec.Selector["app"]; got != pod.Labels["app"] {
+			t.Errorf("%s Service selects app=%q but its Pod is labelled app=%q", spec.Name, got, pod.Labels["app"])
+		}
+	}
+	// The Services select on a label that is the server's name, so two servers
+	// sharing a namespace must not share it.
+	if services[0].Spec.Selector["app"] == services[1].Spec.Selector["app"] {
+		t.Errorf("both Services select app=%q, so each would reach either pod", services[0].Spec.Selector["app"])
 	}
 }
 

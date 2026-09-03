@@ -13,8 +13,10 @@
 // limitations under the License.
 
 // Command egress is a small HTTP service for demonstrating per-Actor egress
-// policy. It accepts a URL, fetches it, and returns the upstream response, and
-// on a second endpoint it makes gRPC calls and returns what came back.
+// policy. It accepts a URL, fetches it, and returns the upstream response. On
+// /grpc it makes gRPC calls and returns what came back, and on /tcp it opens a
+// raw TCP connection, so that egress can be exercised with something other than
+// HTTP.
 package main
 
 import (
@@ -150,6 +152,7 @@ func newHandler(client *http.Client) http.Handler {
 		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body)})
 	})
 	mux.HandleFunc("/grpc", handleGRPC)
+	mux.HandleFunc("/tcp", handleTCPProbe)
 	return mux
 }
 
@@ -288,6 +291,114 @@ func writeGRPCFailure(w http.ResponseWriter, rpc string, err error) {
 		Code:  grpcstatus.Code(err).String(),
 		Error: fmt.Sprintf("%s failed: %v", rpc, err),
 	})
+}
+
+// tcpProbeRequest asks for one raw TCP exchange.
+type tcpProbeRequest struct {
+	Address   string `json:"address"`
+	Send      string `json:"send,omitempty"`
+	ReadBytes int    `json:"readBytes,omitempty"`
+	Timeout   string `json:"timeout,omitempty"`
+}
+
+type tcpProbeResponse struct {
+	// Banner is whatever the peer sent before being spoken to.
+	Banner   string `json:"banner,omitempty"`
+	Received string `json:"received,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// handleTCPProbe opens a TCP connection and reads before it writes.
+func handleTCPProbe(w http.ResponseWriter, r *http.Request) {
+	const defaultProbeTimeout = 5 * time.Second
+	// Enough for an SSH identification string or a test banner.
+	const defaultProbeReadBytes = 512
+	const maxProbeReadBytes = 8 << 10 // 8 KiB
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, tcpProbeResponse{Error: "method must be POST"})
+		return
+	}
+
+	var input tcpProbeRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+		return
+	}
+	if _, _, err := net.SplitHostPort(input.Address); err != nil {
+		writeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("address must be host:port: %v", err)})
+		return
+	}
+
+	timeout := defaultProbeTimeout
+	if input.Timeout != "" {
+		parsed, err := time.ParseDuration(input.Timeout)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, tcpProbeResponse{Error: fmt.Sprintf("invalid timeout: %v", err)})
+			return
+		}
+		timeout = parsed
+	}
+	readBytes := input.ReadBytes
+	if readBytes <= 0 {
+		readBytes = defaultProbeReadBytes
+	}
+	readBytes = min(readBytes, maxProbeReadBytes)
+
+	dialer := net.Dialer{Timeout: timeout}
+	connection, err := dialer.DialContext(r.Context(), "tcp", input.Address)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("dialing %s: %v", input.Address, err)})
+		return
+	}
+	defer connection.Close()
+
+	// Read before writing anything at all, so an empty banner really does mean
+	// the peer stayed silent.
+	banner, err := readWithTimeout(connection, readBytes, timeout)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("reading banner from %s: %v", input.Address, err)})
+		return
+	}
+
+	response := tcpProbeResponse{Banner: string(banner)}
+	if input.Send == "" {
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+
+	if err := connection.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("setting write deadline: %v", err)})
+		return
+	}
+	if _, err := io.WriteString(connection, input.Send); err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("writing to %s: %v", input.Address, err)})
+		return
+	}
+	received, err := readWithTimeout(connection, readBytes, timeout)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, tcpProbeResponse{Error: fmt.Sprintf("reading reply from %s: %v", input.Address, err)})
+		return
+	}
+	response.Received = string(received)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// readWithTimeout returns the bytes of a single read, capped at limit. A peer
+// that says nothing within timeout yields no bytes and no error, since silence
+// is a legitimate answer to "does this peer speak first?".
+func readWithTimeout(connection net.Conn, limit int, timeout time.Duration) ([]byte, error) {
+	if err := connection.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, fmt.Errorf("setting read deadline: %w", err)
+	}
+	buffer := make([]byte, limit)
+	n, err := connection.Read(buffer)
+	if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return buffer[:n], nil
 }
 
 func validateURL(raw string) error {
