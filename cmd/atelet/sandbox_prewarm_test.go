@@ -101,12 +101,14 @@ func TestRecordFromSandboxConfig(t *testing.T) {
 		t.Errorf("Assets[%q] = %+v, want %+v", runscAssetName, got, want)
 	}
 
-	// A config with no assets for this node's architecture cannot be projected.
+	// A config with no assets for this node's architecture cannot be
+	// projected, and the error carries the sentinel that keeps prewarm from
+	// retrying a condition only a config change can clear.
 	cfg.Spec.Assets = map[string]map[string]v1alpha1.AssetFile{
 		"other-arch": {runscAssetName: {URL: "gs://bucket/runsc", SHA256: sha}},
 	}
-	if _, err := recordFromSandboxConfig(cfg); err == nil {
-		t.Error("recordFromSandboxConfig accepted a config with no assets for the local architecture")
+	if _, err := recordFromSandboxConfig(cfg); !errors.Is(err, errNoAssetsForArch) {
+		t.Errorf("recordFromSandboxConfig with no assets for the local architecture = %v, want errNoAssetsForArch", err)
 	}
 }
 
@@ -289,15 +291,16 @@ func TestPrewarmPauseImage(t *testing.T) {
 	}
 
 	// A config with no assets for this node's architecture still gets its
-	// pause image pulled: the image needs no per-architecture projection.
+	// pause image pulled, and prewarm succeeds: the missing assets are
+	// permanent until the config changes, not a retryable failure.
 	archCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
 	archCfg.Spec.Assets = map[string]map[string]v1alpha1.AssetFile{
 		"other-arch": {runscAssetName: archCfg.Spec.Assets[runtime.GOARCH][runscAssetName]},
 	}
 	archCfg.Spec.PauseImage = pauseRef
 	p = &sandboxPrewarmer{images: archStore}
-	if err := p.prewarm(ctx, archCfg); err == nil {
-		t.Error("prewarm returned nil despite the config having no assets for the local architecture")
+	if err := p.prewarm(ctx, archCfg); err != nil {
+		t.Errorf("prewarm with no assets for the local architecture: %v", err)
 	}
 
 	// With the registry gone, only a cache hit can satisfy a digest ref.

@@ -257,7 +257,15 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	}
 	// schedule prewarm sandbox assets if provided
 	rec, assetErr := recordFromSandboxConfig(cfg)
-	if assetErr == nil {
+	switch {
+	case errors.Is(assetErr, errNoAssetsForArch):
+		// Permanent until the config changes, and a change re-enqueues:
+		// retrying would burn every attempt on a non-failure and redo the
+		// pause-image pull with it. Nothing to do for this node.
+		slog.DebugContext(ctx, "No sandbox assets to prewarm for this node's architecture",
+			slog.String("config", cfg.Name), slog.String("arch", runtime.GOARCH))
+		assetErr = nil
+	case assetErr == nil:
 		wg.Go(func() {
 			_, assetErr = p.assets.ensureSandboxAssets(ctx, rec)
 		})
@@ -266,13 +274,22 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	if err := errors.Join(assetErr, imageErr); err != nil {
 		return err
 	}
+	assets := 0
+	if rec != nil {
+		assets = len(rec.Assets)
+	}
 	slog.InfoContext(ctx, "Sandbox assets prewarmed",
 		slog.String("config", cfg.Name),
-		slog.Int("assets", len(rec.Assets)),
+		slog.Int("assets", assets),
 		slog.String("pauseImage", cfg.Spec.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }
+
+// errNoAssetsForArch reports that a SandboxConfig lists no assets for this
+// node's architecture. Unlike a failed download it is permanent until the
+// config changes, so prewarm treats it as nothing-to-do rather than retrying.
+var errNoAssetsForArch = errors.New("no sandbox assets for this architecture")
 
 // recordFromSandboxConfig projects a SandboxConfig's per-architecture assets
 // onto the local node's architecture, mirroring recordFromRequest.
@@ -280,7 +297,7 @@ func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig) (*sandboxAssetsRecord,
 	arch := runtime.GOARCH
 	files := cfg.Spec.Assets[arch]
 	if len(files) == 0 {
-		return nil, fmt.Errorf("sandbox config %q has no assets for architecture %q", cfg.Name, arch)
+		return nil, fmt.Errorf("sandbox config %q, architecture %q: %w", cfg.Name, arch, errNoAssetsForArch)
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: string(cfg.Spec.SandboxClass),
