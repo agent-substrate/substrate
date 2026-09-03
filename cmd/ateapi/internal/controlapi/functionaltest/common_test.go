@@ -373,10 +373,12 @@ func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
 	t.Helper()
 	const name = "gvisor-default"
 	sc := &atev1alpha1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Annotations: map[string]string{atev1alpha1.IsDefaultAnnotation: "true"},
+		},
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			Default:      true,
 			PauseImage:   testPauseImage,
 			Assets: map[string]map[string]atev1alpha1.AssetFile{
 				"amd64": {"runsc": {

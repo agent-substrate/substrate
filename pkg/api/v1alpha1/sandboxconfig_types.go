@@ -30,6 +30,12 @@ const (
 	SandboxClassMicroVM SandboxClass = "microvm"
 )
 
+// IsDefaultAnnotation set to "true" marks a SandboxConfig as the cluster-wide
+// default for its SandboxClass; other values are ignored. If several configs
+// of a class carry it, the most recently created wins (as with StorageClass).
+// An annotation rather than a spec field because the spec is immutable.
+const IsDefaultAnnotation = "sandboxconfig.ate.dev/is-default"
+
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
 // runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
 type AssetFile struct {
@@ -58,14 +64,6 @@ type SandboxConfigSpec struct {
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
-
-	// Default marks this SandboxConfig as the cluster-wide default for its
-	// SandboxClass. A WorkerPool with no explicit SandboxConfigName resolves to
-	// the default config for its SandboxClass. At most one default is expected
-	// per SandboxClass.
-	//
-	// +optional
-	Default bool `json:"default,omitempty"`
 
 	// PauseImage is the container image used as the root sandbox container.
 	// It holds the sandbox's namespaces and runs no workload code, so it is an
@@ -98,8 +96,9 @@ type SandboxConfigSpec struct {
 }
 
 // SandboxConfig is cluster-scoped configuration describing the sandbox binaries
-// for a sandbox runtime family. It is referenced (or defaulted) by WorkerPools
-// and decouples sandbox binary selection from ActorTemplate.
+// for a sandbox runtime family. It is referenced (or defaulted, via the
+// IsDefaultAnnotation) by WorkerPools and decouples sandbox binary selection
+// from ActorTemplate.
 //
 // +genclient
 // +genclient:nonNamespaced
@@ -107,7 +106,7 @@ type SandboxConfigSpec struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=sandboxconfig
 // +kubebuilder:printcolumn:name="Class",type=string,JSONPath=`.spec.sandboxClass`
-// +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
+// +kubebuilder:printcolumn:name="Default",type=string,JSONPath=`.metadata.annotations['sandboxconfig\.ate\.dev/is-default']`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SandboxConfig struct {
 	metav1.TypeMeta `json:",inline"`
@@ -116,9 +115,19 @@ type SandboxConfig struct {
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// spec defines the desired state of SandboxConfig
+	// spec defines the desired state of SandboxConfig. It is immutable —
+	// snapshots pin restores to the exact binaries a config named — so roll
+	// to new assets by creating a new SandboxConfig.
+	//
 	// +required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="SandboxConfig spec is immutable; create a new SandboxConfig and mark it default"
 	Spec SandboxConfigSpec `json:"spec"`
+}
+
+// IsDefault reports whether this config is marked as the cluster-wide default
+// for its SandboxClass.
+func (sc *SandboxConfig) IsDefault() bool {
+	return sc.Annotations[IsDefaultAnnotation] == "true"
 }
 
 // SandboxConfigList contains a list of SandboxConfigs.

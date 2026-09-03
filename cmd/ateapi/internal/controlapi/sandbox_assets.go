@@ -63,26 +63,38 @@ func resolveSandboxAssets(
 	return sandboxAssetsProto(class, sc), nil
 }
 
-// defaultSandboxConfig returns the single SandboxConfig marked Default for the
-// given class, erroring if there are zero or more than one.
+// defaultSandboxConfig returns the SandboxConfig marked default (via the
+// IsDefaultAnnotation) for the given class. When several are marked, the most
+// recently created wins (as with StorageClass), so a new default can be
+// created before the old one is unmarked.
 func defaultSandboxConfig(lister listersv1alpha1.SandboxConfigLister, class atev1alpha1.SandboxClass) (*atev1alpha1.SandboxConfig, error) {
 	all, err := lister.List(labels.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("while listing SandboxConfigs: %w", err)
 	}
-	var match *atev1alpha1.SandboxConfig
+	var newest *atev1alpha1.SandboxConfig
 	for _, sc := range all {
-		if sc.Spec.SandboxClass == class && sc.Spec.Default {
-			if match != nil {
-				return nil, fmt.Errorf("multiple default SandboxConfigs for class %q (%q and %q)", class, match.Name, sc.Name)
-			}
-			match = sc
+		if sc.Spec.SandboxClass != class || !sc.IsDefault() {
+			continue
+		}
+		if newest == nil || defaultWinsOver(sc, newest) {
+			newest = sc
 		}
 	}
-	if match == nil {
-		return nil, fmt.Errorf("no default SandboxConfig for class %q; set one with spec.default=true or name one via WorkerPool.spec.sandboxConfigName", class)
+	if newest == nil {
+		return nil, fmt.Errorf("no default SandboxConfig for class %q; annotate one with %s=\"true\" or name one via WorkerPool.spec.sandboxConfigName", class, atev1alpha1.IsDefaultAnnotation)
 	}
-	return match, nil
+	return newest, nil
+}
+
+// defaultWinsOver reports whether a beats b as the class default: newer
+// creationTimestamp, smaller name on a tie (the same order StorageClass
+// default resolution uses).
+func defaultWinsOver(a, b *atev1alpha1.SandboxConfig) bool {
+	if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+		return b.CreationTimestamp.Before(&a.CreationTimestamp)
+	}
+	return a.Name < b.Name
 }
 
 // sandboxAssetsProto converts a resolved SandboxConfig into the proto atelet

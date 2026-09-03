@@ -16,16 +16,19 @@
 # WorkerPool with sandboxClass gvisor (the default) and no explicit
 # sandboxConfigName resolves to this. atelet fetches the gVisor release tarball
 # (gvisor.tar.zstd: runsc plus the gvisor-bin/ helpers runsc requires next to
-# it) matching the worker node's architecture and extracts it locally. To pin a
-# different release, edit the assets below or create another SandboxConfig and
-# name it from the WorkerPool.
+# it) matching the worker node's architecture and extracts it locally.
+#
+# The spec is immutable. To roll to a different release, create a new
+# SandboxConfig marked default with the annotation below (the most recently
+# created default of a class wins) or name it from the WorkerPool.
 apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:
   name: gvisor-default
+  annotations:
+    sandboxconfig.ate.dev/is-default: "true"
 spec:
   sandboxClass: gvisor
-  default: true
   # The root sandbox container's image. On GCP, prefer the in-project mirror
   # gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da.
   pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"

@@ -139,7 +139,7 @@ func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInf
 }
 
 // skipConfig reports whether this node has nothing to prewarm for cfg,
-// logging why. Both enqueue and process apply it: sandboxClass is mutable,
+// logging why. Both enqueue and process apply it: sandboxClass is immutable,
 // so the class observed at enqueue time can be stale by the time the worker
 // resolves the name after jitter or backoff, and the gate must hold for the
 // revision actually prewarmed.
