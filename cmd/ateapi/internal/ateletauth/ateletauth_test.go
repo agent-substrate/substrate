@@ -22,28 +22,30 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
-// TestAuthenticateHonorsConfiguredNamespace checks that the namespace
+// TestAuthenticateHonorsConfiguredIdentity checks that the identity
 // Authenticate is given is the one it accepts, and that the canonical
-// namespace is rejected when the install lives elsewhere.
+// identity is rejected when the install lives elsewhere.
 //
-// The authorization table test in actoridentity covers a caller from the
-// wrong namespace, but it always passes the default namespace, so it holds
-// against a hardcoded "ate-system" too. Only the relocated case distinguishes
-// "reads its configuration" from "happens to agree with the constant".
-func TestAuthenticateHonorsConfiguredNamespace(t *testing.T) {
+// The authorization table test in actoridentity covers a caller with the
+// wrong identity, but it always expects the default identity, so it holds
+// against a hardcoded "ate-system"/"atelet" too. Only the relocated case
+// distinguishes "reads its configuration" from "happens to agree with the
+// constant".
+func TestAuthenticateHonorsConfiguredIdentity(t *testing.T) {
 	const relocated = "substrate-test"
 	const node = "test-node"
+	relocatedID := installdefaults.AteletSPIFFEID(relocated)
 
-	t.Run("accepts atelet from the configured namespace", func(t *testing.T) {
+	t.Run("accepts atelet with the configured identity", func(t *testing.T) {
 		ctx := ateletauthtest.ContextWith(ateletauthtest.CertIn(t, relocated, node))
-		if _, err := ateletauth.Authenticate(ctx, relocated); err != nil {
+		if _, err := ateletauth.Authenticate(ctx, relocatedID); err != nil {
 			t.Errorf("Authenticate() = %v, want success for an atelet in %q", err, relocated)
 		}
 	})
 
-	t.Run("rejects atelet from the canonical namespace", func(t *testing.T) {
+	t.Run("rejects atelet with the canonical identity", func(t *testing.T) {
 		ctx := ateletauthtest.ContextWith(ateletauthtest.CertIn(t, installdefaults.SystemNamespace, node))
-		if _, err := ateletauth.Authenticate(ctx, relocated); err == nil {
+		if _, err := ateletauth.Authenticate(ctx, relocatedID); err == nil {
 			t.Errorf("Authenticate() accepted an atelet from %q, want rejection when configured for %q",
 				installdefaults.SystemNamespace, relocated)
 		}

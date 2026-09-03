@@ -63,6 +63,10 @@ const (
 	testOtherNode    = "node-b"
 )
 
+// ateletSPIFFEID is the identity a default install's atelet presents, and what
+// the Server under test is configured to accept.
+var ateletSPIFFEID = installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount)
+
 // newTestCert builds a self-signed leaf carrying the given SPIFFE URI path
 // (skipped when empty) and, when podIdentity is non-nil, a PodIdentity
 // extension.
@@ -106,7 +110,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, installdefaults.SystemNamespace)
+	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, ateletSPIFFEID)
 }
 
 // staleWatchStore wraps a store with a WatchWorkers that never delivers,
@@ -328,7 +332,7 @@ func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercac
 		ActiveForSigning: "1",
 	}
 
-	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, installdefaults.SystemNamespace)
+	return New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, ateletSPIFFEID)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
@@ -937,7 +941,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 		ActiveForSigning: "1",
 	}
 
-	srv := New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, installdefaults.SystemNamespace)
+	srv := New("issuer", jwtAuthorityPool, certificateAuthorityPool, st, workers, ateletSPIFFEID)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {

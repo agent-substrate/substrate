@@ -71,7 +71,7 @@ func setRequest(actors int32) *ateapipb.SetWorkerCapacityRequest {
 func TestSetWorkerCapacity(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, installdefaults.SystemNamespace)
+	s := New(st, installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount))
 	seedReportedWorker(t, st, capNode, &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(2000, 0)})
 
 	got, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, capNode)), setRequest(4094))
@@ -95,7 +95,7 @@ func TestSetWorkerCapacity(t *testing.T) {
 func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, installdefaults.SystemNamespace)
+	s := New(st, installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount))
 	seedReportedWorker(t, st, capNode, &ateapipb.WorkerResources{Actors: 1})
 
 	_, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), setRequest(4094))
@@ -119,7 +119,7 @@ func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
 func TestSetWorkerCapacity_UnchangedDoesNotWrite(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, installdefaults.SystemNamespace)
+	s := New(st, installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount))
 	seeded := seedReportedWorker(t, st, capNode, &ateapipb.WorkerResources{Actors: 4094})
 
 	for range 3 {
@@ -139,7 +139,7 @@ func TestSetWorkerCapacity_UnchangedDoesNotWrite(t *testing.T) {
 func TestSetWorkerCapacity_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, installdefaults.SystemNamespace)
+	s := New(st, installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount))
 	seedReportedWorker(t, st, capNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, capNode))
 
@@ -177,7 +177,7 @@ func TestSetWorkerCapacity_Errors(t *testing.T) {
 func TestSetWorkerCapacity_RejectsNonsense(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, installdefaults.SystemNamespace)
+	s := New(st, installdefaults.SPIFFEID(installdefaults.SystemNamespace, installdefaults.AteletServiceAccount))
 	seeded := seedReportedWorker(t, st, capNode, &ateapipb.WorkerResources{Actors: 4094})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, capNode))
 
