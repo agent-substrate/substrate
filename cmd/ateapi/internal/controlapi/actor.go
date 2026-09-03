@@ -299,9 +299,10 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 				// families, so the replacement template must name the same
 				// SandboxConfig.
 				if !proto.Equal(oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()) {
+					oldSC, newSC := oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()
 					return status.Errorf(codes.FailedPrecondition,
-						"the current actor template names SandboxConfig %q but the new one names %q; the sandbox config must be identical to repoint an actor",
-						oldTemplate.GetSandboxConfig().GetConfigName(), newTemplate.GetSandboxConfig().GetConfigName())
+						"the current actor template names SandboxConfig %q (class %s) but the new one names %q (class %s); the sandbox config must be identical to repoint an actor",
+						oldSC.GetConfigName(), oldSC.GetSandboxClass(), newSC.GetConfigName(), newSC.GetSandboxClass())
 				}
 				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
 					return err

@@ -192,9 +192,9 @@ func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
 }
 
 // TestCreateActorTemplate_SandboxConfigChecks pins the create-time checks on
-// the template's named SandboxConfig: it must exist (FailedPrecondition — the
-// lister may briefly lag a just-created config, so the error is retryable)
-// and match the template's class (InvalidArgument).
+// the template's named SandboxConfig: it must exist and match the template's
+// class, both FailedPrecondition — they depend on cluster state, and the
+// lister may briefly lag a just-created config, so the error is retryable.
 func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
 	persistence := newTestPersistence(t)
 	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
@@ -222,7 +222,7 @@ func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
 	}, {
 		name:     "named config class mismatch",
 		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "gvisor-default"},
-		wantCode: codes.InvalidArgument,
+		wantCode: codes.FailedPrecondition,
 	}}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

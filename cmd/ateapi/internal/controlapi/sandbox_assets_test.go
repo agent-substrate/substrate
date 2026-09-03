@@ -45,8 +45,9 @@ func testAssets() map[string]map[string]atev1alpha1.AssetFile {
 }
 
 // TestResolveSandboxAssets pins the template-side resolution: the config the
-// template names is resolved (with its class checked), an empty name is an
-// error, and the pause image travels with the sandbox binaries.
+// template names is resolved (with its class checked), an empty name or an
+// unrecognized class is an error, and the pause image travels with the
+// sandbox binaries.
 func TestResolveSandboxAssets(t *testing.T) {
 	const namedPause = "gcr.io/gke-release/pause@sha256:named"
 	namedConfig := &atev1alpha1.SandboxConfig{
@@ -83,7 +84,14 @@ func TestResolveSandboxAssets(t *testing.T) {
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 			ConfigName:   "does-not-exist",
 		},
-		wantErr: `while getting SandboxConfig "does-not-exist"`,
+		wantErr: `SandboxConfig "does-not-exist" not found`,
+	}, {
+		name: "unrecognized sandbox class",
+		sandbox: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED,
+			ConfigName:   "gvisor-custom",
+		},
+		wantErr: "unrecognized sandbox_class",
 	}, {
 		name:    "empty config name",
 		sandbox: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
