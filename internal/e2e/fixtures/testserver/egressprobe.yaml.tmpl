@@ -15,7 +15,7 @@
 # The egress probe used by internal/e2e/suites/egressauthz: testserver's probe
 # subcommand, with the credential volumes that suite mints. It is not a
 # ServerPod because it needs those volumes and a namespace the suite populates
-# first, so it stays a bespoke manifest. ${NAMESPACE} is substituted by the
+# first, so it stays a bespoke manifest. ${NAMESPACE} and ${SYSTEM_NAMESPACE} are substituted by the
 # suite with the randomized namespace it created, so the probe is torn down with
 # that namespace and leaves nothing behind.
 apiVersion: v1
@@ -33,6 +33,10 @@ spec:
     args:
     - "egressprobe"
     - "--listen=:8080"
+    # The gateway lives in substrate's namespace, which the probe cannot infer
+    # from inside the sandbox. ${SYSTEM_NAMESPACE} is substituted alongside
+    # ${NAMESPACE} by the suite.
+    - "--gateway-address=atenet-egress.${SYSTEM_NAMESPACE}.svc:443"
     ports:
     - name: http
       containerPort: 8080

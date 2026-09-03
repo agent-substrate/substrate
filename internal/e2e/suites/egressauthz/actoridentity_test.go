@@ -73,16 +73,16 @@ const (
 // the secret ateapi signs with.
 func actorIdentityCA(t *testing.T, ctx context.Context) *localca.CA {
 	t.Helper()
-	secret, err := e2e.GetClients().K8s.CoreV1().Secrets(egressNamespace).Get(ctx, actorIDCASecret, metav1.GetOptions{})
+	secret, err := e2e.GetClients().K8s.CoreV1().Secrets(e2e.SystemNamespace()).Get(ctx, actorIDCASecret, metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("reading actor-identity CA pool secret %s/%s: %v", egressNamespace, actorIDCASecret, err)
+		t.Fatalf("reading actor-identity CA pool secret %s/%s: %v", e2e.SystemNamespace(), actorIDCASecret, err)
 	}
 	pool, err := localca.Unmarshal(secret.Data[actorIDCASecretKey])
 	if err != nil {
-		t.Fatalf("parsing actor-identity CA pool from %s/%s key %q: %v", egressNamespace, actorIDCASecret, actorIDCASecretKey, err)
+		t.Fatalf("parsing actor-identity CA pool from %s/%s key %q: %v", e2e.SystemNamespace(), actorIDCASecret, actorIDCASecretKey, err)
 	}
 	if len(pool.CAs) == 0 {
-		t.Fatalf("actor-identity CA pool %s/%s contains no CA", egressNamespace, actorIDCASecret)
+		t.Fatalf("actor-identity CA pool %s/%s contains no CA", e2e.SystemNamespace(), actorIDCASecret)
 	}
 	// CAs[0] is the one that signs: ateapi's MintCert makes the same choice.
 	return pool.CAs[0]
