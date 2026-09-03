@@ -399,6 +399,18 @@ func TestRestoreSandboxAssetsSource(t *testing.T) {
 		}
 	})
 
+	t.Run("manifest ref mismatch is allowed for a DATA restore", func(t *testing.T) {
+		// A DATA restore cold-boots the guest from the spec, so the request's
+		// assets may legitimately come from a different SandboxConfig than the
+		// snapshot's (a repointed actor). The mismatched manifest written by
+		// the previous subtest is still in place.
+		req := restoreReq(sandboxAssets)
+		req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		if _, err := s.Restore(ctx, req); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+	})
+
 	t.Run("old-format manifest assets are never read back", func(t *testing.T) {
 		// An old-format manifest still carries the asset set, but the type no
 		// longer declares those keys, so an asset-less request must still fail.

@@ -1099,11 +1099,16 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 	// Defense in depth: the control plane resolved the request's assets from
 	// the snapshot's recorded reference, so a mismatch here means it resolved
-	// a different SandboxConfig object.
-	if manRef := guestMan.SandboxConfigRef; manRef != nil && manRef.UID != "" && manRef.UID != runtimeRec.SandboxConfigRef.UID {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"snapshot manifest records SandboxConfig %s (uid %s) but the request's assets come from %s (uid %s)",
-			manRef.Name, manRef.UID, runtimeRec.SandboxConfigRef.Name, runtimeRec.SandboxConfigRef.UID)
+	// a different SandboxConfig object. A DATA restore is exempt: the guest
+	// cold-boots from the spec rather than resuming any manifest's memory
+	// image (e.g. after a repoint at a template with a different config), so
+	// the snapshot's recorded config does not constrain the request.
+	if req.GetScope() != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+		if manRef := guestMan.SandboxConfigRef; manRef != nil && manRef.UID != "" && manRef.UID != runtimeRec.SandboxConfigRef.UID {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"snapshot manifest records SandboxConfig %s (uid %s) but the request's assets come from %s (uid %s)",
+				manRef.Name, manRef.UID, runtimeRec.SandboxConfigRef.Name, runtimeRec.SandboxConfigRef.UID)
+		}
 	}
 
 	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
