@@ -35,6 +35,8 @@ import (
 
 	"sync"
 
+	"cloud.google.com/go/compute/metadata"
+
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -257,7 +259,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient)
+			startStatsPoller(ctx, interval, statsInst, k8sClient, metadata.OnGCE())
 		}
 	}
 
@@ -294,6 +296,7 @@ func main() {
 		csiDriverConfigLister,
 		clusterTrustBundleLister,
 	)
+
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
 	// on-demand fetch in ensureSandboxAssets still covers correctness.
