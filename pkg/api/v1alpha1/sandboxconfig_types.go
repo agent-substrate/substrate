@@ -86,7 +86,7 @@ type SandboxConfigSpec struct {
 	// Assets is the set of files atelet fetches for this runtime, keyed first by
 	// architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
 	// asset names are interpreted by the sandbox backend: gVisor expects a
-	// "gvisor" asset (the release's gvisor.tar.bz2, which atelet extracts so
+	// "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
 	// the gvisor-bin/ helpers sit next to runsc; a legacy bare-binary "runsc"
 	// asset is still accepted); a micro-VM backend expects several (e.g.
 	// "cloud-hypervisor", "kata-kernel", "kata-image"). The schema is

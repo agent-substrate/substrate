@@ -47,7 +47,10 @@ cd "${ROOT}"
 ROUTER_NS="ate-system"
 DEMO_NS="ate-demo-counter"
 DEMO_POOL="counter"
-ATESPACE="drain-check"
+# The demo's atespace: a template reference resolves in the actor's
+# atespace, so the check's actors live next to the demo's. Their names are
+# timestamped, so they cannot collide with anything already there.
+ATESPACE="ate-demo-counter"
 SUFFIX="$(date +%s)"
 ACTOR_BUSY="busy-${SUFFIX}"    # occupies the only worker
 ACTOR_PARKED="parked-${SUFFIX}" # its request parks, then survives the drain
@@ -88,8 +91,11 @@ trap cleanup EXIT
 # --- Preflight -------------------------------------------------------------
 
 log_step "preflight"
-phase="$(run_kubectl get actortemplate -n "${DEMO_NS}" "${DEMO_POOL}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-[[ "${phase}" == "Ready" ]] || fail "ActorTemplate ${DEMO_NS}/${DEMO_POOL} is not Ready (phase: ${phase:-absent}); install the counter demo first"
+# Ready means the template's golden snapshot exists; protojson omits empty
+# fields, so the key is only present once it is set.
+run_kubectl_ate get actor-template "${DEMO_POOL}" -a "${ATESPACE}" -o json 2>/dev/null \
+  | grep -q '"goldenSnapshot"' \
+  || fail "actor template ${ATESPACE}/${DEMO_POOL} has no golden snapshot; install the counter demo first"
 # Column 4 is STATUS; the header row's "ASSIGNED ACTOR" column name must not
 # trip the check.
 if run_kubectl_ate get workers 2>/dev/null | awk 'NR>1 && $4=="ASSIGNED"' | grep -q .; then
@@ -110,9 +116,8 @@ run_kubectl patch workerpool -n "${DEMO_NS}" "${DEMO_POOL}" --type merge -p '{"s
 run_kubectl rollout status "deploy/${DEMO_POOL}" -n "${DEMO_NS}" --timeout=180s >/dev/null
 
 log_step "creating actors ${ACTOR_BUSY} + ${ACTOR_PARKED} in atespace ${ATESPACE}"
-run_kubectl_ate create atespace "${ATESPACE}" >/dev/null 2>&1 || true
-run_kubectl_ate create actor "${ACTOR_BUSY}" -a "${ATESPACE}" --template="${DEMO_NS}/${DEMO_POOL}" >/dev/null
-run_kubectl_ate create actor "${ACTOR_PARKED}" -a "${ATESPACE}" --template="${DEMO_NS}/${DEMO_POOL}" >/dev/null
+run_kubectl_ate create actor "${ACTOR_BUSY}" -a "${ATESPACE}" --template-ref "${DEMO_POOL}" >/dev/null
+run_kubectl_ate create actor "${ACTOR_PARKED}" -a "${ATESPACE}" --template-ref "${DEMO_POOL}" >/dev/null
 
 log_step "occupying the only worker with ${ACTOR_BUSY}"
 for i in $(seq 1 20); do

@@ -32,10 +32,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        fetch-depth: 0
     - name: Setup Go
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
+    - name: Verify immutable PostgreSQL migrations
+      if: github.event_name == 'pull_request'
+      run: hack/verify/postgresql-migrations.sh
     - run: go test -race -v ./...
     # tools/apitool has its own module so we need to run it explicitly.
     - name: apitool tests
@@ -83,12 +88,19 @@ jobs:
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
       run: hack/install-ate-kind.sh --deploy-ate-system
-    - name: Deploy substrate micro-VM counter demo
-      # Stages the (cached) assets into the cluster's rustfs and applies the
+    - name: Enable NFS
+      # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
+      run: |
+        sudo modprobe nfs || true
+        sudo modprobe nfsd || true
+    - name: Install CSI NFS driver
+      run: hack/install-ate-kind.sh --setup-csi=nfs
+    - name: Deploy micro-VM counter demo
+      # Stages the (cached) assets into the cluster's rustfs and deploys the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh --substrate
-    - name: Deploy substrate gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter-substrate
+      run: hack/run-microvm-demo-kind.sh
+    - name: Deploy gVisor counter demo
+      run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Deploy egress demos
       # TestActorEgress in the networking suite builds its Actor from the egress
       # ActorTemplate for the class under test, so both fixtures have to exist
@@ -151,7 +163,7 @@ jobs:
     - name: Dump diagnostics on failure
       if: failure()
       run: |
-        kubectl --context kind-kind get actortemplate,workerpool,pods -A -o wide || true
+        kubectl --context kind-kind get workerpool,pods -A -o wide || true
         dump() {
           echo "=== logs: $1/$2 ==="
           kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true

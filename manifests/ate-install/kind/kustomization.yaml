@@ -27,7 +27,6 @@ resources:
   - ./atelet
   - ../atenet-dns.yaml
   - ../atenet-router.yaml
-  - ./postgres
   - ../pod-certificate-controller.yaml
   - ate-otel-config.yaml
   - rustfs.yaml
@@ -55,4 +54,3 @@ patches:
               env:
               - name: OTEL_TRACES_SAMPLER
                 value: parentbased_always_on
-

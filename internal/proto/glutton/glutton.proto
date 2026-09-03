@@ -26,6 +26,11 @@ service Glutton {
   // will be random bytes.
   rpc WriteRAM(WriteRAMRequest) returns (WriteRAMResponse) {}
 
+  // Walks RAM previously allocated by WriteRAM: reads one byte per 4KiB
+  // page across the requested size, so every touched page must be resident
+  // before the response returns.
+  rpc ReadRAM(ReadRAMRequest) returns (ReadRAMResponse) {}
+
   // Tells glutton to write to disk using the specified mode. Data
   // written will be random bytes.
   rpc WriteDisk(WriteDiskRequest) returns (WriteDiskResponse) {}
@@ -53,6 +58,11 @@ enum WriteMode {
 
   // Write on top of the existing data
   WRITE_MODE_OVERWRITE = 1;
+
+  // Write on top of the existing data at a per-key cursor that advances
+  // past each write and wraps at the end, so repeated writes walk the
+  // whole array instead of re-dirtying the same prefix. RAM only.
+  WRITE_MODE_OVERWRITE_ROTATE = 2;
 }
 
 // ReadMode selects how much of the file ReadDisk sends back.
@@ -76,6 +86,23 @@ message WriteRAMRequest {
 }
 
 message WriteRAMResponse {
+}
+
+message ReadRAMRequest {
+  // name of the array to be read
+  string key = 1;
+
+  // size of bytes to walk, with an optional unit suffix (e.g. "2Gi");
+  // empty walks the whole array
+  string size = 2;
+}
+
+message ReadRAMResponse {
+  // total size of bytes walked
+  int64 size = 1;
+
+  // XOR of the sampled bytes, so the reads are observable
+  uint32 checksum = 2;
 }
 
 message WriteDiskRequest {

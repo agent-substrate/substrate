@@ -85,10 +85,13 @@ the HPA still scales to what the metric dictates.
 
 This command will:
 
-- Deploy `prometheus-adapter` into `ate-demo-autoscaled-workerpool` to serve `ate_workerpool_workers` on `external.metrics.k8s.io`.
-- Create the `ate-demo-autoscaled-workerpool` namespace.
-- Create one `WorkerPool` (`counter`, starting with 5 replicas), one `ActorTemplate` (`counter`), and one `HorizontalPodAutoscaler` (`counter`).
-- Wait until the template is `Ready` and the pool is rolled out.
+- Create the `ate-demo-autoscaled-workerpool` namespace and one `WorkerPool`
+  (`counter`, starting with 5 replicas).
+- Create the `ate-demo-autoscaled-workerpool` atespace and the `counter` actor
+  template in it (`autoscaled-workerpool-template.yaml.tmpl`, applied with
+  `kubectl ate create actor-template`), waiting until the pool is rolled out
+  and the template's golden snapshot is built.
+- Deploy `prometheus-adapter` into `ate-demo-autoscaled-workerpool` to serve `ate_workerpool_workers` on `external.metrics.k8s.io`, and one `HorizontalPodAutoscaler` (`counter`).
 
 ### 2. Verify Monitoring Stack & External Metric
 
@@ -104,20 +107,17 @@ kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-aut
 
 ## How to Use
 
-We can trigger autoscaling by creating an atespace, spawning multiple actors, and sending traffic to assign workers in the pool:
+We can trigger autoscaling by spawning multiple actors and sending traffic to assign workers in the pool. The actors go in the demo's atespace (`ate-demo-autoscaled-workerpool`) — `--template-ref` names the template, resolved in the actor's atespace:
 
-### 1. Create an atespace and spawn load actors
+### 1. Spawn load actors
 
 ```sh
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-# Create an atespace for the actors
-kubectl ate create atespace demo
-
 # Create 15 actors to generate load
 for i in {001..015}; do
-  kubectl ate create actor c$i -a demo --template ate-demo-autoscaled-workerpool/counter
+  kubectl ate create actor c$i -a ate-demo-autoscaled-workerpool --template-ref counter
 done
 ```
 
@@ -132,7 +132,7 @@ In a separate terminal, send requests in a retry loop across all hosts to activa
 ```sh
 for attempt in {1..10}; do
   for i in {001..015}; do
-    curl -s -H "Host: c$i.demo.actors.resources.substrate.ate.dev" http://localhost:8000 >/dev/null
+    curl -s -H "Host: c$i.ate-demo-autoscaled-workerpool.actors.resources.substrate.ate.dev" http://localhost:8000 >/dev/null
   done
   sleep 2
 done
@@ -153,22 +153,14 @@ Suspend the actors to drop the assigned worker count. After the 300s stabilizati
 
 ```sh
 for i in {001..015}; do
-  kubectl ate suspend actor c$i -a demo
+  kubectl ate suspend actor c$i -a ate-demo-autoscaled-workerpool
 done
 ```
 
 ## How to Uninstall
 
-First clean up the actors and atespace:
-
-```sh
-for i in {001..015}; do
-  kubectl ate delete actor c$i -a demo
-done
-kubectl ate delete atespace demo
-```
-
-Then remove the demo resources and namespace:
+Remove the demo — this deletes the actors, the template, the atespace, and
+then the pool and its namespace:
 
 ```sh
 ./hack/install-ate-kind.sh --delete-demo-autoscaled-workerpool

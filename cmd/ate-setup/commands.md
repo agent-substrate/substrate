@@ -31,15 +31,54 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--kubeconfig PATH` | `KUBECONFIG=PATH` | Explicit kubeconfig path |
 | `--no-dev-env` | `NO_DEV_ENV=1` | Skip `.ate-dev-env.sh` at the repository root |
 | `--version` / `-v` | — | New; the shell installer had no version |
+| `--image-repo REPO` | — | New. Install pre-built images from `REPO` instead of building them with `ko` |
+| `--image-tag TAG` | — | New. The tag those images carry. Each of the two requires the other |
+
+Both have an environment equivalent, read when the flag is absent:
+`ATE_IMAGE_REPO` and `ATE_IMAGE_TAG`.
+
+## Installing a release
+
+Without `--image-repo`, `ate-setup` builds every image from the checkout with
+`ko` and pushes it to `KO_DOCKER_REPO`. That is the developer install and is
+unchanged.
+
+```
+ate-setup deploy ate-system \
+  --image-repo registry.example.com/substrate \
+  --image-tag v0.0.0
+```
+
+installs published images instead, and never invokes `ko`. The manifests still
+come from the checkout, so this needs one; what it removes is the build, the Go
+toolchain, and write access to a registry.
+
+`REPO` has to hold every component image the manifests reference, all under the
+same tag, which is how a release publishes them. A release that adds a component
+has to publish it alongside the others before a pre-built install can use it.
+Each reference is then pinned to the digest its tag names, which takes one HEAD
+request per image, so the installer needs read access to `REPO` and not only the
+cluster does.
+
+That read is authenticated with the docker config file and the credential
+helpers it names, plus gcloud's own credentials for GCR and Artifact Registry:
+Application Default Credentials, falling back to the `gcloud` CLI. Installing a
+release onto GKE therefore needs no `~/.docker/config.json` entry. Amazon ECR
+and Azure Container Registry need credential-helper modules this repository does
+not depend on, so those registries need a `docker login` first.
+
+`TAG` may itself carry a digest, as in `--image-tag v0.0.0@sha256:...`. A tag
+that already names a manifest is used as written, and is not looked up.
 
 ## Deploy
 
 | `ate-setup` | `hack/install-ate.sh` |
 |---|---|
 | `deploy ate-system` | `--deploy-ate-system` |
-| `deploy ate-system --setup-csi` | `--deploy-ate-system --setup-csi` |
+| `deploy ate-system --setup-csi=nfs` | `--deploy-ate-system --setup-csi=nfs` |
 | `deploy atelet` | `--deploy-atelet` |
 | `deploy apiserver` | `--deploy-ate-apiserver` |
+| `deploy ate-controller` | (no shell equivalent) |
 | `deploy atenet` | `--deploy-atenet` |
 | `deploy postgres` | `--deploy-postgres` |
 
@@ -47,6 +86,15 @@ a pre-scan pass, so they may appear anywhere on its command line.
 apiserver, the controller, atenet, and atelet. It creates every `create`
 resource below on the way, so those subcommands are only needed to redo one on
 a running cluster.
+
+## Publish
+
+| `ate-setup` | `hack/install-ate.sh` |
+|---|---|
+| `publish worker-images` | (no shell equivalent) |
+
+Builds and pushes the ateom worker images for the checked-out build and prints
+their refs; a WorkerPool points `spec.workerImage` to a build to use the ateom.
 
 ## Delete
 
@@ -76,12 +124,11 @@ Individual secrets and config that `deploy ate-system` creates automatically.
 
 | `ate-setup` | `hack/install-ate.sh` |
 |---|---|
-| `setup csi` | `--setup-csi` |
+| `setup csi [driver]` | `--setup-csi[=DRIVER]` |
 
-Kind only. `setup csi` is an error on a non-Kind cluster, where
-`hack/install-ate.sh` warns and continues. Note that `--deploy-ate-system`
-already runs the CSI setup through its own `--setup-csi` flag, so a command line
-passing both does the work once.
+`driver` is one of `nfs`, `hostpath`, `both`, or `none`; `setup csi` with `none` as the default option. The hostpath is for KIND clusters only. NFS has no such
+restriction, but it does need the `nfsd` kernel module loaded on the nodes.
+
 
 ## Benchmarks
 
@@ -109,7 +156,7 @@ See
 | `ate-setup` | `hack/install-ate.sh` | Description |
 |---|---|---|
 | `deploy demo counter` | `--deploy-demo-counter` | A counter actor exercising snapshot, resume, and atenet ingress |
-| `deploy demo counter --with-external-volume` | `--deploy-demo-counter-with-external-volume` | The same, plus an external volume and a pre-seeded file to validate (run `setup csi` first) |
+| `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate. Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
 | `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet |
 | `deploy demo sandbox` | `--deploy-demo-sandbox` | An on-demand sandbox actor driven by the sandbox client |
 | `deploy demo multi-template` | `--deploy-demo-multi-template` | Two ActorTemplates sharing one WorkerPool |
@@ -125,6 +172,7 @@ The demo list is not hard-coded here — it is built from the registry in
 `go run ./cmd/ate-setup deploy demo --help` is authoritative for both the list
 and the per-demo flags.
 
-Each demo previously had its own `hack/install-demo-*.sh`, sourced by the
-installer, which registered the flags above. Those scripts are gone; the demos
-now live in [`internal/demos`](internal/demos).
+The demos also each have a `hack/install-demo-*.sh`, sourced by
+`hack/install-ate.sh`, which registers `--deploy-demo-NAME` /
+`--delete-demo-NAME` flags on that installer. ate-setup does not use those
+scripts; its demos live in [`internal/demos`](internal/demos).

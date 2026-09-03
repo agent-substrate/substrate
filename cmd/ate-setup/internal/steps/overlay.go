@@ -51,7 +51,7 @@ func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
 	if overlay := SystemOverlay(e.Cfg); overlay != "" {
 		return e.KustomizeResolve(ctx, overlay)
 	}
-	return e.KoResolve(ctx, e.Cfg.Manifest())
+	return e.ResolveManifest(ctx, e.Cfg.Manifest())
 }
 
 // renderAtenetRouterManifest produces the atenet router manifest for the
@@ -60,7 +60,7 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	if e.Cfg.Router == config.RouterAgentgateway {
 		return e.KustomizeResolve(ctx, installDir+"/agentgateway-router")
 	}
-	return e.KoResolve(ctx, e.Cfg.Manifest("atenet-router.yaml"))
+	return e.ResolveManifest(ctx, e.Cfg.Manifest("atenet-router.yaml"))
 }
 
 // atenetEgressManifestPath returns the egress manifest path based on configuration.
@@ -85,10 +85,10 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		return e.KoResolveBytes(ctx, patched)
+		return e.ResolveManifestBytes(ctx, patched)
 	}
 
-	return e.KoResolve(ctx, e.atenetEgressManifestPath())
+	return e.ResolveManifest(ctx, e.atenetEgressManifestPath())
 }
 
 func (e *Env) patchAtenetEgressManifest() ([]byte, error) {

@@ -17,12 +17,11 @@
 //
 // Its workload is a Dockerfile-based Python and Claude Code wrapper rather than
 // a Go binary, so the image is built with docker buildx instead of ko and the
-// resolved digest is substituted into the template.
+// resolved digest is substituted into the agent templates.
 package claudemultiplex
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,44 +33,58 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 const (
-	template  = "demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl"
-	workload  = "demos/claude-code-multiplex/workload"
-	namespace = "claude-multiplex-demo"
+	poolManifest = "demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl"
+	workload     = "demos/claude-code-multiplex/workload"
+	// atespace doubles as the pool's k8s namespace.
+	atespace = "claude-multiplex-demo"
 	// imageName is appended to KO_DOCKER_REPO to form the workload image
 	// repository.
 	imageName = "claude-multiplex-demo-workload"
 )
 
-// agents are the actors the demo template declares. Their actors are removed
-// before the manifests at delete time.
-var agents = []steps.TemplateRef{
-	{Atespace: namespace, Name: "agent-luna"},
-	{Atespace: namespace, Name: "agent-mars"},
-	{Atespace: namespace, Name: "agent-orion"},
+// demo wraps a demos.Substrate rather than embedding it, so the shared render
+// test does not pick this demo up: its agent templates carry placeholders
+// (WORKLOAD_IMAGE, ANTHROPIC_API_KEY) that only exist at deploy time, and this
+// package's own test renders them with stand-in values instead.
+type demo struct {
+	sub demos.Substrate
 }
-
-type demo struct{}
 
 func init() {
-	demos.Register(&demo{})
+	d := &demo{}
+	d.sub = demos.Substrate{
+		DemoName:           "demo-claude-code-multiplex",
+		Short:              "Several Claude Code agents multiplexed onto one WorkerPool (requires ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO)",
+		WorkerPoolManifest: poolManifest,
+		Deployments:        []steps.TemplateRef{{Atespace: atespace, Name: "claude-workerpool"}},
+		Templates:          agentTemplates(),
+		RenderValues:       d.renderValues,
+	}
+	demos.Register(d)
 }
 
-func (d *demo) Name() string { return "demo-claude-code-multiplex" }
-
-func (d *demo) Description() string {
-	return "Several Claude Code agents multiplexed onto one WorkerPool (requires ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO)"
+// agentTemplates lists the demo's three agent ActorTemplates.
+func agentTemplates() []demos.SubstrateTemplate {
+	var templates []demos.SubstrateTemplate
+	for _, agent := range []string{"agent-luna", "agent-mars", "agent-orion"} {
+		templates = append(templates, demos.SubstrateTemplate{
+			Manifest: "demos/claude-code-multiplex/" + agent + "-template.yaml.tmpl",
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: agent},
+		})
+	}
+	return templates
 }
 
+func (d *demo) Name() string         { return d.sub.Name() }
+func (d *demo) Description() string  { return d.sub.Description() }
 func (d *demo) Flags(*pflag.FlagSet) {}
 
 func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
-	log.Step(d.Name() + "_deploy")
-
 	if e.Cfg.AnthropicAPIKey == "" {
 		return fmt.Errorf("ANTHROPIC_API_KEY must be set")
 	}
@@ -81,55 +94,26 @@ func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
 	if e.Cfg.KODockerRepo == "" {
 		return fmt.Errorf("KO_DOCKER_REPO must be set (see hack/ate-dev-env.sh.example)")
 	}
+	return d.sub.Deploy(ctx, e)
+}
 
-	if err := e.EnsureCRDs(ctx); err != nil {
-		return err
-	}
+// Delete needs no credentials: only the pool manifest is rendered, and it
+// carries none of the deploy-time placeholders.
+func (d *demo) Delete(ctx context.Context, e *steps.Env) error {
+	return d.sub.Delete(ctx, e)
+}
 
+// renderValues builds the workload image and returns the placeholder values
+// the agent templates need.
+func (d *demo) renderValues(ctx context.Context, e *steps.Env) (map[string]string, error) {
 	image, err := d.buildWorkload(ctx, e)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	log.Step("  workload image: " + image)
-
-	manifest, err := demos.Render(e, template, map[string]string{
+	return map[string]string{
 		"ANTHROPIC_API_KEY": e.Cfg.AnthropicAPIKey,
 		"WORKLOAD_IMAGE":    image,
-	}, nil)
-	if err != nil {
-		return err
-	}
-	return e.KoApplyBytes(ctx, manifest)
-}
-
-func (d *demo) Delete(ctx context.Context, e *steps.Env) error {
-	log.Step(d.Name() + "_delete")
-
-	if err := e.DeleteDemoActors(ctx, agents...); err != nil {
-		return err
-	}
-
-	// Delete-time substitution does not need a real image: Kubernetes
-	// identifies resources by metadata, not container spec. Placeholders keep
-	// the rendered YAML valid even when the environment variables are unset,
-	// which is what DeleteAll relies on.
-	manifest, err := d.renderForDelete(e)
-	if err != nil {
-		return err
-	}
-	return e.Kube.DeleteBytes(ctx, manifest)
-}
-
-func (d *demo) renderForDelete(e *steps.Env) ([]byte, error) {
-	const placeholder = "placeholder"
-	values := map[string]string{
-		"BUCKET_NAME":       cmp.Or(e.Cfg.BucketName, placeholder),
-		"ANTHROPIC_API_KEY": cmp.Or(e.Cfg.AnthropicAPIKey, placeholder),
-		"WORKLOAD_IMAGE":    placeholder,
-	}
-	// demos.Render would re-add BUCKET_NAME from the config, which may be
-	// empty; the value above wins because it is applied after.
-	return demos.Render(e, template, values, nil)
+	}, nil
 }
 
 // buildWorkload builds the workload image, pushes it to KO_DOCKER_REPO, and

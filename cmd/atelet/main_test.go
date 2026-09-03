@@ -1713,7 +1713,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
-	t.Run("gvisor full capture cannot become data yet", func(t *testing.T) {
+	t.Run("gvisor full capture without durable tar has no data", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
@@ -1726,8 +1726,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		req := validUploadPausedCheckpointRequest()
 		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
-		if got := status.Code(err); got != codes.Unimplemented {
-			t.Fatalf("status.Code = %v (err %v), want Unimplemented", got, err)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 		}
 	})
 

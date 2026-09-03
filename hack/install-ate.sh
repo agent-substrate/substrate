@@ -40,7 +40,6 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
-source "${ROOT}"/hack/install-demo-counter-substrate.sh
 source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-jupyter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
@@ -69,7 +68,8 @@ function usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
-  echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
+  echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
+  echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
@@ -100,6 +100,11 @@ function usage() {
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
+  echo ""
+  echo "PostgreSQL configuration:"
+  echo ""
+  echo "  ATE_API_POSTGRES_CONNECTION_STRING     Use an external PostgreSQL instance and skip the bundled instance"
+  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -221,6 +226,10 @@ rollout_timeout() {
 
 default_postgres_connection_string() {
   echo "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+}
+
+use_bundled_postgres() {
+  [[ -z "${ATE_API_POSTGRES_CONNECTION_STRING:-}" ]]
 }
 
 # --- Versioned dataplane rendering ---
@@ -377,6 +386,15 @@ apply_otel_config() {
   fi
 }
 
+apply_postgres() {
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    kubectl kustomize manifests/ate-install/kind/postgres \
+      --load-restrictor LoadRestrictionsNone | run_kubectl apply -f -
+  else
+    run_kubectl apply -f manifests/ate-install/postgres.yaml
+  fi
+}
+
 # --otlp-endpoint sends all control plane telemetry to a different collector for
 # the duration of a measurement. One patch is sufficient: each component reads
 # this ConfigMap through envFrom, and ate-controller copies the values to the
@@ -530,6 +548,7 @@ create_api_server_env_vars() {
     | run_kubectl apply -f -
 
   local postgres_connection_string="${ATE_API_POSTGRES_CONNECTION_STRING:-}"
+  local postgres_schema="${ATE_API_POSTGRES_SCHEMA:-public}"
   if [[ -z "${postgres_connection_string}" ]]; then
     postgres_connection_string="$(default_postgres_connection_string)"
   fi
@@ -538,6 +557,7 @@ create_api_server_env_vars() {
 
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${postgres_connection_string}" \
+    --from-literal=ATE_API_POSTGRES_SCHEMA="${postgres_schema}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }
@@ -593,7 +613,7 @@ create_api_authentication_config() {
 
 ensure_crds() {
   log_step "ensure_crds"
-  if run_kubectl get crd workerpools.ate.dev actortemplates.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
+  if run_kubectl get crd workerpools.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
     return
   fi
 
@@ -605,10 +625,39 @@ deploy_crds() {
   run_ko apply -f manifests/ate-install/generated
 }
 
+require_kind_for_hostpath() {
+  if [[ "${ATE_INSTALL_KIND:-false}" != "true" ]]; then
+    echo "Error: the hostpath CSI driver is only supported on Kind." >&2
+    exit 1
+  fi
+}
+
 setup_csi() {
-  log_step "setup_csi"
-  "${ROOT}/hack/setup-csi-hostpath-kind.sh"
-  "${ROOT}/hack/setup-csi-nfs-kind.sh"
+  local driver="${SETUP_CSI:-none}"
+  case "${driver}" in
+    ""|none|false)
+      return
+      ;;
+  esac
+  log_step "setup_csi (${driver})"
+  case "${driver}" in
+    nfs)
+      "${ROOT}/hack/setup-csi-nfs-kind.sh"
+      ;;
+    hostpath)
+      require_kind_for_hostpath
+      "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+      ;;
+    both|true)
+      require_kind_for_hostpath
+      "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+      "${ROOT}/hack/setup-csi-nfs-kind.sh"
+      ;;
+    *)
+      echo "Error: unknown CSI driver \"${driver}\" (valid options: nfs, hostpath, both, none)." >&2
+      exit 1
+      ;;
+  esac
 }
 
 deploy_ate_system() {
@@ -659,12 +708,13 @@ deploy_ate_system() {
   # exist. The ghostunnel sidecar uses projected podCertificate and clusterTrustBundle
   # volumes which cannot be fulfilled until podcertcontroller is actively signing,
   # otherwise rollout of csi-hostpath-socat times out.
-  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
-    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-      setup_csi
-    else
-      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
-    fi
+  #
+  # setup_csi is a no-op unless --setup-csi asked for a driver, and it is the
+  # one that decides which drivers need Kind, so there is no Kind gate here.
+  setup_csi
+
+  if use_bundled_postgres; then
+    apply_postgres
   fi
 
   local manifests=""
@@ -678,7 +728,9 @@ deploy_ate_system() {
   apply_atenet_egress
 
   log_step "Waiting for ATE system components to be ready..."
-  run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+  if use_bundled_postgres; then
+    run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
+  fi
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
@@ -822,57 +874,10 @@ prepare_actor_for_delete() {
   return 1
 }
 
-# delete_demo_actors removes all actors for one or more (namespace, template)
-# pairs before the demo manifests are deleted. Arguments are alternating
-# namespace and template name, e.g.:
-#   delete_demo_actors ate-demo-counter counter
-#   delete_demo_actors ns-a tmpl-a ns-b tmpl-b
-delete_demo_actors() {
-  if ! command -v jq &>/dev/null; then
-    echo "jq is required to delete demo actors" >&2
-    return 1
-  fi
-
-  if (($# == 0 || $# % 2 != 0)); then
-    echo "delete_demo_actors expects namespace/template pairs" >&2
-    return 1
-  fi
-
-  if ! run_kubectl get deployment/ate-api-server -n ate-system >/dev/null 2>&1; then
-    log_step "ate-api-server not found; skipping actor cleanup"
-    return 0
-  fi
-
-  local actors_json
-  if ! actors_json=$(run_kubectl_ate get actors -A -o json 2>/dev/null); then
-    echo "warning: could not list actors; skipping actor cleanup" >&2
-    return 0
-  fi
-
-  local ns tmpl atespace actor_name
-  while (($# > 0)); do
-    ns="$1"
-    tmpl="$2"
-    shift 2
-
-    log_step "Deleting actors for ${ns}/${tmpl}"
-    while IFS=$'\t' read -r atespace actor_name; do
-      [[ -z "${actor_name}" ]] && continue
-      log_step "  preparing actor ${atespace}/${actor_name} for delete"
-      prepare_actor_for_delete "${actor_name}" "${atespace}"
-      run_kubectl_ate delete actor "${actor_name}" -a "${atespace}"
-    done < <(
-      jq -r --arg ns "${ns}" --arg tmpl "${tmpl}" \
-        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.metadata.atespace)\t\(.metadata.name)"' \
-        <<<"${actors_json}"
-    )
-  done
-}
-
-# delete_demo_actors_substrate is delete_demo_actors for actors created from a
-# substrate ActorTemplate resource: those reference their template via the
-# actorTemplate {atespace, name} ref instead of the legacy CRD namespace/name
-# pair. Arguments are alternating atespace and template name.
+# delete_demo_actors_substrate removes all actors created from a substrate
+# ActorTemplate resource before the demo manifests are deleted: those
+# reference their template via the actorTemplate {atespace, name} ref.
+# Arguments are alternating atespace and template name.
 delete_demo_actors_substrate() {
   if ! command -v jq &>/dev/null; then
     echo "jq is required to delete demo actors" >&2
@@ -945,62 +950,41 @@ wait_actortemplate_ready() {
   return 1
 }
 
-# deploy_substrate_demo deploys a demo whose ActorTemplate is a substrate
-# resource: apply the pool manifest, wait for the pool rollout, create the
-# template through the ate API, and block on its golden snapshot.
-#   deploy_substrate_demo <demo> <pool_manifest> <template_manifest> \
-#     <atespace> <pool> <template> <golden_timeout> [extra sed exprs...]
-# The atespace doubles as the pool's k8s namespace, keeping the substrate
-# naming parallel to the CRD-era namespace/template pairs. An empty <pool>
-# skips the rollout wait; a golden_timeout of 0 creates the template without
-# blocking on its golden snapshot. Extra sed expressions are applied to the
-# template manifest, for demos with optional template stanzas.
-deploy_substrate_demo() {
-  local demo="$1" pool_manifest="$2" template_manifest="$3"
-  local atespace="$4" pool="$5" template="$6" golden_timeout="${7:-300}"
-  shift 7
-  log_step "${demo}_deploy (${atespace}/${template})"
-  ensure_crds
+# The helpers below deploy a demo in the substrate-resource shape: a CRD
+# worker-pool manifest plus protojson ActorTemplates created through the ate
+# API. The pool's k8s namespace doubles as the atespace unless a demo says
+# otherwise; <render_fn> turns a manifest path into YAML on stdout.
 
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${pool_manifest}" \
-    | run_ko apply -f -
-
-  if [[ -n "${pool}" ]]; then
-    log_step "Waiting for the ${pool} worker pool rollout..."
-    wait_for_pool_rollout_fatal "${pool}" "${atespace}"
-  fi
-
-  create_substrate_template "${template_manifest}" "${atespace}" "${template}" "$@"
-
-  if [[ "${golden_timeout}" != "0" ]]; then
-    # Mirrors the CRD era's `kubectl wait --for=condition=Ready
-    # actortemplate/...` (there is no kubectl wait for substrate resources).
-    log_step "Waiting for the ${atespace}/${template} golden snapshot..."
-    if ! wait_actortemplate_ready "${atespace}" "${template}" "${golden_timeout}"; then
-      exit 1
-    fi
-  fi
+# render_demo_manifest substitutes ${BUCKET_NAME} and the version
+# placeholders in a manifest.
+render_demo_manifest() {
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "$1" | substitute_version
 }
 
-# create_substrate_template renders a protojson ActorTemplate manifest and
-# creates it through the ate API:
-#   create_substrate_template <manifest> <atespace> <template> [extra sed exprs...]
-create_substrate_template() {
-  local template_manifest="$1" atespace="$2" template="$3"
-  shift 3
-
-  # The store enforces that the template's atespace exists at create time.
+# ensure_atespace creates the atespace if it does not already exist. The
+# store enforces that a template's atespace exists at create time.
+ensure_atespace() {
+  local atespace="$1"
   if ! run_kubectl_ate create atespace "${atespace}" >/dev/null 2>&1 \
       && ! run_kubectl_ate get atespace "${atespace}" >/dev/null 2>&1; then
     echo "error: failed to create atespace ${atespace}" >&2
     exit 1
   fi
+}
 
-  # ko resolve builds the ko:// image references and replaces them with pushed
-  # digests before the manifest reaches kubectl-ate. Actor templates are
-  # immutable (no update RPC), so an existing template is left in place:
-  # delete the demo and redeploy to change it.
-  if ! sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "$@" "${template_manifest}" \
+# create_demo_actor_template renders a protojson ActorTemplate manifest,
+# creates it through the ate API, and blocks on its golden snapshot.
+# Templates are immutable, so an existing one is kept in place.
+create_demo_actor_template() {
+  local render_fn="$1"
+  local template_manifest="$2"
+  local atespace="$3"
+  local template="$4"
+  local timeout_secs="${5:-300}"
+
+  # ko resolve replaces ko:// image references with pushed digests;
+  # manifests without them pass through unchanged.
+  if ! "${render_fn}" "${template_manifest}" \
       | run_ko resolve -f - \
       | run_kubectl_ate create actor-template -f -; then
     if run_kubectl_ate get actor-template "${template}" -a "${atespace}" >/dev/null 2>&1; then
@@ -1010,35 +994,71 @@ create_substrate_template() {
       exit 1
     fi
   fi
+
+  # The substrate counterpart of `kubectl wait --for=condition=Ready
+  # actortemplate/...`, which does not exist for substrate resources.
+  log_step "Waiting for the ${atespace}/${template} golden snapshot..."
+  if ! wait_actortemplate_ready "${atespace}" "${template}" "${timeout_secs}"; then
+    exit 1
+  fi
 }
 
-# delete_substrate_templates removes a demo's actors, its templates, and then
-# their shared atespace:
-#   delete_substrate_templates <atespace> <template...>
-delete_substrate_templates() {
+# deploy_substrate_demo deploys the common substrate demo shape: one worker
+# pool plus ActorTemplates given as alternating manifest / name pairs after
+# the golden-snapshot timeout (micro-VM goldens pay a cloud-hypervisor cold
+# boot, so those demos pass a larger budget).
+deploy_substrate_demo() {
+  local render_fn="$1"
+  local pool_manifest="$2"
+  local atespace="$3" # also the pool's k8s namespace
+  local pool="$4"
+  local golden_timeout="$5"
+  shift 5
+
+  ensure_crds
+  "${render_fn}" "${pool_manifest}" | run_ko apply -f -
+
+  log_step "Waiting for the ${pool} worker pool rollout..."
+  wait_for_pool_rollout_fatal "${pool}" "${atespace}"
+
+  ensure_atespace "${atespace}"
+
+  local template_manifest template
+  while (($# > 0)); do
+    template_manifest="$1"
+    template="$2"
+    shift 2
+    create_demo_actor_template "${render_fn}" "${template_manifest}" "${atespace}" "${template}" "${golden_timeout}"
+  done
+}
+
+# delete_demo_actor_template deletes a template's actors, then the template
+# itself, which server-side also removes its golden actor and snapshot.
+delete_demo_actor_template() {
   local atespace="$1"
-  shift
+  local template="$2"
+  delete_demo_actors_substrate "${atespace}" "${template}"
+  run_kubectl_ate delete actor-template "${template}" -a "${atespace}" 2>/dev/null \
+    || log_step "actor template ${atespace}/${template} not deleted (may not exist)"
+}
+
+# delete_substrate_demo tears down what deploy_substrate_demo deployed:
+# actors, templates, the atespace, then the pool manifest. Arguments after
+# the atespace are the template names in that atespace.
+delete_substrate_demo() {
+  local render_fn="$1"
+  local pool_manifest="$2"
+  local atespace="$3"
+  shift 3
+
   local template
   for template in "$@"; do
-    delete_demo_actors_substrate "${atespace}" "${template}"
-    # Also removes the template's golden actor and golden snapshot server-side.
-    run_kubectl_ate delete actor-template "${template}" -a "${atespace}" 2>/dev/null \
-      || log_step "actor template ${atespace}/${template} not deleted (may not exist)"
+    delete_demo_actor_template "${atespace}" "${template}"
   done
   run_kubectl_ate delete atespace "${atespace}" 2>/dev/null \
     || log_step "atespace ${atespace} not deleted (may not exist or is not empty)"
-}
 
-# delete_substrate_demo tears down one substrate demo: its actors, templates,
-# atespace, and pool manifest.
-#   delete_substrate_demo <demo> <pool_manifest> <atespace> <template...>
-delete_substrate_demo() {
-  local demo="$1" pool_manifest="$2" atespace="$3"
-  shift 3
-  log_step "${demo}_delete (${atespace})"
-  delete_substrate_templates "${atespace}" "$@"
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${pool_manifest}" \
-    | run_kubectl delete --ignore-not-found -f -
+  "${render_fn}" "${pool_manifest}" | run_kubectl delete --ignore-not-found -f -
 }
 
 delete_ate_system() {
@@ -1131,7 +1151,10 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
-SETUP_CSI="${SETUP_CSI:-false}"
+# Valid values for SETUP_CSI: nfs, hostpath, both, none. Defaults to none: a
+# CSI driver is an opt-in extra, and NFS needs kernel modules a plain
+# workstation will not have loaded.
+SETUP_CSI="${SETUP_CSI:-none}"
 BENCHMARK_WORKER_COUNT=1
 BENCHMARK_SANDBOX_CLASS=gvisor
 # Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).
@@ -1208,8 +1231,13 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ATE_OTLP_ENDPOINT="${prescan_args[$((i + 1))]}"
       ;;
     --otlp-endpoint=*) ATE_OTLP_ENDPOINT="${prescan_args[i]#*=}" ;;
+    --setup-csi=*) SETUP_CSI="${prescan_args[i]#*=}" ;;
     --setup-csi)
-      SETUP_CSI=true
+      if (( i + 1 < ${#prescan_args[@]} )) && [[ "${prescan_args[$((i + 1))]}" != --* ]]; then
+        SETUP_CSI="${prescan_args[$((i + 1))]}"
+      else
+        SETUP_CSI="nfs"
+      fi
       ;;
   esac
 done
@@ -1272,13 +1300,20 @@ while [[ "$#" -gt 0 ]]; do
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;
+    --setup-csi=*)
+      SETUP_CSI="${1#*=}"
+      ensure_crds
+      setup_csi
+      ;;
     --setup-csi)
-      if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-        ensure_crds
-        setup_csi
+      if [[ "$#" -gt 1 && "$2" != --* ]]; then
+        shift
+        SETUP_CSI="$1"
       else
-        echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+        SETUP_CSI="nfs"
       fi
+      ensure_crds
+      setup_csi
       ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;

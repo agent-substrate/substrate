@@ -29,7 +29,7 @@ spec:
       operations:  ["CREATE", "UPDATE"]
       resources:   ["sandboxconfigs"]
   validations:
-  # gVisor needs a "gvisor" release-tarball asset (gvisor.tar.bz2: runsc plus
+  # gVisor needs a "gvisor" release-tarball asset (gvisor.tar.zstd: runsc plus
   # its gvisor-bin/ helpers) for every architecture it advertises. A legacy
   # bare-binary "runsc" asset is still accepted for releases that predate the
   # tarball.

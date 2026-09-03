@@ -19,14 +19,14 @@ Flag registration lives in the modules that own each flag:
   * --min-wait-time / --max-wait-time → common.wait_time.init_wait_time
   * --resume-mode                   → common.resume_mode.add_resume_mode_arguments
   * --durdir-*                      → common.durdir_config.add_durdir_arguments
-  * --mem-target / --mem-churn      → common.memload_config.add_memload_arguments
+  * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
 the operator set in the web UI form:
   * init_boomer_config(): ensures the owning init_*() hooks have run, then
     serves the current parsed values at /boomer-config on the master.
   * build_config_json(): parses an argv list and returns the JSON payload
-    that runner.py hands to boomer-glutton via --config-json in headless
+    that runner.py hands to boomer-worker via --config-json in headless
     mode (no web UI to fetch from).
   * serve_config_headless(): the same /boomer-config payload from a plain
     HTTP server, for a headless run whose values change while it runs.
@@ -55,6 +55,7 @@ _FLAGS = {
     "--durdir-template": str,
     "--mem-target": str,
     "--mem-churn": str,
+    "--mem-read": str,
 }
 
 
@@ -63,7 +64,7 @@ def _attr(flag: str) -> str:
 
 
 def build_config_json(argv: Iterable[str]) -> str:
-    """Parse `argv` and return the JSON config payload for boomer-glutton's
+    """Parse `argv` and return the JSON config payload for boomer-worker's
     --config-json flag. Unknown args are ignored; unset flags are omitted so
     boomer falls back to its own defaults."""
     p = argparse.ArgumentParser(add_help=False)

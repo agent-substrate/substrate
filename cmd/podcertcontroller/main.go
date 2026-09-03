@@ -80,6 +80,17 @@ var (
 		"Number of concurrent worker goroutines per signer.",
 	)
 
+	kubeAPIQPS = pflag.Float32(
+		"kube-api-qps",
+		0,
+		"Sustained queries per second allowed against the Kubernetes API. 0 keeps the client-go default.",
+	)
+	kubeAPIBurst = pflag.Int(
+		"kube-api-burst",
+		0,
+		"Burst queries allowed against the Kubernetes API. 0 keeps the client-go default.",
+	)
+
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
@@ -108,6 +119,18 @@ func main() {
 			slog.ErrorContext(ctx, "Error reading kubeconfig", slog.Any("err", err))
 			os.Exit(1)
 		}
+	}
+
+	if *kubeAPIQPS < 0 || *kubeAPIBurst < 0 {
+		slog.ErrorContext(ctx, "Invalid rate limits: --kube-api-qps and --kube-api-burst must not be negative",
+			slog.Any("kube-api-qps", *kubeAPIQPS), slog.Int("kube-api-burst", *kubeAPIBurst))
+		os.Exit(1)
+	}
+	if *kubeAPIQPS > 0 {
+		kconfig.QPS = *kubeAPIQPS
+	}
+	if *kubeAPIBurst > 0 {
+		kconfig.Burst = *kubeAPIBurst
 	}
 
 	kc, err := kubernetes.NewForConfig(kconfig)

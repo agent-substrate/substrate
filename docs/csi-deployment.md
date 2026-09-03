@@ -70,6 +70,10 @@ metadata:
   namespace: kube-system
 data:
   envoy.yaml: |
+    # SDS (used for the TLS certs below) requires a node id and cluster.
+    node:
+      id: csi-nfs-envoy
+      cluster: csi-nfs-envoy
     static_resources:
       listeners:
       - name: grpc_listener

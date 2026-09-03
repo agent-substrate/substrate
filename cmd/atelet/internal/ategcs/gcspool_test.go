@@ -18,7 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 )
 
@@ -36,16 +35,16 @@ func TestPooledClientsAreBuiltLikeTheClientTheyStandIn(t *testing.T) {
 	t.Setenv("GCE_METADATA_HOST", "127.0.0.1:1")
 
 	ctx := context.Background()
-	anon, err := storage.NewClient(ctx, option.WithoutAuthentication())
+	store, err := NewGCSClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		t.Fatalf("an anonymous client must build without credentials: %v", err)
 	}
-	defer anon.Close()
 
-	g, ok := NewGCSClient(anon, option.WithoutAuthentication()).(*gcsClient)
+	g, ok := store.(*gcsClient)
 	if !ok {
 		t.Fatal("NewGCSClient did not return a *gcsClient")
 	}
+	defer g.client.Close()
 
 	pooled := g.uploadClient(ctx, 0)
 	if pooled == nil {

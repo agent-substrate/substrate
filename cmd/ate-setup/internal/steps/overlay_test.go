@@ -55,10 +55,16 @@ func TestEmitAdditionalEgressExtprocCluster(t *testing.T) {
 	if strings.Contains(out, "tls_certificates:") {
 		t.Error("emitted cluster block still carries an inline tls_certificates entry")
 	}
+	// watched_directory belongs in the SDS resource files, not here: on an
+	// inline entry Envoy silently ignores it.
+	if strings.Contains(out, "watched_directory") {
+		t.Error("emitted cluster block contains watched_directory")
+	}
 }
 
-// Splices the real sdsmint manifest and re-parses the result; this path has
-// no e2e coverage in CI.
+// Splices the real sdsmint manifest and re-parses the result. CI deploys the
+// sdsmint variant but never with the extproc flag, so this is the only
+// automated check on the injected cluster.
 func TestPatchAtenetEgressManifest(t *testing.T) {
 	root, err := config.RepoRoot()
 	if err != nil {
@@ -128,6 +134,19 @@ func TestPatchAtenetEgressManifest(t *testing.T) {
 	} {
 		if !strings.Contains(envoyYaml, want) {
 			t.Errorf("patched envoy.yaml is missing %q", want)
+		}
+	}
+	// watched_directory must live only in the SDS resource files; on an
+	// inline entry in the bootstrap Envoy silently ignores it. Comment
+	// lines may mention it.
+	for _, line := range strings.Split(envoyYaml, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, "watched_directory") {
+			t.Errorf("patched envoy.yaml contains watched_directory outside the SDS resource files: %q", line)
+		}
+	}
+	for _, key := range []string{"sds-servicedns-cert.yaml", "sds-podidentity-cert.yaml", "sds-servicedns-validation.yaml"} {
+		if !strings.Contains(data[key], "watched_directory") {
+			t.Errorf("SDS resource %q is missing watched_directory; rotation would be silently broken", key)
 		}
 	}
 }

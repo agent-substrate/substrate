@@ -19,16 +19,22 @@ package parking
 import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
+// namespace is the pool's k8s namespace; it doubles as the atespace holding
+// the demo's ActorTemplate.
 const namespace = "ate-demo-parking"
 
 func init() {
-	demos.Register(&demos.Simple{
-		DemoName:       "demo-parking",
-		Short:          "Actor parking and unparking on a small WorkerPool",
-		Template:       "demos/parking/parking.yaml.tmpl",
-		Deployments:    []steps.TemplateRef{{Atespace: namespace, Name: "parking"}},
-		ActorTemplates: []steps.TemplateRef{{Atespace: namespace, Name: "parking"}},
+	demos.Register(&demos.Substrate{
+		DemoName:           "demo-parking",
+		Short:              "Actor parking and unparking on a small WorkerPool",
+		WorkerPoolManifest: "demos/parking/parking.yaml.tmpl",
+		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "parking"}},
+		Templates: []demos.SubstrateTemplate{{
+			Manifest: "demos/parking/parking-template.yaml.tmpl",
+			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "parking"},
+		}},
 	})
 }

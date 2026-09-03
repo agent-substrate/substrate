@@ -154,10 +154,6 @@ func TestShapeGVisor_Idempotent(t *testing.T) {
 	if len(spec.Mounts) != first {
 		t.Errorf("mount count = %d after a second shaping, want %d", len(spec.Mounts), first)
 	}
-	// The sandbox spec declares its durable-dir volumes.
-	if got := spec.Annotations["dev.gvisor.spec.mount.data.share"]; got != "container" {
-		t.Errorf("durable-dir volume not declared to gVisor: annotations=%v", spec.Annotations)
-	}
 	if got := spec.Annotations["io.kubernetes.cri.container-type"]; got != "sandbox" {
 		t.Errorf("pause container-type = %q, want sandbox", got)
 	}

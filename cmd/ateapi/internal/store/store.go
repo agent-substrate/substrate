@@ -239,9 +239,6 @@ type Interface interface {
 	// held and renewed automatically until the returned Lease is closed.
 	// Returns ErrLeaseConflict if the lease is already held by another client.
 	AcquireLease(ctx context.Context, key string) (*Lease, error)
-
-	// DebugClearAll drop all data from the database. Useful for debugging / local testing/
-	DebugClearAll(ctx context.Context) error
 }
 
 // Precondition guards an update with the uid and version the caller observed:

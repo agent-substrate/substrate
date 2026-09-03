@@ -62,29 +62,36 @@ type Persistence struct {
 
 var _ store.Interface = (*Persistence)(nil)
 
-// Connect opens a pgxpool against dsn, verifies connectivity, and applies the
-// embedded schema. Startup fails if the database cannot be reached. A second,
-// two-connection watch pool (owned by the Persistence, closed by Close) isolates
-// outbox polling and maintenance from write traffic.
-func Connect(ctx context.Context, dsn string) (*Persistence, error) {
+// ErrUnavailable reports that ateapi could not establish the initial
+// PostgreSQL connection. Callers can retry this error before startup.
+var ErrUnavailable = errors.New("PostgreSQL is unavailable")
+
+// Connect opens a pgxpool against dsn, creates schema if necessary, and
+// applies pending schema migrations. A dedicated watch pool isolates outbox
+// polling and maintenance from writes.
+func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
+	if schema == "" {
+		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
+	}
 	cfg, err := poolConfig(dsn)
 	if err != nil {
 		return nil, err
 	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
+		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
+	}
+	if err := createSchema(ctx, pool, schema); err != nil {
+		pool.Close()
+		return nil, err
 	}
 
-	watchCfg, err := poolConfig(dsn)
-	if err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("watch pool: %w", err)
-	}
+	watchCfg := cfg.Copy()
 	watchCfg.MaxConns = watchPoolMaxConns
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
@@ -101,6 +108,25 @@ func Connect(ctx context.Context, dsn string) (*Persistence, error) {
 	}
 	p.ownsWatchPool = true
 	return p, nil
+}
+
+func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("starting PostgreSQL schema transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // Commit or the returned error decides the outcome.
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "agent-substrate:create-schema:"+schema); err != nil {
+		return fmt.Errorf("locking PostgreSQL schema %q: %w", schema, err)
+	}
+	if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
+		return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing PostgreSQL schema %q: %w", schema, err)
+	}
+	return nil
 }
 
 // poolConfig parses dsn into a pool configuration whose TLS material is read
@@ -137,7 +163,7 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 	return cfg, nil
 }
 
-// NewPersistence wraps an already-open pool, applying the idempotent schema.
+// NewPersistence wraps an already-open pool, applying pending migrations.
 // Callers that already hold a pool (e.g. tests using testcontainers) use
 // this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
@@ -145,7 +171,7 @@ func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, erro
 }
 
 func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
-	if err := applySchema(ctx, pool); err != nil {
+	if err := applyMigrations(ctx, pool); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
@@ -188,6 +214,12 @@ type querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+
+// unmarshalStored decodes a stored proto, dropping fields this binary has no
+// descriptor for. This means a newer replica can have written such a field.
+func unmarshalStored(b []byte, m proto.Message) error {
+	return proto.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(b, m)
+}
 func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Uid = uuid.NewString()
 	metadata.Version = 1
@@ -286,7 +318,7 @@ func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.A
 		return nil, fmt.Errorf("getting atespace %q: %w", name, err)
 	}
 	out := &ateapipb.Atespace{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling atespace: %w", err)
 	}
 	return out, nil
@@ -326,7 +358,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("scanning atespace row: %w", err)
 		}
 		a := &ateapipb.Atespace{}
-		if err := proto.Unmarshal(protoBytes, a); err != nil {
+		if err := unmarshalStored(protoBytes, a); err != nil {
 			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("unmarshaling atespace: %w", err)
 		}
 		result = append(result, a)
@@ -357,7 +389,7 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
 	}
 	out := &ateapipb.Atespace{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted atespace: %w", err)
 	}
 	return out, nil
@@ -403,7 +435,7 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 		return nil, fmt.Errorf("getting actor template %s: %w", templateRef, err)
 	}
 	out := &ateapipb.ActorTemplate{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template: %w", err)
 	}
 	return out, nil
@@ -436,7 +468,7 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	}
 
 	dbTemplate := &ateapipb.ActorTemplate{}
-	if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
+	if err := unmarshalStored(currentBytes, dbTemplate); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
 	}
 	if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
@@ -526,7 +558,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("scanning actor template row: %w", err)
 		}
 		template := &ateapipb.ActorTemplate{}
-		if err := proto.Unmarshal(protoBytes, template); err != nil {
+		if err := unmarshalStored(protoBytes, template); err != nil {
 			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("unmarshaling actor template: %w", err)
 		}
 		keys = append(keys, k)
@@ -561,7 +593,7 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 		return nil, fmt.Errorf("deleting actor template %s: %w", templateRef, err)
 	}
 	out := &ateapipb.ActorTemplate{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted actor template: %w", err)
 	}
 	return out, nil
@@ -614,7 +646,7 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 		return nil, fmt.Errorf("getting actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
 	}
 	out := &ateapipb.Actor{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor: %w", err)
 	}
 	return out, nil
@@ -638,7 +670,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	}
 
 	dbActor := &ateapipb.Actor{}
-	if err := proto.Unmarshal(currentBytes, dbActor); err != nil {
+	if err := unmarshalStored(currentBytes, dbActor); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
 	}
 	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
@@ -699,7 +731,7 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	}
 
 	out := &ateapipb.Actor{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for deletion: %w", err)
 	}
 	if out.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
@@ -761,7 +793,7 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
 		a := &ateapipb.Actor{}
-		if err := proto.Unmarshal(protoBytes, a); err != nil {
+		if err := unmarshalStored(protoBytes, a); err != nil {
 			return nil, "", fmt.Errorf("unmarshaling actor: %w", err)
 		}
 		result = append(result, a)
@@ -809,7 +841,7 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
 		a := &ateapipb.Actor{}
-		if err := proto.Unmarshal(protoBytes, a); err != nil {
+		if err := unmarshalStored(protoBytes, a); err != nil {
 			return nil, "", fmt.Errorf("unmarshaling actor: %w", err)
 		}
 		result = append(result, a)
@@ -938,7 +970,7 @@ func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...an
 
 func unmarshalEgressPolicy(uid string, version int64, protoBytes []byte) (*ateapipb.EgressPolicy, error) {
 	policy := &ateapipb.EgressPolicy{}
-	if err := proto.Unmarshal(protoBytes, policy); err != nil {
+	if err := unmarshalStored(protoBytes, policy); err != nil {
 		return nil, fmt.Errorf("unmarshaling egress policy: %w", err)
 	}
 	if err := validateProtoMetadataMatchesColumns("egress policy", policy.GetMetadata(), uid, version); err != nil {
@@ -986,7 +1018,7 @@ func (p *Persistence) GetActorSnapshot(ctx context.Context, snapshotRef resource
 		return nil, fmt.Errorf("getting actor snapshot %s/%s: %w", atespace, name, err)
 	}
 	out := &ateapipb.ActorSnapshot{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor snapshot: %w", err)
 	}
 	return out, nil
@@ -1004,7 +1036,7 @@ func (p *Persistence) GetActorSnapshotTag(ctx context.Context, tagRef resources.
 		return nil, fmt.Errorf("getting actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
 	tag := &ateapipb.ActorSnapshotTag{}
-	if err := proto.Unmarshal(protoBytes, tag); err != nil {
+	if err := unmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
 	}
 	return tag, nil
@@ -1056,7 +1088,7 @@ func (p *Persistence) listActorSnapshotsScoped(ctx context.Context, atespace str
 			return nil, "", fmt.Errorf("scanning actor snapshot row: %w", err)
 		}
 		snapshot := &ateapipb.ActorSnapshot{}
-		if err := proto.Unmarshal(protoBytes, snapshot); err != nil {
+		if err := unmarshalStored(protoBytes, snapshot); err != nil {
 			return nil, "", fmt.Errorf("unmarshaling actor snapshot: %w", err)
 		}
 		result = append(result, snapshot)
@@ -1102,7 +1134,7 @@ func (p *Persistence) listActorSnapshotsGlobal(ctx context.Context, pageSize int
 			return nil, "", fmt.Errorf("scanning actor snapshot row: %w", err)
 		}
 		snapshot := &ateapipb.ActorSnapshot{}
-		if err := proto.Unmarshal(protoBytes, snapshot); err != nil {
+		if err := unmarshalStored(protoBytes, snapshot); err != nil {
 			return nil, "", fmt.Errorf("unmarshaling actor snapshot: %w", err)
 		}
 		result = append(result, snapshot)
@@ -1175,7 +1207,7 @@ func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotRef re
 		return nil, fmt.Errorf("getting existing actor snapshot tag %s/%s: %w", tagAtespace, tagName, err)
 	}
 	existing := &ateapipb.ActorSnapshotTag{}
-	if err := proto.Unmarshal(existingBytes, existing); err != nil {
+	if err := unmarshalStored(existingBytes, existing); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
 	}
 	if existing.GetSnapshot().GetAtespace() != snapshotAtespace || existing.GetSnapshot().GetName() != snapshotName || existing.GetScope() != tag.GetScope() {
@@ -1221,7 +1253,7 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, tagRef resourc
 	}
 
 	dbTag := &ateapipb.ActorSnapshotTag{}
-	if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
+	if err := unmarshalStored(currentBytes, dbTag); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
 	}
 	if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("actor snapshot tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
@@ -1278,7 +1310,7 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, tagRef resourc
 		return nil, fmt.Errorf("deleting actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
 	tag := &ateapipb.ActorSnapshotTag{}
-	if err := proto.Unmarshal(protoBytes, tag); err != nil {
+	if err := unmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted actor snapshot tag: %w", err)
 	}
 	return tag, nil
@@ -1328,7 +1360,7 @@ func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker
 		return nil, fmt.Errorf("getting worker %s: %w", name, err)
 	}
 	out := &ateapipb.Worker{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return out, nil
@@ -1350,7 +1382,7 @@ func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi
 		return nil, fmt.Errorf("locking worker %s for update: %w", name, err)
 	}
 	out := &ateapipb.Worker{}
-	if err := proto.Unmarshal(protoBytes, out); err != nil {
+	if err := unmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return out, nil
@@ -1461,7 +1493,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("scanning worker row: %w", err)
 		}
 		w := &ateapipb.Worker{}
-		if err := proto.Unmarshal(protoBytes, w); err != nil {
+		if err := unmarshalStored(protoBytes, w); err != nil {
 			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("unmarshaling worker: %w", err)
 		}
 		result = append(result, w)
@@ -1488,11 +1520,23 @@ const defaultLeaseTTL = 30 * time.Second
 func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	ttl := p.leaseTTL
 	token := uuid.NewString()
+	// Acquisition runs before any workflow step span opens, so log the two
+	// queries' durations to make this window attributable: the cleanup DELETE
+	// scans the whole table and contends with concurrent acquires/releases.
+	t := time.Now()
 	if err := p.cleanupExpiredLeases(ctx); err != nil {
 		slog.WarnContext(ctx, "failed to clean up expired PostgreSQL leases", "error", err)
 	}
+	dCleanup := time.Since(t)
 
+	t = time.Now()
 	acquired, err := p.acquireLease(ctx, key, token, ttl)
+	dAcquire := time.Since(t)
+	slog.InfoContext(ctx, "PostgreSQL lease acquisition finished",
+		slog.String("key", key),
+		slog.Bool("acquired", acquired && err == nil),
+		slog.Duration("cleanup_expired", dCleanup),
+		slog.Duration("acquire", dAcquire))
 	if err != nil {
 		return nil, err
 	}
@@ -1509,14 +1553,25 @@ func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Leas
 	}()
 
 	closeFn := func() {
+		// Close runs after the last workflow step span ends but inside the
+		// operation, so log its two waits: the renewal goroutine may be
+		// mid-query when cancelled, and the release DELETE contends with
+		// concurrent acquires' full-table cleanup DELETEs.
+		t := time.Now()
 		cancel()
 		<-renewalDone
+		dRenewalStop := time.Since(t)
 
 		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer releaseCancel()
+		t = time.Now()
 		if err := p.releaseLease(releaseCtx, key, token); err != nil {
 			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lease, relying on TTL to reclaim it", "key", key, "error", err)
 		}
+		slog.InfoContext(releaseCtx, "PostgreSQL lease released",
+			slog.String("key", key),
+			slog.Duration("renewal_stop", dRenewalStop),
+			slog.Duration("release", time.Since(t)))
 	}
 	return store.NewLease(leaseCtx, closeFn), nil
 }
@@ -1628,15 +1683,6 @@ func (p *Persistence) renewLease(ctx context.Context, key, token string, ttl tim
 func (p *Persistence) releaseLease(ctx context.Context, key, token string) error {
 	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE key = $1 AND token = $2`, key, token); err != nil {
 		return fmt.Errorf("releasing lease for %q: %w", key, err)
-	}
-	return nil
-}
-
-// --- Debug ---
-
-func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
-		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil
 }

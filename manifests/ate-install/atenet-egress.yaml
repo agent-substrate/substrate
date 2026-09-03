@@ -25,8 +25,8 @@ metadata:
 #
 # No RBAC is bound to this ServiceAccount on purpose: the ext_proc sidecar runs
 # with --mode=egress, which serves the egress ext_proc handler and nothing else
-# — no xDS server and no ActorTemplate controller, so no Kubernetes access. It
-# reaches the control plane over the ate API only.
+# — no xDS server, so no Kubernetes access. It reaches the control plane over
+# the ate API only.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -301,8 +301,8 @@ spec:
           readOnly: true
       # Co-located ext_proc server: the same atenet router binary the ingress
       # gateway runs, started with --mode=egress so it serves only the egress
-      # ext_proc handler (no xDS server, no ActorTemplate controller, no
-      # Kubernetes access). The egress Envoy calls it over localhost to
+      # ext_proc handler (no xDS server, no Kubernetes access). The egress
+      # Envoy calls it over localhost to
       # authenticate actor identity against the ate API on every CONNECT.
       #
       # Ingress and egress are separate Deployments because they scale

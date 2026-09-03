@@ -73,19 +73,19 @@ type SubstrateFixture struct {
 // fixture somewhere else.
 func SubstrateCounterFixture() SubstrateFixture {
 	f := SubstrateFixture{
-		Atespace:      "ate-demo-counter-substrate",
+		Atespace:      "ate-demo-counter",
 		Name:          "counter",
-		PoolNamespace: "ate-demo-counter-substrate",
-		PoolName:      "counter-substrate",
-		DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-substrate",
+		PoolNamespace: "ate-demo-counter",
+		PoolName:      "counter",
+		DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter",
 	}
 	if IsMicroVM() {
 		f = SubstrateFixture{
-			Atespace:      "ate-demo-counter-substrate-microvm",
+			Atespace:      "ate-demo-counter-microvm",
 			Name:          "counter-microvm",
-			PoolNamespace: "ate-demo-counter-substrate-microvm",
-			PoolName:      "counter-substrate-microvm",
-			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-substrate-microvm",
+			PoolNamespace: "ate-demo-counter-microvm",
+			PoolName:      "counter-microvm",
+			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-counter-microvm",
 		}
 	}
 	if v := os.Getenv("E2E_SUBSTRATE_TEMPLATE_ATESPACE"); v != "" {

@@ -90,8 +90,8 @@ func TestChurnRAMOverwritesEachCycle(t *testing.T) {
 	wantSizes := []string{"1Gi", "64Mi", "64Mi"}
 	wantModes := []gluttonpb.WriteMode{
 		gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
-		gluttonpb.WriteMode_WRITE_MODE_OVERWRITE,
-		gluttonpb.WriteMode_WRITE_MODE_OVERWRITE,
+		gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE,
+		gluttonpb.WriteMode_WRITE_MODE_OVERWRITE_ROTATE,
 	}
 	if len(sizes) != len(wantSizes) {
 		t.Fatalf("WriteRAM calls = %d (%v), want %d", len(sizes), sizes, len(wantSizes))
@@ -112,6 +112,60 @@ func TestChurnRAMDisabledByDefault(t *testing.T) {
 	u.churnRAM(ctx)
 	if got := len(srv.RecordedRAMWriteSizes()); got != 1 {
 		t.Errorf("WriteRAM calls with churn unset = %d, want 1 (fill only)", got)
+	}
+}
+
+func TestReadRAMWalksAfterFill(t *testing.T) {
+	srv := &fake.Server{}
+	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi", MemRead: "all"})
+	ctx := context.Background()
+
+	// Read before fill is a no-op: there is nothing to walk yet.
+	u.readRAM(ctx)
+	if got := len(srv.RecordedRAMReadSizes()); got != 0 {
+		t.Fatalf("ReadRAM calls before fill = %d, want 0", got)
+	}
+
+	u.ensureRAMFilled(ctx)
+	u.readRAM(ctx)
+	u.readRAM(ctx)
+
+	sizes := srv.RecordedRAMReadSizes()
+	// "all" maps to an empty size: ReadRAM walks the whole array.
+	want := []string{"", ""}
+	if len(sizes) != len(want) {
+		t.Fatalf("ReadRAM calls = %d (%v), want %d", len(sizes), sizes, len(want))
+	}
+	for i := range want {
+		if sizes[i] != want[i] {
+			t.Errorf("call %d size = %q, want %q", i, sizes[i], want[i])
+		}
+	}
+}
+
+func TestReadRAMPassesSizeVerbatim(t *testing.T) {
+	srv := &fake.Server{}
+	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi", MemRead: "512Mi"})
+	ctx := context.Background()
+
+	u.ensureRAMFilled(ctx)
+	u.readRAM(ctx)
+
+	sizes := srv.RecordedRAMReadSizes()
+	if len(sizes) != 1 || sizes[0] != "512Mi" {
+		t.Fatalf("ReadRAM sizes = %v, want [512Mi] (passed through verbatim)", sizes)
+	}
+}
+
+func TestReadRAMDisabledByDefault(t *testing.T) {
+	srv := &fake.Server{}
+	u := newTestGluttonUser(t, srv, dynconfig.Config{MemTarget: "1Gi"})
+	ctx := context.Background()
+
+	u.ensureRAMFilled(ctx)
+	u.readRAM(ctx)
+	if got := len(srv.RecordedRAMReadSizes()); got != 0 {
+		t.Errorf("ReadRAM calls with mem_read unset = %d, want 0", got)
 	}
 }
 

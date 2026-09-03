@@ -24,18 +24,22 @@ var setupCmd = &cobra.Command{
 }
 
 var setupCSICmd = &cobra.Command{
-	Use:   "csi",
-	Short: "Set up the hostpath and NFS CSI drivers (Kind only)",
+	Use:   "csi [driver]",
+	Short: "Set up the hostpath and/or NFS CSI drivers",
 	Long: `Install the CSI drivers that back the external volume demos.
 
-Both drivers are patched for the single-node Kind layout: the hostpath plugin is
-pinned to the worker node and bind-mounts atelet's sandbox image directory with
-bidirectional propagation, and each controller is exposed over TCP so atelet can
-reach it. Re-running this removes the previous deployment first, which clears
-stale mounts left behind by an earlier install.`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.SetupCSI(cmd.Context())
+Driver options: nfs (default), hostpath, both, none. Note that hostpath is
+single-node Kind only, while NFS is not restricted to Kind.
+
+Both drivers expose their controllers over TCP so atelet and ateapi can reach them. Re-running this removes
+the previous deployment first, which clears stale mounts left behind by an earlier install.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		driver := "nfs"
+		if len(args) > 0 {
+			driver = args[0]
+		}
+		return env.SetupCSI(cmd.Context(), driver)
 	},
 }
 

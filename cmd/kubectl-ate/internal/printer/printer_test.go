@@ -392,11 +392,12 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Sorted by atespace, then name.
-	expected := `ATESPACE                             NAME              SANDBOX CLASS           STATUS   AGE
-ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    Ready    5m
-ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR    Failed   3d
-ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM   Failed   5h
+	// Sorted by atespace, then name. The ERROR column only flags that an
+	// error message exists; the full text is available via json/yaml.
+	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN SNAPSHOT   ERROR   AGE
+ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    snap-1                    5m
+ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                              3d
+ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                     ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

@@ -59,8 +59,8 @@ func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
 		return store.WorkerEvent{}, fmt.Errorf("unknown worker event type byte %d", payload[0])
 	}
 	worker := &ateapipb.Worker{}
-	if err := proto.Unmarshal(payload[1:], worker); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in proto.Unmarshal: %w", err)
+	if err := unmarshalStored(payload[1:], worker); err != nil {
+		return store.WorkerEvent{}, fmt.Errorf("in unmarshalStored: %w", err)
 	}
 	if worker.GetMetadata().GetName() == "" {
 		return store.WorkerEvent{}, fmt.Errorf("worker event payload has no worker name")
@@ -351,10 +351,11 @@ func (p *Persistence) tryCreateWorkerOutboxPartitions(ctx context.Context, trunc
 // entire range is older than retention.
 func (p *Persistence) dropExpiredWorkerOutboxPartitions(ctx context.Context, q querier, now time.Time) error {
 	rows, err := q.Query(ctx, `
-		SELECT c.relname FROM pg_inherits i
-		JOIN pg_class c ON c.oid = i.inhrelid
+		SELECT child.relname FROM pg_inherits i
+		JOIN pg_class child ON child.oid = i.inhrelid
 		JOIN pg_class parent ON parent.oid = i.inhparent
-		WHERE parent.relname = 'worker_outbox'`)
+		WHERE i.inhparent = 'worker_outbox'::regclass
+		AND child.relnamespace = parent.relnamespace`)
 	if err != nil {
 		return fmt.Errorf("listing outbox partitions: %w", err)
 	}

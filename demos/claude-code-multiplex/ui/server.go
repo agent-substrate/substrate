@@ -413,6 +413,8 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	actors := make([]actorSummary, 0, len(resp.GetActors()))
 	for _, a := range resp.GetActors() {
+		// The demo's templates live in the atespace named after the demo
+		// namespace, so the template ref's atespace filters foreign actors.
 		if namespace != "" && a.GetActorTemplate().GetAtespace() != "" && a.GetActorTemplate().GetAtespace() != namespace {
 			continue
 		}

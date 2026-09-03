@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"log/slog"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -37,11 +36,6 @@ import (
 
 var BuildTag = "dev"
 
-type TemplateInfo struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-}
-
 type DashboardContext struct {
 	BuildTag        string                `json:"build_tag"`
 	RouterClusterIP string                `json:"router_cluster_ip"`
@@ -55,7 +49,6 @@ type DashboardContext struct {
 	Flags           map[string]string     `json:"flags"`
 	Queries         []FormattedQuery      `json:"queries"`
 	Health          RouterHealthReport    `json:"health"`
-	Templates       []TemplateInfo        `json:"templates"`
 	Parking         ingress.ParkingStatus `json:"parking"`
 }
 
@@ -138,22 +131,6 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		hr = s.health.Report()
 	}
 
-	var templateInfos []TemplateInfo
-	if s.atStore != nil {
-		templates, err := s.atStore.readyTemplates(ctx)
-		if err != nil {
-			slog.ErrorContext(ctx, "Failed to get ActorTemplates for status", slog.String("err", err.Error()))
-		} else {
-			templateInfos = make([]TemplateInfo, len(templates))
-			for i, t := range templates {
-				templateInfos[i] = TemplateInfo{
-					Name:      t.Name,
-					Namespace: t.Namespace,
-				}
-			}
-		}
-	}
-
 	// Parking belongs to the ingress handler; an egress-only instance has none.
 	var parking ingress.ParkingStatus
 	if s.ingressHandler != nil {
@@ -173,7 +150,6 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		Flags:           flagsMap,
 		Queries:         formattedQueries,
 		Health:          hr,
-		Templates:       templateInfos,
 		Parking:         parking,
 	}
 

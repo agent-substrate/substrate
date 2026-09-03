@@ -43,8 +43,9 @@ set -uo pipefail
 
 DURATION=30
 ROUTER="http://localhost:8000"
-TEMPLATE="ate-demo-parking/parking"
-ATESPACE="parking"
+# The template name, resolved in the actors' atespace (--template-ref).
+TEMPLATE="parking"
+ATESPACE="ate-demo-parking"
 SUFFIX="actors.resources.substrate.ate.dev"
 
 usage() {
@@ -54,7 +55,7 @@ load.sh -- oversubscription load generator for the request-parking demo.
 Usage: ./load.sh [-d duration_secs] [-r router_url] [-a atespace] [actor_id ...]
   -d   load duration in seconds (default 30)
   -r   router base URL          (default http://localhost:8000)
-  -a   atespace for the actors  (default parking)
+  -a   atespace for the actors  (default ate-demo-parking)
   args actor IDs                (default: p1 p2 p3 p4)
 
 Prereqs: `kubectl ate` installed and the router port-forwarded
@@ -96,7 +97,7 @@ echo
 echo "==> ensuring atespace ${ATESPACE} and actors exist (template ${TEMPLATE})"
 kubectl ate create atespace "${ATESPACE}" >/dev/null 2>&1 || true
 for a in "${ACTORS[@]}"; do
-  kubectl ate create actor "${a}" --atespace "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
+  kubectl ate create actor "${a}" --atespace "${ATESPACE}" --template-ref "${TEMPLATE}" >/dev/null 2>&1 || true
 done
 
 # One worker per actor: hammer it with request->suspend until the deadline.

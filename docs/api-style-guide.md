@@ -565,7 +565,43 @@ Rules:
 - Fields inside `status` follow the same naming rules as any other field (section #5).
 - `ResourceMetadata` (section #6) is exempt from this split. It mixes caller-specified identity (`atespace`, `name`) with server-managed fields (`uid`, `version`, timestamps).
 
-## 9. Validation
+## 9. Union Types
+
+A **union** is a set of fields of which exactly one is set. Substrate expresses a union
+as a group of sibling fields, each tagged `+k8s:unionMember`.
+
+```proto
+message Volume {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string name = 1;
+
+  // Exactly one of durable_dir / external_volume_template / image must be set.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  DurableDirVolumeSource durable_dir = 2;
+
+  // +k8s:optional
+  // +k8s:unionMember
+  ExternalVolumeTemplate external_volume_template = 3;
+
+  // +k8s:optional
+  // +k8s:unionMember
+  ImageVolumeSource image = 4;
+}
+```
+
+Rules:
+- Unions **must not** use protobuf's `oneof` keyword. `oneof` does not work with declarative validation.
+- Each member **must** be tagged `+k8s:optional` and `+k8s:unionMember`. The generated validation enforces that exactly one member is set.
+- A member that is genuinely a primitive **must** use the `optional` keyword, so that presence is explicit on the wire. Protobuf elides zero-valued primitives, so without `optional` the server cannot tell a member set to `0`, `false`, or `""` from an unset one. Use with care, as a primitive type cannot be augmented with more fields.
+- A `map` or `repeated` member takes no `optional` keyword and needs none, but it has no presence either: validation treats it as set when it is non-empty. A client cannot select such a member by sending it empty. If "empty" has to be a meaningful choice, wrap the map or list in a message, which does have presence.
+- Unions **must not** carry a discriminator field (a `type` or `kind` enum naming which member is set). The member that is set is the discriminator. A separate discriminator is a second source of truth that can contradict the payload, and it forces every client to keep the two in sync for no gain.
+
+---
+
+## 10. Validation
 
 All fields of all APIs must be validated.  We use
 [validation-gen](https://github.com/kubernetes/code-generator/tree/master/cmd/validation-gen) to generate validation code for our APIs.  See [the guidelines for validation](api-validation.md) for more information.

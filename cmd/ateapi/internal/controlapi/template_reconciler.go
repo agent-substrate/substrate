@@ -42,8 +42,7 @@ const (
 
 	// goldenSnapshotWarmup is the default wall-clock delay between resuming
 	// the golden actor and taking its snapshot, for templates without a
-	// readiness probe on every container. Mirrors the ActorTemplate CRD
-	// controller (cmd/atecontroller/internal/controllers); keep in sync.
+	// readiness probe on every container.
 	goldenSnapshotWarmup = 20 * time.Second
 )
 

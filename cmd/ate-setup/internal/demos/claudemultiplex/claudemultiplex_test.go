@@ -17,19 +17,34 @@ package claudemultiplex
 import (
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/demotest"
 )
 
-// TestRenderForDelete covers the delete-time rendering of the template, which
-// DeleteAll relies on producing valid YAML even with no credentials in the
-// environment.
-func TestRenderForDelete(t *testing.T) {
+// TestRenderManifests covers this demo's manifests, which the shared render
+// test skips because the agent templates carry deploy-time placeholders
+// (WORKLOAD_IMAGE, ANTHROPIC_API_KEY). The pool manifest must render with no
+// extra values at all — Delete relies on that on a cluster with no
+// credentials in the environment.
+func TestRenderManifests(t *testing.T) {
 	e := demotest.Env(t)
-	e.Cfg.BucketName = ""
 
-	manifest, err := (&demo{}).renderForDelete(e)
+	pool, err := demos.Render(e, poolManifest, nil, nil)
 	if err != nil {
-		t.Fatalf("renderForDelete: %v", err)
+		t.Fatalf("Render(%s): %v", poolManifest, err)
 	}
-	demotest.AssertRendered(t, manifest)
+	demotest.AssertRendered(t, pool)
+
+	values := map[string]string{
+		"ANTHROPIC_API_KEY": "test-api-key",
+		// A digest-shaped stand-in for the buildx-pushed workload image.
+		"WORKLOAD_IMAGE": "registry.example.dev/claude-multiplex-demo-workload@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+	}
+	for _, tmpl := range agentTemplates() {
+		manifest, err := demos.Render(e, tmpl.Manifest, values, nil)
+		if err != nil {
+			t.Fatalf("Render(%s): %v", tmpl.Manifest, err)
+		}
+		demotest.AssertRenderedActorTemplate(t, manifest, tmpl.Ref)
+	}
 }

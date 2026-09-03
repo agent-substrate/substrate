@@ -15,7 +15,7 @@
 # Cluster-wide default SandboxConfig for the gVisor (runsc) sandbox class. A
 # WorkerPool with sandboxClass gvisor (the default) and no explicit
 # sandboxConfigName resolves to this. atelet fetches the gVisor release tarball
-# (gvisor.tar.bz2: runsc plus the gvisor-bin/ helpers runsc requires next to
+# (gvisor.tar.zstd: runsc plus the gvisor-bin/ helpers runsc requires next to
 # it) matching the worker node's architecture and extracts it locally. To pin a
 # different release, edit the assets below or create another SandboxConfig and
 # name it from the WorkerPool.
@@ -32,9 +32,9 @@ spec:
   assets:
     amd64:
       gvisor:
-        url: "gs://gvisor/releases/nightly/2026-08-28/x86_64/gvisor.tar.bz2"
-        sha256: "97f83fa5f352f2c6337d792b1c23c4e73a9c47529c08f6531029f8e0722cfe2c"
+        url: "gs://gvisor/releases/nightly/2026-09-02/x86_64/gvisor.tar.zstd"
+        sha256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
     arm64:
       gvisor:
-        url: "gs://gvisor/releases/nightly/2026-08-28/aarch64/gvisor.tar.bz2"
-        sha256: "561e281b7f8af95205b1df140c453a795a7fbc0db348c63b305e6521350734ef"
+        url: "gs://gvisor/releases/nightly/2026-09-02/aarch64/gvisor.tar.zstd"
+        sha256: "a64916f9813ce7e4841a30480a599337f7dda07b421c6bf0123db2212aa7d1df"

@@ -31,14 +31,13 @@ demo-sandbox_cmdline() {
 
 demo-sandbox_deploy() {
   log_step "demo-sandbox_deploy"
-  ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/sandbox/sandbox.yaml.tmpl \
-    | run_ko apply -f -
+  deploy_substrate_demo render_demo_manifest \
+    demos/sandbox/sandbox.yaml.tmpl ate-demo-sandbox sandbox-workerpool 300 \
+    demos/sandbox/sandbox-template.yaml.tmpl sandbox-template
 }
 
 demo-sandbox_delete() {
   log_step "demo-sandbox_delete"
-  delete_demo_actors ate-demo-sandbox sandbox-template
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/sandbox/sandbox.yaml.tmpl \
-    | run_kubectl delete --ignore-not-found -f -
+  delete_substrate_demo render_demo_manifest \
+    demos/sandbox/sandbox.yaml.tmpl ate-demo-sandbox sandbox-template
 }

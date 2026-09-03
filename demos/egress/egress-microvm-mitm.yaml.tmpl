@@ -38,8 +38,8 @@ spec:
   sandboxClass: microvm
   sandboxConfigName: microvm
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
-  # No template.resources, unlike counter-substrate-microvm: an unlimited
-  # ateom container reports no capacity, which the scheduler reads as
+  # No template.resources, unlike the counter demo's micro-VM variant: an
+  # unlimited ateom container reports no capacity, which the scheduler reads as
   # unconstrained, and the pod requests nothing so it stays placeable next to
   # the counter pool's reservation on CI's single kind node. What actually
   # bounds the memory here is the ActorTemplate's resources, which size the

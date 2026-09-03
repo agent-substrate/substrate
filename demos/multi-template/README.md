@@ -1,10 +1,11 @@
 # Multi-Template Demo
 
-This demo shows that **two different `ActorTemplate`s running two different binaries
-can share a single `WorkerPool` — even when all three live in different namespaces**.
+This demo shows that **two different actor templates running two different binaries
+can share a single `WorkerPool` — even when the templates live in different atespaces**.
 
-Each `ActorTemplate` gates on the pool via `workerSelector`, a label selector matched
-against the pool's labels — pool selection is cluster-wide, not scoped by namespace.
+Each template gates on the pool via `workerSelector`, a label selector matched
+against the pool's labels — pool selection is cluster-wide, not scoped by atespace
+or namespace.
 
 ## Prerequisites
 
@@ -17,8 +18,9 @@ against the pool's labels — pool selection is cluster-wide, not scoped by name
 ### 1. Build and Deploy
 
 > [!NOTE]
-> Do not manually edit `demos/multi-template/multi-template.yaml.tmpl`. The installation
-> script automatically injects your `${BUCKET_NAME}` environment variable during deployment.
+> Do not manually edit the `demos/multi-template/*.yaml.tmpl` manifests. The
+> installation script automatically injects your `${BUCKET_NAME}` environment
+> variable during deployment.
 
 ```bash
 ./hack/install-ate.sh --deploy-demo-multi-template
@@ -26,28 +28,27 @@ against the pool's labels — pool selection is cluster-wide, not scoped by name
 
 This command will:
 - Build the `counter` and `fspersist` images using `ko`.
-- Create 3 namespaces: `ate-demo-multi-template-pool`,
-  `ate-demo-multi-template-counter`, and `ate-demo-multi-template-fspersist`.
-- Create one `WorkerPool` (`shared-pool`) in `ate-demo-multi-template-pool` and two
-  `ActorTemplate`s — `counter` in `ate-demo-multi-template-counter` and `fspersist` in
-  `ate-demo-multi-template-fspersist`, both selecting the pool via the same
-  `workerSelector` label.
-- Wait until both templates are `Ready` (golden snapshots built).
+- Create one `WorkerPool` (`shared-pool`) in the `ate-demo-multi-template-pool`
+  namespace (`multi-template.yaml.tmpl`).
+- Create 2 atespaces — `ate-demo-multi-template-counter` and
+  `ate-demo-multi-template-fspersist` — and an actor template in each:
+  `counter` (`counter-template.yaml.tmpl`) and `fspersist`
+  (`fspersist-template.yaml.tmpl`), both selecting the pool via the same
+  `workerSelector` label and applied with `kubectl ate create actor-template`.
+- Wait until both templates' golden snapshots are built.
 
 ### 2. Create one actor per template
 
-Both actors go in an **atespace**, which must exist first. The atespace is independent of the templates' Kubernetes namespaces, so both actors can share one.
+Each actor goes in its template's atespace — `--template-ref` names the template,
+resolved in the actor's atespace — and their DNS names embed that atespace:
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-# Create the atespace (required before creating actors).
-kubectl ate create atespace demo
-
-# Create two actors from different templates, both in the demo atespace.
-kubectl ate create actor c1 -a demo --template ate-demo-multi-template-counter/counter
-kubectl ate create actor f1 -a demo --template ate-demo-multi-template-fspersist/fspersist
+# Create two actors from different templates, one per atespace.
+kubectl ate create actor c1 -a ate-demo-multi-template-counter --template-ref counter
+kubectl ate create actor f1 -a ate-demo-multi-template-fspersist --template-ref fspersist
 ```
 
 ### 3. Port-forward the atenet router
@@ -64,11 +65,11 @@ When you send an HTTP request through the router, Substrate automatically detect
 
 ```bash
 # counter binary
-curl -s -H "Host: c1.demo.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "Host: c1.ate-demo-multi-template-counter.actors.resources.substrate.ate.dev" http://localhost:8000
 # -> hello from: <ip> | preserved memory count: 1
 
 # fspersist binary
-curl -s -H "Host: f1.demo.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -s -H "Host: f1.ate-demo-multi-template-fspersist.actors.resources.substrate.ate.dev" http://localhost:8000
 # -> pod: <ip>
 #    --- history ---
 #    pod=<ip> | count=0 | time=<timestamp>
@@ -85,22 +86,14 @@ a line to its history file on each request. Suspending and re-requesting an acto
 preserves that state across the snapshot/restore cycle:
 
 ```bash
-kubectl ate suspend actor f1 -a demo
-curl -s -H "Host: f1.demo.actors.resources.substrate.ate.dev" http://localhost:8000  # history persists; count keeps climbing
+kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
+curl -s -H "Host: f1.ate-demo-multi-template-fspersist.actors.resources.substrate.ate.dev" http://localhost:8000  # history persists; count keeps climbing
 ```
 
 ## How to Uninstall
 
-Delete the actors, then the now-empty atespace — namespace teardown does not reclaim actor records or their GCS snapshots:
-
-```bash
-# For example:
-kubectl ate delete actor c1 -a demo
-kubectl ate delete actor f1 -a demo
-kubectl ate delete atespace demo
-```
-
-Then remove the templates, pool, and namespaces:
+Remove the demo — this deletes the actors (suspending running ones first), the
+templates, both atespaces, and then the pool and its namespace:
 
 ```bash
 ./hack/install-ate.sh --delete-demo-multi-template

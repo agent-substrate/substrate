@@ -45,7 +45,7 @@ it as a device, which is what places micro-VM workers there.
 
 4. **Apply the demo + drive it:**
    ```sh
-   BUCKET_NAME=ate-snapshots envsubst < demos/counter/counter-microvm.yaml.tmpl | kubectl apply -f -
+   BUCKET_NAME=ate-snapshots SUBSTRATE_VERSION="$(git describe --tags --always --dirty)" envsubst < demos/counter/counter-microvm.yaml.tmpl | kubectl apply -f -   # the pool pins workers to nodes labeled with this version
    ```
    Create an actor from `counter-microvm`, hit the in-RAM counter to increment it, suspend
    (checkpoint), resume on a different worker pod, and confirm the count continues — proving the

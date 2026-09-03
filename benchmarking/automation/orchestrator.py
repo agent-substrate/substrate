@@ -331,7 +331,7 @@ def deploy_workloads(
     worker_count: int = 1,
     sandbox_class: str = "gvisor",
     actor_memory: str = "",
-    wait_timeout: str = "",
+    wait_timeout_secs: int | str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -345,23 +345,12 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
-    # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout.
-    if wait_timeout:
-        cmd += ["--wait-timeout", wait_timeout]
+    # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout
+    # (whole seconds).
+    if wait_timeout_secs != "":
+        cmd += ["--wait-timeout", str(wait_timeout_secs)]
+    # deploy.sh itself blocks until every template's golden snapshot exists.
     run(cmd)
-    # Block until ActorTemplates are Ready
-    run(
-        [
-            "kubectl",
-            "wait",
-            "--for=condition=Ready",
-            "--all",
-            "actortemplates",
-            "-n",
-            "benchmark-workloads",
-            "--timeout=300s",
-        ]
-    )
 
 
 def teardown_workloads() -> None:

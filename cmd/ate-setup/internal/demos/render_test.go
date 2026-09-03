@@ -28,25 +28,43 @@ import (
 // the placeholder sets in this package: a new ${PLACEHOLDER} in a template that
 // nothing substitutes or drops would otherwise only show up as an apply-time
 // YAML error against a real cluster.
+//
+// Substrate-shaped demos are checked manifest by manifest: the pool manifest
+// must decode as a Kubernetes stream, and each protojson ActorTemplate
+// manifest must strictly parse into the message it is created as.
 func TestDemoTemplatesRender(t *testing.T) {
 	e := demotest.Env(t)
 
+	render := func(t *testing.T, relPath string) []byte {
+		t.Helper()
+		manifest, err := demos.Render(e, relPath, nil, demos.ExternalVolumePlaceholders)
+		if err != nil {
+			t.Fatalf("Render(%s): %v", relPath, err)
+		}
+		return manifest
+	}
+
 	covered := 0
 	for _, demo := range demos.All() {
-		templated, ok := demo.(interface{ TemplatePath() string })
-		if !ok {
+		switch d := demo.(type) {
+		case interface{ SubstrateDemo() *demos.Substrate }:
+			covered++
+			t.Run(demo.Name(), func(t *testing.T) {
+				s := d.SubstrateDemo()
+				demotest.AssertRendered(t, render(t, s.WorkerPoolManifest))
+				for _, tmpl := range s.Templates {
+					demotest.AssertRenderedActorTemplate(t, render(t, tmpl.Manifest), tmpl.Ref)
+				}
+			})
+		case interface{ TemplatePath() string }:
+			covered++
+			t.Run(demo.Name(), func(t *testing.T) {
+				demotest.AssertRendered(t, render(t, d.TemplatePath()))
+			})
+		default:
 			// demo-claude-code-multiplex has its own placeholders, and is
 			// covered by its own package's test.
-			continue
 		}
-		covered++
-		t.Run(demo.Name(), func(t *testing.T) {
-			manifest, err := demos.Render(e, templated.TemplatePath(), nil, demos.ExternalVolumePlaceholders)
-			if err != nil {
-				t.Fatalf("Render: %v", err)
-			}
-			demotest.AssertRendered(t, manifest)
-		})
 	}
 	if want := len(demos.All()) - 1; covered != want {
 		t.Errorf("covered %d demo templates, want %d", covered, want)

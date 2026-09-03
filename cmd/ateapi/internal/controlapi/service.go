@@ -171,8 +171,3 @@ func newServiceImpl(
 func (s *ServiceImpl) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
 	return s.store.AcquireLease(ctx, key)
 }
-
-// Pass-through.
-func (s *ServiceImpl) DebugClearAll(ctx context.Context) error {
-	return s.store.DebugClearAll(ctx)
-}

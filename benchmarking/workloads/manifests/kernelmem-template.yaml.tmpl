@@ -1,0 +1,39 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the kernelmem
+# benchmark workload (locust/tests/kernelmem.py): fills kernel memory with
+# dentry cache and sleeping processes to size kernel-state snapshots. Not
+# part of deploy.sh's default template set; deploy with
+# WORKLOAD_TEMPLATES="kernelmem ...". No memory limit: the 50000 sleeping
+# processes need more than the 256Mi default --actor-memory the other
+# templates take. The sandbox class must match the WorkerPool's so snapshots
+# stay within a class.
+metadata:
+  atespace: benchmark-workloads
+  name: kernelmem
+workerSelector:
+  matchLabels:
+    workload: benchmark-ateom
+containers:
+- name: kernelmem
+  image: containerstack/alpine-stress:latest
+  command: ["sh", "-c", "find /; for i in $(seq 50000); do sleep 10000 & done; sleep 10000"]
+snapshotsConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/kernelmem/
+sandboxConfig:
+  sandboxClass: ${SANDBOX_CLASS_ENUM}
+  configName: ${SANDBOX_CONFIG_NAME}

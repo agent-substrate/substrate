@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Worker pool for the manual multi-volume test. The ActorTemplate lives in
+# manual-test-multi-template.yaml and is created through the ate API with
+# `kubectl ate create actor-template`.
+
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -27,36 +31,3 @@ metadata:
 spec:
   replicas: 1
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
----
-apiVersion: ate.dev/v1alpha1
-kind: ActorTemplate
-metadata:
-  name: sandbox-template
-  namespace: ate-manual-test-multi
-spec:
-  workerSelector:
-    matchLabels:
-      workload: sandbox
-  containers:
-  - name: sandbox
-    image: ko://github.com/agent-substrate/substrate/demos/sandbox
-    command: ["/ko-app/sandbox"]
-    env:
-    - name: PORT
-      value: "80"
-    volumeMounts:
-    - name: vol-hostpath
-      mountPath: /hostpath-data
-    - name: vol-nfs
-      mountPath: /nfs-data
-  snapshotsConfig:
-    location: gs://ate-snapshots/ate-manual-test-multi/
-  volumes:
-  - name: vol-hostpath
-    externalVolumeTemplate:
-      capacity: 1Gi
-      storageClassName: csi-hostpath-sc
-  - name: vol-nfs
-    externalVolumeTemplate:
-      capacity: 1Gi
-      storageClassName: csi-nfs-sc

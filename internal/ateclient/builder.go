@@ -53,10 +53,9 @@ const (
 	liveBundleSelector   = "podcert.ate.dev/canarying=live"
 )
 
-// Client wraps the gRPC ControlClient and DebugClient and ensures the port-forward connection is closed when done.
+// Client wraps the gRPC ControlClient and ensures the port-forward connection is closed when done.
 type Client struct {
 	ateapipb.ControlClient
-	ateapipb.DebugClient
 	conn           *grpc.ClientConn
 	cancel         func()
 	tracerProvider *sdktrace.TracerProvider
@@ -142,7 +141,6 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 	}
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
-		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel:        func() {},
 	}, nil
@@ -203,7 +201,6 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile 
 
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
-		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel:        stopForward,
 	}, nil

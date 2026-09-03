@@ -24,6 +24,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
@@ -262,7 +263,7 @@ func TestDurDirShutdownSuspendsBeforeDelete(t *testing.T) {
 	du := newTestDurDirUser(t, &fake.Server{}, cfg)
 
 	rt := &durDirRuntime{cfg: du.cfg}
-	rt.users.Store(goroutineID(), du)
+	rt.users.Store(boomerutil.GoroutineID(), du)
 	rt.shutdown(context.Background())
 
 	calls := fakeCtrl.recordedCalls()

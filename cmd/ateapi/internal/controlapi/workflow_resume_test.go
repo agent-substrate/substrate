@@ -93,6 +93,41 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 	}
 }
 
+// TestFinalizeRunning_RecordsSprintTemplate verifies committing RUNNING stamps
+// the template the sprint booted with, overwriting the previous sprint's
+// record, so the next resume can detect a repointed template by UID.
+func TestFinalizeRunning_RecordsSprintTemplate(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
+		Status: &ateapipb.ActorStatus{
+			State:                   ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			CurrentActorTemplate:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-1"},
+			CurrentActorTemplateUid: "tmpl-uid-1",
+		},
+	})
+	w := &ActorWorkflow{store: persistence}
+
+	got, err := w.finalizeRunning(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl-2", Uid: "tmpl-uid-2"},
+	})
+	if err != nil {
+		t.Fatalf("finalizeRunning: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
+	}
+	want := &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"}
+	if ref := got.GetStatus().GetCurrentActorTemplate(); !proto.Equal(ref, want) {
+		t.Errorf("CurrentActorTemplate = %v, want %v", ref, want)
+	}
+	if uid := got.GetStatus().GetCurrentActorTemplateUid(); uid != "tmpl-uid-2" {
+		t.Errorf("CurrentActorTemplateUid = %q, want %q", uid, "tmpl-uid-2")
+	}
+}
+
 type updateWorkerErrorStore struct {
 	store.Interface
 	err error
@@ -1122,6 +1157,79 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "regenerate the golden snapshot") {
 		t.Errorf("error %q does not tell the operator to regenerate the golden snapshot", err)
+	}
+}
+
+// TestLoadActorForResume_TemplateReplaced covers the snapshot-side detection
+// of a repointed actor: the durable snapshot records the template UID it was
+// captured under, and a mismatch with the actor's current template marks the
+// source TemplateReplaced, forcing the restore to data-only. The detection
+// must not depend on the actor's boot-time template stamp, which is absent
+// on actors created from a snapshot clone.
+func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+	tests := []struct {
+		name string
+		// snapshotTemplateUID seeds the snapshot's recorded template UID;
+		// "current" stands for the created template's own UID, "" leaves
+		// the field unset (a snapshot from before the field was recorded).
+		snapshotTemplateUID string
+		noSnapshot          bool
+		want                bool
+	}{
+		{name: "snapshot taken under the current template", snapshotTemplateUID: "current", want: false},
+		{name: "snapshot taken under a replaced template", snapshotTemplateUID: "some-other-uid", want: true},
+		{name: "snapshot without a recorded template UID", snapshotTemplateUID: "", want: false},
+		{name: "no durable snapshot", noSnapshot: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+
+			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+			tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+			})
+			if err != nil {
+				t.Fatalf("create template: %v", err)
+			}
+			if tmpl.GetMetadata().GetUid() == "" {
+				t.Fatal("created template has no UID; the matching case would be vacuous")
+			}
+
+			var seedOpts []func(*ateapipb.Actor)
+			if !tt.noSnapshot {
+				uid := tt.snapshotTemplateUID
+				if uid == "current" {
+					uid = tmpl.GetMetadata().GetUid()
+				}
+				snap := storetest.MustCreateActorSnapshot(t, ctx, persistence, &ateapipb.ActorSnapshot{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: "snap-1"},
+					Status: &ateapipb.ActorSnapshotStatus{
+						SourceActor:      &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+						ActorTemplateUid: uid,
+						ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+						SnapshotUri:      "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+					},
+				})
+				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
+					a.Status.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snap.GetMetadata().GetName()}
+				})
+			}
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, seedOpts...)
+
+			w := &ActorWorkflow{store: persistence}
+			_, _, src, err := w.loadActorForResume(ctx, actorRef, false)
+			if err != nil {
+				t.Fatalf("loadActorForResume: %v", err)
+			}
+			if src.TemplateReplaced != tt.want {
+				t.Errorf("src.TemplateReplaced = %v, want %v", src.TemplateReplaced, tt.want)
+			}
+		})
 	}
 }
 

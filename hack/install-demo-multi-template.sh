@@ -29,24 +29,37 @@ demo-multi-template_cmdline() {
   return 0
 }
 
+# The demo's two templates live in two different atespaces to show that pool
+# selection is atespace-agnostic, so this composes the substrate helpers
+# itself instead of using deploy_substrate_demo's one-atespace shape.
 demo-multi-template_deploy() {
   log_step "demo-multi-template_deploy"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/multi-template/multi-template.yaml.tmpl \
+  render_demo_manifest demos/multi-template/multi-template.yaml.tmpl \
     | run_ko apply -f -
 
-  # Wait for both ActorTemplates to be ready before returning.
-  log_step "Waiting for multi-template demo to be ready..."
-  wait_for_pool_rollout shared-pool ate-demo-multi-template-pool
-  run_kubectl wait --for=condition=Ready actortemplate/counter -n ate-demo-multi-template-counter --timeout=300s
-  run_kubectl wait --for=condition=Ready actortemplate/fspersist -n ate-demo-multi-template-fspersist --timeout=300s
+  log_step "Waiting for the shared-pool worker pool rollout..."
+  wait_for_pool_rollout_fatal shared-pool ate-demo-multi-template-pool
+
+  ensure_atespace ate-demo-multi-template-counter
+  ensure_atespace ate-demo-multi-template-fspersist
+  create_demo_actor_template render_demo_manifest \
+    demos/multi-template/counter-template.yaml.tmpl \
+    ate-demo-multi-template-counter counter
+  create_demo_actor_template render_demo_manifest \
+    demos/multi-template/fspersist-template.yaml.tmpl \
+    ate-demo-multi-template-fspersist fspersist
 }
 
 demo-multi-template_delete() {
   log_step "demo-multi-template_delete"
-  delete_demo_actors \
-    ate-demo-multi-template-counter counter \
-    ate-demo-multi-template-fspersist fspersist
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/multi-template/multi-template.yaml.tmpl \
+  local atespace
+  delete_demo_actor_template ate-demo-multi-template-counter counter
+  delete_demo_actor_template ate-demo-multi-template-fspersist fspersist
+  for atespace in ate-demo-multi-template-counter ate-demo-multi-template-fspersist; do
+    run_kubectl_ate delete atespace "${atespace}" 2>/dev/null \
+      || log_step "atespace ${atespace} not deleted (may not exist or is not empty)"
+  done
+  render_demo_manifest demos/multi-template/multi-template.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

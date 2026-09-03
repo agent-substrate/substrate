@@ -16,7 +16,7 @@ It allows you to run arbitrary commands in an sandboxed, isolated container (run
 
 - A k8s cluster with Agent Substrate installed.
 - `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured in `demos/sandbox/sandbox.yaml.tmpl`).
+- A GCS bucket for storing snapshots (configured in `demos/sandbox/sandbox-template.yaml.tmpl`).
 - `kubectl-ate` CLI installed (can be installed via `go install ./cmd/kubectl-ate`).
 
 ## How to Run on Agent Substrate
@@ -24,9 +24,9 @@ It allows you to run arbitrary commands in an sandboxed, isolated container (run
 ### 1. Build and Deploy
 
 > [!NOTE]
-> Do not manually edit `demos/sandbox/sandbox.yaml.tmpl`. The installation script automatically injects your `${BUCKET_NAME}` environment variable during deployment.
+> Do not manually edit the `demos/sandbox/*.yaml.tmpl` manifests. The installation script automatically injects your `${BUCKET_NAME}` environment variable during deployment.
 
-Use the core installation script to build the image and apply the resolved manifests to your cluster:
+Use the core installation script to build the image and deploy the demo to your cluster:
 
 ```bash
 ./hack/install-ate.sh --deploy-demo-sandbox
@@ -34,27 +34,26 @@ Use the core installation script to build the image and apply the resolved manif
 
 This command will:
 - Build the sandbox server image based on Alpine Linux.
-- Create the `ate-demo-sandbox` namespace.
-- Create the `WorkerPool` and `ActorTemplate`.
+- Create the `ate-demo-sandbox` namespace and `WorkerPool` (`sandbox.yaml.tmpl`).
+- Create the `ate-demo-sandbox` atespace and the `sandbox-template` actor
+  template in it (`sandbox-template.yaml.tmpl`, applied with
+  `kubectl ate create actor-template`).
+- Wait until the template's golden snapshot is built.
 
-Wait until the template is ready:
+Inspect the template with:
 ```bash
-kubectl wait --for=condition=Ready actortemplate/sandbox-template -n ate-demo-sandbox --timeout=5m
+kubectl ate get actor-template sandbox-template -a ate-demo-sandbox
 ```
 
 ### 2. Create a Sandbox Actor
 
-Actors live in an **atespace**, which must exist before you create actors in it. Create one (e.g., `demo`), then create the sandbox actor with a chosen name (e.g., `my-sandbox-1`):
+Create the sandbox actor in the demo's atespace with a chosen name (e.g., `my-sandbox-1`) — `--template-ref` names the template, resolved in the actor's atespace:
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-# Create the atespace (required before creating actors).
-kubectl ate create atespace demo
-
-# Create the actor in the atespace, using the sandbox template.
-kubectl ate create actor my-sandbox-1 -a demo --template ate-demo-sandbox/sandbox-template
+kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template-ref sandbox-template
 ```
 
 ### 3. Port-Forward Services
@@ -76,7 +75,7 @@ Build and run the client REPL:
 ```bash
 go build -o bin/sandbox-client ./demos/sandbox/client
 
-./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=demo --name=my-sandbox-1
+./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
 ```
 
 Once in the `sandbox>` prompt, you can run commands:
@@ -90,15 +89,14 @@ sandbox> cat test.txt
 
 Type `exit` to leave. This will automatically trigger the suspension of the actor.
 
-To permanently delete the suspended actor, then the now-empty atespace:
+To permanently delete the suspended actor:
 ```bash
-kubectl ate delete actor my-sandbox-1 -a demo
-kubectl ate delete atespace demo
+kubectl ate delete actor my-sandbox-1 -a ate-demo-sandbox
 ```
 
 ## How to Uninstall
 
-To remove the sandbox demo resources (namespace, workerpool, and template) from your cluster, run:
+To remove the sandbox demo resources (actors, template, atespace, workerpool, and namespace) from your cluster, run:
 
 ```bash
 ./hack/install-ate.sh --delete-demo-sandbox

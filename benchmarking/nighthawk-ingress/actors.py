@@ -39,7 +39,9 @@ TOKEN_FILE = "/run/ateapi-token/token"
 # nh-<idx>.
 ATESPACE = "ingress-benchmark"
 
-TEMPLATE_NAMESPACE = "benchmark-workloads"
+# The glutton template's (atespace, name) identity; see
+# benchmarking/workloads/manifests/glutton-template.yaml.tmpl.
+TEMPLATE_ATESPACE = "benchmark-workloads"
 TEMPLATE_NAME = "glutton"
 
 
@@ -91,8 +93,10 @@ def create_actor(stub, name: str, atespace: str = ATESPACE) -> None:
                     metadata=ateapi_pb2.ResourceMetadata(
                         atespace=atespace, name=name
                     ),
-                    actor_template_namespace=TEMPLATE_NAMESPACE,
-                    actor_template_name=TEMPLATE_NAME,
+                    actor_template=ateapi_pb2.ObjectRef(
+                        atespace=TEMPLATE_ATESPACE,
+                        name=TEMPLATE_NAME,
+                    ),
                 )
             )
         )
@@ -154,7 +158,7 @@ def create_and_warm(
     for name in names:
         create_actor(stub, name, atespace)
         created.append(name)
-    log(f"Created {count} actors from {TEMPLATE_NAMESPACE}/{TEMPLATE_NAME}")
+    log(f"Created {count} actors from {TEMPLATE_ATESPACE}/{TEMPLATE_NAME}")
 
     deadline = time.time() + warm_deadline_s
     failures: list[str] = []

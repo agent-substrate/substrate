@@ -437,6 +437,11 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT}
 		},
 	}, {
+		name: "valid on_resume with golden",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN}
+		},
+	}, {
 		name: "negative on_resume from_data",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotsConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(-1)}

@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,14 +38,28 @@ import (
 // they mount inside it are visible to atelet.
 const ateomHostDir = "/var/lib/ateom-gvisor"
 
+// csiNFSStorageClass is the StorageClass the external volume demos provision
+// from.
+const csiNFSStorageClass = `
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-nfs-sc
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.default.svc.cluster.local
+  share: /
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
+`
+
 // SetupCSI installs the hostpath and NFS CSI drivers used by external volume
 // demos. Kind only: both drivers are patched for the single-node Kind layout
 // and reach into the node container over docker.
-func (e *Env) SetupCSI(ctx context.Context) error {
+func (e *Env) SetupCSI(ctx context.Context, driver string) error {
 	log.Step("setup_csi")
-	if err := e.RequireKind("CSI setup"); err != nil {
-		return err
-	}
 	// Both drivers register themselves with a CSIDriverConfig, so the ate CRDs
 	// have to be in place even when CSI setup runs on its own rather than as
 	// part of deploy ate-system.
@@ -59,7 +72,7 @@ func (e *Env) SetupCSI(ctx context.Context) error {
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
-	if err := e.KoApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
+	if err := e.ResolveAndApply(ctx, e.Cfg.Manifest("pod-certificate-controller.yaml")); err != nil {
 		return err
 	}
 	if err := e.applyPodcertWorkersOverride(ctx); err != nil {
@@ -71,10 +84,29 @@ func (e *Env) SetupCSI(ctx context.Context) error {
 	if err := e.WaitForPodCertificateTrustBundles(ctx); err != nil {
 		return err
 	}
-	if err := e.setupCSIHostpath(ctx); err != nil {
-		return err
+
+	switch driver {
+	case "nfs":
+		return e.setupCSINFS(ctx)
+	case "hostpath":
+		if err := e.RequireKind("csi-hostpath"); err != nil {
+			return err
+		}
+		return e.setupCSIHostpath(ctx)
+	case "both", "true":
+		if err := e.RequireKind("csi-hostpath"); err != nil {
+			return err
+		}
+		if err := e.setupCSIHostpath(ctx); err != nil {
+			return err
+		}
+		return e.setupCSINFS(ctx)
+	case "none", "false", "":
+		log.Infof("Skipping CSI driver setup.")
+		return nil
+	default:
+		return fmt.Errorf("unknown CSI driver %q (valid options: nfs, hostpath, both, none)", driver)
 	}
-	return e.setupCSINFS(ctx)
 }
 
 func (e *Env) setupCSIHostpath(ctx context.Context) error {
@@ -211,31 +243,22 @@ spec:
 
 	// The image cache directories under ateomHostDir were just wiped, so
 	// atelet has to recreate them.
-	log.Infof("Restarting the atelet DaemonSet (if present)...")
-	return e.Kube.RolloutRestart(ctx, NamespaceAteSystem, "atelet", time.Now())
+	log.Infof("Restarting the atelet DaemonSets (if present)...")
+	return e.RestartAteletDaemonSets(ctx)
 }
 
 func (e *Env) setupCSINFS(ctx context.Context) error {
 	log.Step("setup_csi_nfs")
 
 	if err := checkNFSDSupport(); err != nil {
-		log.Warnf("%v; skipping NFS CSI driver setup", err)
-		return nil
+		return err
 	}
 
 	deployDir := e.Cfg.Path("hack", "third_party", "csi-driver-nfs", "deploy")
 
-	log.Infof("Deploying the sample NFS server...")
-	if err := e.Kube.ApplyPath(ctx, deployDir+"/example/nfs-provisioner/nfs-server.yaml"); err != nil {
+	log.Infof("Deploying the NFS server...")
+	if err := e.Kube.ApplyPath(ctx, e.Cfg.Path("hack", "csi", "nfs-server.yaml")); err != nil {
 		return err
-	}
-	// The upstream sample backs its export with a hostPath; an emptyDir keeps
-	// the Kind node's filesystem clean and is sufficient for demo volumes.
-	log.Infof("Patching the NFS server to use emptyDir...")
-	const nfsVolumePatch = `[{"op":"replace","path":"/spec/template/spec/volumes/0","value":{"name":"nfs-vol","emptyDir":{}}}]`
-	if _, err := e.Kube.Typed.AppsV1().Deployments("default").Patch(
-		ctx, "nfs-server", types.JSONPatchType, []byte(nfsVolumePatch), metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("while patching the nfs-server Deployment: %w", err)
 	}
 
 	log.Infof("Deploying the CSI NFS driver...")
@@ -323,21 +346,7 @@ spec:
 	// The driver resolves the server's DNS name at provisioning time, so the
 	// StorageClass can be created before the NFS server has an address.
 	log.Infof("Creating the csi-nfs-sc StorageClass...")
-	if err := e.applyInline(ctx, `
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: csi-nfs-sc
-provisioner: nfs.csi.k8s.io
-parameters:
-  server: nfs-server.default.svc.cluster.local
-  share: /
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
-mountOptions:
-  - nfsvers=3
-  - nolock
-`); err != nil {
+	if err := e.applyInline(ctx, csiNFSStorageClass); err != nil {
 		return err
 	}
 
@@ -366,8 +375,8 @@ spec:
 		return err
 	}
 
-	log.Infof("Restarting the atelet DaemonSet (if present)...")
-	return e.Kube.RolloutRestart(ctx, NamespaceAteSystem, "atelet", time.Now())
+	log.Infof("Restarting the atelet DaemonSets (if present)...")
+	return e.RestartAteletDaemonSets(ctx)
 }
 
 // checkNFSDSupport verifies the host kernel can serve NFS. The in-cluster NFS

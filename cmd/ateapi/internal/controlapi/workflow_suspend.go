@@ -347,19 +347,43 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
+	// The step is a chain of store round-trips with no spans of its own, so
+	// log a per-call breakdown to attribute its latency. Deferred so a call
+	// that stalls and then fails still reports where the time went; steps not
+	// reached (or skipped) log zero.
+	start := time.Now()
+	var dGetActor, dReleaseWorker, dRefetchActor, dCreateSnapshot, dUpdateActor time.Duration
+	defer func() {
+		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
+			slog.Any("actor", actorRef),
+			slog.Duration("total", time.Since(start)),
+			slog.Duration("get_actor", dGetActor),
+			slog.Duration("release_worker", dReleaseWorker),
+			slog.Duration("refetch_actor", dRefetchActor),
+			slog.Duration("create_snapshot", dCreateSnapshot),
+			slog.Duration("update_actor", dUpdateActor))
+	}()
+
+	t := time.Now()
 	latestActor, err := w.store.GetActor(ctx, actorRef)
+	dGetActor = time.Since(t)
 	if err != nil {
 		return nil, err
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
-		if _, err := releaseWorker(ctx, w.store, latestActor); err != nil {
+		t = time.Now()
+		_, err := releaseWorker(ctx, w.store, latestActor)
+		dReleaseWorker = time.Since(t)
+		if err != nil {
 			return nil, err
 		}
 
 		// Re-fetch the actor now that the worker is freed.
+		t = time.Now()
 		latestActor, err = w.store.GetActor(ctx, actorRef)
+		dRefetchActor = time.Since(t)
 		if err != nil {
 			return nil, err
 		}
@@ -390,10 +414,14 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 		// ErrAlreadyExists means a previous attempt crashed after creating
 		// the snapshot record; the persisted record is authoritative.
-		if _, err := w.store.CreateActorSnapshot(ctx, snapshot); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+		t = time.Now()
+		_, err = w.store.CreateActorSnapshot(ctx, snapshot)
+		dCreateSnapshot = time.Since(t)
+		if err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 			return nil, err
 		}
 	}
+	t = time.Now()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		if snapshotName != "" {
@@ -405,6 +433,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		toUpdate.Status.LocalSnapshotInfo = nil
 		return nil
 	})
+	dUpdateActor = time.Since(t)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
