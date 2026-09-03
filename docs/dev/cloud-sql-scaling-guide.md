@@ -35,15 +35,17 @@ Set with `--storage-size` at create time; it only grows afterwards.
 
 ## Connection sizing for a target throughput
 
-Set with `ATE_API_POSTGRES_POOL_MAX_CONNS` at deploy time. Connections are
-concurrency, so `needed ≈ QPS × mean latency`. At 10k ops/s and ~6ms per
-operation that is ~60 busy connections; provision ~2× for bursts (e.g. 4
-replicas × `ATE_API_POSTGRES_POOL_MAX_CONNS=32`). The default pool
-(`max(4, NumCPU)` per replica) supports only ~1–2k ops/s and is the first
-thing that saturates on an untuned deployment — an undersized pool shows up
-as client-side latency (queries queue in pgx waiting for a connection), not
-as database errors. The chain to keep consistent, since the proxy maps
-client connections 1:1 onto server backends:
+Set with `ATE_API_POSTGRES_POOL_MAX_CONNS` at deploy time. Target connections
+equal throughput multiplied by average query latency:
+
+```
+connections ≈ QPS × mean latency in seconds
+            ≈ 10,000 req/s × 0.006 s ≈ 60 active connections
+```
+
+Provision ~2× headroom for bursts (e.g. 4 replicas × `ATE_API_POSTGRES_POOL_MAX_CONNS=32`).
+An undersized pool causes client-side queuing inside `pgx` rather than database errors.
+Ensure total connections across all replicas stay within Cloud SQL's limit:
 
 ```
 replicas × pool_max_conns  ≤  max_connections − slack (superuser, maintenance)
@@ -64,7 +66,7 @@ number rather than maximizing.
 The proxy imposes no connection limit and adds
 sub-millisecond latency, but it encrypts all database traffic, so its CPU
 use scales with throughput. The patch
-(`manifests/ate-install/cloudsql-proxy-patch.yaml`) requests `100m` — sized
+(`manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml`) requests `100m` — sized
 for control-plane traffic. For sustained thousands of ops/s, raise the
 sidecar's CPU request so node pressure cannot throttle it into becoming the
 bottleneck. Connection *churn* has a separate ceiling: IAM database logins

@@ -159,7 +159,7 @@ spec:
         # by the DSN via sslrootcert (sslmode=verify-ca). Empty unless the
         # postgres-server-ca Secret exists. Cloud SQL does not need this: it
         # uses the Auth Proxy sidecar (see
-        # manifests/ate-install/cloudsql-proxy-patch.yaml), which handles TLS
+        # manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml), which handles TLS
         # itself.
         - name: "postgres-server-ca"
           mountPath: "/run/postgres-server-ca"

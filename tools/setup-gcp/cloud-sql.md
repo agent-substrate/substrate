@@ -1,6 +1,6 @@
 # Cloud SQL for the PostgreSQL store backend
 
-The ateapi PostgreSQL store (`--store-backend=postgres`) can run against
+The ateapi PostgreSQL store can run against
 [Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres). The
 supported, most secure configuration uses the
 [Cloud SQL Auth Proxy](https://docs.cloud.google.com/sql/docs/postgres/sql-proxy)
@@ -20,7 +20,7 @@ authentication**](https://docs.cloud.google.com/sql/docs/postgres/iam-authentica
   nothing to store, leak, or rotate; access is revoked in IAM.
 - **Cloud-agnostic code** — ateapi itself knows nothing about Cloud SQL. The
   sidecar is a deployment-time patch
-  (`manifests/ate-install/cloudsql-proxy-patch.yaml`) applied by
+  (`manifests/ate-install/cloudsql/proxy-sidecar-patch.yaml`) applied by
   `hack/install-ate.sh` only when a Cloud SQL instance is configured.
 
 ## 1. Provision
@@ -33,7 +33,8 @@ missing). Then:
 
 ```sh
 export PROJECT_ID=<project>
-go run ./tools/setup-gcp create cloudsql   # flags: --instance, --tier, --edition, --storage-size, --gsa-name, --network
+go run ./tools/setup-gcp create cloudsql --region=<cluster region>
+# other flags: --instance, --tier, --edition, --storage-size, --gsa-name, --network
 ```
 
 This idempotently creates:
@@ -57,12 +58,13 @@ This idempotently creates:
 
 [IAM database users](https://docs.cloud.google.com/sql/docs/postgres/add-manage-iam-users)
 are created with no privileges, and PostgreSQL 15+ removed
-`PUBLIC`'s `CREATE` on the `public` schema. ateapi applies its schema
-idempotently at startup as the connecting user, so grant it once (connect as
-the built-in `postgres` user — note the database username is the GSA email
-**without** `.gserviceaccount.com`):
+`PUBLIC`'s `CREATE` on the `public` schema. Before serving, `ateapi` runs versioned
+migrations to create its tables. The connecting user needs DDL rights to do this.
+Grant them once as the built-in `postgres` user (note the database username is
+the GSA email **without** `.gserviceaccount.com`):
 
 ```sql
+GRANT CREATE ON DATABASE atepg TO "ate-api-server@<project>.iam";
 GRANT USAGE, CREATE ON SCHEMA public TO "ate-api-server@<project>.iam";
 ```
 
@@ -76,7 +78,7 @@ gcloud sql users set-password postgres --instance=<instance> --password='<temp-p
 IP=$(gcloud sql instances describe <instance> --format="value(ipAddresses[0].ipAddress)")
 kubectl run psql-grant --rm -i --restart=Never --image=postgres:18-alpine -- \
   psql "postgresql://postgres:<temp-pw>@${IP}:5432/atepg?sslmode=require" \
-  -c 'GRANT USAGE, CREATE ON SCHEMA public TO "ate-api-server@<project>.iam";'
+  -c 'GRANT CREATE ON DATABASE atepg TO "ate-api-server@<project>.iam"; GRANT USAGE, CREATE ON SCHEMA public TO "ate-api-server@<project>.iam";'
 ```
 
 Nothing deployed ever uses this password — afterwards you can scramble it
@@ -99,13 +101,16 @@ REASSIGN OWNED BY "<olduser>" TO "ate-api-server@<project>.iam";  -- run inside 
 ```sh
 export ATE_API_POSTGRES_CLOUDSQL_INSTANCE=<project>:<region>:<instance>
 export ATE_API_POSTGRES_CLOUDSQL_GSA=ate-api-server@<project>.iam.gserviceaccount.com
-./hack/install-ate.sh --deploy-ate-system --store-backend=postgres
+./hack/install-ate.sh --deploy-ate-system
 # Existing installation: --deploy-ate-apiserver instead of --deploy-ate-system
 ```
 
 What this does differently from a plain install:
 
-- Skips the in-cluster PostgreSQL StatefulSet.
+- Skips the bundled PostgreSQL StatefulSet (a configured Cloud SQL instance
+  counts as an external database, exactly like an explicit
+  `ATE_API_POSTGRES_CONNECTION_STRING`); the install logs the skip and the
+  database it deferred to.
 - Writes the proxy's configuration (`CSQL_PROXY_*`) into the
   `ate-api-server-envvars` ConfigMap and synthesizes a passwordless DSN
   (`user=<gsa-user> host=127.0.0.1 ... sslmode=disable`) into the
@@ -114,21 +119,37 @@ What this does differently from a plain install:
   `cloud-sql-proxy` native sidecar (initContainer with
   `restartPolicy: Always`; requires Kubernetes 1.29+) into the deployment.
   The sidecar's `/startup` probe gates ateapi, so ateapi never races the
-  tunnel. Unsetting `ATE_API_POSTGRES_CLOUDSQL_INSTANCE` and redeploying
-  removes the sidecar and annotation again.
+  tunnel. Leaving `ATE_API_POSTGRES_CLOUDSQL_INSTANCE` **unset** on later
+  redeploys keeps the current Cloud SQL configuration (it is adopted from
+  the cluster's record); to remove the sidecar and annotation, set it to
+  the empty string explicitly: `ATE_API_POSTGRES_CLOUDSQL_INSTANCE=""`.
 
 Optional environment variables:
 
 - `ATE_API_POSTGRES_CLOUDSQL_IP_TYPE` — `private` (default), `public`, `psc`.
+  Selects which of the instance's addresses the proxy dials, for connecting
+  to instances provisioned outside this tool: `setup-gcp create cloudsql`
+  itself only creates private-services-access (private IP) instances —
+  `public` and `psc` require an instance configured accordingly out-of-band.
 - `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH` — set `false` to fall back to password
   authentication through the proxy (still encrypted and identity-verified);
   you must then provide `ATE_API_POSTGRES_CONNECTION_STRING` with the
   password yourself (the install script rejects `false` without an explicit
   connection string — a synthesized passwordless DSN cannot log in once the
   proxy stops injecting IAM tokens).
+- `ATE_API_POSTGRES_SCHEMA` — the schema holding the store's tables
+  (default `public`). If using a custom schema, the one-time schema grant
+  in §2 (`GRANT USAGE, CREATE ON SCHEMA ...`) must target your custom schema
+  instead of `public`.
 - `ATE_API_POSTGRES_POOL_MAX_CONNS` — pgxpool connections per ateapi replica
-  (default: `max(4, NumCPU)`); folded into the synthesized DSN as
-  `pool_max_conns`.
+  (default: `max(4, NumCPU)`); appended as `pool_max_conns` to whichever DSN
+  is in effect (synthesized, in-cluster default, or explicitly provided —
+  a `pool_max_conns` already present in an explicit DSN wins).
+
+Changing any of these on a running installation takes effect immediately:
+the install script stamps a hash of the rendered configuration into the
+pod template (`ate.dev/env-hash`), so a config change rolls ate-api-server
+and an unchanged config triggers nothing.
 
 ## 4. Verify
 
@@ -137,7 +158,7 @@ kubectl rollout status deployment/ate-api-server -n ate-system
 kubectl logs deployment/ate-api-server -n ate-system -c cloud-sql-proxy | head
 # expect: "The proxy has started successfully and is ready for new connections"
 kubectl logs deployment/ate-api-server -n ate-system | head -5
-# expect store-backend=postgres in the flag dump and no connection errors
+# expect the startup flag dump and no store connection errors
 kubectl get secret ate-api-server-secret-envvars -n ate-system \
   -o jsonpath='{.data.ATE_API_POSTGRES_CONNECTION_STRING}' | base64 -d
 # expect: no password in the DSN
@@ -172,5 +193,5 @@ server CA and credentials yourself.)
 ```sh
 export ATE_API_POSTGRES_CONNECTION_STRING='postgresql://<user>:<pw>@<host>:5432/atepg?sslmode=verify-ca&sslrootcert=/run/postgres-server-ca/server-ca.pem'
 export ATE_API_POSTGRES_SERVER_CA_FILE=/path/to/server-ca.pem
-./hack/install-ate.sh --deploy-ate-system --store-backend=postgres
+./hack/install-ate.sh --deploy-ate-system
 ```

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -136,10 +137,11 @@ func waitForSQLOperation(ctx context.Context, svc *sqladmin.Service, cfg *Config
 			return ctx.Err()
 		case <-time.After(5 * time.Second):
 		}
+		name := op.Name
 		var err error
-		op, err = svc.Operations.Get(cfg.ProjectID, op.Name).Context(ctx).Do()
+		op, err = svc.Operations.Get(cfg.ProjectID, name).Context(ctx).Do()
 		if err != nil {
-			return fmt.Errorf("poll operation %s: %w", op.Name, err)
+			return fmt.Errorf("poll operation %s: %w", name, err)
 		}
 	}
 }
@@ -178,8 +180,8 @@ func createCloudSQLInstance(ctx context.Context, svc *sqladmin.Service, cfg *Con
 		return err
 	}
 	slog.Info("Creating Cloud SQL instance (takes several minutes)...",
-		slog.String("instance", cfg.CloudSQLInstance), slog.String("tier", cfg.CloudSQLTier),
-		slog.String("edition", spec.Settings.Edition))
+		slog.String("instance", cfg.CloudSQLInstance), slog.String("region", cfg.Region),
+		slog.String("tier", cfg.CloudSQLTier), slog.String("edition", spec.Settings.Edition))
 	op, err := svc.Instances.Insert(cfg.ProjectID, spec).Context(ctx).Do()
 	if err != nil {
 		return fmt.Errorf("create instance: %w", err)
@@ -193,6 +195,9 @@ func createCloudSQLInstance(ctx context.Context, svc *sqladmin.Service, cfg *Con
 func cloudSQLInstanceSpec(cfg *Config) (*sqladmin.DatabaseInstance, error) {
 	settings := &sqladmin.Settings{
 		Tier: cfg.CloudSQLTier,
+		// This tool provisions private-services-access instances exclusively.
+		// The ATE_API_POSTGRES_CLOUDSQL_IP_TYPE setting in install-ate.sh exists
+		// only to connect to public/PSC instances provisioned out-of-band.
 		IpConfiguration: &sqladmin.IpConfiguration{
 			Ipv4Enabled:     false,
 			PrivateNetwork:  privateNetworkURL(cfg),
@@ -396,7 +401,7 @@ Cloud SQL is provisioned. Two steps remain:
 
      export ATE_API_POSTGRES_CLOUDSQL_INSTANCE=%s:%s:%s
      export ATE_API_POSTGRES_CLOUDSQL_GSA=%s
-     ./hack/install-ate.sh --deploy-ate-system --store-backend=postgres
+     ./hack/install-ate.sh --deploy-ate-system
 
 See tools/setup-gcp/cloud-sql.md for details and verification steps.
 `, dbUser, cfg.ProjectID, cfg.Region, cfg.CloudSQLInstance, gsa)
@@ -408,6 +413,10 @@ var cloudsqlCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if cfg.ProjectID == "" {
 			return errors.New("--project-id is required")
+		}
+		// Require explicit region to prevent silent cross-region latency and egress costs.
+		if !cmd.Flags().Changed("region") && os.Getenv("GCE_REGION") == "" {
+			return errors.New("--region is required (or set GCE_REGION): the instance must be in the cluster's region")
 		}
 		ctx := cmd.Context()
 		if err := enableCloudSQLAPIs(ctx, &cfg); err != nil {
