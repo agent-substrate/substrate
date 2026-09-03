@@ -36,7 +36,7 @@ spec:
     # The gateway lives in substrate's namespace, which the probe cannot infer
     # from inside the sandbox. ${SYSTEM_NAMESPACE} is substituted alongside
     # ${NAMESPACE} by the suite.
-    - "--gateway-address=atenet-egress.${SYSTEM_NAMESPACE}.svc:443"
+    - "--gateway-address=${EGRESS_GATEWAY_SERVICE}.${SYSTEM_NAMESPACE}.svc:443"
     ports:
     - name: http
       containerPort: 8080

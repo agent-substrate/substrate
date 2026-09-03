@@ -47,6 +47,11 @@ fi
 # below refuses the combination that would half-install.
 ATE_NAMESPACE="${ATE_NAMESPACE:-ate-system}"
 
+# Service name fronting ateapi. It is the audience the API authentication config
+# accepts, so it has to match the Service the deployment actually creates; a
+# Helm release that prefixes resource names needs it set.
+ATE_API_SERVICE_NAME="${ATE_API_SERVICE_NAME:-api}"
+
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
@@ -345,6 +350,13 @@ require_default_namespace_for_manifests() {
     echo "       manifests/ate-install/ hardcodes the ate-system namespace. Install into" >&2
     echo "       another namespace with the Helm chart, then use this script only for the" >&2
     echo "       --create-* bootstrap steps." >&2
+    exit 1
+  fi
+  if [[ "${ATE_API_SERVICE_NAME}" != "api" ]]; then
+    echo "error: ATE_API_SERVICE_NAME=${ATE_API_SERVICE_NAME} cannot be used with the manifest-applying subcommands." >&2
+    echo "       manifests/ate-install/ creates the Service literally named api, so tokens" >&2
+    echo "       minted for this audience would all be rejected. A renamed Service comes" >&2
+    echo "       from a Helm install; use this script only for the --create-* bootstrap steps." >&2
     exit 1
   fi
 }
@@ -870,7 +882,7 @@ create_api_authentication_config() {
       ;;
   esac
   local authentication_config
-  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.%s.svc]\n%s' "${jwt_issuer}" "${ATE_NAMESPACE}" "${discovery_config}")
+  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [%s.%s.svc]\n%s' "${jwt_issuer}" "${ATE_API_SERVICE_NAME}" "${ATE_NAMESPACE}" "${discovery_config}")
   echo "ate-api-authentication authentication.yaml:"
   echo "  | ${authentication_config//$'\n'/$'\n'  | }"
   run_kubectl create configmap -n "${ATE_NAMESPACE}" ate-api-authentication \
