@@ -123,7 +123,28 @@ kubectl ate get workers -l <label-selector>
 | `POOL` | The `WorkerPool` name. |
 | `POD` | The worker pod name. |
 | `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
-| `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-name>`. |
+| `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<template-namespace>/<template>/<atespace>/<actor-name>`. |
+
+### Resource Usage
+
+`top workers` adds live CPU and memory usage to the worker listing, read from the
+Kubernetes metrics API. It takes the same filter flags as `get workers`.
+
+```bash
+# CPU/memory per worker across the cluster
+kubectl ate top workers
+
+# Same filters as `get workers`
+kubectl ate top workers -n <namespace>
+kubectl ate top workers -a <atespace>
+kubectl ate top workers -l <label-selector>
+```
+
+Columns are `NAME`, `POOL`, `STATUS`, `ASSIGNED ACTOR`, `CPU(CORES)`, `MEMORY(bytes)`.
+Usage is reported for the worker's `ateom` container. It requires
+[metrics-server](https://github.com/kubernetes-sigs/metrics-server) in the
+cluster; without it the two usage columns read `metrics unavailable` and the rest
+of the output is still printed.
 
 ### Atespaces
 
@@ -203,6 +224,10 @@ kubectl ate resume actor my-actor -a <atespace>
 
 # Suspend an actor (snapshots its state to storage and frees the worker)
 kubectl ate suspend actor my-actor -a <atespace>
+
+# Pause an actor (checkpoints it but keeps the snapshot on the node VM, so the
+# next resume can be prioritized back onto that same node)
+kubectl ate pause actor my-actor -a <atespace>
 
 # Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
 kubectl ate delete actor my-actor -a <atespace>
