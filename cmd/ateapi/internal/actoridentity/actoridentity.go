@@ -31,7 +31,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/principal"
@@ -61,21 +60,21 @@ type Server struct {
 	store   store.Interface
 	workers *workercache.Cache
 
-	// ateletNamespace is the namespace segment of the SPIFFE ID that the
-	// calling atelet must present to mint actor credentials.
-	ateletNamespace string
+	// ateletSPIFFEID is the identity the calling atelet must present to mint
+	// actor credentials.
+	ateletSPIFFEID string
 }
 
 var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache, ateletNamespace string) *Server {
+func New(actorIdentityJWTIssuer, actorIDJWTPoolFile string, actorIDCAPool localca.Pool, store store.Interface, workers *workercache.Cache, ateletSPIFFEID string) *Server {
 	return &Server{
 		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
 		actorIDJWTPoolFile:     actorIDJWTPoolFile,
 		actorIDCAPool:          actorIDCAPool,
 		store:                  store,
 		workers:                workers,
-		ateletNamespace:        ateletNamespace,
+		ateletSPIFFEID:         ateletSPIFFEID,
 	}
 }
 
@@ -256,11 +255,7 @@ func (s *Server) authenticateAtelet(ctx context.Context) (*ateletCaller, error) 
 	// Only atelet may mint actor credentials. Everything else with a valid
 	// pod-identity certificate — including the actor workloads themselves — is
 	// rejected here.
-	expected := (&url.URL{
-		Scheme: "spiffe",
-		Host:   installdefaults.AteletTrustDomain,
-		Path:   path.Join("ns", s.ateletNamespace, "sa", installdefaults.AteletServiceAccount),
-	}).String()
+	expected := s.ateletSPIFFEID
 	if len(leaf.URIs) == 0 || leaf.URIs[0].String() != expected {
 		slog.WarnContext(ctx, "ActorIdentity denied: caller is not atelet",
 			slog.Any("uris", leaf.URIs), slog.String("expected", expected))

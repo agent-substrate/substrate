@@ -75,7 +75,7 @@ const (
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here. otel, when it carries an endpoint, is propagated to the
 // ateom container so it pushes telemetry to that collector.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings, systemNamespace string) *appsv1ac.DeploymentApplyConfiguration {
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
 	if wp.Spec.Template != nil {
@@ -100,8 +100,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			// The peers atunnel authenticates live in substrate's namespace,
 			// not the worker's, so the controller passes their identities
 			// rather than letting ateom assume the default install.
-			"--atunnel-client-identity="+installdefaults.RouterSPIFFEID(systemNamespace),
-			"--atunnel-broker-identity="+installdefaults.AteletSPIFFEID(systemNamespace),
+			"--atunnel-client-identity="+installdefaults.SPIFFEID(systemNamespace, routerServiceAccount),
+			"--atunnel-broker-identity="+installdefaults.SPIFFEID(systemNamespace, ateletServiceAccount),
 			"--atunnel-egress-listen-address=0.0.0.0:15001",
 			"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
 		).

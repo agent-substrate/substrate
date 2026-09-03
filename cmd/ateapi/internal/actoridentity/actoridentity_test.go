@@ -84,6 +84,10 @@ const (
 	ateletSA          = installdefaults.AteletServiceAccount
 )
 
+// ateletSPIFFEID is the identity a default install's atelet presents, and what
+// the Server under test is configured to accept.
+var ateletSPIFFEID = installdefaults.SPIFFEID(ateletNamespace, ateletSA)
+
 func newTestCert(t *testing.T, spiffePath string, podIdentity *substratex509.PodIdentity) *x509.Certificate {
 	t.Helper()
 
@@ -175,7 +179,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 			t.Fatalf("start worker cache: %v", err)
 		}
 	}
-	return New("issuer", "", pool, st, workers, ateletNamespace)
+	return New("issuer", "", pool, st, workers, ateletSPIFFEID)
 }
 
 // staleWatchStore wraps a store with a WatchWorkers that never delivers,
@@ -334,11 +338,11 @@ func newTestServerWithCache(t *testing.T, st store.Interface, workers *workercac
 		t.Fatalf("generate CA: %v", err)
 	}
 	pool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
-	return New("issuer", "", pool, st, workers, ateletNamespace)
+	return New("issuer", "", pool, st, workers, ateletSPIFFEID)
 }
 
 func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
-	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example", ateletNamespace: ateletNamespace}
+	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example", ateletSPIFFEID: ateletSPIFFEID}
 	for _, tt := range []struct {
 		name string
 		ctx  context.Context
@@ -928,7 +932,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 		ActiveForSigning: "test-actor-ca",
 	}
 
-	srv := New("issuer", "", pool, st, workers, ateletNamespace)
+	srv := New("issuer", "", pool, st, workers, ateletSPIFFEID)
 
 	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
 	if err != nil {
@@ -1104,7 +1108,7 @@ func TestValidateMintCertRequest(t *testing.T) {
 func TestAuthenticateAteletHonorsConfiguredNamespace(t *testing.T) {
 	const relocated = "substrate-test"
 
-	srv := &Server{ateletNamespace: relocated}
+	srv := &Server{ateletSPIFFEID: installdefaults.SPIFFEID(relocated, ateletSA)}
 
 	t.Run("accepts atelet from the configured namespace", func(t *testing.T) {
 		id := podIdentityOn(testNode)
