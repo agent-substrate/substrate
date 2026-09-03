@@ -264,6 +264,15 @@ Kind — only the hostpath plugin is patched for the single-node Kind layout, an
 both reject `hostpath` and `both` there with a hard error rather than the
 shell's old warn-and-continue.
 
+**Cloud SQL is shell-only.** `hack/install-ate.sh` automates Cloud SQL setup
+with IAM authentication, synthesized DSNs, and the Auth Proxy sidecar
+([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)). `ate-setup` does not yet
+port this: while it honors `ATE_API_POSTGRES_CONNECTION_STRING` for generic
+external databases, it ignores `ATE_API_POSTGRES_CLOUDSQL_*` and deploys the
+bundled StatefulSet. Running `ate-setup` on a Cloud SQL cluster reverts the DSN
+to the in-cluster database, leaving behind an orphaned proxy. Use
+`hack/install-ate.sh` for Cloud SQL clusters until ported.
+
 ## Testing
 
 The shell installer had no tests. `cmd/ate-setup` has unit tests for template

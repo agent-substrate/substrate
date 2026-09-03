@@ -41,7 +41,7 @@ This idempotently creates:
 
 | Resource | Value |
 |---|---|
-| Cloud SQL instance | PostgreSQL 18, Enterprise edition, private IP only, `cloudsql.iam_authentication=on` |
+| Cloud SQL instance | PostgreSQL 18, Enterprise edition, private IP only, `cloudsql.iam_authentication=on`, automated backups + point-in-time recovery, deletion protection |
 | Database | `atepg` |
 | Google service account | `ate-api-server@<project>.iam.gserviceaccount.com` |
 | Project IAM roles | `roles/cloudsql.client`, `roles/cloudsql.instanceUser` on the GSA |
@@ -53,6 +53,17 @@ This idempotently creates:
 > accounts — federated Kubernetes principals cannot log into the database. The
 > KSA is therefore annotated with `iam.gke.io/gcp-service-account` so the
 > proxy's ambient credentials resolve to the GSA.
+
+Deletion protection means an instance cannot be deleted until it is cleared:
+
+```sh
+gcloud sql instances patch <instance> --no-deletion-protection
+gcloud sql instances delete <instance>
+```
+
+Backups, point-in-time recovery, and the shape of an existing instance are
+never reconciled — the settings above apply at creation. Change them later
+with `gcloud sql instances patch`.
 
 ## 2. One-time schema privileges
 

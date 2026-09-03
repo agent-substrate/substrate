@@ -709,7 +709,9 @@ create_api_server_env_vars() {
     fi
   fi
 
-  echo "POSTGRES_CONNECTION_STRING: ${postgres_connection_string}"
+  # Redact any password before logging (URI user:pw@host and keyword password=).
+  echo "POSTGRES_CONNECTION_STRING: $(printf '%s' "${postgres_connection_string}" \
+    | sed -E 's#(://[^:/@]*):[^@]*@#\1:***@#; s/(password=)[^ &]*/\1***/g')"
 
   # Empty unless Cloud SQL is configured; expanded below with the
   # ${arr[@]+...} idiom because bash 3.2's nounset rejects "${arr[@]}" on an

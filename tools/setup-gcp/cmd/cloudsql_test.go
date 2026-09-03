@@ -73,6 +73,16 @@ func TestCloudSQLInstanceSpec(t *testing.T) {
 		if got := spec.Settings.DatabaseFlags[0]; got.Name != "cloudsql.iam_authentication" || got.Value != "on" {
 			t.Errorf("DatabaseFlags[0] = %v, want cloudsql.iam_authentication=on", got)
 		}
+		// The Admin API leaves these off when omitted, so the spec must ask
+		// for them explicitly: this database is the control plane's state.
+		if spec.Settings.BackupConfiguration == nil || !spec.Settings.BackupConfiguration.Enabled {
+			t.Error("BackupConfiguration not enabled, want automated backups on")
+		} else if !spec.Settings.BackupConfiguration.PointInTimeRecoveryEnabled {
+			t.Error("PointInTimeRecoveryEnabled = false, want true")
+		}
+		if !spec.Settings.DeletionProtectionEnabled {
+			t.Error("DeletionProtectionEnabled = false, want true")
+		}
 	})
 
 	t.Run("enterprise-plus enables data cache", func(t *testing.T) {

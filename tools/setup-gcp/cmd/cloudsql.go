@@ -206,6 +206,14 @@ func cloudSQLInstanceSpec(cfg *Config) (*sqladmin.DatabaseInstance, error) {
 		DatabaseFlags: []*sqladmin.DatabaseFlags{
 			{Name: "cloudsql.iam_authentication", Value: "on"},
 		},
+		// Daily automated backups with point-in-time recovery, and a guard
+		// against accidental deletion; clear it with `gcloud sql instances
+		// patch --no-deletion-protection` before tearing the instance down.
+		BackupConfiguration: &sqladmin.BackupConfiguration{
+			Enabled:                    true,
+			PointInTimeRecoveryEnabled: true,
+		},
+		DeletionProtectionEnabled: true,
 	}
 	switch cfg.CloudSQLEdition {
 	case "", "enterprise":
