@@ -52,12 +52,14 @@ func TestEnsureMarkedSuspending_SnapshotName(t *testing.T) {
 		t.Fatalf("in-progress snapshot = %q, want a valid resource name", snapshotName)
 	}
 	// The URI the later steps rebuild from that name nests under the actor's
-	// atespace so each tenant gets a distinct storage prefix.
-	uri, err := resources.NewSnapshotURI(tmpl.GetSnapshotsConfig().GetStorageLocation(), "team-a", snapshotName)
+	// own prefix, so the objects name their owner and nothing else can collect
+	// them.
+	uri, err := inProgressSnapshotURI(tmpl, marked, snapshotName)
 	if err != nil {
-		t.Fatalf("NewSnapshotURI(%q): %v", snapshotName, err)
+		t.Fatalf("inProgressSnapshotURI(%q): %v", snapshotName, err)
 	}
-	if want := "gs://bucket/root/snapshots/team-a/" + snapshotName; uri.String() != want {
+	want := "gs://bucket/root/atespaces/team-a/actors/" + marked.GetMetadata().GetUid() + "/snapshots/" + snapshotName
+	if uri.String() != want {
 		t.Errorf("snapshot URI = %q, want %q", uri, want)
 	}
 }
@@ -224,7 +226,7 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 	}{
 		{
 			name:         "keeps previous external snapshot",
-			prevSnapshot: "gs://bucket/root/snapshots/team-a/prev",
+			prevSnapshot: someActorSnapshotURI(t, testStorageLocation, "team-a", "prev"),
 		},
 		{
 			name:         "stays empty without previous external snapshot",
@@ -295,7 +297,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 			},
 		},
 	}
-	storetest.MustCreateActor(t, ctx, persistence, actor)
+	created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 	w := &ActorWorkflow{store: persistence}
 	tmpl := &ateapipb.ActorTemplate{SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://snapshots"}}
@@ -307,9 +309,9 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", stored.GetStatus().GetState())
 	}
-	wantURI, err := resources.NewSnapshotURI("gs://snapshots", "team-a", snapshotName)
+	wantURI, err := inProgressSnapshotURI(tmpl, created, snapshotName)
 	if err != nil {
-		t.Fatalf("NewSnapshotURI: %v", err)
+		t.Fatalf("inProgressSnapshotURI: %v", err)
 	}
 	if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != wantURI.String() {
 		t.Errorf("SnapshotUri = %q, want %q", got, wantURI.String())
@@ -327,38 +329,26 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 // nothing else can name it — unless the actor was only borrowing it from a tag,
 // in which case the tag owns those objects and the suspend must leave them be.
 func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
-	// The snapshot the actor is running from when the suspend finalizes, and
-	// the one the suspend has just written in its place.
-	const (
-		previousSnapshotURI = "gs://ate-snapshots/team-a/snapshots/team-a/tag-v1"
-		snapshotName        = "2026-01-01t00-00-00z-new"
-	)
+	// The name of the snapshot the suspend has just written, in place of the
+	// one the actor was running from.
+	const snapshotName = "2026-01-01t00-00-00z-new"
 
 	tests := []struct {
-		name         string
-		actorStatus  *ateapipb.ActorStatus
-		wantReleased bool
+		name string
+		// tagOwnedSnapshot makes the snapshot the actor is running from a tag's rather
+		// than one it took itself, which is how an actor created from a tag
+		// starts out.
+		tagOwnedSnapshot bool
+		wantReleased     bool
 	}{
 		{
-			name: "releases the external snapshot the actor owned",
-			actorStatus: &ateapipb.ActorStatus{
-				State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-				InProgressSnapshotName: snapshotName,
-				ExternalSnapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: previousSnapshotURI},
-			},
+			name:         "releases the external snapshot the actor owned",
 			wantReleased: true,
 		},
 		{
-			name: "leaves an external snapshot borrowed from a tag in place",
-			actorStatus: &ateapipb.ActorStatus{
-				State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-				InProgressSnapshotName: snapshotName,
-				ExternalSnapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: previousSnapshotURI},
-				// This actor was created from a tag. It has never been suspended,
-				// so the snapshot it is running from is the tag's own copy.
-				CurrentSnapshotTag: &ateapipb.ObjectRef{Atespace: "team-a", Name: "v1"},
-			},
-			wantReleased: false,
+			name:             "leaves an external snapshot borrowed from a tag in place",
+			tagOwnedSnapshot: true,
+			wantReleased:     false,
 		},
 	}
 
@@ -369,26 +359,34 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 			template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 			w, objects := newFinalizeWorkflow(persistence)
 
-			previous := mustParseSnapshotURI(t, previousSnapshotURI)
-			fresh := mustSnapshotURI(t, template, "team-a", snapshotName)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+			})
+
+			previous := mustActorSnapshotURI(t, template, actor, "old")
+			if tt.tagOwnedSnapshot {
+				previous = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+			}
+			fresh := mustActorSnapshotURI(t, template, actor, snapshotName)
 			objects.PutSnapshot(t, previous, "manifest.json")
 			objects.PutSnapshot(t, fresh, "manifest.json")
 
-			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status:        tt.actorStatus,
+			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+				s.InProgressSnapshotName = snapshotName
+				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
 			})
 
 			stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template)
 			if err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
-			// Whichever way the snapshot went, the actor now owns the one it
-			// just wrote and is no longer borrowing.
-			if got := stored.GetStatus().GetCurrentSnapshotTag(); got != nil {
-				t.Errorf("current snapshot tag = %v, want cleared", got)
+			// Whichever way the previous snapshot went, the actor now owns the
+			// one it just wrote and is no longer borrowing.
+			if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != fresh.String() {
+				t.Errorf("external snapshot = %q, want the one this suspend wrote, %q", got, fresh)
 			}
 			if released := len(objects.Snapshot(t, previous)) == 0; released != tt.wantReleased {
 				t.Errorf("previous external snapshot released = %v, want %v", released, tt.wantReleased)
@@ -414,20 +412,21 @@ func TestEnsureSuspendedFinalized_RetriesAfterObjectStoreFailure(t *testing.T) {
 	w, objects := newFinalizeWorkflow(persistence)
 
 	const snapshotName = "2026-01-01t00-00-00z-new"
-	previous := mustSnapshotURI(t, template, "team-a", "old")
-	fresh := mustSnapshotURI(t, template, "team-a", snapshotName)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDING},
+	})
+
+	previous := mustActorSnapshotURI(t, template, actor, "old")
+	fresh := mustActorSnapshotURI(t, template, actor, snapshotName)
 	objects.PutSnapshot(t, previous, "manifest.json")
 	objects.PutSnapshot(t, fresh, "manifest.json")
 
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status: &ateapipb.ActorStatus{
-			State:                  ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
-			InProgressSnapshotName: snapshotName,
-			ExternalSnapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()},
-		},
+	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.InProgressSnapshotName = snapshotName
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
 	})
 
 	objects.OnDelete = func(string, string) error { return errObjectStore }

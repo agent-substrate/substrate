@@ -35,15 +35,15 @@ import (
 // URI of that snapshot.
 func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interface, objects *objectstoretest.Fake, template *ateapipb.ActorTemplate, name string, objectNames ...string) (*ateapipb.Actor, resources.SnapshotURI) {
 	t.Helper()
-	uri := mustSnapshotURI(t, template, "team-a", name+"-snapshot")
-	objects.PutSnapshot(t, uri, objectNames...)
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: template.GetMetadata().GetName()},
-		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-		},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	uri := mustActorSnapshotURI(t, template, actor, name+"-snapshot")
+	objects.PutSnapshot(t, uri, objectNames...)
+	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
 	})
 	return actor, uri
 }
@@ -152,17 +152,18 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 			w, objects := newFinalizeWorkflow(persistence)
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			actorStatus := &ateapipb.ActorStatus{State: tt.state}
-			if tt.withSnapshot {
-				uri := mustSnapshotURI(t, template, "team-a", "actor-1-snapshot")
-				objects.PutSnapshot(t, uri, "manifest.json")
-				actorStatus.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String()}
-			}
-			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-				Status:        actorStatus,
+				Status:        &ateapipb.ActorStatus{State: tt.state},
 			})
+			if tt.withSnapshot {
+				uri := mustActorSnapshotURI(t, template, actor, "actor-1-snapshot")
+				objects.PutSnapshot(t, uri, "manifest.json")
+				mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String()}
+				})
+			}
 
 			_, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
 			if code := status.Code(err); code != codes.FailedPrecondition {
@@ -261,7 +262,7 @@ func TestTagActorSnapshot_RetryAfterResuspendDropsStaleObjects(t *testing.T) {
 
 	// What the first attempt left behind: a pending row, and the objects it had
 	// copied out of the snapshot the actor held before it was resumed.
-	stranded := mustSnapshotURI(t, template, "team-a", "v1-tag-snapshot")
+	stranded := mustTagSnapshotURI(t, template, "team-a", "v1-tag-snapshot")
 	objects.PutSnapshot(t, stranded, "manifest.json", "memory-0000.zst", "memory-0001.zst")
 	storetest.MustCreateActorSnapshotTag(t, ctx, persistence, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},

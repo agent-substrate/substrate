@@ -345,7 +345,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/snapshots/ate-golden/snap-1"},
+					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/snap-1"},
 				},
 			},
 		},
@@ -386,10 +386,10 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 
 	// Sorted by atespace, then name. The ERROR column only flags that an
 	// error message exists; the full text is available via json/yaml.
-	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN SNAPSHOT                            ERROR   AGE
-ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    gs://private/snapshots/ate-golden/snap-1           5m
-ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                                                       3d
-ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                                              ERROR   5h
+	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN SNAPSHOT                                                                                  ERROR   AGE
+ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    gs://private/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/snap-1           5m
+ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                                                                                                             3d
+ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                                                                                                    ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -465,7 +465,7 @@ func TestPrintActorSnapshotTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 			Status: &ateapipb.ActorSnapshotTagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/snapshots/team-a/tag-v2", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/actor-snapshot-tags/v2", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			},
 		},
 		{
@@ -476,7 +476,7 @@ func TestPrintActorSnapshotTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.ActorSnapshotTagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/snapshots/team-a/tag-v1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/actor-snapshot-tags/v1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 			},
 		},
 		{
@@ -489,7 +489,7 @@ func TestPrintActorSnapshotTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.ActorSnapshotTagStatus{
-				InProgressSnapshotUri: "gs://private/snapshots/team-a/tag-9f1c",
+				InProgressSnapshotUri: "gs://private/atespaces/team-a/actor-snapshot-tags/9f1c",
 			},
 		},
 	}
@@ -499,10 +499,10 @@ func TestPrintActorSnapshotTagsTo_Table(t *testing.T) {
 	}
 
 	// Sorted by atespace, then name.
-	expected := `ATESPACE   NAME   SCOPE                                STATE     SNAPSHOT                               CONTENT SCOPE                 AGE
-team-a     v1     ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE    Ready     gs://private/snapshots/team-a/tag-v1   SNAPSHOT_CONTENT_SCOPE_FULL   5h
-team-a     v2     ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED   Ready     gs://private/snapshots/team-a/tag-v2   SNAPSHOT_CONTENT_SCOPE_FULL   5m
-team-a     v3     ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE    Pending   <none>                                 <none>                        30s
+	expected := `ATESPACE   NAME   SCOPE                                STATE     SNAPSHOT                                               CONTENT SCOPE                 AGE
+team-a     v1     ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/actor-snapshot-tags/v1   SNAPSHOT_CONTENT_SCOPE_FULL   5h
+team-a     v2     ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/actor-snapshot-tags/v2   SNAPSHOT_CONTENT_SCOPE_FULL   5m
+team-a     v3     ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE    Pending   <none>                                                 <none>                        30s
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

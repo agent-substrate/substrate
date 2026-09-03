@@ -121,7 +121,7 @@ func (f *Fake) WriteSnapshot(snapshotURI string, names ...string) error {
 	if err != nil {
 		return fmt.Errorf("while parsing the snapshot URI %q: %w", snapshotURI, err)
 	}
-	bucket, prefix, err := objectstore.BucketPrefix(uri)
+	bucket, prefix, err := objectstore.BucketPrefix(uri.Prefix())
 	if err != nil {
 		return err
 	}
@@ -135,9 +135,17 @@ func (f *Fake) WriteSnapshot(snapshotURI string, names ...string) error {
 // snapshot at uri is made of. An empty result means the snapshot is not there.
 func (f *Fake) Snapshot(t *testing.T, uri resources.SnapshotURI) []string {
 	t.Helper()
-	bucket, prefix, err := objectstore.BucketPrefix(uri)
+	return f.Prefix(t, uri.Prefix())
+}
+
+// Prefix returns the names, relative to prefix, of every object below it. It is
+// how a test asserts on a whole owner's subtree: that deleting one resource
+// collected all of its objects, or left another's alone.
+func (f *Fake) Prefix(t *testing.T, storagePrefix resources.StoragePrefix) []string {
+	t.Helper()
+	bucket, prefix, err := objectstore.BucketPrefix(storagePrefix)
 	if err != nil {
-		t.Fatalf("BucketPrefix(%s) = %v", uri, err)
+		t.Fatalf("BucketPrefix(%s) = %v", storagePrefix, err)
 	}
 	objects, err := f.List(t.Context(), bucket, prefix)
 	if err != nil {

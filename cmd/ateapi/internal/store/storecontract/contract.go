@@ -44,6 +44,21 @@ import (
 // testAtespace is the atespace used by tests that create a single actor.
 const testAtespace = "test-atespace"
 
+// testSnapshotOwnerUID stands in for the Actor UID an external snapshot's
+// prefix is keyed on. The store keeps a snapshot URI opaque, so the tests only
+// need URIs of the right shape, not ones an actual actor wrote.
+const testSnapshotOwnerUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
+
+// testActorSnapshotURI returns the URI of a snapshot under an Actor's own
+// prefix, and testTagSnapshotURI the URI of the one snapshot a tag owns.
+func testActorSnapshotURI(location, atespace, name string) string {
+	return location + "/atespaces/" + atespace + "/actors/" + testSnapshotOwnerUID + "/snapshots/" + name
+}
+
+func testTagSnapshotURI(location, atespace, name string) string {
+	return location + "/atespaces/" + atespace + "/actor-snapshot-tags/" + name
+}
+
 // Worker resource names. They are opaque to the store, which only ever uses
 // them as the row key.
 const (
@@ -749,7 +764,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 			Status: &ateapipb.ActorStatus{
 				State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/snapshots/" + testAtespace + "/snapshot-1"},
+				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
 			},
 		}
 		actor2 := &ateapipb.Actor{
@@ -757,7 +772,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 			Status: &ateapipb.ActorStatus{
 				State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/snapshots/" + testAtespace + "/snapshot-2"},
+				ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
 			},
 		}
 		if _, err := s.CreateActor(ctx, actor1); err != nil {
@@ -974,7 +989,7 @@ func newTestSuspendedActor(atespace, name string) *ateapipb.Actor {
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:  "gs://private/snapshots/" + atespace + "/" + name,
+				SnapshotUri:  testActorSnapshotURI("gs://private", atespace, name),
 				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			},
 		},
@@ -991,7 +1006,7 @@ func newTestInProgressSnapshotTag(name string, actor *ateapipb.Actor) *ateapipb.
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.ActorSnapshotTagStatus{
 			ActorTemplateUid:      "template-uid",
-			InProgressSnapshotUri: "gs://private/snapshots/" + atespace + "/tag-" + name,
+			InProgressSnapshotUri: testTagSnapshotURI("gs://private", atespace, name),
 			SourceActorUid:        actor.GetMetadata().GetUid(),
 		},
 	}
@@ -1121,7 +1136,7 @@ func runActorSnapshotTagContractTests(t *testing.T, setup func(t *testing.T) sto
 			{
 				name: "reopening the in-progress snapshot uri",
 				mutate: func(toUpdate *ateapipb.ActorSnapshotTag) {
-					toUpdate.Status.InProgressSnapshotUri = "gs://private/snapshots/team-a/tag-again"
+					toUpdate.Status.InProgressSnapshotUri = testTagSnapshotURI("gs://private", "team-a", "again")
 				},
 			},
 			{

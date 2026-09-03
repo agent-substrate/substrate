@@ -58,6 +58,9 @@ import (
 const (
 	testAtespace = "test-atespace"
 	testActorID  = "id1"
+	// testStorageLocation is the snapshots_config.storage_location the test
+	// templates hand out. No object store is wired up behind it.
+	testStorageLocation = "gs://fake-fake-fake"
 
 	// ateletNamespace and byNode mirror the unexported constants controlapi's
 	// atelet informer is built with.
@@ -294,6 +297,41 @@ func assertSnapshotCollected(t *testing.T, tc *testContext, snapshotURI string) 
 	}
 }
 
+// goldenSnapshotURI is the golden snapshot the test templates record: the
+// golden Actor owns it under its own prefix in the reserved atespace, the way
+// the ActorTemplateReconciler's checkpoint would leave it.
+func goldenSnapshotURI(t *testing.T) string {
+	t.Helper()
+	const goldenActorUID = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
+	uri, err := resources.NewActorSnapshotURI(testStorageLocation, resources.GoldenActorAtespace, goldenActorUID, "golden")
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI: %v", err)
+	}
+	return uri.String()
+}
+
+// snapshotOwnedByActor reports whether snapshotURI sits under the actor's own
+// prefix. That is what says the actor took the snapshot itself rather than
+// borrowing it from a tag, and so what decides whether its suspends and its
+// delete may collect it.
+func snapshotOwnedByActor(t *testing.T, actor *ateapipb.Actor, snapshotURI string) bool {
+	t.Helper()
+	uri, err := resources.ParseSnapshotURI(snapshotURI)
+	if err != nil {
+		t.Fatalf("ParseSnapshotURI(%q) = %v", snapshotURI, err)
+	}
+	return uri.OwnedBy(resources.ActorSnapshotOwner(actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetUid()))
+}
+
+// assertSnapshotOwnedByActor fails when snapshotURI is not under the actor's
+// own prefix.
+func assertSnapshotOwnedByActor(t *testing.T, actor *ateapipb.Actor, snapshotURI string) {
+	t.Helper()
+	if !snapshotOwnedByActor(t, actor, snapshotURI) {
+		t.Errorf("external snapshot %s is not under actor %s's own prefix, want it owned by the actor", snapshotURI, resources.ActorRefFromActor(actor))
+	}
+}
+
 func namespaceForTest(baseName string) string {
 	return fmt.Sprintf("%s-%d", baseName, time.Now().UnixNano())
 }
@@ -356,7 +394,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 				Name:     "tmpl1",
 			},
 			SnapshotsConfig: &ateapipb.SnapshotsConfig{
-				StorageLocation: "gs://fake-fake-fake",
+				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
 				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -381,7 +419,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		func(dbTemplate *ateapipb.ActorTemplate) error {
 			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/golden", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 				},
 			}
 			return nil
@@ -482,7 +520,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				Name:     name,
 			},
 			SnapshotsConfig: &ateapipb.SnapshotsConfig{
-				StorageLocation: "gs://fake-fake-fake",
+				StorageLocation: testStorageLocation,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
 				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,

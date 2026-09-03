@@ -103,12 +103,12 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		ActorVolumes: initVols,
 	}
 	if sourceTag != nil {
-		// The Actor starts out borrowing the tag's external snapshot rather
-		// than copying it. current_snapshot_tag records that the tag, not this
-		// Actor, owns those objects, until the Actor's first suspend: where
-		// we'll write a new snapshot and it'll be owned by the actor.
+		// The Actor starts out borrowing the tag's external snapshot rather than
+		// copying it. The snapshot URI is under the tag's prefix, not the Actor's, which
+		// is what keeps the Actor from collecting those objects. Its first
+		// suspend writes a snapshot under its own prefix and takes over from
+		// there.
 		outActor.Status.ExternalSnapshot = proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
-		outActor.Status.CurrentSnapshotTag = resources.ActorSnapshotTagRefFromActorSnapshotTag(sourceTag).ToObjectRef()
 	}
 	if errs := validateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)

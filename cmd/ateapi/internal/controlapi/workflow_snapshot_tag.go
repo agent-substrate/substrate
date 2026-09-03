@@ -107,7 +107,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, actorRef resource
 	defer func() { err = done(err) }()
 
 	tagRef := resources.ActorSnapshotTagRef{Atespace: actorRef.Atespace, Name: tag.GetMetadata().GetName()}
-	dst, err := resources.NewSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), actorRef.Atespace, resources.NewSnapshotNameForTag())
+	dst, err := resources.NewTagSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), actorRef.Atespace, resources.NewSnapshotName())
 	if err != nil {
 		return nil, "", fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
 	}
@@ -190,11 +190,11 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 		// resuspended since, the new source has a different object set that
 		// would otherwise union with the old one. A freshly minted destination
 		// is empty by construction, so only an adopted one needs clearing.
-		if err := objectstore.DeletePrefix(ctx, w.objectStore, dst); err != nil {
+		if err := objectstore.DeletePrefix(ctx, w.objectStore, dst.Prefix()); err != nil {
 			return fmt.Errorf("while clearing the in-progress snapshot of tag %s: %w", tagRef, err)
 		}
 	}
-	if err := objectstore.CopyPrefix(ctx, w.objectStore, src, dst); err != nil {
+	if err := objectstore.CopyPrefix(ctx, w.objectStore, src.Prefix(), dst.Prefix()); err != nil {
 		return fmt.Errorf("while copying the external snapshot for tag %s: %w", tagRef, err)
 	}
 	return nil

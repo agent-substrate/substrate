@@ -365,7 +365,7 @@ func TestListActorSnapshotTags(t *testing.T) {
 	seedTag := func(atespace, name string) {
 		t.Helper()
 		actor := newTestSuspendedActor(t, ctx, persistence, atespace, "actor-"+name)
-		storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(name, actor))
+		storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(t, name, actor))
 	}
 	seedTag(testAtespace, "v1")
 	seedTag(testAtespace, "v2")
@@ -528,27 +528,38 @@ func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 // newTestSuspendedActor creates a suspended actor holding an external snapshot.
 func newTestSuspendedActor(t *testing.T, ctx context.Context, st store.Interface, atespace, name string) *ateapipb.Actor {
 	t.Helper()
-	return storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+	actor := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-1"},
-		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/root/snapshots/" + atespace + "/" + name, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-		},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	// The snapshot sits under the actor's own prefix, which is keyed on the UID
+	// the store assigns, so it can only be recorded once the row exists.
+	uri, err := resources.NewActorSnapshotURI(testStorageLocation, atespace, actor.GetMetadata().GetUid(), name)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI: %v", err)
+	}
+	return mustUpdateActorStatus(t, ctx, st, actor, func(status *ateapipb.ActorStatus) {
+		status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
 	})
 }
 
 // newTestTag builds a finished tag of actor: the shape
 // CreateActorSnapshotTag leaves behind, pointing at the tag's own copy of the
 // actor's external snapshot rather than at the actor's.
-func newTestTag(name string, actor *ateapipb.Actor) *ateapipb.ActorSnapshotTag {
+func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.ActorSnapshotTag {
+	t.Helper()
 	atespace := actor.GetMetadata().GetAtespace()
+	uri, err := resources.NewTagSnapshotURI(testStorageLocation, atespace, name)
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
 	return &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.ActorSnapshotTagStatus{
 			Snapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:  "gs://bucket/root/snapshots/" + atespace + "/tag-" + name,
+				SnapshotUri:  uri.String(),
 				ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope(),
 			},
 			SourceActorUid: actor.GetMetadata().GetUid(),
@@ -559,8 +570,9 @@ func newTestTag(name string, actor *ateapipb.Actor) *ateapipb.ActorSnapshotTag {
 // newPendingTestTag builds the tag a create leaves behind when it dies between
 // reserving the name and finishing the copy: the row names the prefix it was
 // writing into, and nothing else.
-func newPendingTestTag(name string, actor *ateapipb.Actor) *ateapipb.ActorSnapshotTag {
-	tag := newTestTag(name, actor)
+func newPendingTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.ActorSnapshotTag {
+	t.Helper()
+	tag := newTestTag(t, name, actor)
 	tag.Status.InProgressSnapshotUri = tag.GetStatus().GetSnapshot().GetSnapshotUri()
 	tag.Status.Snapshot = nil
 	return tag
@@ -577,7 +589,7 @@ func rpcServiceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag
 
 	atespace, name := tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName()
 	actor := newTestSuspendedActor(t, ctx, persistence, atespace, "actor-"+name)
-	seeded := newTestTag(name, actor)
+	seeded := newTestTag(t, name, actor)
 	seeded.Scope = tag.GetScope()
 	created := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, seeded)
 	return &RPCService{impl: persistence}, created
@@ -595,7 +607,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 	const tagName = "before-upgrade"
 	// Tag A: what the client reads, and what its uid precondition names.
 	// Freshly created, so it sits at version 1.
-	originalTag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(tagName, actorOne))
+	originalTag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(t, tagName, actorOne))
 
 	// A concurrent client deletes A and re-tags the same atespace/name as a
 	// brand new tag B, pointed at another snapshot.
@@ -606,7 +618,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 			if _, err := persistence.DeleteActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: testAtespace, Name: tagName}); err != nil {
 				t.Fatalf("Racing writer: DeleteActorSnapshotTag: %v", err)
 			}
-			recreatedTag = storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(tagName, actorTwo))
+			recreatedTag = storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(t, tagName, actorTwo))
 		},
 	}
 	svc := &RPCService{impl: racing}
@@ -645,7 +657,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
 
 	const tagName = "before-upgrade"
-	originalTag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(tagName, actor))
+	originalTag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(t, tagName, actor))
 
 	// A concurrent client moves the tag past the version the caller could have
 	// observed, in the window the handler used to leave open between its own
@@ -695,7 +707,7 @@ func TestDeleteActorSnapshotTag_ReleasesExternalSnapshot(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
-	tag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag("v1", actor))
+	tag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newTestTag(t, "v1", actor))
 	tagRef := resources.ActorSnapshotTagRefFromActorSnapshotTag(tag)
 
 	objects := objectstoretest.New()
@@ -741,7 +753,7 @@ func TestDeleteActorSnapshotTag_ReleasesPendingSnapshot(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
-	tag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newPendingTestTag("v1", actor))
+	tag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newPendingTestTag(t, "v1", actor))
 	tagRef := resources.ActorSnapshotTagRefFromActorSnapshotTag(tag)
 
 	objects := objectstoretest.New()
@@ -774,7 +786,7 @@ func TestUpdateActorSnapshotTag_PendingTag(t *testing.T) {
 	svc := &RPCService{impl: persistence}
 
 	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
-	tag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newPendingTestTag("v1", actor))
+	tag := storetest.MustCreateActorSnapshotTag(t, ctx, persistence, newPendingTestTag(t, "v1", actor))
 
 	tag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
 	_, err := svc.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{ActorSnapshotTag: tag})

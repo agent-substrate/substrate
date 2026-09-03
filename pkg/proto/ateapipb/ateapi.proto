@@ -533,11 +533,9 @@ message ActorStatus {
   string in_progress_snapshot_name = 3;
 
   // external_snapshot is the Actor's current external snapshot.
-  // If the actor was created from an ActorSnapshotTag:
-  //   * This is the tag's snapshot AND
-  //   * current_snapshot_tag is set
-  // Otherwise: this field is unset until the Actor is first suspended
-  //
+  // If the Actor was created from an ActorSnapshotTag this is the tag's
+  // snapshot, borrowed until the Actor's first suspend writes one of its own.
+  // Otherwise it is unset until the Actor is first suspended.
   // +k8s:optional
   ExternalSnapshot external_snapshot = 4;
 
@@ -564,15 +562,6 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:format=k8s-short-name
   string in_progress_local_snapshot_name = 8;
-
-  // current_snapshot_tag is the ActorSnapshotTag that owns the external
-  // snapshot at `external_snapshot`. It is set when the Actor is created from
-  // a tag and cleared once the Actor takes a snapshot of its own (at it's
-  // first Suspend operation).
-  //
-  // +k8s:optional
-  // +k8s:subfield(atespace)=+k8s:required
-  ObjectRef current_snapshot_tag = 9;
 
   // The actor template the Actor's guest state is currently built on: the
   // one its latest sprint booted with, recorded when the resume (or first

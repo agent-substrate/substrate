@@ -323,7 +323,7 @@ func TestGoldenSnapshotWarmupFor(t *testing.T) {
 }
 
 func TestReconcileOne(t *testing.T) {
-	const snapshot = "gs://bucket/root/snapshots/ate-golden/snap-1"
+	goldenSnapshot := "gs://bucket/root/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"
 	tests := []struct {
 		name     string
 		template *ateapipb.ActorTemplate // nil: template absent from the store
@@ -352,8 +352,8 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:         "happy path creates, resumes, and snapshots the golden actor",
 			template:     testTemplate(),
-			control:      &fakeGoldenControl{snapshot: snapshot},
-			wantSnapshot: snapshot,
+			control:      &fakeGoldenControl{snapshot: goldenSnapshot},
+			wantSnapshot: goldenSnapshot,
 			wantDeadline: true,
 			wantCreates:  1,
 			wantResumes:  1,
@@ -362,7 +362,7 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:           "warmup without readyz stops after resume and requeues",
 			template:       testTemplate(withoutReadyz),
-			control:        &fakeGoldenControl{snapshot: snapshot},
+			control:        &fakeGoldenControl{snapshot: goldenSnapshot},
 			wantRequeueMin: goldenSnapshotWarmup - time.Second,
 			wantRequeueMax: goldenSnapshotWarmup,
 			wantDeadline:   true,
@@ -381,8 +381,8 @@ func TestReconcileOne(t *testing.T) {
 			name: "running golden actor is snapshotted once the deadline passed",
 			template: testTemplate(
 				withSnapshotDeadline(time.Now().Add(-time.Minute))),
-			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, snapshot: snapshot},
-			wantSnapshot: snapshot,
+			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, snapshot: goldenSnapshot},
+			wantSnapshot: goldenSnapshot,
 			wantSuspends: 1,
 		},
 		{
@@ -404,15 +404,15 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:         "suspending golden actor is completed and recorded",
 			template:     testTemplate(),
-			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, snapshot: snapshot},
-			wantSnapshot: snapshot,
+			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDING, snapshot: goldenSnapshot},
+			wantSnapshot: goldenSnapshot,
 			wantSuspends: 1,
 		},
 		{
 			name:         "suspended golden actor with a snapshot is recorded without more control calls",
 			template:     testTemplate(),
-			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: snapshot},
-			wantSnapshot: snapshot,
+			control:      &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: goldenSnapshot},
+			wantSnapshot: goldenSnapshot,
 		},
 		{
 			name:        "create AlreadyExists requeues for the retry to observe",
@@ -489,9 +489,9 @@ func TestReconcileOne(t *testing.T) {
 		},
 		{
 			name:         "terminal golden snapshot is a noop",
-			template:     testTemplate(withGoldenSnapshot(snapshot)),
+			template:     testTemplate(withGoldenSnapshot(goldenSnapshot)),
 			control:      &fakeGoldenControl{},
-			wantSnapshot: snapshot,
+			wantSnapshot: goldenSnapshot,
 		},
 		{
 			name:             "terminal error message is a noop",
@@ -556,7 +556,9 @@ func TestReconcileOne(t *testing.T) {
 func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTemplateStore(testTemplate())
-	control := &fakeGoldenControl{snapshot: "gs://bucket/root/snapshots/ate-golden/snap-1"}
+
+	goldenSnapshot := "gs://bucket/root/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"
+	control := &fakeGoldenControl{snapshot: goldenSnapshot}
 	r := newTestTemplateReconciler(st, control)
 
 	if _, err := r.reconcileOne(ctx, testTemplateRef); err != nil {
@@ -589,11 +591,13 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 
 func TestCheckpoint_TerminalStateErrors(t *testing.T) {
 	ctx := context.Background()
+	goldenSnapshot := "gs://bucket/root/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"
+
 	for _, seed := range []struct {
 		name string
 		opt  func(*ateapipb.ActorTemplate)
 	}{
-		{"golden snapshot taken", withGoldenSnapshot("gs://bucket/root/snapshots/ate-golden/snap-1")},
+		{"golden snapshot taken", withGoldenSnapshot(goldenSnapshot)},
 		{"failed", withFailed(reasonGoldenActorCrashed)},
 	} {
 		t.Run(seed.name, func(t *testing.T) {
@@ -654,6 +658,8 @@ func drainQueue(r *ActorTemplateReconciler) []resources.ActorTemplateRef {
 }
 
 func TestResync_QueuesOnlyActionableTemplates(t *testing.T) {
+	goldenSnapshot := "gs://bucket/root/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"
+
 	tests := []struct {
 		name       string
 		opts       []func(*ateapipb.ActorTemplate)
@@ -661,7 +667,7 @@ func TestResync_QueuesOnlyActionableTemplates(t *testing.T) {
 	}{
 		{"empty status", nil, true},
 		{"mid warmup", []func(*ateapipb.ActorTemplate){withSnapshotDeadline(time.Now().Add(time.Hour))}, true},
-		{"golden snapshot taken", []func(*ateapipb.ActorTemplate){withGoldenSnapshot("gs://bucket/root/snapshots/ate-golden/snap-1")}, false},
+		{"golden snapshot taken", []func(*ateapipb.ActorTemplate){withGoldenSnapshot(goldenSnapshot)}, false},
 		{"failed", []func(*ateapipb.ActorTemplate){withFailed(reasonGoldenActorCrashed)}, false},
 	}
 

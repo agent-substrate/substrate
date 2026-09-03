@@ -38,6 +38,11 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+// testSnapshotOwnerUID stands in for the Actor UID an external snapshot's
+// prefix is keyed on. The store keeps a snapshot URI opaque, so the tests only
+// need URIs of the right shape, not ones an actual actor wrote.
+const testSnapshotOwnerUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
+
 // One Postgres container serves every test in this package; each test gets
 // isolation via clearAll rather than a fresh container, which would be
 // far slower. Tests in this package are not safe to run with -parallel.
@@ -600,7 +605,7 @@ func createTestSuspendedActor(t *testing.T, s *Persistence, atespace, name strin
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/snapshots/" + atespace + "/" + name, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + atespace + "/actors/" + testSnapshotOwnerUID + "/snapshots/" + name, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 		},
 	})
 	if err != nil {
@@ -617,7 +622,7 @@ func createTestActorSnapshotTag(t *testing.T, s *Persistence, actor *ateapipb.Ac
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagAtespace, Name: tagName},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.ActorSnapshotTagStatus{
-			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/snapshots/" + tagAtespace + "/tag-" + tagName},
+			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/actor-snapshot-tags/" + tagName},
 			SourceActorUid: actor.GetMetadata().GetUid(),
 		},
 	})
@@ -671,7 +676,7 @@ func TestCreateActorSnapshotTag_TagForeignKeyErrors(t *testing.T) {
 	_, err := s.CreateActorSnapshotTag(ctx, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "latest"},
 		Status: &ateapipb.ActorSnapshotTagStatus{
-			InProgressSnapshotUri: "gs://bucket/snapshots/gone/tag-latest",
+			InProgressSnapshotUri: "gs://bucket/atespaces/gone/actor-snapshot-tags/latest",
 			SourceActorUid:        actor.GetMetadata().GetUid(),
 		},
 	})

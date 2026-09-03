@@ -1099,9 +1099,9 @@ type CheckpointWorkloadRequest struct {
 	// gVisor, the checkpoint consists of a checkpoint.img file that contains the
 	// memory, sentry state, and filesystem deltas.
 	//
-	// The control plane sends an ActorSnapshot's snapshot_uri, whose layout is
-	// "<snapshotsConfig.location>/snapshots/<atespace>/<snapshot name>". For
-	// example: "gs://bucket/root/snapshots/team-a/5678".
+	// The control plane sends an ActorSnapshot's snapshot_uri, which sits under
+	// the prefix of the resource that owns the snapshot. For example:
+	// "gs://bucket/root/atespaces/team-a/actors/<actor uid>/snapshots/5678".
 	SnapshotUri string `protobuf:"bytes,8,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.

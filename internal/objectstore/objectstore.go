@@ -50,16 +50,17 @@ type Store interface {
 	Copy(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string) error
 }
 
-// DeletePrefix removes every object of the external snapshot at uri. A
-// snapshot with no objects left is already collected, so it succeeds.
-func DeletePrefix(ctx context.Context, s Store, uri resources.SnapshotURI) error {
+// DeletePrefix removes every object under uri: one external snapshot, or
+// every snapshot an owner holds. A prefix with no objects left is already
+// collected, so it succeeds.
+func DeletePrefix(ctx context.Context, s Store, uri resources.StoragePrefix) error {
 	bucket, prefix, err := BucketPrefix(uri)
 	if err != nil {
 		return err
 	}
 	objects, err := s.List(ctx, bucket, prefix)
 	if err != nil {
-		return fmt.Errorf("while listing external snapshot %s: %w", uri, err)
+		return fmt.Errorf("while listing %s: %w", uri, err)
 	}
 	group, ctx := errgroup.WithContext(ctx)
 	group.SetLimit(prefixConcurrency)
@@ -78,7 +79,7 @@ func DeletePrefix(ctx context.Context, s Store, uri resources.SnapshotURI) error
 // keeping each object's name relative to the prefix. The destination is
 // deterministic, so a retry of a partly-completed copy overwrites what it
 // already wrote instead of leaving a second copy behind.
-func CopyPrefix(ctx context.Context, s Store, src, dst resources.SnapshotURI) error {
+func CopyPrefix(ctx context.Context, s Store, src, dst resources.StoragePrefix) error {
 	srcBucket, srcPrefix, err := BucketPrefix(src)
 	if err != nil {
 		return err
@@ -89,7 +90,7 @@ func CopyPrefix(ctx context.Context, s Store, src, dst resources.SnapshotURI) er
 	}
 	objects, err := s.List(ctx, srcBucket, srcPrefix)
 	if err != nil {
-		return fmt.Errorf("while listing external snapshot %s: %w", src, err)
+		return fmt.Errorf("while listing %s: %w", src, err)
 	}
 	// Unlike a delete, an empty source is a failure: copying nothing would
 	// leave the destination naming an external snapshot that cannot be
@@ -111,19 +112,19 @@ func CopyPrefix(ctx context.Context, s Store, src, dst resources.SnapshotURI) er
 	return group.Wait()
 }
 
-// BucketPrefix splits a snapshot URI into the bucket and the object-name
+// BucketPrefix splits a storage prefix into the bucket and the object-name
 // prefix its objects share. The prefix keeps its trailing separator so that it
-// cannot match a sibling snapshot whose name it happens to prefix.
-func BucketPrefix(uri resources.SnapshotURI) (string, string, error) {
+// cannot match a sibling whose name it happens to prefix.
+func BucketPrefix(uri resources.StoragePrefix) (string, string, error) {
 	if uri.IsZero() {
-		return "", "", fmt.Errorf("empty external snapshot URI")
+		return "", "", fmt.Errorf("empty storage prefix")
 	}
 	parsed, err := url.Parse(uri.String())
 	if err != nil {
-		return "", "", fmt.Errorf("while parsing external snapshot URI %s: %w", uri, err)
+		return "", "", fmt.Errorf("while parsing storage prefix %s: %w", uri, err)
 	}
 	if parsed.Host == "" {
-		return "", "", fmt.Errorf("external snapshot URI %s has no bucket", uri)
+		return "", "", fmt.Errorf("storage prefix %s has no bucket", uri)
 	}
 	return parsed.Host, strings.TrimPrefix(parsed.Path, "/") + "/", nil
 }

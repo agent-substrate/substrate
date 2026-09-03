@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -36,16 +38,31 @@ func seedActorSnapshotTag(t *testing.T, tc *testContext, actorName, tagName stri
 	actor := storetest.MustCreateActor(t, ctx, tc.persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: actorName},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-		Status: &ateapipb.ActorStatus{
-			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/" + actorName, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-		},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
+	// The actor's snapshot sits under its own prefix, keyed on the UID the store
+	// assigns, so it can only be recorded once the row exists.
+	actorSnapshotURI, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actor.GetMetadata().GetUid(), actorName)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI: %v", err)
+	}
+	actor, err = tc.persistence.UpdateActor(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: actorSnapshotURI.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("recording the actor's external snapshot: %v", err)
+	}
+	// The tag owns its own copy, under the tag prefix rather than the actor's.
+	tagSnapshotURI, err := resources.NewTagSnapshotURI(testStorageLocation, testAtespace, tagName)
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
 	tag := &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.ActorSnapshotTagStatus{
-			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/tag-" + tagName, ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope()},
+			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI.String(), ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope()},
 			SourceActorUid: actor.GetMetadata().GetUid(),
 		},
 	}

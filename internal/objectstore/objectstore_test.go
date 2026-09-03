@@ -28,76 +28,116 @@ import (
 
 const testLocation = "gs://bucket/root"
 
-func mustSnapshotURI(t *testing.T, location, atespace, name string) resources.SnapshotURI {
+func mustActorSnapshotURI(t *testing.T, location, atespace, actorUID, name string) resources.SnapshotURI {
 	t.Helper()
-	uri, err := resources.NewSnapshotURI(location, atespace, name)
+	uri, err := resources.NewActorSnapshotURI(location, atespace, actorUID, name)
 	if err != nil {
-		t.Fatalf("NewSnapshotURI(%q, %q, %q) = %v", location, atespace, name, err)
+		t.Fatalf("NewActorSnapshotURI(%q, %q, %q, %q) = %v", location, atespace, actorUID, name, err)
 	}
 	return uri
+}
+
+func mustTagSnapshotURI(t *testing.T, location, atespace, name string) resources.SnapshotURI {
+	t.Helper()
+	uri, err := resources.NewTagSnapshotURI(location, atespace, name)
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI(%q, %q, %q) = %v", location, atespace, name, err)
+	}
+	return uri
+}
+
+func mustOwnerPrefix(t *testing.T, owner resources.SnapshotOwner, location string) resources.StoragePrefix {
+	t.Helper()
+	prefix, err := owner.Prefix(location)
+	if err != nil {
+		t.Fatalf("%s.Prefix(%q) = %v", owner, location, err)
+	}
+	return prefix
 }
 
 func TestDeletePrefix(t *testing.T) {
 	tests := []struct {
 		name string
-		// seed maps a snapshot's objects onto the store before the delete.
-		seed map[string][]string
-		// target is the snapshot to release, as an atespace/name pair under
-		// testLocation.
-		targetAtespace string
-		targetName     string
-		wantRemaining  []string
+		// seed maps each snapshot to write onto the store to its object names.
+		seed          map[resources.SnapshotURI][]string
+		target        resources.StoragePrefix
+		wantRemaining []string
 	}{
 		{
-			name:           "releases every object of the snapshot",
-			seed:           map[string][]string{"team-a/snap-1": {"manifest.json", "memory.zst", "disks/root.zst"}},
-			targetAtespace: "team-a",
-			targetName:     "snap-1",
-			wantRemaining:  nil,
+			name: "releases every object of one snapshot",
+			seed: map[resources.SnapshotURI][]string{
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1"): {"manifest.json", "memory.zst", "disks/root.zst"},
+			},
+			target:        mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1").Prefix(),
+			wantRemaining: nil,
+		},
+		{
+			name: "releases every snapshot an actor owns",
+			seed: map[resources.SnapshotURI][]string{
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1"): {"manifest.json"},
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-2"): {"manifest.json"},
+			},
+			target:        mustOwnerPrefix(t, resources.ActorSnapshotOwner("team-a", "actor-1"), testLocation),
+			wantRemaining: nil,
 		},
 		{
 			name: "leaves a snapshot whose name it is a prefix of",
-			seed: map[string][]string{
-				"team-a/snap-1":  {"manifest.json"},
-				"team-a/snap-10": {"manifest.json"},
+			seed: map[resources.SnapshotURI][]string{
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1"):  {"manifest.json"},
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-10"): {"manifest.json"},
 			},
-			targetAtespace: "team-a",
-			targetName:     "snap-1",
-			wantRemaining:  []string{"bucket/root/snapshots/team-a/snap-10/manifest.json"},
+			target:        mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1").Prefix(),
+			wantRemaining: []string{"bucket/root/atespaces/team-a/actors/actor-1/snapshots/snap-10/manifest.json"},
 		},
 		{
-			name: "leaves the same name in another atespace",
-			seed: map[string][]string{
-				"team-a/snap-1": {"manifest.json"},
-				"team-b/snap-1": {"manifest.json"},
+			name: "leaves another actor's snapshots",
+			seed: map[resources.SnapshotURI][]string{
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1"): {"manifest.json"},
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-2", "snap-1"): {"manifest.json"},
 			},
-			targetAtespace: "team-a",
-			targetName:     "snap-1",
-			wantRemaining:  []string{"bucket/root/snapshots/team-b/snap-1/manifest.json"},
+			target:        mustOwnerPrefix(t, resources.ActorSnapshotOwner("team-a", "actor-1"), testLocation),
+			wantRemaining: []string{"bucket/root/atespaces/team-a/actors/actor-2/snapshots/snap-1/manifest.json"},
 		},
 		{
-			name:           "an already collected snapshot succeeds",
-			seed:           nil,
-			targetAtespace: "team-a",
-			targetName:     "snap-1",
-			wantRemaining:  nil,
+			name: "leaves the same actor UID in another atespace",
+			seed: map[resources.SnapshotURI][]string{
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1"): {"manifest.json"},
+				mustActorSnapshotURI(t, testLocation, "team-b", "actor-1", "snap-1"): {"manifest.json"},
+			},
+			target:        mustOwnerPrefix(t, resources.ActorSnapshotOwner("team-a", "actor-1"), testLocation),
+			wantRemaining: []string{"bucket/root/atespaces/team-b/actors/actor-1/snapshots/snap-1/manifest.json"},
+		},
+		{
+			// The invariant the layout exists for: an actor's prefix cannot reach
+			// a tag's objects, so a clone borrowing one cannot collect it.
+			name: "an actor's prefix leaves a tag's snapshot alone",
+			seed: map[resources.SnapshotURI][]string{
+				mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1"): {"manifest.json"},
+				mustTagSnapshotURI(t, testLocation, "team-a", "snap-2"):              {"manifest.json"},
+			},
+			target:        mustOwnerPrefix(t, resources.ActorSnapshotOwner("team-a", "actor-1"), testLocation),
+			wantRemaining: []string{"bucket/root/atespaces/team-a/actor-snapshot-tags/snap-2/manifest.json"},
+		},
+		{
+			name:          "an already collected snapshot succeeds",
+			seed:          nil,
+			target:        mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1").Prefix(),
+			wantRemaining: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := objectstoretest.New()
-			for snapshot, names := range tt.seed {
-				atespace, name := splitSnapshot(t, snapshot)
-				fake.PutSnapshot(t, mustSnapshotURI(t, testLocation, atespace, name), names...)
+			for uri, names := range tt.seed {
+				fake.PutSnapshot(t, uri, names...)
 			}
 
-			target := mustSnapshotURI(t, testLocation, tt.targetAtespace, tt.targetName)
-			if err := objectstore.DeletePrefix(t.Context(), fake, target); err != nil {
-				t.Fatalf("DeletePrefix(%s) = %v, want nil", target, err)
+			if err := objectstore.DeletePrefix(t.Context(), fake, tt.target); err != nil {
+				t.Fatalf("DeletePrefix(%s) = %v, want nil", tt.target, err)
 			}
 			if diff := cmp.Diff(tt.wantRemaining, fake.Objects(), cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("objects after DeletePrefix(%s) differ (-want +got):\n%s", target, diff)
+				t.Errorf("objects after DeletePrefix(%s) differ (-want +got):\n%s", tt.target, diff)
 			}
 		})
 	}
@@ -124,10 +164,10 @@ func TestDeletePrefix_Failures(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := objectstoretest.New()
 			fake.OnList, fake.OnDelete = tt.onList, tt.onDelete
-			uri := mustSnapshotURI(t, testLocation, "team-a", "snap-1")
+			uri := mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1")
 			fake.PutSnapshot(t, uri, "manifest.json", "memory.zst")
 
-			err := objectstore.DeletePrefix(t.Context(), fake, uri)
+			err := objectstore.DeletePrefix(t.Context(), fake, uri.Prefix())
 			if !errors.Is(err, failure) {
 				t.Fatalf("DeletePrefix(%s) = %v, want it to wrap %v", uri, err, failure)
 			}
@@ -139,7 +179,7 @@ func TestDeletePrefix_Failures(t *testing.T) {
 // the objects already gone stay gone and the rest are collected.
 func TestDeletePrefix_Resumes(t *testing.T) {
 	fake := objectstoretest.New()
-	uri := mustSnapshotURI(t, testLocation, "team-a", "snap-1")
+	uri := mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1")
 	fake.PutSnapshot(t, uri, "manifest.json", "memory.zst", "disks/root.zst")
 
 	failure := errors.New("boom")
@@ -149,12 +189,12 @@ func TestDeletePrefix_Resumes(t *testing.T) {
 		}
 		return nil
 	}
-	if err := objectstore.DeletePrefix(t.Context(), fake, uri); !errors.Is(err, failure) {
+	if err := objectstore.DeletePrefix(t.Context(), fake, uri.Prefix()); !errors.Is(err, failure) {
 		t.Fatalf("DeletePrefix(%s) = %v, want it to wrap %v", uri, err, failure)
 	}
 
 	fake.OnDelete = nil
-	if err := objectstore.DeletePrefix(t.Context(), fake, uri); err != nil {
+	if err := objectstore.DeletePrefix(t.Context(), fake, uri.Prefix()); err != nil {
 		t.Fatalf("DeletePrefix(%s) on retry = %v, want nil", uri, err)
 	}
 	if remaining := fake.Objects(); len(remaining) != 0 {
@@ -163,13 +203,13 @@ func TestDeletePrefix_Resumes(t *testing.T) {
 }
 
 func TestCopyPrefix(t *testing.T) {
-	src := mustSnapshotURI(t, testLocation, "team-a", "snap-1")
-	dst := mustSnapshotURI(t, testLocation, "team-a", "tag-v1")
+	src := mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1")
+	dst := mustTagSnapshotURI(t, testLocation, "team-a", "snap-2")
 
 	fake := objectstoretest.New()
 	fake.PutSnapshot(t, src, "manifest.json", "memory.zst", "disks/root.zst")
 
-	if err := objectstore.CopyPrefix(t.Context(), fake, src, dst); err != nil {
+	if err := objectstore.CopyPrefix(t.Context(), fake, src.Prefix(), dst.Prefix()); err != nil {
 		t.Fatalf("CopyPrefix(%s, %s) = %v, want nil", src, dst, err)
 	}
 
@@ -185,18 +225,18 @@ func TestCopyPrefix(t *testing.T) {
 // TestCopyPrefix_AcrossBuckets covers a template whose snapshotsConfig.location
 // moved: the copy still lands under the destination's own bucket.
 func TestCopyPrefix_AcrossBuckets(t *testing.T) {
-	src := mustSnapshotURI(t, "gs://old-bucket/root", "team-a", "snap-1")
-	dst := mustSnapshotURI(t, "gs://new-bucket", "team-a", "tag-v1")
+	src := mustActorSnapshotURI(t, "gs://old-bucket/root", "team-a", "actor-1", "snap-1")
+	dst := mustTagSnapshotURI(t, "gs://new-bucket", "team-a", "snap-2")
 
 	fake := objectstoretest.New()
 	fake.PutSnapshot(t, src, "manifest.json")
 
-	if err := objectstore.CopyPrefix(t.Context(), fake, src, dst); err != nil {
+	if err := objectstore.CopyPrefix(t.Context(), fake, src.Prefix(), dst.Prefix()); err != nil {
 		t.Fatalf("CopyPrefix(%s, %s) = %v, want nil", src, dst, err)
 	}
 	want := []string{
-		"new-bucket/snapshots/team-a/tag-v1/manifest.json",
-		"old-bucket/root/snapshots/team-a/snap-1/manifest.json",
+		"new-bucket/atespaces/team-a/actor-snapshot-tags/snap-2/manifest.json",
+		"old-bucket/root/atespaces/team-a/actors/actor-1/snapshots/snap-1/manifest.json",
 	}
 	if diff := cmp.Diff(want, fake.Objects()); diff != "" {
 		t.Errorf("objects after CopyPrefix differ (-want +got):\n%s", diff)
@@ -206,8 +246,8 @@ func TestCopyPrefix_AcrossBuckets(t *testing.T) {
 // TestCopyPrefix_RetryOverwrites covers the retry of a copy that failed partway:
 // the destination is deterministic, so nothing is left over from the first run.
 func TestCopyPrefix_RetryOverwrites(t *testing.T) {
-	src := mustSnapshotURI(t, testLocation, "team-a", "snap-1")
-	dst := mustSnapshotURI(t, testLocation, "team-a", "tag-v1")
+	src := mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1")
+	dst := mustTagSnapshotURI(t, testLocation, "team-a", "snap-2")
 
 	fake := objectstoretest.New()
 	fake.PutSnapshot(t, src, "manifest.json", "memory.zst")
@@ -219,12 +259,12 @@ func TestCopyPrefix_RetryOverwrites(t *testing.T) {
 		}
 		return nil
 	}
-	if err := objectstore.CopyPrefix(t.Context(), fake, src, dst); !errors.Is(err, failure) {
+	if err := objectstore.CopyPrefix(t.Context(), fake, src.Prefix(), dst.Prefix()); !errors.Is(err, failure) {
 		t.Fatalf("CopyPrefix(%s, %s) = %v, want it to wrap %v", src, dst, err, failure)
 	}
 
 	fake.OnCopy = nil
-	if err := objectstore.CopyPrefix(t.Context(), fake, src, dst); err != nil {
+	if err := objectstore.CopyPrefix(t.Context(), fake, src.Prefix(), dst.Prefix()); err != nil {
 		t.Fatalf("CopyPrefix(%s, %s) on retry = %v, want nil", src, dst, err)
 	}
 	want := []string{"manifest.json", "memory.zst"}
@@ -237,11 +277,11 @@ func TestCopyPrefix_RetryOverwrites(t *testing.T) {
 // would leave the destination naming an external snapshot nothing can restore
 // from, so it has to fail instead.
 func TestCopyPrefix_EmptySource(t *testing.T) {
-	src := mustSnapshotURI(t, testLocation, "team-a", "snap-1")
-	dst := mustSnapshotURI(t, testLocation, "team-a", "tag-v1")
+	src := mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1")
+	dst := mustTagSnapshotURI(t, testLocation, "team-a", "snap-2")
 
 	fake := objectstoretest.New()
-	if err := objectstore.CopyPrefix(t.Context(), fake, src, dst); err == nil {
+	if err := objectstore.CopyPrefix(t.Context(), fake, src.Prefix(), dst.Prefix()); err == nil {
 		t.Fatalf("CopyPrefix(%s, %s) = nil, want an error", src, dst)
 	}
 	if objects := fake.Objects(); len(objects) != 0 {
@@ -252,55 +292,57 @@ func TestCopyPrefix_EmptySource(t *testing.T) {
 func TestBucketPrefix(t *testing.T) {
 	tests := []struct {
 		name       string
-		uri        resources.SnapshotURI
+		prefix     resources.StoragePrefix
 		wantBucket string
 		wantPrefix string
 		wantErr    bool
 	}{
 		{
 			name:       "gcs location with a path",
-			uri:        mustSnapshotURI(t, "gs://bucket/root", "team-a", "snap-1"),
+			prefix:     mustActorSnapshotURI(t, "gs://bucket/root", "team-a", "actor-1", "snap-1").Prefix(),
 			wantBucket: "bucket",
-			wantPrefix: "root/snapshots/team-a/snap-1/",
+			wantPrefix: "root/atespaces/team-a/actors/actor-1/snapshots/snap-1/",
 		},
 		{
 			name:       "s3 location at the bucket root",
-			uri:        mustSnapshotURI(t, "s3://bucket", "team-a", "snap-1"),
+			prefix:     mustActorSnapshotURI(t, "s3://bucket", "team-a", "actor-1", "snap-1").Prefix(),
 			wantBucket: "bucket",
-			wantPrefix: "snapshots/team-a/snap-1/",
+			wantPrefix: "atespaces/team-a/actors/actor-1/snapshots/snap-1/",
 		},
 		{
-			name:    "the zero URI",
-			uri:     resources.SnapshotURI{},
+			name:       "an actor's owner prefix",
+			prefix:     mustOwnerPrefix(t, resources.ActorSnapshotOwner("team-a", "actor-1"), "gs://bucket/root"),
+			wantBucket: "bucket",
+			wantPrefix: "root/atespaces/team-a/actors/actor-1/",
+		},
+		{
+			name:       "a tag's prefix",
+			prefix:     mustTagSnapshotURI(t, "gs://bucket/root", "team-a", "snap-1").Prefix(),
+			wantBucket: "bucket",
+			wantPrefix: "root/atespaces/team-a/actor-snapshot-tags/snap-1/",
+		},
+		{
+			name:    "the zero prefix",
+			prefix:  resources.StoragePrefix{},
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bucket, prefix, err := objectstore.BucketPrefix(tt.uri)
+			bucket, prefix, err := objectstore.BucketPrefix(tt.prefix)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("BucketPrefix(%s) = (%q, %q, nil), want an error", tt.uri, bucket, prefix)
+					t.Fatalf("BucketPrefix(%s) = (%q, %q, nil), want an error", tt.prefix, bucket, prefix)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("BucketPrefix(%s) = %v, want nil", tt.uri, err)
+				t.Fatalf("BucketPrefix(%s) = %v, want nil", tt.prefix, err)
 			}
 			if bucket != tt.wantBucket || prefix != tt.wantPrefix {
-				t.Errorf("BucketPrefix(%s) = (%q, %q), want (%q, %q)", tt.uri, bucket, prefix, tt.wantBucket, tt.wantPrefix)
+				t.Errorf("BucketPrefix(%s) = (%q, %q), want (%q, %q)", tt.prefix, bucket, prefix, tt.wantBucket, tt.wantPrefix)
 			}
 		})
 	}
-}
-
-// splitSnapshot splits a test's "atespace/name" shorthand.
-func splitSnapshot(t *testing.T, snapshot string) (string, string) {
-	t.Helper()
-	atespace, name, found := strings.Cut(snapshot, "/")
-	if !found {
-		t.Fatalf("malformed snapshot shorthand %q, want atespace/name", snapshot)
-	}
-	return atespace, name
 }

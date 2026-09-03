@@ -394,11 +394,10 @@ func TestCreateActor_PendingSnapshotTag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor from the finished tag failed: %v", err)
 	}
+	// The clone points at the tag's snapshot, under the tag's own prefix: the
+	// tag still owns those objects.
 	if got := clone.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
 		t.Errorf("clone external snapshot = %q, want the tag's %q", got, snapshotURI)
-	}
-	if got := clone.GetStatus().GetCurrentSnapshotTag(); !proto.Equal(got, tagRef) {
-		t.Errorf("clone current snapshot tag = %v, want %v: the tag still owns the objects", got, tagRef)
 	}
 }
 
@@ -2180,9 +2179,8 @@ func TestSuspendActor(t *testing.T) {
 	if snapshotURI == "" {
 		t.Fatalf("SuspendActor wrote no external snapshot: %v", suspended)
 	}
-	if got := sourceActor.GetStatus().GetCurrentSnapshotTag(); got != nil {
-		t.Errorf("current snapshot tag = %v, want unset: the Actor owns the snapshot it just wrote", got)
-	}
+	// The snapshot lands under the Actor's own prefix: it owns what it wrote.
+	assertSnapshotOwnedByActor(t, sourceActor, snapshotURI)
 
 	// Tagging is a separate call over whatever snapshot the Actor holds by then,
 	// which here is the one the suspend above left behind.
@@ -2256,8 +2254,9 @@ func TestSuspendActor(t *testing.T) {
 		t.Fatalf("CreateActor from published tag failed: %v", err)
 	}
 
-	// A clone borrows the tag's external snapshot rather than copying it, and
-	// records that it is borrowing so that its own lifecycle never releases it.
+	// A clone borrows the tag's external snapshot rather than copying it. The
+	// snapshot stays under the tag's prefix, which is what keeps the clone's own
+	// lifecycle from ever releasing it.
 	clone, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:          &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
@@ -2271,8 +2270,8 @@ func TestSuspendActor(t *testing.T) {
 	if got := clone.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != tagSnapshotURI {
 		t.Errorf("clone snapshot uri = %q, want the tag's %q", got, tagSnapshotURI)
 	}
-	if !proto.Equal(clone.GetStatus().GetCurrentSnapshotTag(), tagRef) {
-		t.Errorf("clone current snapshot tag = %v, want %v", clone.GetStatus().GetCurrentSnapshotTag(), tagRef)
+	if snapshotOwnedByActor(t, clone, tagSnapshotURI) {
+		t.Errorf("clone snapshot %s sits under the clone's own prefix, want it left under the tag's", tagSnapshotURI)
 	}
 	if !proto.Equal(clone.GetSourceSnapshotTag(), tagRef) {
 		t.Errorf("clone source snapshot tag = %v, want %v", clone.GetSourceSnapshotTag(), tagRef)
@@ -2294,9 +2293,7 @@ func TestSuspendActor(t *testing.T) {
 	if cloneSnapshotURI == tagSnapshotURI || cloneSnapshotURI == "" {
 		t.Errorf("clone snapshot uri after suspension = %q, want an external snapshot of its own", cloneSnapshotURI)
 	}
-	if got := cloneSuspended.GetActor().GetStatus().GetCurrentSnapshotTag(); got != nil {
-		t.Errorf("clone current snapshot tag after suspension = %v, want unset", got)
-	}
+	assertSnapshotOwnedByActor(t, cloneSuspended.GetActor(), cloneSnapshotURI)
 	// It stopped borrowing without releasing what it had borrowed.
 	assertSnapshotPresent(t, tc, tagSnapshotURI)
 	assertSnapshotPresent(t, tc, cloneSnapshotURI)

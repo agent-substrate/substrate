@@ -111,7 +111,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 		// shared crash path, which cannot know which workflow was in flight.
 		a.Status.InProgressSnapshotName = "partial-snapshot"
 		a.Status.InProgressLocalSnapshotName = "partial-local-snapshot"
-		a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/root/snapshots/" + apiActorRef.Atespace + "/last"}
+		a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last")}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
@@ -135,7 +135,7 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 		t.Errorf("in-progress checkpoints not cleared: %v", got.GetStatus())
 	}
 	// The last completed snapshot is what makes the actor resumable, so it stays.
-	if want := "gs://bucket/root/snapshots/" + apiActorRef.Atespace + "/last"; got.GetStatus().GetExternalSnapshot().GetSnapshotUri() != want {
+	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"); got.GetStatus().GetExternalSnapshot().GetSnapshotUri() != want {
 		t.Errorf("external snapshot = %q, want it preserved as %q", got.GetStatus().GetExternalSnapshot().GetSnapshotUri(), want)
 	}
 }

@@ -22,7 +22,17 @@ import (
 	"github.com/google/uuid"
 )
 
-const snapshotsPathSegment = "snapshots"
+const (
+	atespacesPathSegment = "atespaces"
+	snapshotsPathSegment = "snapshots"
+
+	// actorsOwnerKind and tagsOwnerKind are the path segments naming the kind
+	// of resource that owns a snapshot. They are what makes ownership readable
+	// from an object's name, so a collector can tell whose objects it is
+	// looking at without consulting the store.
+	actorsOwnerKind = "actors"
+	tagsOwnerKind   = "actor-snapshot-tags"
+)
 
 // NewSnapshotName returns a unique name for a new snapshot, durable or
 // node-local.
@@ -30,49 +40,133 @@ func NewSnapshotName() string {
 	return uuid.NewString()
 }
 
-// SnapshotURI is where one ActorSnapshot's objects live in object storage:
-// an ActorTemplate's snapshotsConfig.location, plus /snapshots/<atespace>/<name>.
-//
-//	gs://bucket/root                              location
-//	gs://bucket/root/snapshots/team-a/<name>      this URI
-//	gs://bucket/root/snapshots/team-a/<name>/...  an object in the snapshot
-type SnapshotURI struct {
-	uri      string
-	location string
-	atespace string
-	name     string
+// StoragePrefix is a validated object-storage prefix: a scheme, a bucket and a
+// path, with no query, fragment or userinfo. Every object below this prefix has a name
+// starting with its path, so deleting the prefix collects all of them.
+type StoragePrefix struct {
+	uri string
 }
 
-// NewSnapshotURI returns the URI of a snapshot of an actor in a given
-// atespace, stored and under an ActorTemplate's snapshotsConfig.location.
-func NewSnapshotURI(location, atespace, name string) (SnapshotURI, error) {
-	if err := ValidateSnapshotLocation(location); err != nil {
-		return SnapshotURI{}, err
+// IsZero reports whether p is empty
+func (p StoragePrefix) IsZero() bool { return p == StoragePrefix{} }
+
+func (p StoragePrefix) String() string { return p.uri }
+
+// SnapshotOwner is the resource whose objects a snapshot's prefix holds: the
+// Actor that took it, or the ActorSnapshotTag that copied it. Deletion is
+// expressed as "collect everything under my own prefix", so an owner cannot
+// name another's objects, and a borrowed snapshot is recognized by the URI
+// alone rather than by a flag the two have to keep in sync.
+type SnapshotOwner struct {
+	kind     string
+	atespace string
+	// id distinguishes one owner from every other of its kind: an Actor's UID,
+	// which no later Actor reuses, or, for a tag, the name of the single
+	// snapshot it owns.
+	id string
+}
+
+// ActorSnapshotOwner returns the owner of the snapshots an Actor takes. It is
+// keyed on the UID rather than the name so that an Actor recreated under the
+// same name never inherits its predecessor's objects.
+func ActorSnapshotOwner(atespace, actorUID string) SnapshotOwner {
+	return SnapshotOwner{kind: actorsOwnerKind, atespace: atespace, id: actorUID}
+}
+
+// TagSnapshotOwner returns the owner of the one snapshot an ActorSnapshotTag
+// holds. A tag never takes a second snapshot, so its prefix is that snapshot's
+// prefix, and the name is minted fresh rather than derived from the tag: a
+// recreated tag cannot compute its way onto the objects its predecessor left.
+func TagSnapshotOwner(atespace, snapshotName string) SnapshotOwner {
+	return SnapshotOwner{kind: tagsOwnerKind, atespace: atespace, id: snapshotName}
+}
+
+// IsZero reports whether o is the zero SnapshotOwner.
+func (o SnapshotOwner) IsZero() bool { return o == SnapshotOwner{} }
+
+// Atespace returns the atespace the owner belongs to.
+func (o SnapshotOwner) Atespace() string { return o.atespace }
+
+func (o SnapshotOwner) String() string {
+	return fmt.Sprintf("%s/%s/%s", o.atespace, o.kind, o.id)
+}
+
+func (o SnapshotOwner) validate() error {
+	switch o.kind {
+	case actorsOwnerKind, tagsOwnerKind:
+	default:
+		return fmt.Errorf("invalid snapshot owner: unknown kind %q", o.kind)
 	}
-	if !IsValidResourceName(atespace) {
-		return SnapshotURI{}, fmt.Errorf("invalid snapshot URI: atespace %q is not a valid resource name", atespace)
+	if !IsValidResourceName(o.atespace) {
+		return fmt.Errorf("invalid snapshot owner: atespace %q is not a valid resource name", o.atespace)
+	}
+	if !IsValidResourceName(o.id) {
+		return fmt.Errorf("invalid snapshot owner: %q is not a valid resource name", o.id)
+	}
+	return nil
+}
+
+// Prefix returns the prefix holding every object this owner's snapshots are
+// made of, under an ActorTemplate's snapshotsConfig.location.
+func (o SnapshotOwner) Prefix(location string) (StoragePrefix, error) {
+	if err := o.validate(); err != nil {
+		return StoragePrefix{}, err
+	}
+	if err := ValidateSnapshotLocation(location); err != nil {
+		return StoragePrefix{}, err
+	}
+	uri, err := url.JoinPath(location, atespacesPathSegment, o.atespace, o.kind, o.id)
+	if err != nil {
+		return StoragePrefix{}, fmt.Errorf("invalid storage prefix: %w", err)
+	}
+	return StoragePrefix{uri: uri}, nil
+}
+
+// SnapshotURI is where one external snapshot's objects live in object storage:
+// an ActorTemplate's snapshotsConfig.location, plus the prefix of the resource
+// that owns the snapshot.
+//
+//	gs://bucket/root                                                    location
+//	gs://bucket/root/atespaces/team-a/actors/<uid>                      an Actor's prefix
+//	gs://bucket/root/atespaces/team-a/actors/<uid>/snapshots/<name>     one of its snapshots
+//	gs://bucket/root/atespaces/team-a/actor-snapshot-tags/<name>        a tag's prefix, and its
+//	                                                                    only snapshot
+type SnapshotURI struct {
+	uri         string
+	location    string
+	owner       SnapshotOwner
+	ownerPrefix string
+	name        string
+}
+
+// NewActorSnapshotURI returns the URI of a snapshot an Actor took, stored
+// under an ActorTemplate's snapshotsConfig.location.
+func NewActorSnapshotURI(location, atespace, actorUID, name string) (SnapshotURI, error) {
+	owner := ActorSnapshotOwner(atespace, actorUID)
+	prefix, err := owner.Prefix(location)
+	if err != nil {
+		return SnapshotURI{}, err
 	}
 	if !IsValidResourceName(name) {
 		return SnapshotURI{}, fmt.Errorf("invalid snapshot URI: snapshot name %q is not a valid resource name", name)
 	}
-	uri, err := url.JoinPath(location, snapshotsPathSegment, atespace, name)
+	uri, err := url.JoinPath(prefix.String(), snapshotsPathSegment, name)
 	if err != nil {
 		return SnapshotURI{}, fmt.Errorf("invalid snapshot URI: %w", err)
 	}
-	return SnapshotURI{uri: uri, location: location, atespace: atespace, name: name}, nil
+	return SnapshotURI{uri: uri, location: location, owner: owner, ownerPrefix: prefix.String(), name: name}, nil
 }
 
-// tagSnapshotPrefix separates the snapshots ActorSnapshotTags own from the
-// ones actors own. Actor snapshots are named by NewSnapshotName, which returns
-// a UUID, so no actor can ever be handed a name a tag holds.
-const tagSnapshotPrefix = "tag-"
-
-// NewSnapshotNameForTag returns a unique name for the snapshot an
-// ActorSnapshotTag owns. Nothing derives it from the tag name: the destination
-// is minted once, recorded on the tag row, and only ever read back afterwards,
-// so no later operation can compute its way onto another tag's objects.
-func NewSnapshotNameForTag() string {
-	return tagSnapshotPrefix + uuid.NewString()
+// NewTagSnapshotURI returns the URI of the snapshot an ActorSnapshotTag owns,
+// stored under an ActorTemplate's snapshotsConfig.location. The tag's prefix
+// and its snapshot's are the same: a tag holds exactly one snapshot.
+func NewTagSnapshotURI(location, atespace, name string) (SnapshotURI, error) {
+	owner := TagSnapshotOwner(atespace, name)
+	prefix, err := owner.Prefix(location)
+	if err != nil {
+		return SnapshotURI{}, err
+	}
+	return SnapshotURI{uri: prefix.String(), location: location, owner: owner, ownerPrefix: prefix.String(), name: name}, nil
 }
 
 // ParseSnapshotURI parses a given snapshot URI.
@@ -83,23 +177,54 @@ func ParseSnapshotURI(uri string) (SnapshotURI, error) {
 	}
 
 	segments := strings.Split(strings.TrimSuffix(u.Path, "/"), "/")
-	if len(segments) < 3 || segments[len(segments)-3] != snapshotsPathSegment {
-		return SnapshotURI{}, fmt.Errorf("invalid snapshot URI %q", uri)
+	n := len(segments)
+	switch {
+	// /root/atespaces/team-a/actors/<uid>/snapshots/<name>
+	//       n-6       n-5    n-4    n-3   n-2       n-1
+	case n >= 6 && segments[n-6] == atespacesPathSegment && segments[n-4] == actorsOwnerKind && segments[n-2] == snapshotsPathSegment:
+		u.Path = strings.Join(segments[:n-6], "/")
+		return NewActorSnapshotURI(u.String(), segments[n-5], segments[n-3], segments[n-1])
+	// /root/atespaces/team-a/actor-snapshot-tags/<name>
+	//       n-4       n-3    n-2                 n-1
+	case n >= 4 && segments[n-4] == atespacesPathSegment && segments[n-2] == tagsOwnerKind:
+		u.Path = strings.Join(segments[:n-4], "/")
+		return NewTagSnapshotURI(u.String(), segments[n-3], segments[n-1])
 	}
-	atespace, name := segments[len(segments)-2], segments[len(segments)-1]
-
-	u.Path = strings.Join(segments[:len(segments)-3], "/")
-	return NewSnapshotURI(u.String(), atespace, name)
+	return SnapshotURI{}, fmt.Errorf("invalid snapshot URI %q", uri)
 }
 
 // Location returns the ActorTemplate snapshotsConfig.location this snapshot is stored under.
 func (u SnapshotURI) Location() string { return u.location }
 
-// Atespace returns the atespace of the actor the snapshot was taken from.
-func (u SnapshotURI) Atespace() string { return u.atespace }
+// Atespace returns the atespace of the resource that owns the snapshot.
+func (u SnapshotURI) Atespace() string { return u.owner.Atespace() }
 
 // Name returns the snapshot's resource name.
 func (u SnapshotURI) Name() string { return u.name }
+
+// Owner returns the resource whose prefix the snapshot lives under.
+func (u SnapshotURI) Owner() SnapshotOwner { return u.owner }
+
+// OwnedBy reports whether the snapshot is owned by o. A collector asks this
+// before deleting: an Actor whose snapshot came from a tag does not own it,
+// and releasing it would break every other Actor cloned from that tag.
+func (u SnapshotURI) OwnedBy(o SnapshotOwner) bool { return !u.IsZero() && u.owner == o }
+
+// OwnerPrefix returns the prefix of the resource that owns the snapshot,
+// holding this snapshot and every other that owner wrote. Collecting an owner
+// takes only a URI it recorded, with no need to resolve its ActorTemplate for
+// the storage location.
+func (u SnapshotURI) OwnerPrefix() StoragePrefix {
+	return StoragePrefix{uri: u.ownerPrefix}
+}
+
+// Prefix returns the prefix holding this one snapshot's objects.
+func (u SnapshotURI) Prefix() StoragePrefix {
+	if u.IsZero() {
+		return StoragePrefix{}
+	}
+	return StoragePrefix{uri: u.uri}
+}
 
 // IsZero reports whether u is the zero SnapshotURI.
 func (u SnapshotURI) IsZero() bool { return u == SnapshotURI{} }

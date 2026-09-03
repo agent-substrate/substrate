@@ -309,7 +309,7 @@ func (s *RPCService) releaseTagSnapshot(ctx context.Context, tag *ateapipb.Actor
 		if err != nil {
 			return fmt.Errorf("while parsing the external snapshot %q of tag %s/%s: %w", snapshotURI, atespace, name, err)
 		}
-		if err := objectstore.DeletePrefix(ctx, s.objectStore, uri); err != nil {
+		if err := objectstore.DeletePrefix(ctx, s.objectStore, uri.Prefix()); err != nil {
 			return fmt.Errorf("while releasing the external snapshot %q of tag %s/%s: %w", snapshotURI, atespace, name, err)
 		}
 	}

@@ -44,7 +44,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 			// Server-owned status on the request is ignored.
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/ate-golden/sneaky"},
+					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/sneaky"},
 				},
 			},
 		},

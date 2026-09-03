@@ -414,25 +414,11 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-				SnapshotUri:  "gs://private/snapshots/as/snap-1",
+				SnapshotUri:  "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
 				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			}
 		})),
 		nil,
-	}, {
-		"valid actor.status.current_snapshot_tag",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.CurrentSnapshotTag = &ateapipb.ObjectRef{Atespace: "as", Name: "v1"}
-		})),
-		nil,
-	}, {
-		"missing actor.status.current_snapshot_tag.atespace",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.CurrentSnapshotTag = &ateapipb.ObjectRef{Name: "v1"}
-		})),
-		field.ErrorList{field.Required(field.NewPath("status", "current_snapshot_tag", "atespace"), "")},
 	}, {
 		"valid actor.status.local_snapshot_info.snapshot_name",
 		validInput(),

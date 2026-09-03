@@ -146,7 +146,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	name := resources.NewSnapshotName()
 	// Fail here rather than at checkpoint time if the template's location
 	// cannot produce a usable URI: nothing has been written yet.
-	if _, err := inProgressSnapshotURI(actorTemplate, actorRef.Atespace, name); err != nil {
+	if _, err := inProgressSnapshotURI(actorTemplate, actor, name); err != nil {
 		return nil, err
 	}
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
@@ -236,7 +236,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 		return "", err
 	}
 
-	snapshotURI, err := inProgressSnapshotURI(actorTemplate, actor.GetMetadata().GetAtespace(), actor.GetStatus().GetInProgressSnapshotName())
+	snapshotURI, err := inProgressSnapshotURI(actorTemplate, actor, actor.GetStatus().GetInProgressSnapshotName())
 	if err != nil {
 		return "", err
 	}
@@ -295,7 +295,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	snapshotURI, err := inProgressSnapshotURI(actorTemplate, actor.GetMetadata().GetAtespace(), actor.GetStatus().GetInProgressSnapshotName())
+	snapshotURI, err := inProgressSnapshotURI(actorTemplate, actor, actor.GetStatus().GetInProgressSnapshotName())
 	if err != nil {
 		return "", err
 	}
@@ -318,10 +318,13 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	return wireSnapshotScope, maybeCrashActor(ctx, w.store, actorRef, err, "while uploading paused snapshot", ateattr.OperationSuspend)
 }
 
-func inProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, atespace, name string) (resources.SnapshotURI, error) {
-	uri, err := resources.NewSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), atespace, name)
+// inProgressSnapshotURI is where the snapshot an actor is currently taking is
+// written: under the actor's own prefix, so the objects name their owner.
+func inProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, name string) (resources.SnapshotURI, error) {
+	atespace := actor.GetMetadata().GetAtespace()
+	uri, err := resources.NewActorSnapshotURI(actorTemplate.GetSnapshotsConfig().GetStorageLocation(), atespace, actor.GetMetadata().GetUid(), name)
 	if err != nil {
-		return resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", atespace, name, err)
+		return resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", atespace, actor.GetMetadata().GetName(), err)
 	}
 	return uri, nil
 }
@@ -398,7 +401,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if snapshotName != "" {
 		// The same inputs CallAteletSuspend used, so the recorded URI is
 		// where the external snapshot was actually written.
-		uri, err := inProgressSnapshotURI(actorTemplate, actorRef.Atespace, snapshotName)
+		uri, err := inProgressSnapshotURI(actorTemplate, latestActor, snapshotName)
 		if err != nil {
 			return nil, err
 		}
@@ -422,10 +425,10 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		if snapshotName != "" {
+			// The recorded URI is under the actor's own prefix, so the actor now
+			// owns its external snapshot rather than borrowing the tag's it may
+			// have been created from.
 			toUpdate.Status.ExternalSnapshot = proto.CloneOf(externalSnapshot)
-			// The actor now owns an external snapshot of its own, so it is no
-			// longer borrowing the tag it was created from (if any).
-			toUpdate.Status.CurrentSnapshotTag = nil
 			toUpdate.Status.InProgressSnapshotName = ""
 		}
 		toUpdate.Status.WorkerAssignment = nil
@@ -447,7 +450,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 // It runs while the actor record still points at the old snapshot, so an
 // interrupted release is rediscoverable: the retry deletes whatever is left.
 // An actor that borrowed its current snapshot from a tag releases nothing —
-// the tag owns that snapshot and outlives the actor.
+// the snapshot lives under the tag's prefix, and the tag outlives the actor.
 func (w *ActorWorkflow) releaseReplacedSnapshot(ctx context.Context, actor *ateapipb.Actor, nextSnapshot *ateapipb.ExternalSnapshot) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseReplacedSnapshot")
 	defer func() { err = done(err) }()
@@ -463,13 +466,18 @@ func (w *ActorWorkflow) releaseReplacedSnapshot(ctx context.Context, actor *atea
 	case previous == nextSnapshot.GetSnapshotUri():
 		markSkipped(ctx, "the actor's external snapshot is unchanged")
 		return nil
-	case actor.GetStatus().GetCurrentSnapshotTag() != nil:
-		markSkipped(ctx, "the replaced external snapshot is owned by a tag")
-		return nil
 	}
 	uri, err := resources.ParseSnapshotURI(previous)
 	if err != nil {
 		return fmt.Errorf("while parsing the replaced external snapshot %q: %w", previous, err)
 	}
-	return objectstore.DeletePrefix(ctx, w.objectStore, uri)
+	if !uri.OwnedBy(actorSnapshotOwner(actor)) {
+		markSkipped(ctx, "the replaced external snapshot is owned by another resource")
+		return nil
+	}
+	return objectstore.DeletePrefix(ctx, w.objectStore, uri.Prefix())
+}
+
+func actorSnapshotOwner(actor *ateapipb.Actor) resources.SnapshotOwner {
+	return resources.ActorSnapshotOwner(actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetUid())
 }

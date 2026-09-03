@@ -56,6 +56,20 @@ import (
 
 const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
+const (
+	snapshotOwnerUID = "3d7f1b62-8a04-4c19-b5e6-2f9c7a1d0e38"
+	goldenActorUID   = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
+
+	// Bucket-relative paths, as the object store keys them.
+	testSnapshotPath   = "bucket/root/atespaces/ate-demo/actors/" + snapshotOwnerUID + "/snapshots/counter-1-snap"
+	pausedSnapshotPath = "bucket/root/atespaces/ate-demo/actors/" + snapshotOwnerUID + "/snapshots/snap-1"
+	goldenSnapshotPath = "bucket/golden-root/atespaces/ate-golden/actors/" + goldenActorUID + "/snapshots/golden-1"
+
+	testSnapshotURI   = "gs://" + testSnapshotPath
+	pausedSnapshotURI = "gs://" + pausedSnapshotPath
+	goldenSnapshotURI = "gs://" + goldenSnapshotPath
+)
+
 // TestPortFlagDefault verifies the default value of the --port flag.
 func TestPortFlagDefault(t *testing.T) {
 	f := pflag.Lookup("port")
@@ -411,7 +425,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
+				SnapshotUri: testSnapshotURI,
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -430,7 +444,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
+				SnapshotUri: testSnapshotURI,
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -576,7 +590,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
 		{"data-on-golden with golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+			r.GoldenSnapshotUri = goldenSnapshotURI
 		}), false},
 		{"data-on-golden without golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
@@ -590,12 +604,12 @@ func TestValidateRestoreRequest(t *testing.T) {
 		// can carry it.
 		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+			r.GoldenSnapshotUri = goldenSnapshotURI
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "local-snap-1"}}
 		}), false},
 		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+			r.GoldenSnapshotUri = goldenSnapshotURI
 		}), true},
 	}
 	for _, tc := range tests {
@@ -1163,17 +1177,17 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 	}
 
 	store := mapObjectStorage{objects: map[string][]byte{
-		"bucket/root/snapshots/ate-demo/counter-1-snap/durable-dir.tar.zstd":    zstdBytes(t, "actor durable data"),
-		"bucket/golden-root/snapshots/ate-golden/golden-1/config.json.zstd":     zstdBytes(t, "golden config"),
-		"bucket/golden-root/snapshots/ate-golden/golden-1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
-		"bucket/golden-root/snapshots/ate-golden/golden-1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
+		testSnapshotPath + "/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
+		goldenSnapshotPath + "/config.json.zstd":     zstdBytes(t, "golden config"),
+		goldenSnapshotPath + "/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
+		goldenSnapshotPath + "/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
 	}}
 	s := &AteomHerder{gcsClient: store}
 
 	dstDir := t.TempDir()
 	err := s.downloadCombinedCheckpoint(context.Background(),
-		"gs://bucket/root/snapshots/ate-demo/counter-1-snap",
-		"gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+		testSnapshotURI,
+		goldenSnapshotURI,
 		dstDir,
 		[]string{"durable-dir.tar"},
 		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
@@ -1626,14 +1640,14 @@ func validUploadPausedCheckpointRequest() *ateletpb.UploadPausedCheckpointReques
 		ActorTemplateAtespace:  "ate-demo",
 		ActorTemplateName:      "counter",
 		LocalSnapshotName:      "pause-snap-1",
-		DestinationSnapshotUri: "gs://bucket/root/snapshots/ate-demo/snap-1",
+		DestinationSnapshotUri: pausedSnapshotURI,
 		DesiredScope:           ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 	}
 }
 
 func TestUploadLocalCheckpointDir(t *testing.T) {
 	ctx := context.Background()
-	uri, err := resources.ParseSnapshotURI("gs://bucket/root/snapshots/ate-demo/snap-1")
+	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
 	if err != nil {
 		t.Fatalf("ParseSnapshotURI: %v", err)
 	}
@@ -1648,7 +1662,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 	remoteManifest := func(t *testing.T, store *recordingObjectStorage) sandboxAssetsRecord {
 		t.Helper()
-		b, ok := store.objects["bucket/root/snapshots/ate-demo/snap-1/manifest.json"]
+		b, ok := store.objects[pausedSnapshotPath+"/manifest.json"]
 		if !ok {
 			t.Fatal("no manifest uploaded")
 		}
@@ -1671,10 +1685,10 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
-			"bucket/root/snapshots/ate-demo/snap-1/config.json.zstd",
-			"bucket/root/snapshots/ate-demo/snap-1/durable-dir.tar.zstd",
-			"bucket/root/snapshots/ate-demo/snap-1/manifest.json",
-			"bucket/root/snapshots/ate-demo/snap-1/memory-ranges.zstd",
+			pausedSnapshotPath + "/config.json.zstd",
+			pausedSnapshotPath + "/durable-dir.tar.zstd",
+			pausedSnapshotPath + "/manifest.json",
+			pausedSnapshotPath + "/memory-ranges.zstd",
 		}
 		if got := store.keys(); !slices.Equal(got, want) {
 			t.Errorf("uploaded objects = %v, want %v", got, want)
@@ -1698,8 +1712,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
 		want := []string{
-			"bucket/root/snapshots/ate-demo/snap-1/durable-dir.tar.zstd",
-			"bucket/root/snapshots/ate-demo/snap-1/manifest.json",
+			pausedSnapshotPath + "/durable-dir.tar.zstd",
+			pausedSnapshotPath + "/manifest.json",
 		}
 		if got := store.keys(); !slices.Equal(got, want) {
 			t.Errorf("uploaded objects = %v, want %v", got, want)
@@ -1809,7 +1823,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 
 	t.Run("gone locally but already uploaded succeeds", func(t *testing.T) {
 		store := &recordingObjectStorage{objects: map[string][]byte{
-			"bucket/root/snapshots/ate-demo/snap-1/manifest.json": []byte(`{"sandboxClass":"microvm"}`),
+			pausedSnapshotPath + "/manifest.json": []byte(`{"sandboxClass":"microvm"}`),
 		}}
 		s := &AteomHerder{gcsClient: store}
 

@@ -896,7 +896,7 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 // data-only restore (a Data durable snapshot, or a paused actor whose
 // onPause is Data) additionally resolves the template's golden snapshot
 func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
-	const goldenSnapshotURI = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+	goldenSnapshotURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 	tests := []struct {
@@ -1004,7 +1004,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			} else {
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
 					a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-						SnapshotUri:  "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+						SnapshotUri:  someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"),
 						ContentScope: tt.contentScope,
 					}
 				})
@@ -1069,7 +1069,7 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 		Status: &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
 				GoldenSnapshot: &ateapipb.ExternalSnapshot{
-					SnapshotUri:  "gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+					SnapshotUri:  someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1"),
 					ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				},
 			},
@@ -1136,7 +1136,7 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 				}
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
 					a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-						SnapshotUri:  "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+						SnapshotUri:  someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"),
 						ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 					}
 					a.Status.CurrentActorTemplateUid = uid

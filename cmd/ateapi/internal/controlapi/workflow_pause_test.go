@@ -272,7 +272,7 @@ func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testin
 	}{
 		{
 			name:         "keeps previous external snapshot",
-			prevSnapshot: "gs://bucket/root/snapshots/team-a/prev",
+			prevSnapshot: someActorSnapshotURI(t, testStorageLocation, "team-a", "prev"),
 		},
 		{
 			name:         "stays empty without previous external snapshot",
