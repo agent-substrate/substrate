@@ -341,7 +341,7 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 		"uid-unpooled": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
-	p.workerPools = func(context.Context) map[string]workerPoolRef {
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
 		return map[string]workerPoolRef{"uid-pooled": {namespace: "pool-ns", name: "pool-a"}}
 	}
 
@@ -437,7 +437,7 @@ func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
 	}
 	p, _ := newPollerFixture(t, fakes)
 	listOK := true
-	p.workerPools = func(context.Context) map[string]workerPoolRef {
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
 		if !listOK {
 			return nil // the apiserver list failed this sweep
 		}
@@ -470,7 +470,7 @@ func TestStatsPollerPoolCachePrunes(t *testing.T) {
 		"uid-1": {resp: noSampleResponse(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD)},
 	}
 	p, _ := newPollerFixture(t, fakes)
-	p.workerPools = func(context.Context) map[string]workerPoolRef {
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
 		return map[string]workerPoolRef{
 			"uid-1":    {namespace: "pool-ns", name: "pool-a"},
 			"uid-gone": {namespace: "pool-ns", name: "pool-a"}, // no ateom dir
@@ -495,7 +495,7 @@ func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
 		"uid-new": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
-	p.workerPools = func(context.Context) map[string]workerPoolRef { return nil }
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef { return nil }
 
 	got := p.collect(context.Background())
 

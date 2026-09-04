@@ -119,17 +119,17 @@ type statsPoller struct {
 	// are using.
 	dial func(ctx context.Context, podUID string) (activeStatsClient, io.Closer, error)
 
-	// workerPools resolves this node's worker pod UIDs to the pool that owns
-	// them, called once per sweep through resolveWorkerPools, which backs it
-	// with cachedPools so one failed list does not strand that tick's samples
-	// on a pool-less label set. Nil (or a nil map) means this sweep's list
-	// failed and the cache alone answers; a pod neither resolves reaches
-	// groups without pool labels rather than being dropped: the pool is
-	// enrichment, the sample is the point. The real resolver lists the node's
-	// pods by the ate.dev/worker-pool label the pool controller stamps on
-	// every worker (see workerpool_apply.go); the ateom directory name IS the
-	// worker pod UID, which is the join key.
-	workerPools func(ctx context.Context) map[string]workerPoolRef
+	// fetchWorkerPools is the raw fetch: one apiserver list mapping this
+	// node's worker pod UIDs to the pool that owns them, called once per sweep
+	// through resolveWorkerPools, which backs it with cachedPools so one
+	// failed list does not strand that tick's samples on a pool-less label
+	// set. A nil return means this fetch failed and the cache alone answers;
+	// a pod neither resolves groups without pool labels rather than being
+	// dropped: the pool is enrichment, the sample is the point. The real
+	// fetcher lists the node's pods by the ate.dev/worker-pool label the pool
+	// controller stamps on every worker (see workerpool_apply.go); the ateom
+	// directory name IS the worker pod UID, which is the join key.
+	fetchWorkerPools func(ctx context.Context) map[string]workerPoolRef
 
 	inst *statsInstruments
 
@@ -398,10 +398,10 @@ func statsSourceLabel(s ateompb.StatsSource) string {
 // pod first seen while the apiserver is unreachable -- it groups without pool
 // labels until a list succeeds.
 func (p *statsPoller) resolveWorkerPools(ctx context.Context, podUIDs []string) map[string]workerPoolRef {
-	if p.workerPools == nil {
+	if p.fetchWorkerPools == nil {
 		return nil
 	}
-	fresh := p.workerPools(ctx)
+	fresh := p.fetchWorkerPools(ctx)
 	merged := make(map[string]workerPoolRef, len(podUIDs))
 	for _, uid := range podUIDs {
 		if ref, ok := fresh[uid]; ok {
@@ -414,13 +414,14 @@ func (p *statsPoller) resolveWorkerPools(ctx context.Context, podUIDs []string) 
 	return merged
 }
 
-// nodeWorkerPools returns a resolver that lists nodeName's worker pods once
-// per sweep and maps pod UID to the pool that owns it. One field-selected,
+// newWorkerPoolFetcher returns the fetch func behind fetchWorkerPools: it
+// lists nodeName's worker pods and maps pod UID to the pool that owns it,
+// once per call. One field-selected,
 // label-selected LIST per interval per node is deliberately chosen over a
 // standing informer: at the poll cadence the apiserver cost is negligible,
 // there is no cache to sync before the first sweep, and a failed list
 // degrades to unlabeled samples for one tick instead of blocking anything.
-func nodeWorkerPools(client kubernetes.Interface, nodeName string) func(ctx context.Context) map[string]workerPoolRef {
+func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx context.Context) map[string]workerPoolRef {
 	return func(ctx context.Context) map[string]workerPoolRef {
 		// Bounded so a hung apiserver connection cannot stall the sweep it is
 		// merely enriching: past the deadline, this tick's samples group
@@ -587,7 +588,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
 	if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
-		poller.workerPools = nodeWorkerPools(k8sClient, nodeName)
+		poller.fetchWorkerPools = newWorkerPoolFetcher(k8sClient, nodeName)
 	} else {
 		slog.WarnContext(ctx, "NODE_NAME not set; actor stats will carry no worker pool labels")
 	}
