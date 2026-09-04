@@ -104,6 +104,16 @@ class ControlStub:
                 request_serializer=ateapi__pb2.DeleteActorEgressPolicyRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.EgressPolicy.FromString,
                 _registered_method=True)
+        self.MintActorJWT = channel.unary_unary(
+                '/ateapi.Control/MintActorJWT',
+                request_serializer=ateapi__pb2.MintActorJWTRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.MintActorJWTResponse.FromString,
+                _registered_method=True)
+        self.MintActorCertificate = channel.unary_unary(
+                '/ateapi.Control/MintActorCertificate',
+                request_serializer=ateapi__pb2.MintActorCertificateRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.MintActorCertificateResponse.FromString,
+                _registered_method=True)
         self.CreateTag = channel.unary_unary(
                 '/ateapi.Control/CreateTag',
                 request_serializer=ateapi__pb2.CreateTagRequest.SerializeToString,
@@ -289,6 +299,28 @@ class ControlServicer:
 
     def DeleteActorEgressPolicy(self, request, context):
         """Delete the egress policy resource nested under an Actor.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def MintActorJWT(self, request, context):
+        """Create a Substrate-issued JWT asserting the actor identity.
+
+        * Called by the egress gateway when actor JWT injection is configured for outbound requests.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def MintActorCertificate(self, request, context):
+        """Create a Substrate-issued SPIFFE certificate asserting the actor identity.
+
+        * Called by atelet to provision an atunnel with a certificate for
+        communication with the egress gateway.  TODO(ahmedtd): Migrate this use
+        case to a distinct certificate to prevent actor/atunnel confusion.
+        * Called by the egress gateway when actor client certificate injection is
+        configured for outbound requests.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -504,6 +536,16 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.DeleteActorEgressPolicy,
                     request_deserializer=ateapi__pb2.DeleteActorEgressPolicyRequest.FromString,
                     response_serializer=ateapi__pb2.EgressPolicy.SerializeToString,
+            ),
+            'MintActorJWT': grpc.unary_unary_rpc_method_handler(
+                    servicer.MintActorJWT,
+                    request_deserializer=ateapi__pb2.MintActorJWTRequest.FromString,
+                    response_serializer=ateapi__pb2.MintActorJWTResponse.SerializeToString,
+            ),
+            'MintActorCertificate': grpc.unary_unary_rpc_method_handler(
+                    servicer.MintActorCertificate,
+                    request_deserializer=ateapi__pb2.MintActorCertificateRequest.FromString,
+                    response_serializer=ateapi__pb2.MintActorCertificateResponse.SerializeToString,
             ),
             'CreateTag': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateTag,
@@ -909,6 +951,60 @@ class Control:
             '/ateapi.Control/DeleteActorEgressPolicy',
             ateapi__pb2.DeleteActorEgressPolicyRequest.SerializeToString,
             ateapi__pb2.EgressPolicy.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MintActorJWT(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/MintActorJWT',
+            ateapi__pb2.MintActorJWTRequest.SerializeToString,
+            ateapi__pb2.MintActorJWTResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def MintActorCertificate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/MintActorCertificate',
+            ateapi__pb2.MintActorCertificateRequest.SerializeToString,
+            ateapi__pb2.MintActorCertificateResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1476,154 +1572,6 @@ class Control:
             '/ateapi.Control/DeleteActorTemplate',
             ateapi__pb2.DeleteActorTemplateRequest.SerializeToString,
             ateapi__pb2.ActorTemplate.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-
-class ActorIdentityStub:
-    """ActorIdentity allows substrate workloads to exchange their
-    infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate actor-level credential. A given substrate actor might migrate
-    between many different physical workers over the course of its lifecycle,
-    whereas the actor credential's identity will be stable for the life of the
-    actor.
-    """
-
-    def __init__(self, channel):
-        """Constructor.
-
-        Args:
-            channel: A grpc.Channel.
-        """
-        self.MintJWT = channel.unary_unary(
-                '/ateapi.ActorIdentity/MintJWT',
-                request_serializer=ateapi__pb2.MintJWTRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.MintJWTResponse.FromString,
-                _registered_method=True)
-        self.MintCert = channel.unary_unary(
-                '/ateapi.ActorIdentity/MintCert',
-                request_serializer=ateapi__pb2.MintCertRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.MintCertResponse.FromString,
-                _registered_method=True)
-
-
-class ActorIdentityServicer:
-    """ActorIdentity allows substrate workloads to exchange their
-    infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate actor-level credential. A given substrate actor might migrate
-    between many different physical workers over the course of its lifecycle,
-    whereas the actor credential's identity will be stable for the life of the
-    actor.
-    """
-
-    def MintJWT(self, request, context):
-        """Request an Actor Identity JWT.
-
-        To call this RPC, you must be authenticated as the Kubernetes Pod that is
-        currently running the requested actor.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def MintCert(self, request, context):
-        """Request an Actor Identity Certificate for an actor.
-
-        Actors do not call this RPC themselves. The atelet hosting the actor calls
-        it on the actor's behalf, authenticating with its own client certificate
-        rather than a bearer token.
-
-        Authorization is decided on that client certificate and the worker
-        identity attested by atelet. Ateapi verifies that the worker is assigned to
-        the actor and that the actor points back to that exact worker before signing.
-
-        The certificate in the response is the actor's identity, not the atelet's.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-
-def add_ActorIdentityServicer_to_server(servicer, server):
-    rpc_method_handlers = {
-            'MintJWT': grpc.unary_unary_rpc_method_handler(
-                    servicer.MintJWT,
-                    request_deserializer=ateapi__pb2.MintJWTRequest.FromString,
-                    response_serializer=ateapi__pb2.MintJWTResponse.SerializeToString,
-            ),
-            'MintCert': grpc.unary_unary_rpc_method_handler(
-                    servicer.MintCert,
-                    request_deserializer=ateapi__pb2.MintCertRequest.FromString,
-                    response_serializer=ateapi__pb2.MintCertResponse.SerializeToString,
-            ),
-    }
-    generic_handler = grpc.method_handlers_generic_handler(
-            'ateapi.ActorIdentity', rpc_method_handlers)
-    server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('ateapi.ActorIdentity', rpc_method_handlers)
-
-
- # This class is part of an EXPERIMENTAL API.
-class ActorIdentity:
-    """ActorIdentity allows substrate workloads to exchange their
-    infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate actor-level credential. A given substrate actor might migrate
-    between many different physical workers over the course of its lifecycle,
-    whereas the actor credential's identity will be stable for the life of the
-    actor.
-    """
-
-    @staticmethod
-    def MintJWT(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.ActorIdentity/MintJWT',
-            ateapi__pb2.MintJWTRequest.SerializeToString,
-            ateapi__pb2.MintJWTResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def MintCert(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/ateapi.ActorIdentity/MintCert',
-            ateapi__pb2.MintCertRequest.SerializeToString,
-            ateapi__pb2.MintCertResponse.FromString,
             options,
             channel_credentials,
             insecure,

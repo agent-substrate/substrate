@@ -43,7 +43,7 @@ func TestBrokerCertificateSourceMintsAndReusesKey(t *testing.T) {
 	defer cancel()
 
 	for range 2 {
-		if _, err := source.Mint(ctx); err != nil {
+		if _, err := source.MintAteomCertificate(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -68,7 +68,7 @@ func TestBrokerCertificateSourceRejectsAteletOnDifferentNode(t *testing.T) {
 	source, _ := newTestBrokerCertificateSource(t, testAteletIdentity("node-b"), time.Hour)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := source.Mint(ctx); err == nil || !strings.Contains(err.Error(), "not on worker node") {
+	if _, err := source.MintAteomCertificate(ctx); err == nil || !strings.Contains(err.Error(), "not on worker node") {
 		t.Fatalf("Mint() error = %v, want node identity rejection", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestBrokerCertificateSourceRejectsExpiredCertificate(t *testing.T) {
 	source, _ := newTestBrokerCertificateSource(t, testAteletIdentity("node-a"), -time.Minute)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := source.Mint(ctx); err == nil || !strings.Contains(err.Error(), "invalid actor certificate lifetime") {
+	if _, err := source.MintAteomCertificate(ctx); err == nil || !strings.Contains(err.Error(), "invalid actor certificate lifetime") {
 		t.Fatalf("Mint() error = %v, want expired certificate rejection", err)
 	}
 }
@@ -87,7 +87,7 @@ func TestBrokerCertificateSourceRejectsUnexpectedActor(t *testing.T) {
 	broker.actorUID = "another-actor-uid"
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := source.Mint(ctx); err == nil || !strings.Contains(err.Error(), "unexpected actor") {
+	if _, err := source.MintAteomCertificate(ctx); err == nil || !strings.Contains(err.Error(), "unexpected actor") {
 		t.Fatalf("Mint() error = %v, want actor UID rejection", err)
 	}
 }
@@ -101,7 +101,7 @@ type credentialBrokerStub struct {
 }
 
 func (s *credentialBrokerStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
-	if req.GetExpectedActorUid() != "actor-uid" {
+	if req.GetActorUid() != "actor-uid" {
 		return nil, status.Error(codes.FailedPrecondition, "unexpected actor UID")
 	}
 	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
@@ -148,7 +148,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 	trustPath := filepath.Join(dir, "trust.pem")
 	writeCredentialBundle(t, credentialPath, workerCert)
 	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("While writing trust anchors: %v", err)
 	}
 
 	clientCAs := x509.NewCertPool()
@@ -157,13 +157,13 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 	// socket path limit on darwin, so the socket gets its own short dir.
 	socketDir, err := os.MkdirTemp("", "atunnel")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Error creating temp dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	socketPath := filepath.Join(socketDir, "broker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Error listening: %v", err)
 	}
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
 		MinVersion:   tls.VersionTLS13,
@@ -183,10 +183,12 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		SocketPath:           socketPath,
 		CredentialBundlePath: credentialPath,
 		TrustBundlePath:      trustPath,
-		ExpectedActorUID:     "actor-uid",
+		ActorAtespace:        "actor-atespace",
+		ActorName:            "actor-name",
+		ActorUID:             "actor-uid",
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Error creating broker certificate source: %v", err)
 	}
 	return source, broker
 }
