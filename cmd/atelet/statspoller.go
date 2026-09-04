@@ -120,15 +120,29 @@ type statsPoller struct {
 	dial func(ctx context.Context, podUID string) (activeStatsClient, io.Closer, error)
 
 	// workerPools resolves this node's worker pod UIDs to the pool that owns
-	// them, called once per sweep. Nil (or a nil map, or a missing entry)
-	// degrades to samples grouped without pool labels rather than dropped: the
-	// pool is enrichment, the sample is the point. The real resolver lists the
-	// node's pods by the ate.dev/worker-pool label the pool controller stamps
-	// on every worker (see workerpool_apply.go); the ateom directory name IS
-	// the worker pod UID, which is the join key.
+	// them, called once per sweep through resolveWorkerPools, which backs it
+	// with cachedPools so one failed list does not strand that tick's samples
+	// on a pool-less label set. Nil (or a nil map) means this sweep's list
+	// failed and the cache alone answers; a pod neither resolves reaches
+	// groups without pool labels rather than being dropped: the pool is
+	// enrichment, the sample is the point. The real resolver lists the node's
+	// pods by the ate.dev/worker-pool label the pool controller stamps on
+	// every worker (see workerpool_apply.go); the ateom directory name IS the
+	// worker pod UID, which is the join key.
 	workerPools func(ctx context.Context) map[string]workerPoolRef
 
 	inst *statsInstruments
+
+	// cachedPools carries pool resolutions across sweeps: a pod's pool is
+	// immutable for the pod's lifetime (the label is stamped at creation and
+	// pods do not move between pools), so an entry can never go wrong, only
+	// stale-and-then-pruned. It is what keeps one failed pod list from
+	// re-homing that tick's samples -- and, worse, the CPU counter's
+	// increments, which can never be re-attributed -- onto a pool-less label
+	// set. Only the sweep loop touches it, and resolveWorkerPools prunes it to
+	// the pods whose ateom directories still exist, the same bound lastCPU
+	// keeps.
+	cachedPools map[string]workerPoolRef
 
 	// lastCPU is the previous sweep's cpu_usage_usec per actor uid, the
 	// baseline the next sweep's deltas are computed against. Only the sweep
@@ -241,10 +255,13 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 		return nil
 	}
 
-	var pools map[string]workerPoolRef
-	if p.workerPools != nil {
-		pools = p.workerPools(ctx)
+	podUIDs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			podUIDs = append(podUIDs, e.Name())
+		}
 	}
+	pools := p.resolveWorkerPools(ctx, podUIDs)
 
 	var (
 		mu      sync.Mutex
@@ -253,11 +270,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 		g       errgroup.Group
 	)
 	g.SetLimit(statsSweepConcurrency)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		podUID := e.Name()
+	for _, podUID := range podUIDs {
 
 		g.Go(func() error {
 			// One deadline over the whole probe, dial included. The real dial
@@ -375,6 +388,30 @@ func statsSourceLabel(s ateompb.StatsSource) string {
 	default:
 		return ateattr.StatsSourceUnspecified
 	}
+}
+
+// resolveWorkerPools returns this sweep's pod-UID-to-pool map, backed by
+// cachedPools: fresh resolutions win, a failed or partial list falls back to
+// the cache (safe: a pod's pool is immutable), and the cache is rebuilt
+// restricted to the pods whose ateom directories exist this sweep, which both
+// prunes departed pods and bounds its size. The residual unlabeled case is a
+// pod first seen while the apiserver is unreachable -- it groups without pool
+// labels until a list succeeds.
+func (p *statsPoller) resolveWorkerPools(ctx context.Context, podUIDs []string) map[string]workerPoolRef {
+	if p.workerPools == nil {
+		return nil
+	}
+	fresh := p.workerPools(ctx)
+	merged := make(map[string]workerPoolRef, len(podUIDs))
+	for _, uid := range podUIDs {
+		if ref, ok := fresh[uid]; ok {
+			merged[uid] = ref
+		} else if ref, ok := p.cachedPools[uid]; ok {
+			merged[uid] = ref
+		}
+	}
+	p.cachedPools = merged
+	return merged
 }
 
 // nodeWorkerPools returns a resolver that lists nodeName's worker pods once
