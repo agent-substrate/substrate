@@ -91,7 +91,7 @@ def verify_file(filepath):
 def main():
     # Get tracked files via git ls-files
     try:
-        output = subprocess.check_output(['git', 'ls-files', '--others', '--cached', '--exclude-standard'], text=True)
+        output = subprocess.check_output(['git', 'ls-files', '--modified', '--cached', '--exclude-standard'], text=True)
     except subprocess.CalledProcessError as e:
         print(f"Error running git ls-files: {e}")
         sys.exit(1)
