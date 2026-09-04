@@ -56,6 +56,21 @@ const (
 	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
 
+// TemplateUnknown is the fallback for unresolvable or missing template dimensions.
+// Note: "unknown" is syntactically a legal atespace/template name; like
+// ate.sandbox.class="unknown", this trades potential collision with a real
+// object named "unknown" for maintaining a bounded, non-empty metric dimension.
+const TemplateUnknown = "unknown"
+
+// NormalizeTemplateDimension ensures a template dimension (atespace or name) is
+// non-empty, falling back to TemplateUnknown if unset.
+func NormalizeTemplateDimension(dim string) string {
+	if dim == "" {
+		return TemplateUnknown
+	}
+	return dim
+}
+
 // ReservedNamespace is substrate's. A producer that merges untrusted fields into a
 // record drops everything under it, so nothing a workload sets can read as
 // platform-issued attribution downstream.
@@ -197,6 +212,9 @@ const (
 	RouterResumeTriggered = "triggered"
 	// RouterResumeJoined indicates this request parked on an in-flight singleflight resume.
 	RouterResumeJoined = "joined"
+	// RouterResumeUnattempted indicates no cold activation was in flight (e.g.
+	// definitive errors before activation, request cancellation, or non-resuming route).
+	RouterResumeUnattempted = "unattempted"
 )
 
 // Values for ImageCacheOutcomeKey. A hit is a complete image record; a miss
