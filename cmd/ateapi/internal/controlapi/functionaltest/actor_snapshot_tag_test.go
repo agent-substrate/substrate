@@ -82,11 +82,11 @@ func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	// Actor A is suspended and tagged, the ordinary way.
 	const tagName = "before-upgrade"
-	actorFirstSnapshotURI := suspendActorForTest(t, tc, "actor-a")
+	actorFirstSnapshotURI := suspendActorForTest(t, tc, workerName, "actor-a")
 	first, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
@@ -106,7 +106,7 @@ func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
 
 	// Create & Suspend actor B. Then, try to tag its snapshot with the same name
 	// that was already tagged by actor A.
-	secondSnapshotURI := suspendActorForTest(t, tc, "actor-b")
+	secondSnapshotURI := suspendActorForTest(t, tc, workerName, "actor-b")
 	if secondSnapshotURI == actorFirstSnapshotURI {
 		t.Fatalf("both actors suspended to %s, want distinct external snapshots", secondSnapshotURI)
 	}
@@ -149,9 +149,9 @@ func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
 	}
 }
 
-// suspendActorForTest creates, resumes and suspends an actor, and returns the
-// URI of the external snapshot the suspend wrote.
-func suspendActorForTest(t *testing.T, tc *testContext, name string) string {
+// suspendActorForTest creates, resumes and suspends an actor on workerName,
+// and returns the URI of the external snapshot the suspend wrote.
+func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string) string {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -160,6 +160,10 @@ func suspendActorForTest(t *testing.T, tc *testContext, name string) string {
 	}}); err != nil {
 		t.Fatalf("CreateActor(%s) failed: %v", name, err)
 	}
+	// Successive actors share the one worker, and scheduling reads the worker
+	// cache: the preceding suspend released the worker in the store, but the
+	// cache only learns of it on its next watch poll.
+	waitForWorkerAvailable(t, tc, workerName)
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	}); err != nil {
