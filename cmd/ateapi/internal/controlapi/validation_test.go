@@ -771,9 +771,20 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 		}),
 		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
 	}, {
-		name: "item path with control character",
+		name: "item path with NUL byte",
 		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "actor\nname"
+			s.DataSources[0].ActorMetadata.Items[0].Path = "actor\x00name"
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
+	}, {
+		name: "valid: unicode item path",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = "méta/имя"
+		}),
+	}, {
+		name: "item path with too many segments",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Path = strings.Repeat("d/", 16) + "actor-name"
 		}),
 		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
 	}, {
@@ -794,19 +805,6 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 			s.DataSources[1].TrustBundle.Path = "actor-uid"
 		}),
 		want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("trust_bundle", "path"), nil)},
-	}, {
-		name: "path nested under another projected path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[1].TrustBundle.Path = "actor-name/ca.pem"
-		}),
-		want: field.ErrorList{field.Invalid(dsPath.Index(1).Child("trust_bundle", "path"), nil, "")},
-	}, {
-		name: "path is a directory of another projected path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "certs/actor-name"
-			s.DataSources[1].TrustBundle.Path = "certs"
-		}),
-		want: field.ErrorList{field.Invalid(dsPath.Index(1).Child("trust_bundle", "path"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

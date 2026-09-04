@@ -1112,12 +1112,12 @@ message ExternalVolumeTemplate {
 message SystemInfoVolumeSource {
   // data_sources lists the projections to place within the volume. At most
   // one actor_metadata entry may appear, and file paths must be unique
-  // across all entries: no path may repeat or name a directory of another.
+  // across all entries.
   //
   // +k8s:optional
   // +k8s:maxItems=8
   // +k8s:listType=atomic
-  // +k8s:customValidation # paths unique and non-nested across entries
+  // +k8s:customValidation # paths unique across entries
   repeated SystemInfoDataSource data_sources = 1;
 }
 
@@ -1156,13 +1156,13 @@ message ActorMetadataItem {
   // +k8s:maximum=3 # keep this in sync with the ActorMetadataField enum
   ActorMetadataField field = 1;
 
-  // path must be a clean relative Unix path: no leading '/', no empty, '.'
-  // or '..' segments, and no control characters.
+  // path must be a clean relative Unix path: at most 16 '/'-separated
+  // segments, none of them empty, '.' or '..', and no NUL byte.
   //
   // +k8s:required
   // +k8s:minLength=1
   // +k8s:maxLength=255
-  // +k8s:customValidation # clean relative path; no regex/pattern tag exists
+  // +k8s:customValidation # projected-path rule shared with atelet, see internal/volumepath
   string path = 2;
 }
 
@@ -1183,13 +1183,13 @@ message TrustBundleDataSource {
   // +k8s:maxLength=253
   string name = 1;
 
-  // path must be a clean relative Unix path: no leading '/', no empty, '.'
-  // or '..' segments, and no control characters.
+  // path must be a clean relative Unix path: at most 16 '/'-separated
+  // segments, none of them empty, '.' or '..', and no NUL byte.
   //
   // +k8s:required
   // +k8s:minLength=1
   // +k8s:maxLength=255
-  // +k8s:customValidation # clean relative path; no regex/pattern tag exists
+  // +k8s:customValidation # projected-path rule shared with atelet, see internal/volumepath
   string path = 2;
 }
 
