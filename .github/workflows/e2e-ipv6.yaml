@@ -1,0 +1,361 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: e2e-ipv6
+# Separate from pr-workflow.yaml so this can be gated independently -- and so an
+# hour-long IPv6 run never delays that workflow's merge-gating jobs.
+#
+# Only the networking suite runs. Every test that can tell one address family
+# from another lives in it, and the demo suite is a large share of the wall
+# clock for coverage that is not family-specific. The demos still deploy,
+# because networking builds its actors from their templates.
+#
+# Both sandbox classes run, gVisor then micro-VM, off the one cluster and the
+# one E2E_SANDBOX_CLASS knob. The class is where address-family support
+# diverges: gVisor's runsc adopts the interior netns wholesale and picks the
+# actor's IPv6 up for free, while a micro-VM's eth0 is a tap cross-connected to
+# that netns at L2, so the guest has to be told over the kata-agent channel. A
+# lane that ran gVisor alone could not tell a working micro-VM guest from one
+# that never got an address.
+#
+# Two ways in. A pull request that edits this file runs it: the paths filter is
+# evaluated before the job, so no unrelated request pays for a v6 cluster, and
+# the lane can demonstrate itself without a label someone has to create first.
+# Dispatch it with a list of pull requests and it merges them onto main in that
+# order and runs the result: the IPv6 work is a set of changes that do nothing
+# apart, so a per-request run cannot show the feature working, only that it did
+# no harm. The stack exists for the length of the run and is never pushed,
+# which is what lets this branch carry the workflow file alone instead of a
+# copy of every change it wants to exercise.
+#
+# Stacking is dispatch-only, so the pull_request path runs main plus this file
+# and nothing else. That exercises the lane, not the IPv6 work, and it stays
+# red until the changes this gates are on main.
+#
+# Either way this job stays out of the `e2e-test` gate, so it never blocks a PR.
+on:
+  pull_request:
+    paths: ['.github/workflows/e2e-ipv6.yaml']
+  workflow_dispatch:
+    inputs:
+      prs:
+        description: 'Pull requests to merge onto main, in order, e.g. "958 938 1083". Blank runs main alone.'
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  e2e-test-ipv6:
+    runs-on: ubuntu-latest
+    # Nothing else in this workflow sets a timeout, so jobs inherit GitHub's
+    # 6-hour default. A broken IPv6 cluster does not crash, it misses
+    # 10-minute ActorTemplate deadlines, so an uncapped job burns hours.
+    # Raised from 40 for the second sandbox class: a micro-VM golden snapshot is
+    # a cloud-hypervisor cold boot plus a checkpoint on nested KVM, and the
+    # networking suite then runs twice.
+    timeout-minutes: 75
+    env:
+      # Non-default name so these steps can be replayed locally without
+      # touching an existing cluster. install-ate-kind.sh does not derive
+      # KUBECTL_CONTEXT from the cluster name the way run-e2e-kind.sh does,
+      # so both have to be set here.
+      KIND_CLUSTER_NAME: ate-ipv6
+      KUBECTL_CONTEXT: kind-ate-ipv6
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        # The merges below need refs this clone would not otherwise have.
+        fetch-depth: 0
+    - name: Stack the pull requests under test
+      # Merge, not cherry-pick: a request that has been squash-merged since it
+      # was opened re-applies as a revert of what is already on main, and only
+      # a merge notices there is nothing to do. Order is the order given, so a
+      # conflict names the request that has to rebase rather than the stack.
+      #
+      # This builds and runs the requests' code. The token is read-only and no
+      # secrets reach it; a run happens only when someone asks for one.
+      if: github.event_name == 'workflow_dispatch' && inputs.prs != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PRS: ${{ inputs.prs }}
+        # The numbers in `prs` are always upstream pull requests, so they are
+        # resolved against upstream by name rather than against whichever repo
+        # the run happens to be in. Reading them needs no token.
+        UPSTREAM: https://github.com/agent-substrate/substrate
+      run: |
+        git config user.name  'e2e-ipv6'
+        git config user.email 'e2e-ipv6@invalid'
+        {
+          echo "### Stack under test"
+          echo ""
+          echo "Merged onto \`main\` at \`$(git rev-parse --short HEAD)\`, in order:"
+          echo ""
+          echo "| pull request | head | title |"
+          echo "|---|---|---|"
+        } >> "$GITHUB_STEP_SUMMARY"
+        for pr in ${PRS//,/ }; do
+          case "${pr}" in
+            ''|*[!0-9]*) echo "::error::'${pr}' is not a pull request number"; exit 1 ;;
+          esac
+          git fetch -q "${UPSTREAM}" "refs/pull/${pr}/head:pr-${pr}" \
+            || { echo "::error::no such pull request: #${pr}"; exit 1; }
+          if ! git merge --no-edit -q "pr-${pr}"; then
+            echo "::error::#${pr} does not merge onto the stack; it needs a rebase"
+            git merge --abort || true
+            exit 1
+          fi
+          title=$(gh pr view "${pr}" --repo "${UPSTREAM}" --json title -q .title 2>/dev/null || echo '?')
+          echo "| #${pr} | \`$(git rev-parse --short "pr-${pr}")\` | ${title} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "merged #${pr}: ${title}"
+        done
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    - name: Free disk space
+      # kind node image + control-plane images + snapshots are tight on the
+      # ~14GB runner disk, and the micro-VM assets -- a 1GB kata-static tarball
+      # unpacked to a 256MB rootfs, plus a kernel -- are on top of that.
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h /
+    - name: Cache micro-VM assets
+      # restore, not the composite cache action: pr-workflow.yaml's e2e-test
+      # writes this key on every push to main, and a second saver would race it
+      # for no gain -- the assets are identical and assemble.sh fully pins them.
+      # A miss just means run-microvm-demo-kind.sh assembles them itself.
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: bin/microvm-assets/amd64
+        key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
+    - name: Enable IPv6 in the Docker daemon
+      # ubuntu-latest ships dockerd with IPv6 off, so kind would create its
+      # network v4-only and create-kind-cluster.sh would reject the cluster.
+      # Merge the two keys into whatever daemon.json the runner image ships
+      # rather than replacing the file.
+      run: |
+        sudo mkdir -p /etc/docker
+        [ -s /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+        sudo cat /etc/docker/daemon.json \
+          | jq '. + {"ipv6": true, "ip6tables": true}' \
+          | sudo tee /etc/docker/daemon.json.new >/dev/null
+        sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
+        sudo systemctl restart docker
+        # Assert, don't print: if the merge or the restart silently did not take,
+        # kind builds a v4-only network and the failure surfaces much later as a
+        # cluster that is not the one this job exists to test.
+        docker network inspect bridge --format '{{.EnableIPv6}}' | grep -qx true || {
+          echo "::error::dockerd did not come back with IPv6 enabled"
+          sudo cat /etc/docker/daemon.json; exit 1;
+        }
+        echo "bridge EnableIPv6=true"
+    - name: Enable forwarding for the NAT64 agent
+      # ubuntu-latest has no IPv6 egress whatsoever -- measured, not assumed:
+      # every curl -6 fails in ~2ms. A v6-only cluster still has to reach real
+      # v4 destinations (atelet fetches the gVisor tarball from GCS,
+      # TestActorEgress fetches example.com), so the cluster translates for
+      # itself. What upstream's own e2e sets, and ordered after the dockerd
+      # restart, which rebuilds the chains this affects.
+      run: |
+        sudo sysctl -w net.ipv4.ip_forward=1
+        sudo sysctl -w net.ipv6.conf.all.forwarding=1
+    - name: Enable KVM
+      # Grant the runner access to /dev/kvm so create-kind-cluster.sh makes it
+      # usable inside the node. No node label follows from this: a micro-VM
+      # WorkerPool reaches the node through the ate.dev/kvm extended resource
+      # atelet's device plugin advertises, which is why the check that this
+      # worked has to wait until after the install. After the dockerd restart
+      # above, which is what the script's probe container runs under.
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Create cluster
+      # NAT64 is opt-in in the script and this is the case it exists for: the
+      # names this job needs have real AAAA records pointing at addresses the
+      # runner cannot reach, so the prefix deploys the translator and routes
+      # cluster DNS through it.
+      env:
+        IP_FAMILY: ipv6
+        IPV6_DNS64_PREFIX: '64:ff9b::/96'
+      run: hack/create-kind-cluster.sh
+    - name: Assert the cluster is single-stack IPv6
+      # This job is worthless if the cluster is not actually v6-only, and a
+      # green run leaves no evidence either way -- the diagnostics dump below
+      # only runs on failure. A kind default change or an IP_FAMILY regression
+      # would otherwise turn this into a second IPv4 run that reports success.
+      # Checked here rather than later so it fails as itself.
+      #
+      # PreferDualStack Services resolving to a single clusterIP is the
+      # positive signal: on a dual-stack cluster they would get two.
+      run: |
+        k() { kubectl --context="$KUBECTL_CONTEXT" "$@"; }
+        pod_cidrs=$(k get nodes -o jsonpath='{.items[*].spec.podCIDRs[*]}')
+        svc_ips=$(k -n default get svc kubernetes -o jsonpath='{.spec.clusterIPs[*]}')
+        node_ips=$(k get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
+        for pair in "podCIDRs=${pod_cidrs}" "kubernetes.clusterIPs=${svc_ips}" "node.InternalIP=${node_ips}"; do
+          case "${pair#*=}" in
+            *.*) echo "::error::not single-stack IPv6 -- ${pair}"; exit 1 ;;
+            "")  echo "::error::empty, cannot confirm IP family -- ${pair}"; exit 1 ;;
+          esac
+          echo "  ${pair}"
+        done
+        echo "single-stack IPv6 confirmed"
+    - name: Verify cluster DNS answers both internal and external names
+      # The install is the next step and it takes ten minutes to fail. A DNS
+      # regression is the failure this Corefile is most likely to cause, so
+      # assert all three cases here where the message is unambiguous.
+      # Reads the log rather than attaching. `kubectl run --attach` has to
+      # connect before the container writes, and on a cluster still settling it
+      # loses that race far more often than it wins it -- a probe that fails on
+      # a healthy cluster is worse than no probe. Create, wait, read the log,
+      # and retry the whole thing.
+      run: |
+        k() { kubectl --context="$KUBECTL_CONTEXT" "$@"; }
+        probe() {
+          k delete pod dnscheck --ignore-not-found --wait --timeout=60s >/dev/null 2>&1
+          k run dnscheck --restart=Never --image=busybox:1.36 --command -- \
+            sh -c '
+              nslookup kubernetes.default.svc.cluster.local >/dev/null 2>&1 \
+                || { echo "FAIL: an in-cluster Service does not resolve"; exit 1; }
+              nslookup storage.googleapis.com 2>/dev/null | grep -q "64:ff9b" \
+                || { echo "FAIL: external names are not synthesized through NAT64"; exit 1; }
+              # Absolute name deliberately. The registry has its own server
+              # block and no search domain leads to it, so the bare name is
+              # NXDOMAIN under ndots:5 -- busybox gives up there, while glibc
+              # and Go go on to try the name as given, which is what atelet
+              # does when it pulls from its own netns. Querying what those
+              # resolvers end up querying is what makes this worth failing on.
+              nslookup kind-registry. >/dev/null 2>&1 \
+                || { echo "FAIL: kind-registry does not resolve; atelet cannot pull"; exit 1; }
+              echo "DNS-OK"
+            ' >/dev/null 2>&1 || return 1
+          k wait --for=jsonpath='{.status.phase}'=Succeeded pod/dnscheck --timeout=120s \
+            >/dev/null 2>&1
+          k logs dnscheck > /tmp/dnscheck.log 2>&1 || return 1
+          grep -q DNS-OK /tmp/dnscheck.log
+        }
+        for attempt in $(seq 6); do
+          if probe; then cat /tmp/dnscheck.log; exit 0; fi
+          echo "dnscheck attempt ${attempt} failed"
+          cat /tmp/dnscheck.log 2>/dev/null || true
+          sleep 10
+        done
+        echo "::error::cluster DNS did not come up"
+        exit 1
+    - name: Install Agent Substrate
+      run: hack/install-ate-kind.sh --deploy-ate-system
+    - name: Deploy micro-VM counter demo
+      # Stages the (cached) assets into the cluster's rustfs and deploys the
+      # counter-microvm demo onto the control plane installed above. First of
+      # the demos: it is the step a v6-only cluster breaks, and its golden
+      # snapshot is the long pole, so failing here fails early.
+      run: hack/run-microvm-demo-kind.sh
+    - name: Deploy gVisor counter demo
+      run: hack/install-ate-kind.sh --deploy-demo-counter
+    - name: Deploy egress demos
+      # One per class: networking builds its egress Actor from the fixture for
+      # the class under test, so both have to exist before either lane runs.
+      run: |
+        hack/install-ate-kind.sh --deploy-demo-egress
+        hack/install-ate-kind.sh --deploy-demo-egress-microvm
+    - name: Run E2E tests (networking)
+      id: e2e-networking
+      run: |
+        set -o pipefail
+        hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color 2>&1 \
+          | tee /tmp/e2e-networking.log
+    - name: Run E2E tests (networking, micro-VM)
+      # The same suite again, with every fixture repointed at its micro-VM
+      # variant by the single E2E_SANDBOX_CLASS knob (internal/e2e/sandbox.go).
+      # Sequential with the gVisor lane above, not concurrent: a suite releases
+      # its namespace -- and with it its worker pods -- as each test passes, so
+      # the two runs do not contend for the one kind node.
+      #
+      # always(), so a gVisor failure does not hide the micro-VM result. That is
+      # the whole point of the lane: the two classes reach an actor's addresses
+      # by different routes and can fail independently.
+      id: e2e-networking-microvm
+      if: always() && steps.e2e-networking.outcome != 'skipped'
+      env:
+        E2E_SANDBOX_CLASS: microvm
+      run: |
+        set -o pipefail
+        hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color 2>&1 \
+          | tee /tmp/e2e-networking-microvm.log
+    - name: Guard against a vacuously green run
+      # A test that gates on a dual-stack Service skips itself on v6-only and
+      # exits 0, so a suite that only skipped would otherwise read as a pass.
+      # The bar is one real PASS, not zero skips: a test with nothing to compare
+      # on a single-family cluster is right to skip. Skips are printed so a
+      # growing list gets noticed.
+      # Skipped when the suite never ran: with no log to count, this step would
+      # otherwise report a reassuring zero on a job that failed earlier.
+      if: always() && steps.e2e-networking.outcome != 'skipped'
+      env:
+        MICROVM_RAN: ${{ steps.e2e-networking-microvm.outcome != 'skipped' }}
+      run: |
+        logs=/tmp/e2e-networking.log
+        if [ "${MICROVM_RAN}" = "true" ]; then
+          logs="${logs} /tmp/e2e-networking-microvm.log"
+        else
+          echo "::warning::the micro-VM lane did not run; only gVisor was checked"
+        fi
+        for f in ${logs}; do
+          [ -s "$f" ] || { echo "::error::${f} is missing or empty"; exit 1; }
+          passed=$(grep -c -- '--- PASS' "$f" || true)
+          echo "${f}: ${passed} passed, $(grep -c -- '--- SKIP' "$f" || true) skipped"
+          grep -h -- '--- SKIP' "$f" || true
+          if [ "${passed}" -eq 0 ]; then
+            echo "::error::${f} has no passing tests -- a suite that only skips proves nothing"
+            exit 1
+          fi
+        done
+    - name: Dump diagnostics on failure
+      if: failure()
+      run: |
+        kubectl --context="$KUBECTL_CONTEXT" get actortemplate,workerpool,pods -A -o wide || true
+        dump() {
+          echo "=== logs: $1/$2 ==="
+          kubectl --context="$KUBECTL_CONTEXT" logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
+        }
+        for p in $(kubectl --context="$KUBECTL_CONTEXT" get pods -n ate-system -o name 2>/dev/null); do
+          dump ate-system "$p"
+        done
+        # Every worker pod in any namespace: the demo pools plus the e2e suites'
+        # randomly-named per-test namespaces, which the suites keep on failure.
+        # The failing actor runs in one of these, so this is where its ateom logs
+        # -- and, for a micro-VM worker, the guest console tail -- live.
+        kubectl --context="$KUBECTL_CONTEXT" get pods -A -l ate.dev/worker-pool \
+          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
+          | while read -r ns name; do dump "$ns" "$name"; done
+        # IPv6-specific: the Corefile create-kind-cluster.sh built, and what each
+        # Service actually got assigned, are the two things that differ from the
+        # IPv4 job.
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system logs -l k8s-app=kube-dns --tail=100 || true
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' || true
+        kubectl --context="$KUBECTL_CONTEXT" get svc -A \
+          -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,POLICY:.spec.ipFamilyPolicy,IPS:.spec.clusterIPs || true
+        # The agent logs the interface and eBPF setup it did, which is the only
+        # view of an egress failure that is not a bare timeout. Its pod is the
+        # one thing here that can be absent on a run that failed early, so say
+        # so rather than letting kubectl's stderr through: those diagnostics
+        # most need to not end on something that reads like a second failure.
+        echo "=== nat64 agent ==="
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system get pods -l app=nat64 -o wide \
+          2>/dev/null || echo "(no agent; NAT64 never started)"
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system logs -l app=nat64 --tail=100 \
+          --prefix 2>/dev/null || true
