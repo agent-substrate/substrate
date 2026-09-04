@@ -1762,9 +1762,7 @@ type ActorSnapshotTagStatus struct {
 	// them.
 	InProgressSnapshotUri string `protobuf:"bytes,3,opt,name=in_progress_snapshot_uri,json=inProgressSnapshotUri,proto3" json:"in_progress_snapshot_uri,omitempty"`
 	// source_actor_uid is the UID of the Actor this tag's snapshot was copied
-	// from. A retried CreateActorSnapshotTag adopts a still-pending row only when
-	// this matches the Actor it was called for: adopting another Actor's pending
-	// create would let two sources interleave objects into one prefix.
+	// from.
 	SourceActorUid string `protobuf:"bytes,4,opt,name=source_actor_uid,json=sourceActorUid,proto3" json:"source_actor_uid,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -5069,9 +5067,9 @@ func (x *ListActorSnapshotTagsResponse) GetNextPageToken() string {
 // this call", not "the snapshot some earlier suspend returned".
 //
 // The tag is given its own copy of that snapshot, so it survives the Actor
-// being suspended again or deleted. Retrying a create that timed out resumes
-// the copy for the same Actor; a name held by a finished tag, or by a pending
-// tag of a different Actor, is ALREADY_EXISTS.
+// being suspended again or deleted.
+// To retry a create that failed or timed out, delete the tag first,
+// which collects whatever that attempt stranded, and create it again.
 type CreateActorSnapshotTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The tag to create. metadata.name, scope and source_actor are honored;

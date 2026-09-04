@@ -119,7 +119,7 @@ func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
 			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-b"},
 		},
 	})
-	assertGrpcError(t, err, codes.AlreadyExists, fmt.Sprintf("ActorSnapshotTag %s/%s already exists", testAtespace, tagName))
+	assertGrpcError(t, err, codes.AlreadyExists, fmt.Sprintf("ActorSnapshotTag %s/%s already exists; delete it and create it again to retry", testAtespace, tagName))
 
 	// The row still contains actor A's tag
 	stored, err := tc.client.GetActorSnapshotTag(context.Background(), &ateapipb.GetActorSnapshotTagRequest{
