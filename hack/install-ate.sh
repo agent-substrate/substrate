@@ -117,6 +117,13 @@ function usage() {
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
   echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
   echo ""
+  echo "Authentication configuration:"
+  echo ""
+  echo "  EXPECTED_JWT_ISSUER                    Issuer URL ate-api-server requires in service account tokens, verbatim."
+  echo "                                         Default: derived from PROJECT_ID/CLUSTER_LOCATION/CLUSTER_NAME"
+  echo "                                         (https://container.googleapis.com/v1/projects/.../clusters/...),"
+  echo "                                         else the cluster's OIDC discovery document"
+  echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
   echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
@@ -796,8 +803,13 @@ create_api_authentication_config() {
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
+  # ate-api-server accepts a token only if its iss claim equals this string
+  # exactly. EXPECTED_JWT_ISSUER, when set, is that string; the derivation
+  # below is for clusters whose issuer follows the standard form.
   local jwt_issuer=""
-  if [[ -n "${PROJECT_ID:-}" && -n "${CLUSTER_LOCATION:-}" && -n "${CLUSTER_NAME:-}" ]]; then
+  if [[ -n "${EXPECTED_JWT_ISSUER:-}" ]]; then
+    jwt_issuer="${EXPECTED_JWT_ISSUER}"
+  elif [[ -n "${PROJECT_ID:-}" && -n "${CLUSTER_LOCATION:-}" && -n "${CLUSTER_NAME:-}" ]]; then
     jwt_issuer="https://container.googleapis.com/v1/projects/${PROJECT_ID}/locations/${CLUSTER_LOCATION}/clusters/${CLUSTER_NAME}"
   else
     jwt_issuer=$(run_kubectl get --raw /.well-known/openid-configuration 2>/dev/null | grep -o '"issuer":"[^"]*' | sed 's/"issuer":"//' || true)
@@ -814,6 +826,8 @@ create_api_authentication_config() {
   esac
   local authentication_config
   authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n%s' "${jwt_issuer}" "${discovery_config}")
+  echo "ate-api-authentication authentication.yaml:"
+  echo "  | ${authentication_config//$'\n'/$'\n'  | }"
   run_kubectl create configmap -n ate-system ate-api-authentication \
     --from-literal=authentication.yaml="${authentication_config}" \
     --dry-run=client -o yaml \
