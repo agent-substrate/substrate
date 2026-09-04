@@ -49,6 +49,7 @@ build-images:
 	    ./cmd/atelet \
 	    ./cmd/atenet \
 	    ./cmd/ateom-gvisor \
+	    ./cmd/ateom-microvm \
 	    ./cmd/podcertcontroller
 
 .PHONY: build-atectl
