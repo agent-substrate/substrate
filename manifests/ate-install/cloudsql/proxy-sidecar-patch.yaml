@@ -1,0 +1,66 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Strategic-merge patch adding a Cloud SQL Auth Proxy sidecar to
+# ate-api-server. Applied by hack/install-ate.sh only when
+# ATE_API_POSTGRES_CLOUDSQL_INSTANCE is set.
+#
+# The proxy owns transport security (TLS 1.3 tunnel with ephemeral
+# certificates and instance identity verification) and, with
+# CSQL_PROXY_AUTO_IAM_AUTHN, IAM database authentication: it resolves the
+# pod's Workload Identity via ADC and logs into Postgres with an OAuth token,
+# so no database password exists anywhere. ateapi connects to
+# 127.0.0.1:5432 in plaintext that never leaves the pod's network namespace.
+#
+# All CSQL_PROXY_* configuration comes from the ate-api-server-envvars
+# ConfigMap (written by install-ate.sh); the instance connection name is the
+# proxy's single positional argument, expanded by Kubernetes from the same
+# ConfigMap.
+spec:
+  template:
+    spec:
+      # A native sidecar: an initContainer with restartPolicy Always starts
+      # (and passes its startupProbe) before the ateapi container starts, and
+      # keeps running for the pod's lifetime. Requires Kubernetes 1.29+.
+      initContainers:
+      - name: cloud-sql-proxy
+        image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.2
+        restartPolicy: Always
+        args:
+        - "$(ATE_API_POSTGRES_CLOUDSQL_INSTANCE)"
+        envFrom:
+        - configMapRef:
+            name: ate-api-server-envvars
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        # /startup returns 200 once the proxy can accept connections; gating
+        # on it means ateapi never races the tunnel. Health checks listen on
+        # CSQL_PROXY_HTTP_PORT (9801; ateapi's metrics own 9090).
+        startupProbe:
+          httpGet:
+            path: /startup
+            port: 9801
+          periodSeconds: 1
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /liveness
+            port: 9801
+          initialDelaySeconds: 10
+          periodSeconds: 10

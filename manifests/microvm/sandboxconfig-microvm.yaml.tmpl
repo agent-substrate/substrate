@@ -14,15 +14,11 @@
 
 # Cluster-wide SandboxConfig for the micro-VM (kata + cloud-hypervisor) sandbox
 # class. Unlike sandboxconfig-gvisor.yaml (applied unconditionally by
-# hack/install-ate.sh --deploy-ate-system and marked default:true), this is
-# opt-in: apply via hack/install-microvm-deps.sh --install after staging the
-# asset set (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh).
-#
-# It is deliberately NOT marked default:true. A dirty teardown could leave this
-# CR behind, and if it were the class default a subsequent WorkerPool that
-# omitted sandboxConfigName would silently resolve to the stale config. Making
-# every microvm WorkerPool name it explicitly (sandboxConfigName: microvm) makes
-# a missing/stale config fail loudly instead.
+# hack/install-ate.sh --deploy-ate-system), this is opt-in: apply via
+# hack/install-microvm-deps.sh --install after staging the asset set
+# (assemble.sh + stage-to-gcs.sh / stage-to-rustfs.sh). Every microvm
+# ActorTemplate names it explicitly (configName: microvm), so a missing/stale
+# config fails loudly at template creation.
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs,
 # base configuration.toml) are FETCHED at runtime from the cluster object store

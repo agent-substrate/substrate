@@ -134,8 +134,7 @@ Once installed:
 
 ### Rebuilding gRPC Python clients
 
-Run `hack/update/python-codegen.sh` from anywhere in the repository; it manages
-its own virtual environment under `locust/codegen/venv`. `hack/update-all.sh`
-runs it along with the rest of the code generation, and
-`hack/verify/python-codegen.sh` fails if the checked-in clients have drifted
-from the protos.
+`hack/update/codegen.sh` regenerates them along with the rest of the generated
+code; it manages its own virtual environment under `locust/codegen/venv`.
+`hack/verify/codegen.sh` fails if the checked-in clients have drifted from the
+protos.

@@ -119,7 +119,7 @@ func memoryLimit(tmpl *ateapipb.ActorTemplate) string {
 
 // TestRenderSubstrateFixtures_GVisor pins the default rendering: every
 // micro-VM block is gone, no placeholder survives, and the templates name the
-// cluster-wide default SandboxConfig.
+// cluster-wide gvisor-default SandboxConfig.
 func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, fixture := range substrateFixtures {
@@ -128,9 +128,8 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-gvisor") {
 				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.SandboxClass != "" || pool.Spec.SandboxConfigName != "" {
-				t.Errorf("WorkerPool carries micro-VM runtime fields: class=%q config=%q",
-					pool.Spec.SandboxClass, pool.Spec.SandboxConfigName)
+			if pool.Spec.SandboxClass != "" {
+				t.Errorf("WorkerPool carries micro-VM runtime fields: class=%q", pool.Spec.SandboxClass)
 			}
 
 			templates := renderTemplates(t, fixture.manifests.Template)
@@ -142,8 +141,8 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR {
 					t.Errorf("template %s sandboxClass = %v, want GVISOR", name, got)
 				}
-				// The templates name the cluster-wide default SandboxConfig
-				// explicitly: config_name is required.
+				// The templates name the cluster-wide gvisor-default
+				// SandboxConfig explicitly: config_name is required.
 				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "gvisor-default" {
 					t.Errorf("template %s configName = %q, want gvisor-default", name, got)
 				}
@@ -167,9 +166,9 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 	}
 }
 
-// TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the pool
-// names the cluster-wide SandboxConfig, the templates match its class and
-// carry limits, and the snapshots land under their own prefix.
+// TestRenderSubstrateFixtures_MicroVM pins the micro-VM rendering: the
+// templates name the cluster-wide SandboxConfig and match the pool's class
+// and carry limits, and the snapshots land under their own prefix.
 func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 	t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
 	for _, fixture := range substrateFixtures {
@@ -178,9 +177,8 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-microvm") {
 				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.SandboxClass != SandboxClassMicroVM || pool.Spec.SandboxConfigName != "microvm" {
-				t.Errorf("WorkerPool runtime = class %q / config %q, want microvm / microvm",
-					pool.Spec.SandboxClass, pool.Spec.SandboxConfigName)
+			if pool.Spec.SandboxClass != SandboxClassMicroVM {
+				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.SandboxClass)
 			}
 
 			templates := renderTemplates(t, fixture.manifests.Template)
@@ -192,8 +190,8 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
 					t.Errorf("template %s sandboxClass = %v, want MICROVM — it must match the pool's or no worker is eligible", name, got)
 				}
-				// Deliberately not the class default (see fixture.go), so a
-				// missing or stale microvm install fails loudly.
+				// Named explicitly (see fixture.go), so a missing or stale
+				// microvm install fails loudly.
 				if got := tmpl.GetSandboxConfig().GetConfigName(); got != "microvm" {
 					t.Errorf("template %s configName = %q, want microvm", name, got)
 				}

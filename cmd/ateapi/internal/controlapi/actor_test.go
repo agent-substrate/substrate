@@ -870,8 +870,8 @@ func TestUpdateActor(t *testing.T) {
 // TestUpdateActor_RepointTemplate covers the mutable actor_template ref: an
 // update may point a suspended actor at a different template (it takes effect
 // on the next ResumeActor), but the actor must be suspended, the new ref must
-// resolve, and the replacement's volumes and volume mounts must match the old
-// template's.
+// resolve, and the replacement's sandbox config, volumes, and volume mounts
+// must match the old template's.
 func TestUpdateActor_RepointTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
@@ -946,13 +946,13 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
-	// Repointing at a template with a different sandbox class is rejected.
+	// Repointing at a template naming a different SandboxConfig is rejected.
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
 	}})
 	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("UpdateActor to a template with a different sandbox class = %v, want FailedPrecondition (err: %v)", got, err)
+		t.Fatalf("UpdateActor to a template with a different sandbox config = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
 	// Repointing at an existing template with identical volumes and mounts
@@ -965,6 +965,25 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
 	if got, want := updated.GetActorTemplate().GetName(), "tmpl-b"; got != want {
+		t.Errorf("updated actor_template.name = %q, want %q", got, want)
+	}
+
+	// When the old template no longer exists there is nothing left to
+	// compare the sandbox config or volume layout against, so the repoint
+	// only requires the new ref to resolve.
+	orphan := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "orphan-actor"},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-gone"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	})
+	repointed, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      orphan.GetMetadata(),
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateActor from a deleted template failed: %v", err)
+	}
+	if got, want := repointed.GetActorTemplate().GetName(), "tmpl-e"; got != want {
 		t.Errorf("updated actor_template.name = %q, want %q", got, want)
 	}
 
@@ -995,54 +1014,6 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	}
 	if got, want := kept.GetActorTemplate().GetName(), "tmpl-a"; got != want {
 		t.Errorf("updated actor_template.name = %q, want %q", got, want)
-	}
-}
-
-// TestValidateTemplateSandboxClassUnchanged exercises the sandbox class
-// comparison applied when an actor is repointed at a replacement template.
-func TestValidateTemplateSandboxClassUnchanged(t *testing.T) {
-	template := func(config *ateapipb.SandboxConfig) *ateapipb.ActorTemplate {
-		return &ateapipb.ActorTemplate{SandboxConfig: config}
-	}
-	gvisorDefault := &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"}
-	gvisorNightly := &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-nightly"}
-	microvm := &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "microvm"}
-
-	tests := []struct {
-		name             string
-		oldTmpl, newTmpl *ateapipb.ActorTemplate
-		wantErr          bool
-	}{{
-		name:    "same sandbox class",
-		oldTmpl: template(gvisorDefault),
-		newTmpl: template(gvisorDefault),
-	}, {
-		name:    "same class with a different config name",
-		oldTmpl: template(gvisorDefault),
-		newTmpl: template(gvisorNightly),
-	}, {
-		name:    "class changed",
-		oldTmpl: template(gvisorDefault),
-		newTmpl: template(microvm),
-		wantErr: true,
-	}, {
-		name:    "class set on the new template only",
-		oldTmpl: template(nil),
-		newTmpl: template(microvm),
-		wantErr: true,
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateTemplateSandboxClassUnchanged(tt.oldTmpl, tt.newTmpl)
-			if gotErr := err != nil; gotErr != tt.wantErr {
-				t.Fatalf("validateTemplateSandboxClassUnchanged() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err != nil {
-				if got := status.Code(err); got != codes.FailedPrecondition {
-					t.Errorf("status code = %v, want FailedPrecondition", got)
-				}
-			}
-		})
 	}
 }
 

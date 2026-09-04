@@ -101,15 +101,15 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	}
 
 	// Enforce per-class SandboxConfig asset requirements. This is applied
-	// before any SandboxConfig so the default below is validated too.
+	// before any SandboxConfig so the config below is validated too.
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
 		return err
 	}
 
-	// Install the cluster-wide default sandbox config. Sandbox binaries live
-	// on cluster-scoped SandboxConfigs resolved via each WorkerPool's
-	// SandboxClass, decoupled from ActorTemplate; gVisor pools resolve to this
-	// default unless they name their own SandboxConfig.
+	// Install the cluster-wide sandbox config. Sandbox binaries live on
+	// cluster-scoped SandboxConfigs each ActorTemplate names via
+	// sandboxConfig.configName; gVisor templates name this one unless they
+	// create their own SandboxConfig.
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml")); err != nil {
 		return err
 	}
@@ -118,6 +118,10 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	// workload pulls this ConfigMap in via envFrom, and a container whose
 	// envFrom target is missing will not start.
 	if err := e.applyOtelConfig(ctx); err != nil {
+		return err
+	}
+
+	if err := e.applyBundledPostgres(ctx); err != nil {
 		return err
 	}
 
@@ -148,14 +152,22 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 	log.Step("Waiting for ATE system components to be ready...")
-	for _, w := range []struct{ kind, name string }{
-		{kube.KindStatefulSet, "postgres"},
-		{kube.KindDeployment, "ate-api-server"},
-		{kube.KindDeployment, "ate-controller"},
-		{kube.KindDeployment, "atenet-router"},
-		{kube.KindDeployment, "atenet-egress"},
-		{kube.KindDaemonSet, ateletName},
-	} {
+	type rollout struct{ kind, name string }
+	var waits []rollout
+	// Only when the bundled StatefulSet was applied above; an external
+	// database means it never gets deployed, and waiting on it would block
+	// until the timeout on an object that will never exist.
+	if e.useBundledPostgres() {
+		waits = append(waits, rollout{kube.KindStatefulSet, "postgres"})
+	}
+	waits = append(waits,
+		rollout{kube.KindDeployment, "ate-api-server"},
+		rollout{kube.KindDeployment, "ate-controller"},
+		rollout{kube.KindDeployment, "atenet-router"},
+		rollout{kube.KindDeployment, "atenet-egress"},
+		rollout{kube.KindDaemonSet, ateletName},
+	)
+	for _, w := range waits {
 		if err := e.Kube.RolloutStatus(ctx, w.kind, NamespaceAteSystem, w.name, e.Cfg.RolloutTimeout); err != nil {
 			return err
 		}

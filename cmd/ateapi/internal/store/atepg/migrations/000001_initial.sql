@@ -89,6 +89,20 @@ CREATE TABLE workers (
     proto    bytea NOT NULL
 );
 
+-- One row per Actor, keyed by Actor UID because an Actor has at most one
+-- Worker. Kept separate from workers so Worker reads, writes, and watch events
+-- do not grow with occupancy. The primary key finds an Actor's Worker;
+-- worker_name lists a Worker's Actors.
+CREATE TABLE worker_assignments (
+    actor_uid    text PRIMARY KEY,
+    worker_name  text NOT NULL
+        REFERENCES workers(name) ON DELETE CASCADE,
+    proto        bytea NOT NULL
+);
+
+CREATE INDEX worker_assignments_worker_idx
+    ON worker_assignments (worker_name);
+
 -- Transactional outbox backing WatchWorkers.
 --
 -- 1. Ordering (xid): writeAndAppendEvent guarantees exactly one row per tx,

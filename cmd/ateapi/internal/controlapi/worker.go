@@ -30,6 +30,41 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// ListWorkerActorAssignments lists the Actors a Worker hosts. The assignments are a
+// subresource rather than a field on Worker, so this is the only way to read
+// them and neither GetWorker nor ListWorkers grows with occupancy.
+func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapipb.ListWorkerActorAssignmentsRequest) (*ateapipb.ListWorkerActorAssignmentsResponse, error) {
+	if errs := validateListWorkerActorAssignmentsRequest(ctx, req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
+	name := req.GetWorker().GetName()
+
+	// The Worker is read first so a listing against one that does not exist is
+	// NOT_FOUND rather than an empty page, which a caller cannot tell from a
+	// Worker hosting nothing.
+	if _, err := s.impl.GetWorker(ctx, name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+		}
+		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
+	}
+
+	page, err := s.impl.ListWorkerAssignments(ctx, name,
+		store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	if err != nil {
+		return nil, mapListError(fmt.Errorf("while listing the assignments of worker %s: %w", name, err))
+	}
+	return &ateapipb.ListWorkerActorAssignmentsResponse{
+		ActorAssignments: page.Items,
+		NextPageToken:    page.NextPageToken,
+	}, nil
+}
+
+func validateListWorkerActorAssignmentsRequest(ctx context.Context, req *ateapipb.ListWorkerActorAssignmentsRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ListWorkerActorAssignmentsRequest(ctx, op, nil, req, nil)
+}
+
 func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
 	if errs := validateListWorkersRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -71,6 +106,10 @@ func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerReque
 	return worker, nil
 }
 
+// GetWorker returns the Worker with the Actors it hosts, read separately since
+// the assignments are their own records. The one read that pays O(assignments).
+// A failed read is an error, not a Worker reported as hosting nothing: the
+// caller cannot tell those apart.
 func (s *ServiceImpl) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
 	return s.store.GetWorker(ctx, name)
 }
@@ -105,6 +144,11 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 	// makes ACTIVE the only state it can be born in.
 	outWorker := proto.CloneOf(inWorker)
 	outWorker.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+
+	// Capacity is left unset: a Worker holds nothing until its own ateom says
+	// what it has, through WorkerService.SetWorkerCapacity. Nothing is placed
+	// on it in the meantime, which is the point -- the alternative is guessing
+	// on the Worker's behalf and placing against the guess.
 
 	// Verify that the result is properly valid before storing it.
 	if errs := validateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
@@ -196,6 +240,29 @@ func validateUpdateWorkerRequest(ctx context.Context, req *ateapipb.UpdateWorker
 	return Validate_UpdateWorkerRequest(ctx, op, nil, req, nil)
 }
 
+// The assignment operations are pass-throughs: an assignment is its own record,
+// so binding and releasing are single store calls rather than a read-modify-write
+// of the Worker.
+func (s *ServiceImpl) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapipb.ActorAssignment, admit func(*ateapipb.Worker) error) error {
+	return s.store.BindActorToWorker(ctx, workerName, assignment, admit)
+}
+
+func (s *ServiceImpl) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error) {
+	return s.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
+}
+
+func (s *ServiceImpl) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error) {
+	return s.store.GetWorkerAssignment(ctx, workerName, actorUID)
+}
+
+func (s *ServiceImpl) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error) {
+	return s.store.ListWorkerAssignments(ctx, workerName, opts)
+}
+
+func (s *ServiceImpl) FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error) {
+	return s.store.FindWorkerHostingActor(ctx, actorUID)
+}
+
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := validateDeleteWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
@@ -244,9 +311,8 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapipb.Worker)}
 		}
 		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-		// status.assignment is deliberately left alone: a draining Worker keeps
-		// hosting the Actor bound to it until something releases it. Draining
-		// only stops the scheduler routing new Actors here.
+		// The assignments are left alone: a draining Worker keeps its Actors
+		// until something releases them. Draining only stops new placements.
 		return nil
 	})
 }

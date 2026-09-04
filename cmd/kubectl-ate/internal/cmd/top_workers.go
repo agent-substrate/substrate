@@ -73,6 +73,7 @@ func (l *k8sPodMetricsLister) ListPodMetrics(ctx context.Context, namespace stri
 // TopWorkersRunner executes the top workers resource utilization command logic.
 type TopWorkersRunner struct {
 	workerLister     WorkerLister
+	actorLister      ActorLister
 	podMetricsLister PodMetricsLister
 	namespace        string
 	atespace         string
@@ -87,7 +88,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	filtered, err := filterWorkers(allWorkers, r.namespace, r.atespace, r.selector, r.sandboxClass)
+	filtered, err := filterWorkers(ctx, r.actorLister, allWorkers, r.namespace, r.atespace, r.selector, r.sandboxClass)
 	if err != nil {
 		return err
 	}
@@ -114,25 +115,6 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		podName := w.GetWorkerPod()
 		pool := w.GetWorkerPool()
 
-		status := "FREE"
-		assignedActor := "<none>"
-		if wass := w.GetStatus().GetAssignment(); wass != nil && wass.GetActor() != nil {
-			status = "ASSIGNED"
-			if ref := wass.GetActorTemplateRef(); ref != nil {
-				assignedActor = fmt.Sprintf("%s/%s/%s/%s",
-					ref.GetAtespace(),
-					ref.GetName(),
-					wass.GetActor().GetAtespace(),
-					wass.GetActor().GetName(),
-				)
-			} else {
-				assignedActor = fmt.Sprintf("%s/%s",
-					wass.GetActor().GetAtespace(),
-					wass.GetActor().GetName(),
-				)
-			}
-		}
-
 		cpuStr := "metrics unavailable"
 		memStr := "metrics unavailable"
 
@@ -144,14 +126,13 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		}
 
 		items = append(items, &printer.WorkerTopItem{
-			Pod:           podName,
-			Pool:          pool,
-			Class:         w.GetSandboxClass(),
-			Status:        status,
-			AssignedActor: assignedActor,
-			CPU:           cpuStr,
-			Memory:        memStr,
-			Namespace:     ns,
+			Pod:       podName,
+			Pool:      pool,
+			Class:     w.GetSandboxClass(),
+			Status:    printer.WorkerOccupancy(w),
+			CPU:       cpuStr,
+			Memory:    memStr,
+			Namespace: ns,
 		})
 	}
 
@@ -209,6 +190,7 @@ func runTopWorkers(cmd *cobra.Command, args []string) error {
 
 	runner := &TopWorkersRunner{
 		workerLister:     apiClient,
+		actorLister:      apiClient,
 		podMetricsLister: metricsLister,
 		namespace:        topWorkerNamespaceFlag,
 		atespace:         topWorkerAtespaceFlag,

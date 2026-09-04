@@ -98,6 +98,9 @@ service Control {
   // Returns ABORTED if another write lands on the Worker first; retry.
   rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
 
+  // List the Actors hosted by a given Worker.
+  rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
+
   // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
@@ -744,7 +747,6 @@ message ActorTemplate {
   repeated Volume volumes = 4;
 
   // +k8s:required
-  // +k8s:customValidation # on_commit must be a subset of on_pause
   SnapshotsConfig snapshots_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
@@ -822,6 +824,7 @@ message SandboxConfig {
   string config_name = 2;
 }
 
+// +k8s:customValidation # on_commit must be a subset of on_pause
 message SnapshotsConfig {
   // on_pause selects what is captured during pause actor. UNSPECIFIED is
   // tolerated for compatibility and reads as FULL.
@@ -911,6 +914,9 @@ message Container {
   // +k8s:eachVal=+k8s:maxLength=4096 # argv strings; guardrail, not a contract
   repeated string args = 4;
 
+  // Env variables to set in the container's process environment. Unlike
+  // Kubernetes, $(VAR_NAME) references are NOT expanded in this field.
+  //
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=map # each variable is set at most once
@@ -923,17 +929,15 @@ message Container {
   // +k8s:optional
   ContainerReadyz readyz = 6;
 
-  // Each volume may be mounted at most once per container.
-  //
-  // TODO: Kubernetes permits mounting a single volume at multiple paths (which
-  // requires keying by mountPath). We restrict it to one mount per volume (keyed
-  // by name). Note that keying by name means DV will not catch
-  // two different volumes mounted to the same path.
+  // TODO: Kubernetes permits mounting a single volume at multiple paths
+  // (which requires keying by mountPath). We restrict it to one mount per
+  // volume (keyed by name).
   //
   // +k8s:optional
   // +k8s:maxItems=32
   // +k8s:listType=map
   // +k8s:listMapKey=name
+  // +k8s:customValidation # mount_path must be unique within the container
   repeated VolumeMount volume_mounts = 7;
 
   // security_context adjusts the container's security settings. Unset leaves
@@ -1139,6 +1143,8 @@ message ActorMetadataDataSource {
 // a clean relative Unix path from the root of the volume.
 message ActorMetadataItem {
   // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the ActorMetadataField enum
   ActorMetadataField field = 1;
 
   // +k8s:required
@@ -1153,6 +1159,7 @@ enum ActorMetadataField {
   ACTOR_METADATA_FIELD_NAME = 1;
   ACTOR_METADATA_FIELD_ATESPACE = 2;
   ACTOR_METADATA_FIELD_UID = 3;
+  // Keep this in sync with ActorMetadataItem.field's maximum.
 }
 
 // TrustBundleDataSource projects the trust anchors of the named trust bundle
@@ -1236,6 +1243,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
+  // +k8s:customValidation # volume_mounts must reference declared volumes
   ActorTemplate actor_template = 1;
 }
 
@@ -1480,6 +1488,39 @@ message DeleteOptions {
   string uid = 2;
 }
 
+// ListWorkerActorAssignmentsRequest asks for a page of the Actors hosted by a
+// given Worker.
+message ListWorkerActorAssignmentsRequest {
+  // The Worker under which to list Actors.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+
+  // Requested page size; the server may return fewer. If unspecified, defaults
+  // to a server-chosen value; values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int32 page_size = 2;
+
+  // Pagination token from a previous ListWorkerActorAssignments response.
+  // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
+  string page_token = 3;
+}
+
+// ListWorkerActorAssignmentsResponse is one page of a Worker's Actors.
+message ListWorkerActorAssignmentsResponse {
+  // The Actors this page of the listing covers.
+  repeated ActorAssignment actor_assignments = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
+  string next_page_token = 2;
+}
+
 message ListWorkersRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
@@ -1661,18 +1702,9 @@ message Worker {
   // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> labels = 9;
 
-  // The compute capacity this worker can give an actor sandbox. Immutable, set
-  // at creation: a worker pod's limits are fixed for its lifetime. An update
-  // replaces the worker rather than patching it, so a request that omits
-  // capacity is asking to clear it, which the immutability rule rejects.
-  //
-  // +k8s:optional
-  // +k8s:immutable
-  WorkerCapacity capacity = 10;
-
   // Output-only server-managed state. Absent from Create/Update request
   // payloads; whatever a request carries here is ignored. DrainWorker is the
-  // only way a client moves state, and assignment is the scheduler's.
+  // only way a client moves state, and the assignments are the scheduler's.
   //
   // +k8s:optional
   WorkerStatus status = 11;
@@ -1693,35 +1725,59 @@ message WorkerStatus {
   // +k8s:maximum=2 # keep this in sync with the WorkerState enum
   WorkerState state = 1;
 
-  // The Actor currently bound to this Worker, if any.
+  // The total resource capacity of the Worker.
+  //
+  // A Worker should report every dimension of resources it has available to be
+  // consumed by Actors. Any resource not specified here is assumed to be 0. An
+  // Actor which requests a resource which is not present in a Worker's
+  // capacity will prevent that Actor from running on that Worker.
+  //
+  // Shrinking capacity below allocated prevents new placements but does not
+  // evicts running Actors.
   //
   // +k8s:optional
-  ActorAssignment assignment = 2;
+  WorkerResources capacity = 2;
+
+  // The allocated resources of the Worker.  This is the sum of all the
+  // resources consumed by the Actors currently assigned to this Worker.
+  //
+  // +k8s:optional
+  WorkerResources allocated = 3;
 }
 
-// WorkerCapacity is the worker pod's compute capacity available to host an
-// actor sandbox, taken from the ateom container's resource limits. The
-// scheduler only places an actor on a worker whose capacity is >= the actor's
-// declared resource limits. An unset message, or a zero field within it, means
-// "unknown/unset" for that dimension: treated as unconstrained so placement is
-// not blocked (matching the pre-capacity behavior).
-message WorkerCapacity {
-  // CPU capacity in millicores (1000 = one core).
+// WorkerResources represents a set of resources.
+message WorkerResources {
+  // Resources match the Actor's definition of resources.
+  // They are matched by name and used for placement.
+  //
+  // +k8s:optional
+  Resources resources = 1;
+
+  // A count of Actors.  Workers can use this to limit the number of Actors
+  // that can be placed on them, constraining the costs of other things that
+  // are not captured in the resources above, but which still have costs -
+  // netns, mounts, file descriptors, etc.
   //
   // +k8s:optional
   // +k8s:minimum=1
-  int64 cpu_milli = 1;
-
-  // Memory capacity in bytes.
-  //
-  // +k8s:optional
-  // +k8s:minimum=1
-  int64 memory_bytes = 2;
+  int32 actors = 2;
 }
 
-// ActorAssignment names the Actor currently bound to a Worker — the inverse of
-// WorkerAssignment.
+// ActorAssignment binds an Actor to a Worker.  This is a subresource of the
+// Worker.
 message ActorAssignment {
+  // Metadata about the assignment.
+  //
+  // The atespace field is always empty, since it corresponds to a Worker, and
+  // Workers are not atespaced. The name field is the Actor's UID, so the Actor
+  // that caused an assignment is what addresses it.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ResourceMetadata metadata = 6;
+
+  // actor is the Actor that is assigned to the Worker.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
@@ -1730,12 +1786,17 @@ message ActorAssignment {
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
 
-  // actor_template_ref names the substrate ActorTemplate resource the
-  // assigned actor uses.
+  // actor_template_ref names the ActorTemplate resource the assigned Actor
+  // uses.
   //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
+
+  // The resources allocated to the Actor when it was assigned.
+  //
+  // +k8s:optional
+  Resources resources = 5;
 }
 
 // ActorIdentity allows substrate workloads to exchange their
@@ -1763,6 +1824,42 @@ service ActorIdentity {
   //
   // The certificate in the response is the actor's identity, not the atelet's.
   rpc MintCert(MintCertRequest) returns (MintCertResponse);
+}
+
+// WorkerService is how a Worker tells the control plane about itself. It is
+// separate from Control because the two have different callers and different
+// authorization: Control is the client-facing API, while these RPCs are served
+// only to an atelet, and only for the Workers on its own node.
+service WorkerService {
+  // SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
+  // to report rather than the control plane's to infer: it is what the ateom
+  // can actually supply, only its node can observe it, and a fleet may run
+  // mixed ateom versions.
+  //
+  // atelet calls this with its own client certificate, as it does for
+  // MintCert. Idempotent: re-sending the same capacity is not a write.
+  rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse);
+}
+
+message SetWorkerCapacityRequest {
+  // The Worker being reported on. atespace is always empty; Workers are
+  // global-scoped.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+
+  // Everything the Worker can hold. This replaces what is recorded rather than
+  // merging into it: a dimension left out is one the Worker no longer supplies,
+  // and an Actor asking for that dimension will not be placed here.
+  //
+  // +k8s:required
+  WorkerResources capacity = 2;
+}
+
+message SetWorkerCapacityResponse {
+  // The Worker as recorded, so a caller sees what its report resolved to.
+  Worker worker = 1;
 }
 
 message MintJWTRequest {

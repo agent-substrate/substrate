@@ -365,6 +365,9 @@ func main() {
 	ateletpb.RegisterCredentialBrokerServer(brokerServer, &credentialBroker{
 		actorIdentityClient: ateapipb.NewActorIdentityClient(ateapiConn),
 	})
+	ateletpb.RegisterWorkerCapacityServer(brokerServer, &workerCapacityService{
+		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+	})
 	go func() {
 		if err := brokerServer.Serve(brokerLis); err != nil {
 			serverboot.Fatal(ctx, "Failed to serve credential broker", err)

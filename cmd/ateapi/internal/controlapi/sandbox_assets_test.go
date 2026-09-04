@@ -15,31 +15,27 @@
 package controlapi
 
 import (
+	"strings"
 	"testing"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
-// listerFor builds listers over the given objects, using the same key
-// functions the informers use.
-func listersFor(t *testing.T, pools []*atev1alpha1.WorkerPool, configs []*atev1alpha1.SandboxConfig) (listersv1alpha1.WorkerPoolLister, listersv1alpha1.SandboxConfigLister) {
+// sandboxConfigListerFor builds a lister over the given SandboxConfigs, using
+// the same key function the informers use.
+func sandboxConfigListerFor(t *testing.T, configs []*atev1alpha1.SandboxConfig) listersv1alpha1.SandboxConfigLister {
 	t.Helper()
-	poolIdx := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
-	for _, p := range pools {
-		if err := poolIdx.Add(p); err != nil {
-			t.Fatalf("adding WorkerPool: %v", err)
-		}
-	}
 	configIdx := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
 	for _, c := range configs {
 		if err := configIdx.Add(c); err != nil {
 			t.Fatalf("adding SandboxConfig: %v", err)
 		}
 	}
-	return listersv1alpha1.NewWorkerPoolLister(poolIdx), listersv1alpha1.NewSandboxConfigLister(configIdx)
+	return listersv1alpha1.NewSandboxConfigLister(configIdx)
 }
 
 func testAssets() map[string]map[string]atev1alpha1.AssetFile {
@@ -48,23 +44,12 @@ func testAssets() map[string]map[string]atev1alpha1.AssetFile {
 	}
 }
 
-// TestResolveSandboxAssetsCarriesPauseImage pins that the pause image travels
-// with the sandbox binaries — it is resolved from the pool's SandboxConfig, not
-// from the ActorTemplate — for both the named and the class-default config.
-func TestResolveSandboxAssetsCarriesPauseImage(t *testing.T) {
-	const (
-		defaultPause = "registry.k8s.io/pause@sha256:default"
-		namedPause   = "gcr.io/gke-release/pause@sha256:named"
-	)
-	defaultConfig := &atev1alpha1.SandboxConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
-		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			Default:      true,
-			PauseImage:   defaultPause,
-			Assets:       testAssets(),
-		},
-	}
+// TestResolveSandboxAssets pins the template-side resolution: the config the
+// template names is resolved (with its class checked), an empty name or an
+// unrecognized class is an error, and the pause image travels with the
+// sandbox binaries.
+func TestResolveSandboxAssets(t *testing.T) {
+	const namedPause = "gcr.io/gke-release/pause@sha256:named"
 	namedConfig := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-custom"},
 		Spec: atev1alpha1.SandboxConfigSpec{
@@ -76,22 +61,53 @@ func TestResolveSandboxAssetsCarriesPauseImage(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		configName     string
+		sandbox        *ateapipb.SandboxConfig
 		wantPauseImage string
-	}{
-		{name: "class default", wantPauseImage: defaultPause},
-		{name: "named config", configName: "gvisor-custom", wantPauseImage: namedPause},
-	}
+		wantErr        string
+	}{{
+		name: "named config",
+		sandbox: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "gvisor-custom",
+		},
+		wantPauseImage: namedPause,
+	}, {
+		name: "named config class mismatch",
+		sandbox: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
+			ConfigName:   "gvisor-custom",
+		},
+		wantErr: `has class "gvisor"`,
+	}, {
+		name: "missing named config",
+		sandbox: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "does-not-exist",
+		},
+		wantErr: `SandboxConfig "does-not-exist" not found`,
+	}, {
+		name: "unrecognized sandbox class",
+		sandbox: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED,
+			ConfigName:   "gvisor-custom",
+		},
+		wantErr: "unrecognized sandbox_class",
+	}, {
+		name:    "empty config name",
+		sandbox: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		wantErr: "names no sandbox_config.config_name",
+	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pool := &atev1alpha1.WorkerPool{
-				ObjectMeta: metav1.ObjectMeta{Name: "pool1", Namespace: "worker-ns"},
-				Spec:       atev1alpha1.WorkerPoolSpec{SandboxConfigName: tt.configName},
-			}
-			poolLister, configLister := listersFor(t, []*atev1alpha1.WorkerPool{pool},
-				[]*atev1alpha1.SandboxConfig{defaultConfig, namedConfig})
+			configLister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{namedConfig})
 
-			got, err := resolveSandboxAssets(poolLister, configLister, "worker-ns", "pool1")
+			got, err := resolveSandboxAssets(configLister, tt.sandbox)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("resolveSandboxAssets() error = %v, want it to contain %q", err, tt.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("resolveSandboxAssets() error: %v", err)
 			}

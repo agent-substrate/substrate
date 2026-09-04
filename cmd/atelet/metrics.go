@@ -137,11 +137,11 @@ func recordPhases(ctx context.Context, h metric.Float64Histogram, op snapshotOp,
 		if p.d == 0 {
 			continue
 		}
-		attrs := make([]attribute.KeyValue, 0, len(base)+2)
+		attrs := make([]attribute.KeyValue, 0, len(base)+3)
 		attrs = append(attrs, base...)
 		attrs = append(attrs, ateattr.SnapshotPhaseKey.String(p.name))
 		if err != nil && (p.name == ateattr.SnapshotPhaseTotal || p.name == op.failedPhase) {
-			attrs = append(attrs, ateattr.FailureReasonKey.String(ateattr.FailureReason(err)))
+			attrs = append(attrs, ateattr.FailureAttributes(ateattr.FailureReason(err))...)
 		}
 		h.Record(ctx, p.d.Seconds(), metric.WithAttributes(attrs...))
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -144,12 +145,18 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 		}
 	}
 
+	// Every migration applied once and no more: two racing starts must not each
+	// record the same version.
+	want, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		t.Fatalf("listing migrations: %v", err)
+	}
 	var applied int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "concurrent-startup".schema_migrations WHERE version_id > 0 AND is_applied`).Scan(&applied); err != nil {
 		t.Fatalf("reading applied migrations: %v", err)
 	}
-	if applied != 1 {
-		t.Fatalf("applied migration rows = %d, want 1", applied)
+	if applied != len(want) {
+		t.Fatalf("applied migration rows = %d, want %d", applied, len(want))
 	}
 }
 
@@ -452,7 +459,7 @@ func appliedMigrationVersions(t *testing.T, pool *pgxpool.Pool) []int64 {
 // state, so the statement lives here rather than on Persistence.
 func clearAll(t *testing.T, p *Persistence) {
 	t.Helper()
-	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
+	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, worker_assignments, leases, worker_outbox, worker_outbox_trim`); err != nil {
 		t.Fatalf("truncating tables: %v", err)
 	}
 }
@@ -835,5 +842,85 @@ func TestAcquireLease_ConcurrentTakeover(t *testing.T) {
 	}
 	for lease := range winners {
 		lease.Close()
+	}
+}
+
+// TestSaveWorker_RejectsAStaleWrite proves the precondition saveWorker states
+// on top of the row lock its callers hold: a Worker read before someone else
+// wrote it cannot overwrite that write.
+func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN, "public")
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "stale-write-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	// Move the stored Worker on, so the copy above is a version behind.
+	if _, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Ip = "10.0.0.1"
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin failed: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := saveWorker(ctx, tx, created); !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("saveWorker() with a stale Worker = %v, want ErrVersionConflict", err)
+	}
+}
+
+// TestSaveWorker_RejectsAVanishedWorker keeps a deleted row from being an
+// update of nothing.
+func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN, "public")
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "vanished-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker failed: %v", err)
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin failed: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := saveWorker(ctx, tx, created); !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("saveWorker() on a deleted Worker = %v, want ErrVersionConflict", err)
 	}
 }

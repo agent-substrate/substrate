@@ -33,38 +33,39 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName                = "/ateapi.Control/GetActor"
-	Control_CreateActor_FullMethodName             = "/ateapi.Control/CreateActor"
-	Control_UpdateActor_FullMethodName             = "/ateapi.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName            = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName              = "/ateapi.Control/PauseActor"
-	Control_ResumeActor_FullMethodName             = "/ateapi.Control/ResumeActor"
-	Control_DeleteActor_FullMethodName             = "/ateapi.Control/DeleteActor"
-	Control_GetActorEgressPolicy_FullMethodName    = "/ateapi.Control/GetActorEgressPolicy"
-	Control_CreateActorEgressPolicy_FullMethodName = "/ateapi.Control/CreateActorEgressPolicy"
-	Control_UpdateActorEgressPolicy_FullMethodName = "/ateapi.Control/UpdateActorEgressPolicy"
-	Control_DeleteActorEgressPolicy_FullMethodName = "/ateapi.Control/DeleteActorEgressPolicy"
-	Control_GetActorSnapshot_FullMethodName        = "/ateapi.Control/GetActorSnapshot"
-	Control_GetActorSnapshotTag_FullMethodName     = "/ateapi.Control/GetActorSnapshotTag"
-	Control_ListActorSnapshots_FullMethodName      = "/ateapi.Control/ListActorSnapshots"
-	Control_CreateActorSnapshotTag_FullMethodName  = "/ateapi.Control/CreateActorSnapshotTag"
-	Control_UpdateActorSnapshotTag_FullMethodName  = "/ateapi.Control/UpdateActorSnapshotTag"
-	Control_DeleteActorSnapshotTag_FullMethodName  = "/ateapi.Control/DeleteActorSnapshotTag"
-	Control_ListWorkers_FullMethodName             = "/ateapi.Control/ListWorkers"
-	Control_GetWorker_FullMethodName               = "/ateapi.Control/GetWorker"
-	Control_CreateWorker_FullMethodName            = "/ateapi.Control/CreateWorker"
-	Control_UpdateWorker_FullMethodName            = "/ateapi.Control/UpdateWorker"
-	Control_DeleteWorker_FullMethodName            = "/ateapi.Control/DeleteWorker"
-	Control_DrainWorker_FullMethodName             = "/ateapi.Control/DrainWorker"
-	Control_ListActors_FullMethodName              = "/ateapi.Control/ListActors"
-	Control_CreateAtespace_FullMethodName          = "/ateapi.Control/CreateAtespace"
-	Control_GetAtespace_FullMethodName             = "/ateapi.Control/GetAtespace"
-	Control_ListAtespaces_FullMethodName           = "/ateapi.Control/ListAtespaces"
-	Control_DeleteAtespace_FullMethodName          = "/ateapi.Control/DeleteAtespace"
-	Control_CreateActorTemplate_FullMethodName     = "/ateapi.Control/CreateActorTemplate"
-	Control_GetActorTemplate_FullMethodName        = "/ateapi.Control/GetActorTemplate"
-	Control_ListActorTemplates_FullMethodName      = "/ateapi.Control/ListActorTemplates"
-	Control_DeleteActorTemplate_FullMethodName     = "/ateapi.Control/DeleteActorTemplate"
+	Control_GetActor_FullMethodName                   = "/ateapi.Control/GetActor"
+	Control_CreateActor_FullMethodName                = "/ateapi.Control/CreateActor"
+	Control_UpdateActor_FullMethodName                = "/ateapi.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName               = "/ateapi.Control/SuspendActor"
+	Control_PauseActor_FullMethodName                 = "/ateapi.Control/PauseActor"
+	Control_ResumeActor_FullMethodName                = "/ateapi.Control/ResumeActor"
+	Control_DeleteActor_FullMethodName                = "/ateapi.Control/DeleteActor"
+	Control_GetActorEgressPolicy_FullMethodName       = "/ateapi.Control/GetActorEgressPolicy"
+	Control_CreateActorEgressPolicy_FullMethodName    = "/ateapi.Control/CreateActorEgressPolicy"
+	Control_UpdateActorEgressPolicy_FullMethodName    = "/ateapi.Control/UpdateActorEgressPolicy"
+	Control_DeleteActorEgressPolicy_FullMethodName    = "/ateapi.Control/DeleteActorEgressPolicy"
+	Control_GetActorSnapshot_FullMethodName           = "/ateapi.Control/GetActorSnapshot"
+	Control_GetActorSnapshotTag_FullMethodName        = "/ateapi.Control/GetActorSnapshotTag"
+	Control_ListActorSnapshots_FullMethodName         = "/ateapi.Control/ListActorSnapshots"
+	Control_CreateActorSnapshotTag_FullMethodName     = "/ateapi.Control/CreateActorSnapshotTag"
+	Control_UpdateActorSnapshotTag_FullMethodName     = "/ateapi.Control/UpdateActorSnapshotTag"
+	Control_DeleteActorSnapshotTag_FullMethodName     = "/ateapi.Control/DeleteActorSnapshotTag"
+	Control_ListWorkers_FullMethodName                = "/ateapi.Control/ListWorkers"
+	Control_GetWorker_FullMethodName                  = "/ateapi.Control/GetWorker"
+	Control_CreateWorker_FullMethodName               = "/ateapi.Control/CreateWorker"
+	Control_UpdateWorker_FullMethodName               = "/ateapi.Control/UpdateWorker"
+	Control_DeleteWorker_FullMethodName               = "/ateapi.Control/DeleteWorker"
+	Control_DrainWorker_FullMethodName                = "/ateapi.Control/DrainWorker"
+	Control_ListWorkerActorAssignments_FullMethodName = "/ateapi.Control/ListWorkerActorAssignments"
+	Control_ListActors_FullMethodName                 = "/ateapi.Control/ListActors"
+	Control_CreateAtespace_FullMethodName             = "/ateapi.Control/CreateAtespace"
+	Control_GetAtespace_FullMethodName                = "/ateapi.Control/GetAtespace"
+	Control_ListAtespaces_FullMethodName              = "/ateapi.Control/ListAtespaces"
+	Control_DeleteAtespace_FullMethodName             = "/ateapi.Control/DeleteAtespace"
+	Control_CreateActorTemplate_FullMethodName        = "/ateapi.Control/CreateActorTemplate"
+	Control_GetActorTemplate_FullMethodName           = "/ateapi.Control/GetActorTemplate"
+	Control_ListActorTemplates_FullMethodName         = "/ateapi.Control/ListActorTemplates"
+	Control_DeleteActorTemplate_FullMethodName        = "/ateapi.Control/DeleteActorTemplate"
 )
 
 // ControlClient is the client API for Control service.
@@ -125,6 +126,8 @@ type ControlClient interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// List the Actors hosted by a given Worker.
+	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in database.
@@ -382,6 +385,16 @@ func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest,
 	return out, nil
 }
 
+func (c *controlClient) ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListWorkerActorAssignmentsResponse)
+	err := c.cc.Invoke(ctx, Control_ListWorkerActorAssignments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorsResponse)
@@ -530,6 +543,8 @@ type ControlServer interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
+	// List the Actors hosted by a given Worker.
+	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in database.
@@ -625,6 +640,9 @@ func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerReq
 }
 func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
+}
+func (UnimplementedControlServer) ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListWorkerActorAssignments not implemented")
 }
 func (UnimplementedControlServer) ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActors not implemented")
@@ -1088,6 +1106,24 @@ func _Control_DrainWorker_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_ListWorkerActorAssignments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListWorkerActorAssignmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListWorkerActorAssignments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListWorkerActorAssignments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListWorkerActorAssignments(ctx, req.(*ListWorkerActorAssignmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListActors_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorsRequest)
 	if err := dec(in); err != nil {
@@ -1350,6 +1386,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_DrainWorker_Handler,
 		},
 		{
+			MethodName: "ListWorkerActorAssignments",
+			Handler:    _Control_ListWorkerActorAssignments_Handler,
+		},
+		{
 			MethodName: "ListActors",
 			Handler:    _Control_ListActors_Handler,
 		},
@@ -1568,6 +1608,132 @@ var ActorIdentity_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MintCert",
 			Handler:    _ActorIdentity_MintCert_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "ateapi.proto",
+}
+
+const (
+	WorkerService_SetWorkerCapacity_FullMethodName = "/ateapi.WorkerService/SetWorkerCapacity"
+)
+
+// WorkerServiceClient is the client API for WorkerService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// WorkerService is how a Worker tells the control plane about itself. It is
+// separate from Control because the two have different callers and different
+// authorization: Control is the client-facing API, while these RPCs are served
+// only to an atelet, and only for the Workers on its own node.
+type WorkerServiceClient interface {
+	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
+	// to report rather than the control plane's to infer: it is what the ateom
+	// can actually supply, only its node can observe it, and a fleet may run
+	// mixed ateom versions.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// MintCert. Idempotent: re-sending the same capacity is not a write.
+	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
+}
+
+type workerServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewWorkerServiceClient(cc grpc.ClientConnInterface) WorkerServiceClient {
+	return &workerServiceClient{cc}
+}
+
+func (c *workerServiceClient) SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetWorkerCapacityResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SetWorkerCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// WorkerServiceServer is the server API for WorkerService service.
+// All implementations must embed UnimplementedWorkerServiceServer
+// for forward compatibility.
+//
+// WorkerService is how a Worker tells the control plane about itself. It is
+// separate from Control because the two have different callers and different
+// authorization: Control is the client-facing API, while these RPCs are served
+// only to an atelet, and only for the Workers on its own node.
+type WorkerServiceServer interface {
+	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
+	// to report rather than the control plane's to infer: it is what the ateom
+	// can actually supply, only its node can observe it, and a fleet may run
+	// mixed ateom versions.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// MintCert. Idempotent: re-sending the same capacity is not a write.
+	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
+	mustEmbedUnimplementedWorkerServiceServer()
+}
+
+// UnimplementedWorkerServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedWorkerServiceServer struct{}
+
+func (UnimplementedWorkerServiceServer) SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetWorkerCapacity not implemented")
+}
+func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
+func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
+
+// UnsafeWorkerServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to WorkerServiceServer will
+// result in compilation errors.
+type UnsafeWorkerServiceServer interface {
+	mustEmbedUnimplementedWorkerServiceServer()
+}
+
+func RegisterWorkerServiceServer(s grpc.ServiceRegistrar, srv WorkerServiceServer) {
+	// If the following call panics, it indicates UnimplementedWorkerServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&WorkerService_ServiceDesc, srv)
+}
+
+func _WorkerService_SetWorkerCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetWorkerCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SetWorkerCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SetWorkerCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SetWorkerCapacity(ctx, req.(*SetWorkerCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var WorkerService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "ateapi.WorkerService",
+	HandlerType: (*WorkerServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SetWorkerCapacity",
+			Handler:    _WorkerService_SetWorkerCapacity_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

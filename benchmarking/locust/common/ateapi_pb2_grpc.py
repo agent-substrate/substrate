@@ -164,6 +164,11 @@ class ControlStub:
                 request_serializer=ateapi__pb2.DrainWorkerRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.Worker.FromString,
                 _registered_method=True)
+        self.ListWorkerActorAssignments = channel.unary_unary(
+                '/ateapi.Control/ListWorkerActorAssignments',
+                request_serializer=ateapi__pb2.ListWorkerActorAssignmentsRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ListWorkerActorAssignmentsResponse.FromString,
+                _registered_method=True)
         self.ListActors = channel.unary_unary(
                 '/ateapi.Control/ListActors',
                 request_serializer=ateapi__pb2.ListActorsRequest.SerializeToString,
@@ -382,6 +387,13 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListWorkerActorAssignments(self, request, context):
+        """List the Actors hosted by a given Worker.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListActors(self, request, context):
         """List Actors.
         """
@@ -561,6 +573,11 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.DrainWorker,
                     request_deserializer=ateapi__pb2.DrainWorkerRequest.FromString,
                     response_serializer=ateapi__pb2.Worker.SerializeToString,
+            ),
+            'ListWorkerActorAssignments': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListWorkerActorAssignments,
+                    request_deserializer=ateapi__pb2.ListWorkerActorAssignmentsRequest.FromString,
+                    response_serializer=ateapi__pb2.ListWorkerActorAssignmentsResponse.SerializeToString,
             ),
             'ListActors': grpc.unary_unary_rpc_method_handler(
                     servicer.ListActors,
@@ -1241,6 +1258,33 @@ class Control:
             _registered_method=True)
 
     @staticmethod
+    def ListWorkerActorAssignments(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/ListWorkerActorAssignments',
+            ateapi__pb2.ListWorkerActorAssignmentsRequest.SerializeToString,
+            ateapi__pb2.ListWorkerActorAssignmentsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def ListActors(request,
             target,
             options=(),
@@ -1621,6 +1665,97 @@ class ActorIdentity:
             '/ateapi.ActorIdentity/MintCert',
             ateapi__pb2.MintCertRequest.SerializeToString,
             ateapi__pb2.MintCertResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class WorkerServiceStub:
+    """WorkerService is how a Worker tells the control plane about itself. It is
+    separate from Control because the two have different callers and different
+    authorization: Control is the client-facing API, while these RPCs are served
+    only to an atelet, and only for the Workers on its own node.
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.SetWorkerCapacity = channel.unary_unary(
+                '/ateapi.WorkerService/SetWorkerCapacity',
+                request_serializer=ateapi__pb2.SetWorkerCapacityRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.SetWorkerCapacityResponse.FromString,
+                _registered_method=True)
+
+
+class WorkerServiceServicer:
+    """WorkerService is how a Worker tells the control plane about itself. It is
+    separate from Control because the two have different callers and different
+    authorization: Control is the client-facing API, while these RPCs are served
+    only to an atelet, and only for the Workers on its own node.
+    """
+
+    def SetWorkerCapacity(self, request, context):
+        """SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
+        to report rather than the control plane's to infer: it is what the ateom
+        can actually supply, only its node can observe it, and a fleet may run
+        mixed ateom versions.
+
+        atelet calls this with its own client certificate, as it does for
+        MintCert. Idempotent: re-sending the same capacity is not a write.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_WorkerServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'SetWorkerCapacity': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetWorkerCapacity,
+                    request_deserializer=ateapi__pb2.SetWorkerCapacityRequest.FromString,
+                    response_serializer=ateapi__pb2.SetWorkerCapacityResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'ateapi.WorkerService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('ateapi.WorkerService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class WorkerService:
+    """WorkerService is how a Worker tells the control plane about itself. It is
+    separate from Control because the two have different callers and different
+    authorization: Control is the client-facing API, while these RPCs are served
+    only to an atelet, and only for the Workers on its own node.
+    """
+
+    @staticmethod
+    def SetWorkerCapacity(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.WorkerService/SetWorkerCapacity',
+            ateapi__pb2.SetWorkerCapacityRequest.SerializeToString,
+            ateapi__pb2.SetWorkerCapacityResponse.FromString,
             options,
             channel_credentials,
             insecure,

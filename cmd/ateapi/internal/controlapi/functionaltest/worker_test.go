@@ -54,8 +54,9 @@ func TestListWorkers(t *testing.T) {
 	want := []*ateapipb.Worker{
 		{
 			Metadata: &ateapipb.ResourceMetadata{
-				Name:    podUID,
-				Version: 1,
+				Name: podUID,
+				// Two writes: the registration, then the capacity report.
+				Version: 2,
 			},
 			WorkerNamespace: ns,
 			WorkerPool:      "pool1",
@@ -65,9 +66,7 @@ func TestListWorkers(t *testing.T) {
 			Ip:              "127.0.0.1",
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
-			Status: &ateapipb.WorkerStatus{
-				State: ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			},
+			Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 		},
 	}
 

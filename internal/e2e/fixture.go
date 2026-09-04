@@ -38,10 +38,9 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 		"${FIXTURE_SUFFIX}": "-" + name,
 	}
 	blocks = map[string]string{
-		// gvisor-default is the cluster-wide default SandboxConfig
+		// gvisor-default is the cluster-wide SandboxConfig
 		// manifests/ate-install ships; config_name is required, so the
-		// templates name it explicitly even though the gVisor WorkerPools
-		// leave sandboxConfigName empty and resolve to the same object.
+		// fixtures name it explicitly.
 		"${TEMPLATE_SANDBOX_CONFIG}": "sandboxConfig:\n  sandboxClass: SANDBOX_CLASS_GVISOR\n  configName: gvisor-default",
 		"${TEMPLATE_RESOURCES}":      "",
 		// Off unless the caller opts in; see WithTrustBundle.
@@ -57,9 +56,8 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 	}
 
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
-	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs.
-	// It is deliberately not the class default, so a missing or stale one
-	// fails loudly.
+	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs;
+	// a missing or stale one fails loudly at template creation.
 	blocks["${TEMPLATE_SANDBOX_CONFIG}"] = "sandboxConfig:\n  sandboxClass: SANDBOX_CLASS_MICROVM\n  configName: microvm"
 	// Only for fixtures that declare no limits of their own. Without them the
 	// guest boots at the kata config's default (2GiB), and several of those

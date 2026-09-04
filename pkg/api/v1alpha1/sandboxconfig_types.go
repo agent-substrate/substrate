@@ -51,21 +51,14 @@ type AssetFile struct {
 
 // SandboxConfigSpec is the desired state of a SandboxConfig.
 type SandboxConfigSpec struct {
-	// SandboxClass is the sandbox runtime family this config applies to. A
-	// WorkerPool only uses SandboxConfigs whose SandboxClass matches its own.
+	// SandboxClass is the sandbox runtime family this config applies to. An
+	// ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
+	// sandbox_config.sandbox_class.
 	//
 	// +required
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
-
-	// Default marks this SandboxConfig as the cluster-wide default for its
-	// SandboxClass. A WorkerPool with no explicit SandboxConfigName resolves to
-	// the default config for its SandboxClass. At most one default is expected
-	// per SandboxClass.
-	//
-	// +optional
-	Default bool `json:"default,omitempty"`
 
 	// PauseImage is the container image used as the root sandbox container.
 	// It holds the sandbox's namespaces and runs no workload code, so it is an
@@ -98,8 +91,9 @@ type SandboxConfigSpec struct {
 }
 
 // SandboxConfig is cluster-scoped configuration describing the sandbox binaries
-// for a sandbox runtime family. It is referenced (or defaulted) by WorkerPools
-// and decouples sandbox binary selection from ActorTemplate.
+// for a sandbox runtime family. It is referenced by an ActorTemplate's
+// sandbox_config.config_name (required) and decouples
+// sandbox binary selection from the workload definition.
 //
 // +genclient
 // +genclient:nonNamespaced
@@ -107,7 +101,6 @@ type SandboxConfigSpec struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=sandboxconfig
 // +kubebuilder:printcolumn:name="Class",type=string,JSONPath=`.spec.sandboxClass`
-// +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SandboxConfig struct {
 	metav1.TypeMeta `json:",inline"`

@@ -42,10 +42,35 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, pre stor
 		return nil, err
 	}
 
+	// Checked against the Worker the caller observed, before the drain below
+	// moves the version.
+	if err := pre.Check(worker.GetMetadata()); err != nil {
+		switch {
+		case errors.Is(err, store.ErrUIDConflict):
+			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, pre.UID)
+		case errors.Is(err, store.ErrVersionConflict):
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		return nil, err
+	}
+
+	// Scheduling only places on ACTIVE Workers, so draining first stops a
+	// concurrent resume from binding to a page the sweep has already passed.
+	// The delete would cascade that assignment away and leave the Actor
+	// pointing at a Worker that is gone.
+	worker, err = w.ensureDraining(ctx, worker)
+	if err != nil {
+		return nil, err
+	}
+
+	// The drain moved the version, so only the uid guard still means anything:
+	// a Worker replaced by a new incarnation mid-delete is still refused.
+	pre.Version = 0
+
 	// Order matters: the delete is what erases the Actor's pointer at the
 	// Worker, so a failed release has to leave the record in place for the
 	// caller to rediscover and retry.
-	if err := w.ensureBoundActorReleased(ctx, worker); err != nil {
+	if err := w.ensureBoundActorsReleased(ctx, worker); err != nil {
 		return nil, err
 	}
 
@@ -68,29 +93,82 @@ func (w *WorkerWorkflow) loadWorkerForDelete(ctx context.Context, name string) (
 	return worker, nil
 }
 
-// ensureBoundActorReleased resets the Actor bound to the Worker. An Actor that
-// already reached ACTOR_STATE_SUSPENDED saved its state cleanly during graceful
+// ensureDraining moves the Worker out of the state scheduling will place on,
+// and is a no-op for one already draining.
+func (w *WorkerWorkflow) ensureDraining(ctx context.Context, worker *ateapipb.Worker) (_ *ateapipb.Worker, err error) {
+	ctx, done := stepSpan(ctx, "DrainWorkerForDelete")
+	defer func() { err = done(err) }()
+
+	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		return worker, nil
+	}
+	drained, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker),
+		func(toUpdate *ateapipb.Worker) error {
+			if toUpdate.Status == nil {
+				toUpdate.Status = &ateapipb.WorkerStatus{}
+			}
+			toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("while draining worker for delete: %w", err)
+	}
+	return drained, nil
+}
+
+// ensureBoundActorsReleased resets every Actor bound to the Worker.
+//
+// A single failure stops the sweep, leaving the Worker record in place with the
+// Actors that have not been released still bound to it, so a retry picks up
+// where this left off.
+func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *ateapipb.Worker) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseBoundActors")
+	defer func() { err = done(err) }()
+
+	// Every page: a Worker can hold thousands of Actors and a page holds at
+	// most a thousand, so stopping at the first would leave the rest bound.
+	var released int
+	for token := ""; ; {
+		page, err := w.store.ListWorkerAssignments(ctx, worker.GetMetadata().GetName(), store.ListOptions{PageToken: token})
+		if err != nil {
+			return fmt.Errorf("while listing the assignments of worker %s: %w", worker.GetMetadata().GetName(), err)
+		}
+		for _, assignment := range page.Items {
+			if err := w.releaseBoundActor(ctx, worker, assignment); err != nil {
+				return err
+			}
+			released++
+		}
+		if !page.HasNextPage() {
+			break
+		}
+		token = page.NextPageToken
+	}
+	if released == 0 {
+		markSkipped(ctx, "worker has no actors assigned")
+	}
+	return nil
+}
+
+// releaseBoundActor resets one Actor bound to the Worker. An Actor that already
+// reached ACTOR_STATE_SUSPENDED saved its state cleanly during graceful
 // termination, so it is left untouched and remains resumable. An Actor that was
 // still running when the pod disappeared is moved to ACTOR_STATE_CRASHED and its
 // pod pointers are cleared.
 //
-// Nothing to release is the common case and reports success: an unassigned
-// Worker, a superseded assignment, and an Actor that has since moved elsewhere
-// all leave no Actor pointing at this Worker, which is the state this is driving
-// towards.
+// Nothing to release is the common case and reports success: a superseded
+// assignment and an Actor that has since moved elsewhere both leave no Actor
+// pointing at this Worker, which is the state this is driving towards.
 //
 // A concurrent SuspendActor or ResumeActor wins the optimistic version check;
 // this attempt fails as ABORTED so the caller retries against the newer state.
-func (w *WorkerWorkflow) ensureBoundActorReleased(ctx context.Context, worker *ateapipb.Worker) (err error) {
-	ctx, done := stepSpan(ctx, "ReleaseBoundActor")
-	defer func() { err = done(err) }()
-
-	if worker.GetStatus().GetAssignment().GetActor() == nil {
-		markSkipped(ctx, "worker has no actor assigned")
+func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment) error {
+	if assignment.GetActor() == nil {
+		markSkipped(ctx, "assignment names no actor")
 		return nil
 	}
 	name := worker.GetMetadata().GetName()
-	actorRef := resources.ActorRefFromObjectRef(worker.GetStatus().GetAssignment().GetActor())
+	actorRef := resources.ActorRefFromObjectRef(assignment.GetActor())
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		markSkipped(ctx, "assigned actor no longer exists")
@@ -99,7 +177,7 @@ func (w *WorkerWorkflow) ensureBoundActorReleased(ctx context.Context, worker *a
 	if err != nil {
 		return fmt.Errorf("while getting actor to release from worker %s: %w", name, err)
 	}
-	if actor.GetMetadata().GetUid() != worker.GetStatus().GetAssignment().GetActorUid() {
+	if actor.GetMetadata().GetUid() != assignment.GetActorUid() {
 		markSkipped(ctx, "assignment names a superseded actor incarnation")
 		return nil
 	}
@@ -129,8 +207,9 @@ func (w *WorkerWorkflow) ensureBoundActorReleased(ctx context.Context, worker *a
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
-	slog.InfoContext(ctx, "Releasing actor from a worker whose pod is gone",
-		slog.String("worker", name), slog.String("actor", actorRef.String()))
+	slog.LogAttrs(ctx, slog.LevelInfo, "Releasing actor from a worker whose pod is gone",
+		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
+			slog.String("worker", name))...)
 	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		toUpdate.Status.WorkerAssignment = nil
@@ -152,6 +231,7 @@ func (w *WorkerWorkflow) ensureBoundActorReleased(ctx context.Context, worker *a
 	}
 
 	if !wasAlreadyCrashed {
+		logActorCrashed(ctx, actor, opName, ateattr.ReasonWorkerPodGone)
 		recordActorCrash(ctx, crashAttrs)
 	}
 	return nil

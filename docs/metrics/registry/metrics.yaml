@@ -288,6 +288,14 @@ groups:
               stability: development
               value: LOCAL_SNAPSHOT_GONE
               brief: The local snapshot on the node no longer exists.
+            - id: workload_not_ready
+              stability: development
+              value: WORKLOAD_NOT_READY
+              brief: >
+                A container started but never passed its readyz probe before the
+                deadline of the probe. A slow node confounds this value: a cold
+                image or a throttled CPU also runs the probe out of time. The
+                phases of ate.actor.restore.duration separate the two.
             - id: corrupted_assignment
               stability: development
               value: CORRUPTED_ASSIGNMENT
@@ -304,9 +312,42 @@ groups:
               stability: development
               value: UNKNOWN
               brief: >
-                An infrastructure failure with no reason. Substrate does not
-                make a value from the error message. Thus the list of values
-                stays short.
+                A failure with no reason. Substrate does not make a value from
+                the error message. Thus the list of values stays short. This
+                value asserts no fault domain: read ate.failure.domain, which
+                reports unknown here and not infrastructure.
+
+      - id: ate.failure.domain
+        stability: development
+        brief: >
+          The side of the platform boundary the failure came from. A strict
+          function of ate.failure.reason, thus it adds no series. It exists
+          because an operator triages on the boundary and drills into the
+          reason, and because a consumer must not have to match on the names of
+          the reasons: a component ahead of the control plane can report a
+          reason that the control plane does not know, which becomes UNKNOWN,
+          and a name match would then count it as an infrastructure fault.
+        type:
+          members:
+            - id: infrastructure
+              stability: development
+              value: infrastructure
+              brief: Substrate failed. The node, the store, the object storage, the control plane.
+            - id: workload
+              stability: development
+              value: workload
+              brief: >
+                The owner of the actor fixes this, not the operator of the
+                platform. It covers a bad ActorTemplate as well as a process
+                that does not start. For the reasons that the actor reports
+                about itself, such as an exit or a probe that never passes,
+                this value is a report and not a proof: the actor chooses its
+                own exit. The reasons that Substrate measures, such as a
+                template that resolves to no runnable process, are not.
+            - id: unknown
+              stability: development
+              value: unknown
+              brief: The reason gives no domain. A gap in the taxonomy stays visible here and does not inflate one side.
 
   - id: registry.ate.scheduler
     type: attribute_group
@@ -590,6 +631,8 @@ groups:
         requirement_level: required
       - ref: ate.failure.reason
         requirement_level: required
+      - ref: ate.failure.domain
+        requirement_level: required
       - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name
@@ -790,6 +833,9 @@ groups:
       - ref: ate.failure.reason
         requirement_level:
           conditionally_required: The operation failed. The key occurs only on the phase that failed and on the total.
+      - ref: ate.failure.domain
+        requirement_level:
+          conditionally_required: ate.failure.reason occurs. The two keys always occur together.
 
   - id: metric.ate.actor.checkpoint.duration
     type: metric
@@ -827,6 +873,9 @@ groups:
       - ref: ate.failure.reason
         requirement_level:
           conditionally_required: The operation failed. The key occurs only on the phase that failed and on the total.
+      - ref: ate.failure.domain
+        requirement_level:
+          conditionally_required: ate.failure.reason occurs. The two keys always occur together.
 
   - id: metric.atelet.snapshot.size
     type: metric

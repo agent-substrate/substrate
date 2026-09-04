@@ -115,11 +115,11 @@ run_kubectl_ate() {
 }
 
 substitute() {
-  # SandboxConfig names are pinned per class (rather than defaulted) so a stale
-  # config from a dirty teardown fails loudly instead of silently binding this
-  # pool. gvisor-default is applied by hack/install-ate.sh; microvm is applied
-  # by hack/install-microvm-deps.sh. The protojson templates take the sandbox
-  # class as its proto enum spelling.
+  # SandboxConfig names are pinned per class in the ActorTemplates (rather
+  # than defaulted) so a stale config from a dirty teardown fails loudly
+  # instead of silently binding these workloads. gvisor-default is applied by
+  # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
+  # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
   local sandbox_config_name sandbox_class_enum
   case "${SANDBOX_CLASS}" in

@@ -29,6 +29,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 	ctx := context.Background()
+	ensureDefaultGvisorSandboxConfig(t, tc)
 
 	created, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
@@ -120,4 +121,15 @@ func TestActorTemplateCRUD(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
 	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
+
+	// config_name is required: a template must name its SandboxConfig.
+	_, err = tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata:        &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-unnamed-config"},
+			Containers:      []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1"}},
+			SnapshotsConfig: &ateapipb.SnapshotsConfig{StorageLocation: "gs://my-bucket/snapshots"},
+			SandboxConfig:   &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+		},
+	})
+	assertGrpcErrorRegex(t, err, codes.InvalidArgument, `sandbox_config\.config_name`)
 }

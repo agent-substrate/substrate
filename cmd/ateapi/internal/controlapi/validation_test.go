@@ -712,6 +712,18 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 		}),
 		want: field.ErrorList{field.Required(itemsPath.Index(0).Child("field"), "")},
 	}, {
+		name: "item field outside the enum",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Field = ateapipb.ActorMetadataField(99)
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("field"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "negative item field",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources[0].ActorMetadata.Items[0].Field = ateapipb.ActorMetadataField(-1)
+		}),
+		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("field"), nil, "").WithOrigin("minimum")},
+	}, {
 		name: "empty item path",
 		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
 			s.DataSources[0].ActorMetadata.Items[0].Path = ""

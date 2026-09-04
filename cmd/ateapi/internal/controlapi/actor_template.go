@@ -45,6 +45,12 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 		return nil, toGRPCStatusError(errs)
 	}
 
+	// config_name is required; the declarative validation has already
+	// rejected an empty one.
+	if _, err := resolveTemplateSandboxConfig(s.sandboxConfigLister, in.GetSandboxConfig()); err != nil {
+		return nil, err
+	}
+
 	templateRef := resources.ActorTemplateRefFromActorTemplate(in)
 
 	stored, err := s.impl.CreateActorTemplate(ctx, in)
@@ -63,7 +69,6 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 
 func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
 	// Build the stored object: status is server-owned and starts empty.
-	// TODO: check that sandbox_config.config_name matches sandbox_class.
 	outTemplate := proto.Clone(inTemplate).(*ateapipb.ActorTemplate)
 	outTemplate.Status = &ateapipb.ActorTemplateStatus{}
 
@@ -268,10 +273,10 @@ func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, f
 	return errs
 }
 
-// ValidateCustom_ActorTemplate_SnapshotsConfig requires on_commit to be a
+// ValidateCustom_SnapshotsConfig requires on_commit to be a
 // subset of on_pause. UNSPECIFIED means FULL, so an unset on_commit over a
 // DATA on_pause is rejected too.
-func ValidateCustom_ActorTemplate_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
+func ValidateCustom_SnapshotsConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotsConfig) field.ErrorList {
 	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
@@ -356,4 +361,59 @@ func actorTemplateObjectRef(actor *ateapipb.Actor) *ateapipb.ObjectRef {
 		return nil
 	}
 	return &ateapipb.ObjectRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
+}
+
+// ValidateCustom_Container_VolumeMounts rejects two mounts at the same path
+// within one container. The list is keyed by volume name (one mount per
+// volume), so path uniqueness cannot come from the list-map key
+func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
+	var errs field.ErrorList
+	seen := make(map[string]bool, len(value))
+	for i, m := range value {
+		path := m.GetMountPath()
+		if path == "" {
+			continue // required is enforced by tags
+		}
+		if seen[path] {
+			errs = append(errs, field.Duplicate(fldPath.Index(i).Child("mount_path"), path))
+		}
+		// Nested mounts are unsupported (volumes cannot mount onto
+		// other volumes).
+		for j := 0; j < i; j++ {
+			prior := value[j].GetMountPath()
+			if prior == "" || prior == path {
+				continue
+			}
+			if strings.HasPrefix(path, prior+"/") || strings.HasPrefix(prior, path+"/") {
+				errs = append(errs, field.Invalid(fldPath.Index(i).Child("mount_path"), path,
+					fmt.Sprintf("must not nest under or over another mount (%q)", prior)))
+			}
+		}
+		seen[path] = true
+	}
+	return errs
+}
+
+// ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects container
+// volume mounts that reference volumes the template does not declare.
+func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
+	declared := make(map[string]bool, len(value.GetVolumes()))
+	for _, vol := range value.GetVolumes() {
+		declared[vol.GetName()] = true
+	}
+	var errs field.ErrorList
+	for i, ctr := range value.GetContainers() {
+		for j, mount := range ctr.GetVolumeMounts() {
+			name := mount.GetName()
+			if name == "" {
+				continue // required is enforced by tags
+			}
+			if !declared[name] {
+				errs = append(errs, field.Invalid(
+					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
+					name, "must reference a volume declared in the template"))
+			}
+		}
+	}
+	return errs
 }

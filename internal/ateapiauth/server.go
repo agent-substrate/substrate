@@ -188,7 +188,7 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 		}), nil
 	}
 	slog.DebugContext(ctx, "No JWT provider matched token issuer", slog.String("issuer", issuer))
-	return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
+	return nil, status.Errorf(codes.Unauthenticated, "token issuer %q not trusted", issuer)
 }
 
 func unverifiedIssuer(token string) (string, error) {

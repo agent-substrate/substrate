@@ -22,19 +22,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"net"
-	"net/url"
-	"os"
-	"path"
 	"slices"
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/substratex509"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 // BrokerCertificateSource owns atunnel's actor private key and obtains the
@@ -70,55 +64,13 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 	if cfg.SocketPath == "" || cfg.CredentialBundlePath == "" || cfg.TrustBundlePath == "" || cfg.ExpectedActorUID == "" {
 		return nil, fmt.Errorf("atunnel: credential broker socket, credentials, trust bundle, and expected actor UID are required")
 	}
-	localCert, err := credbundle.Parse(cfg.CredentialBundlePath)
+	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath)
 	if err != nil {
-		return nil, fmt.Errorf("atunnel: load worker identity: %w", err)
-	}
-	localIdentity, err := substratex509.PodIdentityFromCertificate(localCert.Leaf)
-	if err != nil || localIdentity == nil {
-		return nil, fmt.Errorf("atunnel: worker certificate has no valid Pod identity")
-	}
-	trustPEM, err := os.ReadFile(cfg.TrustBundlePath)
-	if err != nil {
-		return nil, fmt.Errorf("atunnel: read credential broker trust bundle: %w", err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(trustPEM) {
-		return nil, fmt.Errorf("atunnel: credential broker trust bundle contains no certificates")
+		return nil, fmt.Errorf("atunnel: %w", err)
 	}
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("atunnel: generate actor private key: %w", err)
-	}
-	expectedURI := (&url.URL{Scheme: "spiffe", Host: "cluster.local", Path: path.Join("ns", "ate-system", "sa", "atelet")}).String()
-	tlsConfig := &tls.Config{
-		MinVersion:           tls.VersionTLS13,
-		InsecureSkipVerify:   true, // Verification below supports SPIFFE Pod certificates without a DNS name.
-		GetClientCertificate: credbundle.ClientLoader(cfg.CredentialBundlePath),
-		VerifyConnection: func(state tls.ConnectionState) error {
-			// Verify both the normal server-auth chain and the identities that DNS
-			// verification cannot express: atelet's SPIFFE ID and exact node
-			// incarnation. This is why InsecureSkipVerify is set above.
-			if len(state.PeerCertificates) == 0 {
-				return fmt.Errorf("credential broker certificate is required")
-			}
-			intermediates := x509.NewCertPool()
-			for _, cert := range state.PeerCertificates[1:] {
-				intermediates.AddCert(cert)
-			}
-			if _, err := state.PeerCertificates[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
-				return fmt.Errorf("verify credential broker certificate: %w", err)
-			}
-			leaf := state.PeerCertificates[0]
-			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != expectedURI {
-				return fmt.Errorf("credential broker is not atelet")
-			}
-			identity, err := substratex509.PodIdentityFromCertificate(leaf)
-			if err != nil || identity == nil || identity.NodeName != localIdentity.NodeName || identity.NodeUID != localIdentity.NodeUID {
-				return fmt.Errorf("credential broker is not on worker node %q (%s)", localIdentity.NodeName, localIdentity.NodeUID)
-			}
-			return nil
-		},
 	}
 
 	return &BrokerCertificateSource{socketPath: cfg.SocketPath, expectedActorUID: cfg.ExpectedActorUID, tlsConfig: tlsConfig, privateKey: privateKey}, nil
@@ -133,12 +85,7 @@ func (s *BrokerCertificateSource) Mint(ctx context.Context) (time.Time, error) {
 	}
 	// A fresh connection picks up rotated worker credentials and forces atelet's
 	// current certificate and node identity to be verified for every mint.
-	conn, err := grpc.NewClient("passthrough:///credential-broker",
-		grpc.WithTransportCredentials(credentials.NewTLS(s.tlsConfig)),
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", s.socketPath)
-		}),
-	)
+	conn, err := ateletdial.Dial(s.socketPath, s.tlsConfig)
 	if err != nil {
 		return time.Time{}, err
 	}

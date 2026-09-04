@@ -222,10 +222,42 @@ type Interface interface {
 	// exhausted, or the mutate's error verbatim otherwise.
 	UpdateWorker(ctx context.Context, name string, precondition Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 
-	// Removes a worker by name and returns the deleted resource. Returns
-	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if pre does
-	// not describe the worker the caller observed.
+	// Removes a worker by name, along with every assignment it holds, and
+	// returns the deleted resource. Returns ErrNotFound if missing, or
+	// ErrUIDConflict/ErrVersionConflict if pre does not describe the worker the
+	// caller observed.
 	DeleteWorker(ctx context.Context, name string, pre DeletePreconditions) (*ateapipb.Worker, error)
+
+	// Assignments and Worker allocation are updated atomically.
+
+	// BindActorToWorker assigns an Actor and updates the Worker's allocation.
+	// Rebinding the same Actor replaces its assignment.
+	//
+	// admit decides whether the Worker will take the Actor, and runs against the
+	// Worker as it stands with its row locked, so the answer cannot go stale
+	// between the check and the bind. Returning an error from it refuses the
+	// bind and is returned unchanged. It is consulted only for a new binding: an
+	// Actor already on this Worker is already counted against it.
+	//
+	// ErrNotFound if the Worker is gone.
+	BindActorToWorker(ctx context.Context, workerName string, assignment *ateapipb.ActorAssignment, admit func(*ateapipb.Worker) error) error
+
+	// ReleaseActorFromWorker removes an assignment and updates allocation,
+	// returning the Worker as it now stands so the caller can feed the
+	// watch-fed cache, which until then reports it full. It returns nil if the
+	// assignment was already absent.
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
+
+	// GetWorkerAssignment returns a Worker's assignment for actorUID, or
+	// ErrNotFound when the Worker is not hosting that Actor.
+	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error)
+
+	// ListWorkerAssignments returns a page of the Actors a Worker hosts.
+	ListWorkerAssignments(ctx context.Context, workerName string, opts ListOptions) (ListResponse[*ateapipb.ActorAssignment], error)
+
+	// FindWorkerHostingActor names the Worker holding an assignment for
+	// actorUID, or ErrNotFound if none does.
+	FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error)
 
 	// WatchWorkers returns an active subscription to track worker state changes.
 	// The watch's Events channel is closed when the caller calls Close, the

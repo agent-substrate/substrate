@@ -26,19 +26,16 @@ import (
 func TestGetWorkersRunner_Filters(t *testing.T) {
 	workers := []*ateapipb.Worker{
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "microvm",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ns-1", Name: "counter"},
-					Actor:            &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
-				},
-			},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "other",
 			WorkerPod:       "pod-2",
@@ -46,24 +43,24 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			Labels:          map[string]string{"ate.dev/worker-pool": "other"},
 		},
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-3"},
 			WorkerNamespace: "ns-2",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-3",
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				Assignment: &ateapipb.ActorAssignment{
-					ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ns-2", Name: "counter"},
-					Actor:            &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
-				},
-			},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 	}
+	actors := &mockActorLister{byAtespace: map[string][]*ateapipb.Actor{
+		"space-a": {actorOn("space-a", "actor-a", "worker-1")},
+		"space-b": {actorOn("space-b", "actor-b", "worker-3")},
+	}}
 
-	header := "NAMESPACE   POOL      CLASS     POD     STATUS     ASSIGNED ACTOR\n"
-	row1 := "ns-1        counter   microvm   pod-1   ASSIGNED   ns-1/counter/space-a/actor-a\n"
-	row2 := "ns-1        other     gvisor    pod-2   FREE       <none>\n"
-	row3 := "ns-2        counter   gvisor    pod-3   ASSIGNED   ns-2/counter/space-b/actor-b\n"
+	header := "NAMESPACE   POOL      CLASS     POD     STATUS\n"
+	row1 := "ns-1        counter   microvm   pod-1   ASSIGNED(1/1)\n"
+	row2 := "ns-1        other     gvisor    pod-2   FREE\n"
+	row3 := "ns-2        counter   gvisor    pod-3   ASSIGNED(1/1)\n"
 
 	tests := []struct {
 		name         string
@@ -77,13 +74,13 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		{name: "namespace", namespace: "ns-1", expected: header + row1 + row2},
 		{name: "atespace", atespace: "space-a", expected: header + row1},
 		// With no matching rows the tabwriter sizes columns to the header alone.
-		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAMESPACE   POOL   CLASS   POD   STATUS   ASSIGNED ACTOR\n"},
+		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAMESPACE   POOL   CLASS   POD   STATUS\n"},
 		{name: "selector", selector: "ate.dev/worker-pool=counter", expected: header + row1 + row3},
 		{name: "sandbox class", sandboxClass: "microvm", expected: header + row1},
 		// gvisor-only rows shrink the CLASS column to the widest survivor.
-		{name: "sandbox class gvisor", sandboxClass: "gvisor", expected: "NAMESPACE   POOL      CLASS    POD     STATUS     ASSIGNED ACTOR\n" +
-			"ns-1        other     gvisor   pod-2   FREE       <none>\n" +
-			"ns-2        counter   gvisor   pod-3   ASSIGNED   ns-2/counter/space-b/actor-b\n"},
+		{name: "sandbox class gvisor", sandboxClass: "gvisor", expected: "NAMESPACE   POOL      CLASS    POD     STATUS\n" +
+			"ns-1        other     gvisor   pod-2   FREE\n" +
+			"ns-2        counter   gvisor   pod-3   ASSIGNED(1/1)\n"},
 		{name: "combined", namespace: "ns-1", selector: "ate.dev/worker-pool=counter", expected: header + row1},
 	}
 
@@ -92,6 +89,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			var buf bytes.Buffer
 			runner := &GetWorkersRunner{
 				workerLister: &mockWorkerLister{workers: workers},
+				actorLister:  actors,
 				namespace:    test.namespace,
 				atespace:     test.atespace,
 				selector:     test.selector,

@@ -18,9 +18,28 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
+import "pkg/proto/ateapipb/ateapi.proto";
+
 // CredentialBroker gives an authenticated worker its current actor credential.
 service CredentialBroker {
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
+}
+
+// WorkerCapacity is how a worker tells the node-local atelet what it can
+// supply to the actors it hosts, for atelet to forward to the control plane's
+// WorkerService.SetWorkerCapacity, which this mirrors. The worker is identified
+// by its mTLS certificate, never by the request.
+service WorkerCapacity {
+  rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse) {}
+}
+
+message SetWorkerCapacityRequest {
+  // What the worker can supply, in the same vocabulary the control plane
+  // records and an ActorTemplate asks in.
+  ateapi.WorkerResources capacity = 1;
+}
+
+message SetWorkerCapacityResponse {
 }
 
 message MintActorCertificateRequest {

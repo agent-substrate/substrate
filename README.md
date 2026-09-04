@@ -44,6 +44,7 @@ Agent Substrate is designed to be **framework and agent harness agnostic**. Beca
 ## Ecosystem & Examples
 
 *   **[Agent Executor](https://github.com/google/ax):** A distributed agent runtime that demonstrates building a secure, hyper-scalable agent harness on Agent Substrate (see the [announcement blog](https://cloud.google.com/blog/products/ai-machine-learning/agent-executor-googles-distributed-agent-runtime) and [integration guide](https://github.com/google/ax/blob/main/manifests/README.md)).
+*   **[kagent](https://github.com/kagent-dev/kagent):** A CNCF Sandbox project and Kubernetes-native framework for building, deploying, and managing AI agents that uses Agent Substrate to run sandboxed, stateful agent workloads (see the [announcement blog](https://kagent.dev/blog/the-future-of-kagent)).
 
 ## Status and compatibility
 
@@ -173,6 +174,9 @@ You can run individual setup steps to create GCP resources as needed. See `go ru
 go run ./tools/setup-gcp create cluster
 go run ./tools/setup-gcp create bucket
 ```
+
+To run the PostgreSQL store backend on Cloud SQL — with IAM database
+authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
 
 Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
 ```bash

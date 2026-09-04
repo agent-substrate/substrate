@@ -76,6 +76,32 @@ func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface
 // it with it. The release happens in this workflow rather than in the caller
 // that noticed the pod had vanished, because an assignment write stays
 // in-process: there is no bind/release RPC for that caller to reach for.
+// A Worker left ACTIVE through the sweep can take a bind onto a page already
+// passed, and the delete then cascades that assignment away while the Actor
+// still points at it. Failing the release keeps the record around, so the
+// state it held during the sweep can be read.
+func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
+	ctx := context.Background()
+	_, persistence := newWorkerDeleteWorkflow(t)
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")})
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
+		t.Fatal("DeleteWorker() = nil error, want the release failure reported")
+	}
+
+	got, err := persistence.GetWorker(ctx, apiWorkerName)
+	if err != nil {
+		t.Fatalf("GetWorker() failed: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state during the sweep = %v, want DRAINING so nothing new binds",
+			got.GetStatus().GetState())
+	}
+}
+
 func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	ctx := context.Background()
 	wf, persistence := newWorkerDeleteWorkflow(t)
@@ -228,12 +254,13 @@ func TestDeleteWorkerWorkflow_AssignedToAbsentActorDeletesAnyway(t *testing.T) {
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, "actor-uid-1")
 
-	got, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
-	if err != nil {
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
-	if got.GetStatus().GetAssignment().GetActorUid() != "actor-uid-1" {
-		t.Errorf("deleted worker assignment = %v, want the one it was holding", got.GetStatus().GetAssignment())
+	// An assignment is its own record now, so what proves the delete went
+	// through is that nothing is left pointing at the Worker.
+	if got := firstAssignment(t, persistence, apiWorkerName); got != nil {
+		t.Errorf("assignment after delete = %v, want none", got)
 	}
 }
 

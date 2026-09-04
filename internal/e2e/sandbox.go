@@ -195,10 +195,10 @@ func fixtureSubstitutions(bucket, name string) (inline, blocks map[string]string
 
 	inline["${ATEOM_IMAGE}"] = "ko://github.com/agent-substrate/substrate/cmd/ateom-microvm"
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
-	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs. A
-	// micro-VM WorkerPool has to name it: it is deliberately not the class
-	// default, so a missing or stale one fails loudly.
-	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClass: microvm\n  sandboxConfigName: microvm"
+	// The micro-VM ActorTemplates name the cluster-wide SandboxConfig
+	// hack/install-microvm-deps.sh installs (configName: microvm), so a
+	// missing or stale one fails loudly. The pool only selects the class.
+	blocks["${WORKERPOOL_RUNTIME}"] = "  sandboxClass: microvm"
 	// Must match the WorkerPool's: a snapshot is not portable across sandbox
 	// classes, so only same-class pools are eligible to run these actors.
 	blocks["${TEMPLATE_SANDBOX_CLASS}"] = "  sandboxClass: microvm"

@@ -235,21 +235,14 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
 			nodeName = worker.GetNodeName()
-			// Only free it if it still belongs to us
-
-			if wass := worker.GetStatus().GetAssignment(); wass != nil {
-				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
-					_, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
-						toUpdate.Status.Assignment = nil
-						return nil
-					})
-					if err != nil {
-						if errors.Is(err, store.ErrVersionConflict) {
-							return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-						}
-						return nil, err
-					}
+			// Drop just this actor's assignment; any other actors the worker
+			// hosts keep theirs.
+			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
+			if err != nil {
+				if errors.Is(err, store.ErrVersionConflict) {
+					return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 				}
+				return nil, err
 			}
 		}
 
@@ -265,7 +258,8 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
 			// stuck in PAUSED.
-			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", actorRef))
+			slog.LogAttrs(ctx, slog.LevelError, "Node name not found during finalize pause, crashing actor",
+				ateattr.ActorRefLogAttrs(actorRef)...)
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		}
 		contentScope := effectiveContentScope(actorTemplate.GetSnapshotsConfig().GetOnPause())
@@ -295,6 +289,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			return nil
 		})
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
+			logActorCrashed(ctx, latestActor, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 			recordActorCrash(ctx, crashAttrs)
 		}
 		if err != nil {

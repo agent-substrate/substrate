@@ -259,8 +259,9 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 	if err != nil {
 		return fmt.Errorf("while generating the JWT authority for %s/%s: %w", namespace, name, err)
 	}
-	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.Pool{
-		Authorities: []*localjwtauthority.Authority{authority},
+	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.ConcretePool{
+		Authorities:      []*localjwtauthority.Authority{authority},
+		ActiveForSigning: poolKeyID,
 	})
 	if err != nil {
 		return fmt.Errorf("while marshaling the JWT pool for %s/%s: %w", namespace, name, err)

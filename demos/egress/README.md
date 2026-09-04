@@ -1,7 +1,8 @@
 # Egress Demo — Pluggable Egress Networking
 
 This demo shows an Actor's outbound traffic being **transparently tunneled through an
-egress gateway** and **authenticated by actor identity**, end to end.
+egress gateway** and **authenticated by actor identity**, end to end. The same demo runs
+with either Envoy or [agentgateway](https://agentgateway.dev/).
 
 The Actor is a tiny service that accepts `{"url":"..."}`, performs an HTTP `GET`, and returns
 the upstream response. The Actor believes it is dialing plain HTTP directly — but its egress is
@@ -9,7 +10,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 
 ## What it demonstrates
 
-```
+```text
   ┌──────────────── ateom worker pod ─────────────────┐
   │  Actor (gVisor)                                     │
   │  GET http://<dst-ip>:80/   (plain HTTP)             │
@@ -20,44 +21,62 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
   └────────┼────────────────────────────────────────────┘
            ▼
   ┌──────────── atenet-egress pod ───────────────────┐
-  │  Envoy egress gateway                              │
-  │    • downstream mTLS, trusted_ca = actor-id CA     │
-  │    • terminates HTTP CONNECT                       │
-  │    • ext_proc ──(localhost)──►  atenet router (ext_proc sidecar)
-  │      (forwards the peer chain    │  verify chain + ActorIdentity extension
-  │       as x-forwarded-client-cert)│  GetActor → UID must match, must be RUNNING
-  │    • dynamic_forward_proxy       │  allow / deny 403
-  │           │                              
+  │  Egress Gateway                            │
+  │    • downstream mTLS, trusted by actor-id CA      │
+  │    • terminates HTTP CONNECT                      │
+  │    • verifies Actor identity with the ATE API     │
+  │    • forwards to the CONNECT authority            │
+  │           │                                       │
   └───────────┼───────────────────────────────────────┘
               ▼
      real destination (the CONNECT authority, an IP:port)
 ```
 
-1. **Guide 1 — gateway accepts CONNECT + mTLS.** `atenet-egress` is an Envoy dynamic-forward-proxy
-   that terminates the actor's mTLS `CONNECT` and tunnels to the requested destination.
+1. **Guide 1 - gateway accepts CONNECT + mTLS.** `atenet-egress` terminates the actor's mTLS `CONNECT` and
+  tunnels to the requested destination.
 2. **Guide 2 — transparent interception.** `nftables` REDIRECTs actor TCP egress into `atunnel`,
    which wraps it in mTLS + `CONNECT`.
 3. **Guide 3 — HTTP-only actors, identity carried by the certificate.** The Actor only dials plain
    HTTP. atunnel presents the actor's own certificate — minted per actor by ateapi off the
    actor-identity CA, carrying an `ActorIdentity` X.509 extension — and sends a bare `CONNECT`
    with no identity headers at all.
-4. **Identity authentication.** Envoy requires a client certificate signed by the actor-identity
-   CA, so a non-actor client is refused at the handshake. It then forwards the verified chain to
-   `ext_proc` as `x-forwarded-client-cert`, and the **atenet router** (co-located in the gateway
-   pod as an ext_proc sidecar, the same binary that serves ingress, started with `--mode=egress`)
-   re-verifies the chain, requires exactly one `ActorIdentity` extension with `purpose: atunnel`,
-   and calls the ate API (`GetActor`). It returns **403** unless the certified **UID** matches a
-   real, `RUNNING` actor. This mirrors the ingress gateway's dataplane + ext_proc co-location; a
-   standalone/shared ext_proc is a future step.
+4. **Identity authentication.** The gateway requires a client certificate signed by the
+  actor-identity CA, so a non-actor client is refused at the handshake. It authorizes the
+  certificate against the ATE API and rejects it unless the certified **UID** matches a real,
+  `RUNNING` actor.
+
+## Choose a dataplane
+
+The dataplane is selected when installing `ate-system`, not when installing this demo. The Actor,
+ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
+
+```bash
+# Envoy (default)
+./hack/install-ate-kind.sh --deploy-ate-system
+
+# agentgateway
+./hack/install-ate-kind.sh --deploy-ate-system --atenet-router=agentgateway
+```
+
+| | Envoy | agentgateway |
+| --- | --- | --- |
+| Select with | `--atenet-router=envoy` (default) | `--atenet-router=agentgateway` |
+| Egress routing | Dynamic forward proxy | Dynamic backend from CONNECT authority |
+| Actor authentication | Co-located atenet `ext_proc` | Built-in `substrateEgress` policy |
+| Configuration | Envoy bootstrap in `atenet-egress.yaml` | Static agentgateway ConfigMap overlay |
+| Access log | Text beginning with `[egress]`, including actor SAN | Structured log including `substrate.connect.authority` |
+| MITM mode | Supported with `--experimental-use-sdsmint` | Supported with `--experimental-use-sdsmint` |
+
+The experimental additional egress `ext_proc` service currently requires Envoy; the installer
+rejects that option with agentgateway rather than silently omitting it.
 
 ## Components
 
 - **Egress app (`main.go`)** — the Actor: `POST /` with `{"url":"..."}` → fetches it → returns
   status + body. It also serves `POST /grpc`, described below.
-- **Egress gateway** — `manifests/ate-install/atenet-egress.yaml`. One pod, two containers:
-  an Envoy (`envoy`) and the atenet router ext_proc (`ext-proc`, `--mode=egress`), called over
-  localhost. In egress mode the router serves the egress ext_proc handler only — no xDS server,
-  no ActorTemplate controller, and no Kubernetes access at all.
+- **Egress gateway** — the `atenet-egress` Deployment. Envoy uses a co-located atenet `ext_proc`
+  container started with `--mode=egress`; agentgateway uses its built-in `substrateEgress` policy
+  and does not need that sidecar. The installer renders the matching configuration and container.
 - **Egress opt-in** — `ate-api-server --egress-gateway-address=atenet-egress.ate-system.svc:443`
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
   atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.
@@ -67,8 +86,9 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 
 ## Prerequisites
 
-- A kind cluster with Agent Substrate installed (`hack/create-kind-cluster.sh` then
-  `hack/install-ate-kind.sh --deploy-ate-system`). Egress is enabled by the ateapi flag above.
+- A kind cluster with Agent Substrate installed (`hack/create-kind-cluster.sh`, followed by one of
+  the [dataplane installation commands above](#choose-a-dataplane)). Egress is enabled by the
+  ateapi flag above.
 - `ko`, `kubectl`, and `kubectl-ate` (`go install ./cmd/kubectl-ate`).
 
 ## Deploy the demo fixture
@@ -91,13 +111,14 @@ kubectl ate get actor-template egress -a ate-demo-egress
 ./demos/egress/test-egress.sh
 ```
 
-It deploys an in-cluster HTTP target, creates & resumes an Actor, then asserts:
+It detects the deployed dataplane, deploys an in-cluster HTTP target, creates and resumes an Actor,
+then asserts:
 
 - **positive** — a real Actor's egress reaches the target (`HTTP 200`) *through the gateway*
-  (the target sees the gateway's IP as its client), and the gateway logs the CONNECT against the
-  actor's certificate SAN;
+  (the target sees the gateway's IP as its client), and the gateway logs the CONNECT. Envoy's log
+  includes the actor certificate SAN; agentgateway's structured log includes the authority;
 - **negative** — a pod holding a valid *pod* identity but no actor certificate cannot open a
-  tunnel at all: the gateway's `trusted_ca` is the actor-identity CA, so the mTLS handshake is
+  tunnel at all: the gateway trusts the actor-identity CA, so the mTLS handshake is
   refused before any CONNECT is answered.
 
 Add `--cleanup` to remove everything the script created.
@@ -126,14 +147,24 @@ curl -s -X POST http://localhost:8000/ \
 
 ### What to observe
 
+With Envoy:
+
 ```bash
 # The egress gateway logs each tunneled CONNECT against the verified peer certificate:
-kubectl -n ate-system logs deploy/atenet-egress | grep '\[egress\]'
+kubectl -n ate-system logs deploy/atenet-egress -c envoy | grep '\[egress\]'
 #   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/ate-demo-egress/actor/egress-demo … code=200 …
 
 # The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
 kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress identity\|egress denied'
 #   egress identity authenticated  atespace=ate-demo-egress actor=egress-demo actorUid=… destination=<TARGET_IP>:80
+```
+
+With agentgateway:
+
+```bash
+# The structured access log includes the CONNECT authority:
+kubectl -n ate-system logs deploy/atenet-egress -c agentgateway \
+  | grep 'substrate.connect.authority'
 ```
 
 The `whoami` body shows `RemoteAddr: <atenet-egress pod IP>` — proof the request egressed

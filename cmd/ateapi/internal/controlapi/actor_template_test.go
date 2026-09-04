@@ -23,12 +23,15 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/api/operation"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -122,6 +125,19 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "containers").Index(0).Child("image"), "")},
 	}, {
+		"volume mount referencing a declared volume",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+		})},
+		nil,
+	}, {
+		"volume mount referencing an undeclared volume",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "ghost-vol", MountPath: "/var/data"}}
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
+	}, {
 		"missing snapshots_config",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotsConfig = nil
@@ -174,11 +190,72 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}
 }
 
+// gvisorDefaultLister returns a SandboxConfig lister seeded with the
+// "gvisor-default" config that validActorTemplate names.
+func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
+	t.Helper()
+	return sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			PauseImage:   "registry.k8s.io/pause@sha256:x",
+			Assets:       testAssets(),
+		},
+	}})
+}
+
+// TestCreateActorTemplate_SandboxConfigChecks pins the create-time checks on
+// the template's named SandboxConfig: it must exist and match the template's
+// class, both FailedPrecondition — they depend on cluster state, and the
+// lister may briefly lag a just-created config, so the error is retryable.
+func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
+	persistence := newTestPersistence(t)
+	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	ctx := context.Background()
+	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		sandbox  *ateapipb.SandboxConfig
+		wantCode codes.Code
+	}{{
+		name:     "named config exists and matches",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		wantCode: codes.OK,
+	}, {
+		name:     "empty config_name is rejected",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name:     "named config missing",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "does-not-exist"},
+		wantCode: codes.FailedPrecondition,
+	}, {
+		name:     "named config class mismatch",
+		sandbox:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "gvisor-default"},
+		wantCode: codes.FailedPrecondition,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+				tmpl.Metadata = &ateapipb.ResourceMetadata{Atespace: "ns1", Name: fmt.Sprintf("tmpl-%d", i)}
+				tmpl.SandboxConfig = tt.sandbox
+			})}
+			_, err := s.CreateActorTemplate(ctx, req)
+			if status.Code(err) != tt.wantCode {
+				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
+			}
+		})
+	}
+}
+
 // TestCreateActorTemplate covers the atespace precondition: creation fails
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -208,7 +285,7 @@ func TestCreateActorTemplate(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil)}
+	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -487,6 +564,73 @@ func TestValidateActorTemplate(t *testing.T) {
 			}
 		},
 		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1), nil)},
+	}, {
+		name: "two volumes at the same path are rejected",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/var/data"},
+				{Name: "other", MountPath: "/var/data"},
+			}
+		},
+		want: field.ErrorList{field.Duplicate(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil)},
+	}, {
+		name: "nested mount paths are rejected",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data"},
+				{Name: "config", MountPath: "/data/config"},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "deeply nested mount path is rejected",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data"},
+				{Name: "deep", MountPath: "/data/a/b/c"},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "nesting is rejected regardless of listing order",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "deep", MountPath: "/data/a/b/c"},
+				{Name: "data", MountPath: "/data"},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "sibling subpaths under an unmounted ancestor are allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data/a"},
+				{Name: "other", MountPath: "/data/b"},
+			}
+		},
+	}, {
+		name: "shared segment prefix below the root is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data/a"},
+				{Name: "other", MountPath: "/data/ab"},
+			}
+		},
+	}, {
+		name: "the same path in different containers is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = append(tmpl.Containers, &ateapipb.Container{Name: "sidecar", Image: "example.com/side:v1"})
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+			tmpl.Containers[1].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+		},
+	}, {
+		name: "shared path prefix without nesting is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data"},
+				{Name: "other", MountPath: "/database"},
+			}
+		},
 	}, {
 		name: "two volumes at distinct paths are allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

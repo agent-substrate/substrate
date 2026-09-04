@@ -51,6 +51,7 @@ func init() {
 // GetWorkersRunner executes the get workers command logic.
 type GetWorkersRunner struct {
 	workerLister WorkerLister
+	actorLister  ActorLister
 	namespace    string
 	atespace     string
 	selector     string
@@ -64,7 +65,7 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	filtered, err := filterWorkers(workers, r.namespace, r.atespace, r.selector, r.sandboxClass)
+	filtered, err := filterWorkers(ctx, r.actorLister, workers, r.namespace, r.atespace, r.selector, r.sandboxClass)
 	if err != nil {
 		return err
 	}
@@ -86,6 +87,7 @@ func runGetWorkers(cmd *cobra.Command, args []string) error {
 
 	runner := &GetWorkersRunner{
 		workerLister: apiClient,
+		actorLister:  apiClient,
 		namespace:    getWorkerNamespaceFlag,
 		atespace:     getWorkerAtespaceFlag,
 		selector:     getWorkerSelectorFlag,

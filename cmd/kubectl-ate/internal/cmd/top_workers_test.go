@@ -41,6 +41,30 @@ func (m *mockWorkerLister) ListWorkers(ctx context.Context, req *ateapipb.ListWo
 	return &ateapipb.ListWorkersResponse{Workers: m.workers}, nil
 }
 
+// mockActorLister serves the actors of one atespace at a time, as the real
+// listing does, so an atespace filter sees only that atespace's placements.
+type mockActorLister struct {
+	byAtespace map[string][]*ateapipb.Actor
+	err        error
+}
+
+func (m *mockActorLister) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest, opts ...grpc.CallOption) (*ateapipb.ListActorsResponse, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &ateapipb.ListActorsResponse{Actors: m.byAtespace[req.GetAtespace()]}, nil
+}
+
+// actorOn is an actor of atespace placed on the named worker.
+func actorOn(atespace, name, workerName string) *ateapipb.Actor {
+	return &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+		Status: &ateapipb.ActorStatus{
+			WorkerAssignment: &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: workerName}},
+		},
+	}
+}
+
 type mockPodMetricsLister struct {
 	metrics []metricsv1beta1.PodMetrics
 	err     error
@@ -61,14 +85,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			WorkerPod:       "counter-worker-pool-7b9f8-x123",
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status: &ateapipb.WorkerStatus{
-				Assignment: &ateapipb.ActorAssignment{
-					Actor: &ateapipb.ObjectRef{
-						Atespace: "ate-demo-counter",
-						Name:     "my-counter-1",
-					},
-				},
-			},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 		{
 			WorkerNamespace: "ate-demo-counter",
@@ -124,9 +141,9 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME                             POOL      CLASS     STATUS     ASSIGNED ACTOR                  CPU(CORES)   MEMORY(bytes)
-counter-worker-pool-7b9f8-x123   counter   gvisor    ASSIGNED   ate-demo-counter/my-counter-1   342m         412Mi
-counter-worker-pool-7b9f8-y456   counter   microvm   FREE       <none>                          2m           64Mi
+	expected := `NAME                             POOL      CLASS     STATUS          CPU(CORES)   MEMORY(bytes)
+counter-worker-pool-7b9f8-x123   counter   gvisor    ASSIGNED(1/1)   342m         412Mi
+counter-worker-pool-7b9f8-y456   counter   microvm   FREE            2m           64Mi
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -161,8 +178,8 @@ func TestTopWorkersRunner_FilterNamespace(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL     CLASS    STATUS   ASSIGNED ACTOR   CPU(CORES)            MEMORY(bytes)
-pod-1   pool-1   gvisor   FREE     <none>           metrics unavailable   metrics unavailable
+	expected := `NAME    POOL     CLASS    STATUS   CPU(CORES)            MEMORY(bytes)
+pod-1   pool-1   gvisor   FREE     metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -172,31 +189,29 @@ pod-1   pool-1   gvisor   FREE     <none>           metrics unavailable   metric
 func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 	workers := []*ateapipb.Worker{
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-1"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "microvm",
-			Status: &ateapipb.WorkerStatus{
-				Assignment: &ateapipb.ActorAssignment{
-					Actor: &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
-				},
-			},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 		{
+			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2"},
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-2",
-			Status: &ateapipb.WorkerStatus{
-				Assignment: &ateapipb.ActorAssignment{
-					Actor: &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
-				},
-			},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 	}
 
 	var buf bytes.Buffer
 	runner := &TopWorkersRunner{
-		workerLister:     &mockWorkerLister{workers: workers},
+		workerLister: &mockWorkerLister{workers: workers},
+		actorLister: &mockActorLister{byAtespace: map[string][]*ateapipb.Actor{
+			"space-a": {actorOn("space-a", "actor-a", "worker-1")},
+			"space-b": {actorOn("space-b", "actor-b", "worker-2")},
+		}},
 		podMetricsLister: &mockPodMetricsLister{metrics: nil},
 		atespace:         "space-a",
 		outputFmt:        "table",
@@ -207,8 +222,8 @@ func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL     CLASS     STATUS     ASSIGNED ACTOR    CPU(CORES)            MEMORY(bytes)
-pod-1   pool-1   microvm   ASSIGNED   space-a/actor-a   metrics unavailable   metrics unavailable
+	expected := `NAME    POOL     CLASS     STATUS          CPU(CORES)            MEMORY(bytes)
+pod-1   pool-1   microvm   ASSIGNED(1/1)   metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -245,8 +260,8 @@ func TestTopWorkersRunner_FilterSelector(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL      CLASS    STATUS   ASSIGNED ACTOR   CPU(CORES)            MEMORY(bytes)
-pod-1   counter   gvisor   FREE     <none>           metrics unavailable   metrics unavailable
+	expected := `NAME    POOL      CLASS    STATUS   CPU(CORES)            MEMORY(bytes)
+pod-1   counter   gvisor   FREE     metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -274,8 +289,8 @@ func TestTopWorkersRunner_MetricsUnavailable(t *testing.T) {
 		t.Fatalf("Run() unexpected error: %v", err)
 	}
 
-	expected := `NAME    POOL     CLASS   STATUS   ASSIGNED ACTOR   CPU(CORES)            MEMORY(bytes)
-pod-1   pool-1           FREE     <none>           metrics unavailable   metrics unavailable
+	expected := `NAME    POOL     CLASS   STATUS   CPU(CORES)            MEMORY(bytes)
+pod-1   pool-1           FREE     metrics unavailable   metrics unavailable
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

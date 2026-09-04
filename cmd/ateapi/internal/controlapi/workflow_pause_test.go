@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -42,6 +43,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 
 	ctx := context.Background()
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	records := crashRecords(t)
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
@@ -84,6 +86,18 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if finalized.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		t.Errorf("returned state = %v, want CRASHED", finalized.GetStatus().GetState())
 	}
+
+	// This site records the crash counter, so it must write the record too, or
+	// a pause-finalize crash is the one kind nothing can attribute to an actor.
+	if len(*records) != 1 {
+		t.Fatalf("got %d crash records, want 1", len(*records))
+	}
+	if got := (*records)[0][string(ateattr.ActorUIDKey)]; got == "" {
+		t.Error("crash record carries no ate.actor.uid")
+	}
+	if got := (*records)[0][string(ateattr.FailureDomainKey)]; got != ateattr.FailureDomainInfrastructure {
+		t.Errorf("ate.failure.domain = %q, want %q", got, ateattr.FailureDomainInfrastructure)
+	}
 }
 
 // TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
@@ -108,32 +122,36 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			ctx := context.Background()
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
+			workerName := testWorkerUID("worker-pod-1")
 			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
 					State: ateapipb.ActorState_ACTOR_STATE_PAUSING,
 					WorkerAssignment: &ateapipb.WorkerAssignment{
+						Worker:          &ateapipb.ObjectRef{Name: workerName},
 						WorkerNamespace: "default",
 						WorkerPool:      "pool1",
 						WorkerPod:       "worker-pod-1",
+						WorkerPodUid:    workerName,
 					},
 					InProgressLocalSnapshotName: "snap-prefix",
 				},
 			})
 			if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
+				Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
 				WorkerNamespace: "default",
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-pod-1",
+				WorkerPodUid:    workerName,
 				NodeName:        "node1",
-				Status: &ateapipb.WorkerStatus{
-					Assignment: &ateapipb.ActorAssignment{
-						Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
-						ActorUid: created.GetMetadata().GetUid(),
-					},
-				},
+				Status:          &ateapipb.WorkerStatus{},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
+			seedAssignment(t, st, workerName, &ateapipb.ActorAssignment{
+				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorUid: created.GetMetadata().GetUid(),
+			})
 
 			w := &ActorWorkflow{store: st}
 			tmpl := &ateapipb.ActorTemplate{

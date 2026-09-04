@@ -958,6 +958,9 @@ spec:
         # of it; without this flag the router has no actor-identity roots and
         # denies every egress CONNECT with a 503.
         - --actor-identity-ca-file=/run/actor-id-ca-certs/ca.crt
+        # Disables Envoy-side tracing only (a span per CONNECT tunnel is
+        # dataplane-volume noise). The ext-proc's own OTel SDK exports to
+        # $OTEL_EXPORTER_OTLP_ENDPOINT from ate-otel-config below.
         - --otlp-collector-address=
         # The egress Envoy's admin listener is on 15000, not the 9901 the flag
         # defaults to (that is the ingress gateway's port). Without this the
@@ -973,6 +976,19 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+        # OTLP exporter settings shared by every control plane component; see
+        # manifests/ate-install/ate-otel-config.yaml. Without this the SDK
+        # falls back to localhost:4317, where nothing listens, and every
+        # egress metric and span is lost.
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
         ports:
         - name: extproc
           containerPort: 50051

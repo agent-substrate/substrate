@@ -96,8 +96,10 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 			}
 		}
 		for _, w := range ws {
+			// Occupancy comes from the allocation total rather than the
+			// assignment list, which a listed worker does not carry.
 			state := ateattr.WorkerStateIdle
-			if w.GetStatus().GetAssignment() != nil {
+			if w.GetStatus().GetAllocated().GetActors() > 0 {
 				state = ateattr.WorkerStateAssigned
 			}
 			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, w.GetSandboxClass()}]++
