@@ -45,6 +45,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/childreap"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
@@ -637,7 +638,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for "pause" container.
+	//   * All OCI bundles are set up, including for the pause container.
 
 	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
 	if err != nil {
@@ -687,14 +688,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// upper — because mounting is ateom's job (atelet runs with no
 	// capabilities); runsc's gofer resolves the mount in this pod's mount
 	// namespace.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ocispec.PauseContainer)); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
-	containersToDelete = append(containersToDelete, "pause")
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+	containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+	if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
-	if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+	if err := rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer); err != nil {
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
 
@@ -773,7 +774,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if !hasDurableVolumes(req.GetSpec().GetContainers()) {
 			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
 		}
-		if err := rcmd.cmdPause(ctx, "pause"); err != nil {
+		if err := rcmd.cmdPause(ctx, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while pausing pause container: %w", err)
 		}
 		tarErr := tarDurableVolumes(ctx, ateompath.DurableDirVolumeMountsDir(req.GetActorUid()), checkpointPath)
@@ -782,7 +783,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// fail the resume instantly and leave the sandbox paused forever.
 		resumeCtx, cancelResume := context.WithTimeout(context.WithoutCancel(ctx), resumeTimeout)
 		defer cancelResume()
-		if err := rcmd.cmdResume(resumeCtx, "pause"); err != nil {
+		if err := rcmd.cmdResume(resumeCtx, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while resuming pause container: %w", err)
 		}
 		if tarErr != nil {
@@ -791,7 +792,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		// Checkpoint pause container (root of the sandbox)
 		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
-		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
+		if err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath); err != nil {
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
 		if hasDurableVolumes(req.GetSpec().GetContainers()) {
@@ -860,15 +861,15 @@ func (r *runsc) stopContainers(ctx context.Context, containers []*ateompb.Contai
 		_ = r.cmdKill(ctx, ctr.GetName(), "SIGKILL")
 		_ = r.cmdWait(ctx, ctr.GetName())
 	}
-	_ = r.cmdKill(ctx, "pause", "SIGKILL")
-	_ = r.cmdWait(ctx, "pause")
+	_ = r.cmdKill(ctx, ocispec.PauseContainer, "SIGKILL")
+	_ = r.cmdWait(ctx, ocispec.PauseContainer)
 }
 
 func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Container) error {
 	// Check state of all containers to mimic containerd.
 	//
 	// Without this, `runsc delete` occasionally throws an error.
-	if err := r.cmdState(ctx, "pause"); err != nil {
+	if err := r.cmdState(ctx, ocispec.PauseContainer); err != nil {
 		return fmt.Errorf("while checking state of pause container: %w", err)
 	}
 	for _, ctr := range containers {
@@ -883,7 +884,7 @@ func (r *runsc) cleanupContainers(ctx context.Context, containers []*ateompb.Con
 		}
 	}
 
-	if err := r.cmdDelete(ctx, "pause"); err != nil {
+	if err := r.cmdDelete(ctx, ocispec.PauseContainer); err != nil {
 		return fmt.Errorf("while deleting pause container: %w", err)
 	}
 
@@ -915,7 +916,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
-	//   * All OCI bundles are set up, including for "pause" container.
+	//   * All OCI bundles are set up, including for the pause container.
 	//   * Checkpoint downloaded and placed on disk
 
 	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
@@ -967,27 +968,27 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
-	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
+	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ocispec.PauseContainer)); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// Create and start pause container (cold boot with durable-dir volumes restored)
-		containersToDelete = append(containersToDelete, "pause")
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+		if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
-		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+		if err := rcmd.cmdStart(ctx, os.Stdout, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
 		// Create and restore pause container
-		containersToDelete = append(containersToDelete, "pause")
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
+		if err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
-		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
+		if err := rcmd.cmdRestore(ctx, os.Stdout, ocispec.PauseContainer, checkpointDir); err != nil {
 			return nil, fmt.Errorf("while restoring pause container: %w", err)
 		}
 	default:
