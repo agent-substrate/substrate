@@ -126,8 +126,7 @@ type ControlClient interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
-	// List the Actors a Worker hosts. A subresource of Worker rather than a field
-	// on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
+	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
@@ -544,8 +543,7 @@ type ControlServer interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
-	// List the Actors a Worker hosts. A subresource of Worker rather than a field
-	// on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
+	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)

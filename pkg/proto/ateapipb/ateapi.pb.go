@@ -5384,11 +5384,11 @@ func (x *DeleteOptions) GetUid() string {
 	return ""
 }
 
-// ListWorkerActorAssignmentsRequest asks for a page of the Actors one Worker hosts.
+// ListWorkerActorAssignmentsRequest asks for a page of the Actors hosted by a
+// given Worker.
 type ListWorkerActorAssignmentsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The Worker whose Actors to list. atespace is always empty; Workers are
-	// global-scoped.
+	// The Worker under which to list Actors.
 	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
@@ -6322,23 +6322,18 @@ func (x *WorkerAllocation) GetAllocated() *WorkerResources {
 	return nil
 }
 
-// WorkerResources represents schedulable resources.
+// WorkerResources represents a set of resources.
 type WorkerResources struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Resources match the actor's definition of resources.
-	// They are matched by name, used for placement.
-	//
-	// Sorted by name, so equal capacities compare equal.
+	// Resources match the Actor's definition of resources.
+	// They are matched by name and used for placement.
 	//
 	// +k8s:optional
 	Resources *Resources `protobuf:"bytes,1,opt,name=resources,proto3" json:"resources,omitempty"`
-	// How many Actors may be bound at once. Not a resource because nothing
-	// divides it: every Actor costs exactly one. It bounds what one more Actor
-	// costs where CPU and memory do not — netns, mounts, file descriptors, blast
-	// radius. Kubernetes bounds a node the same way, with allocatable pods.
-	//
-	// Absent until the Worker reports, and a Worker that has reported no ceiling
-	// holds no Actors, like any other dimension.
+	// A count of Actors.  Workers can use this to limit the number of Actors
+	// that can be placed on them, constraining the costs of other things that
+	// are not captured in the resources above, but which still have costs -
+	// netns, mounts, file descriptors, etc.
 	//
 	// +k8s:optional
 	// +k8s:minimum=1
@@ -6391,35 +6386,34 @@ func (x *WorkerResources) GetActors() int32 {
 	return 0
 }
 
-// ActorAssignment is an Actor bound to a Worker, a subresource of Worker
-// rather than a field on it: a Worker hosts thousands, and a listing that
-// carried them would grow with occupancy. The inverse of WorkerAssignment.
+// ActorAssignment binds an Actor to a Worker.  This is a subresource of the
+// Worker.
 type ActorAssignment struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// atespace is always empty, as it is on the Worker these belong to. name is
-	// the Actor's UID, so the Actor that caused an assignment is what addresses
-	// it.
+	// Metadata about the assignment.
+	//
+	// The atespace field is always empty, since it corresponds to a Worker, and
+	// Workers are not atespaced. The name field is the Actor's UID, so the Actor
+	// that caused an assignment is what addresses it.
 	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Metadata *ResourceMetadata `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	// actor is the Actor that is assigned to the Worker.
+	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-uuid
 	ActorUid string `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// actor_template_ref names the substrate ActorTemplate resource the
-	// assigned actor uses.
+	// actor_template_ref names the ActorTemplate resource the assigned Actor
+	// uses.
 	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	ActorTemplateRef *ObjectRef `protobuf:"bytes,4,opt,name=actor_template_ref,json=actorTemplateRef,proto3" json:"actor_template_ref,omitempty"`
-	// What the Worker admitted this Actor for: the Actor's declared limits as
-	// they read at placement time. Recorded rather than re-read so release
-	// returns exactly what binding consumed, even if the template changed since.
-	//
-	// Sorted by name, as WorkerResources.resources is.
+	// The resources allocated to the Actor when it was assigned.
 	//
 	// +k8s:optional
 	Resources     *Resources `protobuf:"bytes,5,opt,name=resources,proto3" json:"resources,omitempty"`

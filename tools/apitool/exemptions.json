@@ -11,11 +11,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ActorAssignment.actor",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ActorAssignment.actor_uid",
     "message": "field has no doc comment"
   },

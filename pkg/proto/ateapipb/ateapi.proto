@@ -98,8 +98,7 @@ service Control {
   // Returns ABORTED if another write lands on the Worker first; retry.
   rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
 
-  // List the Actors a Worker hosts. A subresource of Worker rather than a field
-  // on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
+  // List the Actors hosted by a given Worker.
   rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
 
   // List Actors.
@@ -1487,10 +1486,10 @@ message DeleteOptions {
   string uid = 2;
 }
 
-// ListWorkerActorAssignmentsRequest asks for a page of the Actors one Worker hosts.
+// ListWorkerActorAssignmentsRequest asks for a page of the Actors hosted by a
+// given Worker.
 message ListWorkerActorAssignmentsRequest {
-  // The Worker whose Actors to list. atespace is always empty; Workers are
-  // global-scoped.
+  // The Worker under which to list Actors.
   //
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
@@ -1753,41 +1752,39 @@ message WorkerAllocation {
   WorkerResources allocated = 2;
 }
 
-// WorkerResources represents schedulable resources.
+// WorkerResources represents a set of resources.
 message WorkerResources {
-  // Resources match the actor's definition of resources.
-  // They are matched by name, used for placement.
-  //
-  // Sorted by name, so equal capacities compare equal.
+  // Resources match the Actor's definition of resources.
+  // They are matched by name and used for placement.
   //
   // +k8s:optional
   Resources resources = 1;
 
-  // How many Actors may be bound at once. Not a resource because nothing
-  // divides it: every Actor costs exactly one. It bounds what one more Actor
-  // costs where CPU and memory do not — netns, mounts, file descriptors, blast
-  // radius. Kubernetes bounds a node the same way, with allocatable pods.
-  //
-  // Absent until the Worker reports, and a Worker that has reported no ceiling
-  // holds no Actors, like any other dimension.
+  // A count of Actors.  Workers can use this to limit the number of Actors
+  // that can be placed on them, constraining the costs of other things that
+  // are not captured in the resources above, but which still have costs -
+  // netns, mounts, file descriptors, etc.
   //
   // +k8s:optional
   // +k8s:minimum=1
   int32 actors = 2;
 }
 
-// ActorAssignment is an Actor bound to a Worker, a subresource of Worker
-// rather than a field on it: a Worker hosts thousands, and a listing that
-// carried them would grow with occupancy. The inverse of WorkerAssignment.
+// ActorAssignment binds an Actor to a Worker.  This is a subresource of the
+// Worker.
 message ActorAssignment {
-  // atespace is always empty, as it is on the Worker these belong to. name is
-  // the Actor's UID, so the Actor that caused an assignment is what addresses
-  // it.
+  // Metadata about the assignment.
+  //
+  // The atespace field is always empty, since it corresponds to a Worker, and
+  // Workers are not atespaced. The name field is the Actor's UID, so the Actor
+  // that caused an assignment is what addresses it.
   //
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ResourceMetadata metadata = 6;
 
+  // actor is the Actor that is assigned to the Worker.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
@@ -1796,18 +1793,14 @@ message ActorAssignment {
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
 
-  // actor_template_ref names the substrate ActorTemplate resource the
-  // assigned actor uses.
+  // actor_template_ref names the ActorTemplate resource the assigned Actor
+  // uses.
   //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template_ref = 4;
 
-  // What the Worker admitted this Actor for: the Actor's declared limits as
-  // they read at placement time. Recorded rather than re-read so release
-  // returns exactly what binding consumed, even if the template changed since.
-  //
-  // Sorted by name, as WorkerResources.resources is.
+  // The resources allocated to the Actor when it was assigned.
   //
   // +k8s:optional
   Resources resources = 5;

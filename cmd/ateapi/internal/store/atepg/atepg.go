@@ -1478,8 +1478,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.
 }
 
 // saveWorker writes back a Worker whose allocation just moved, at the next
-// version. Safe without a precondition only because the caller holds the row
-// lock getWorkerForUpdate took.
+// version. This assumes the caller holds the row lock getWorkerForUpdate took.
 func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapipb.Worker) error {
 	read := worker.GetMetadata()
 	worker.Metadata = newUpdateMetadata(read)
