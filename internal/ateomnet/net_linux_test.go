@@ -17,6 +17,7 @@
 package ateomnet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"runtime"
@@ -24,6 +25,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/roottest"
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
+	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 )
@@ -75,15 +78,46 @@ func withTestNetNS(t *testing.T, fn func(interior netns.NsHandle)) {
 	fn(interior)
 }
 
-// requireNftables skips when the kernel in this environment cannot serve the
-// nftables netlink API at all, which SetupActorNetwork needs and which is a
-// property of the machine rather than of the code under test.
-func requireNftables(t *testing.T) {
+// skipWithoutInetNAT skips when this kernel cannot register an inet nat
+// chain, which needs Linux 5.2 and is a property of the machine rather than
+// of the code under test. Call it inside withTestNetNS: the probe creates
+// and deletes a real table.
+func skipWithoutInetNAT(t *testing.T) {
 	t.Helper()
 	c := &nftables.Conn{}
-	if _, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4); err != nil {
-		t.Skipf("nftables unavailable in this environment: %v", err)
+	probe := c.AddTable(&nftables.Table{Family: nftables.TableFamilyINet, Name: "ateom_nft_probe"})
+	c.AddChain(&nftables.Chain{
+		Name:     "prerouting",
+		Table:    probe,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPrerouting,
+		Priority: nftables.ChainPriorityNATDest,
+	})
+	if err := c.Flush(); err != nil {
+		t.Skipf("nftables inet nat unavailable in this environment: %v", err)
 	}
+	c.DelTable(probe)
+	if err := c.Flush(); err != nil {
+		t.Fatalf("deleting the nftables probe table: %v", err)
+	}
+}
+
+// actorNftTableExists reports whether the actor table is present in family.
+// The family is load-bearing: the kernel filters the dump by it, so a query
+// for the wrong family comes back empty rather than erroring.
+func actorNftTableExists(t *testing.T, family nftables.TableFamily) bool {
+	t.Helper()
+	c := &nftables.Conn{}
+	tables, err := c.ListTablesOfFamily(family)
+	if err != nil {
+		t.Fatalf("listing nftables tables of family %v: %v", family, err)
+	}
+	for _, table := range tables {
+		if table.Name == ActorNftTableName {
+			return true
+		}
+	}
+	return false
 }
 
 // linkByName returns the link, or nil when it does not exist.
@@ -126,7 +160,7 @@ func TestSetupActorNetworkFinalState(t *testing.T) {
 	ctx := context.Background()
 
 	withTestNetNS(t, func(interior netns.NsHandle) {
-		requireNftables(t)
+		skipWithoutInetNAT(t)
 
 		if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
 			t.Fatalf("SetupActorNetwork: %v", err)
@@ -206,7 +240,7 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 	ctx := context.Background()
 
 	withTestNetNS(t, func(interior netns.NsHandle) {
-		requireNftables(t)
+		skipWithoutInetNAT(t)
 
 		for i := range 3 {
 			if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
@@ -215,8 +249,16 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 			if linkByName(t, HostVethName) == nil {
 				t.Fatalf("host veth %q missing after activation %d", HostVethName, i)
 			}
+			if !actorNftTableExists(t, nftables.TableFamilyINet) {
+				t.Fatalf("nftables table %q missing after activation %d", ActorNftTableName, i)
+			}
 			if err := CleanupActorNetwork(ctx, interior); err != nil {
 				t.Fatalf("CleanupActorNetwork (activation %d): %v", i, err)
+			}
+			// Install and teardown have to name the same family; a mismatch makes
+			// teardown's dump come back empty and report success.
+			if actorNftTableExists(t, nftables.TableFamilyINet) {
+				t.Fatalf("nftables table %q survived cleanup after activation %d", ActorNftTableName, i)
 			}
 		}
 
@@ -227,6 +269,9 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 		}
 		if stray := linkByName(t, HostVethName); stray != nil {
 			t.Errorf("host veth %q survived cleanup", HostVethName)
+		}
+		if actorNftTableExists(t, nftables.TableFamilyINet) {
+			t.Errorf("nftables table %q survived a repeated cleanup", ActorNftTableName)
 		}
 		if err := NetNSDo(ctx, interior, func(context.Context) error {
 			if stray := linkByName(t, ActorVethName); stray != nil {
@@ -239,6 +284,104 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 	})
 }
 
+// TestRemoveActorNftablesRules covers cleanup of every family mix, including
+// the upgrade case: a worker whose previous ateom created the actor table in
+// the ip family.
+func TestRemoveActorNftablesRules(t *testing.T) {
+	roottest.Require(t, "creating network namespaces and nftables rules")
+
+	tests := []struct {
+		name     string
+		families []nftables.TableFamily
+	}{{
+		name:     "ip only",
+		families: []nftables.TableFamily{nftables.TableFamilyIPv4},
+	}, {
+		name:     "ip and inet",
+		families: []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyINet},
+	}, {
+		name:     "inet only",
+		families: []nftables.TableFamily{nftables.TableFamilyINet},
+	}}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			withTestNetNS(t, func(netns.NsHandle) {
+				skipWithoutInetNAT(t)
+
+				c := &nftables.Conn{}
+				for _, family := range test.families {
+					c.AddTable(&nftables.Table{Family: family, Name: ActorNftTableName})
+				}
+				if err := c.Flush(); err != nil {
+					t.Fatalf("creating the stand-in actor tables: %v", err)
+				}
+
+				if err := RemoveActorNftablesRules(); err != nil {
+					t.Fatalf("RemoveActorNftablesRules: %v", err)
+				}
+
+				for _, family := range []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyINet} {
+					if actorNftTableExists(t, family) {
+						t.Errorf("actorNftTableExists(family %v) = true after cleanup, want false", family)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestSetupActorNetworkEgressRedirect checks that an inet nat chain accepts
+// the redirect: it is separate kernel support from the nat chain type, and it
+// is the rule the whole actor egress path rides on.
+func TestSetupActorNetworkEgressRedirect(t *testing.T) {
+	roottest.Require(t, "creating network namespaces, veth pairs, and nftables rules")
+	ctx := context.Background()
+
+	const egressPort = 15001
+
+	withTestNetNS(t, func(interior netns.NsHandle) {
+		skipWithoutInetNAT(t)
+
+		if err := SetupActorNetwork(ctx, NetworkConfig{
+			InteriorNetNS:      interior,
+			EgressRedirectPort: egressPort,
+		}); err != nil {
+			t.Fatalf("SetupActorNetwork: %v", err)
+		}
+
+		c := &nftables.Conn{}
+		rules, err := c.GetRules(
+			&nftables.Table{Family: nftables.TableFamilyINet, Name: ActorNftTableName},
+			&nftables.Chain{Name: "prerouting"},
+		)
+		if err != nil {
+			t.Fatalf("listing prerouting rules of the actor table: %v", err)
+		}
+		if len(rules) != 1 {
+			t.Fatalf("prerouting holds %d rules, want the egress redirect alone", len(rules))
+		}
+
+		// Read back what the kernel stored, not what the builder emitted: what is
+		// in doubt is whether an inet nat chain takes these expressions at all.
+		var haveNFProto, havePort, haveRedir bool
+		for _, e := range rules[0].Exprs {
+			switch e := e.(type) {
+			case *expr.Meta:
+				haveNFProto = haveNFProto || e.Key == expr.MetaKeyNFPROTO
+			case *expr.Immediate:
+				havePort = havePort || bytes.Equal(e.Data, binaryutil.BigEndian.PutUint16(egressPort))
+			case *expr.Redir:
+				haveRedir = true
+			}
+		}
+		if !(haveNFProto && havePort && haveRedir) {
+			t.Errorf("installed redirect has nfproto=%t port=%t redir=%t, want all three, got %v",
+				haveNFProto, havePort, haveRedir, rules[0].Exprs)
+		}
+	})
+}
+
 // TestSetupActorNetworkHostVethHWAddr covers the micro-VM requirement: a CH
 // snapshot freezes the guest's ARP entry for the gateway, so the worker-side
 // veth MAC has to be exactly the one the caller asked for, on every pod.
@@ -247,7 +390,7 @@ func TestSetupActorNetworkHostVethHWAddr(t *testing.T) {
 	ctx := context.Background()
 
 	withTestNetNS(t, func(interior netns.NsHandle) {
-		requireNftables(t)
+		skipWithoutInetNAT(t)
 
 		want := MustParseMAC("02:a8:1e:00:00:01")
 		if err := SetupActorNetwork(ctx, NetworkConfig{
@@ -277,7 +420,7 @@ func TestSetupActorNetworkSweepsInteriorLinks(t *testing.T) {
 	ctx := context.Background()
 
 	withTestNetNS(t, func(interior netns.NsHandle) {
-		requireNftables(t)
+		skipWithoutInetNAT(t)
 
 		const leftover = "stale-tap0"
 		if err := NetNSDo(ctx, interior, func(context.Context) error {
