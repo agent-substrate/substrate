@@ -21,6 +21,7 @@ export KO_DOCKER_REPO := gcr.io/$(PROJECT_ID)/ate-images
 # Go commands
 GO := go
 KO := hack/run-tool.sh ko
+KO_FLAGS ?=
 
 # Binaries
 BINDIR := bin/
@@ -41,12 +42,14 @@ build: build-images build-atectl build-ate-setup
 
 .PHONY: build-images
 build-images:
-	$(KO) build \
+	$(KO) build $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
 	    ./cmd/ateapi \
+	    ./cmd/atecontroller \
 	    ./cmd/atelet \
-	    ./cmd/podcertcontroller \
-	    ./cmd/atenet
+	    ./cmd/atenet \
+	    ./cmd/ateom-gvisor \
+	    ./cmd/podcertcontroller
 
 .PHONY: build-atectl
 build-atectl:
@@ -64,7 +67,12 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build --ldflags="$(LDFLAGS)" ./demos/counter ./demos/egress
+	$(KO) build $(KO_FLAGS) \
+	    --ldflags="$(LDFLAGS)" \
+	    ./demos/counter \
+	    ./demos/egress \
+	    ./demos/multi-template/fspersist \
+	    ./demos/sandbox
 
 .PHONY: test
 test:
