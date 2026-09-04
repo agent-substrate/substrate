@@ -54,7 +54,3 @@ tool (
 	k8s.io/code-generator/cmd/lister-gen
 	k8s.io/code-generator/cmd/validation-gen
 )
-
-replace k8s.io/code-generator => ./third_party/k8s.io/code-generator
-
-replace k8s.io/apimachinery => ./third_party/k8s.io/apimachinery

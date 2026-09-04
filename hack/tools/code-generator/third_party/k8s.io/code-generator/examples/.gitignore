@@ -1,2 +1,0 @@
-# avoid constant churn as this file is not kept in sync with the root
-go.work.sum
