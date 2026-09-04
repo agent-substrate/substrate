@@ -1,0 +1,3137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>⚡ Agent Substrate — Onboarding UX Simulator (Prototype)</title>
+  <style>
+    :root {
+      --bg-canvas: #0B0F17;
+      --bg-sidebar: #0B0F17;
+      --bg-content: #0F172A;
+      --bg-card: #131B2E;
+      --border-dark: #1E293B;
+      --border-subtle: #334155;
+      
+      --accent-cyan: #38BDF8;
+      --accent-blue: #2563EB;
+      --accent-blue-hover: #1D4ED8;
+      --accent-indigo: #818CF8;
+      --accent-green: #34D399;
+      --accent-yellow: #FBBF24;
+      --accent-magenta: #F43F5E;
+      
+      --google-blue: #38BDF8;
+      --google-red: #F43F5E;
+      --google-yellow: #FBBF24;
+      --google-green: #34D399;
+
+      --text-white: #ffffff;
+      --text-primary: #F8FAFC;
+      --text-muted: #94A3B8;
+      --text-dim: #64748B;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      min-width: 0;
+    }
+
+    /* Universal Strict Line Wrapping Rule */
+    p, div, span, label, h1, h2, h3,
+    .step-heading, .step-description,
+    .option-title, .option-desc,
+    .track-title, .track-desc,
+    .welcome-tagline, .welcome-typewriter,
+    .welcome-feature-label, .welcome-feature-desc,
+    .cluster-name-title, .cluster-name-desc,
+    .cluster-info-header, .cluster-info-line,
+    .gke-agreement-title, .gke-agreement-sub, .gke-checkbox-text,
+    .scan-status-title, .scan-status-result,
+    .checklist-title, .check-line,
+    .yaml-alert-box, .celebration-title, .celebration-desc,
+    .next-step-title, .done-status, .done-prompt {
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+      word-break: normal;
+      white-space: normal;
+      max-width: 100%;
+    }
+
+    body {
+      background: radial-gradient(circle at 50% 20%, #141c2b 0%, var(--bg-canvas) 100%);
+      color: var(--text-primary);
+      font-family: 'JetBrains Mono', 'Menlo', 'Fira Code', monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    /* Top Control Toolbar */
+    .toolbar {
+      width: 100%;
+      max-width: 1060px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      background: rgba(13, 17, 23, 0.92);
+      backdrop-filter: blur(12px);
+      padding: 10px 18px;
+      border-radius: 12px;
+      border: 1px solid var(--border-dark);
+    }
+
+    .toolbar-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .controls-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-tool {
+      background: var(--bg-card);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+    .btn-tool:hover {
+      background: #21262d;
+      border-color: var(--accent-cyan);
+      color: #ffffff;
+    }
+    .btn-tool:focus-visible, .btn-tool:focus {
+      outline: 2px solid var(--accent-cyan);
+      outline-offset: 2px;
+      border-color: #ffffff;
+      background: #1c2433;
+      color: #ffffff;
+      box-shadow: 0 0 0 3px rgba(112, 214, 255, 0.4), 0 0 12px rgba(112, 214, 255, 0.35);
+    }
+
+    /* Keycap styling for tactile shortcut badges */
+    kbd, .kbd-key {
+      background: #21262d;
+      color: var(--accent-cyan);
+      border: 1px solid var(--border-subtle);
+      border-bottom: 2px solid var(--accent-cyan);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: inherit;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+      margin: 0 2px;
+    }
+
+    /* Terminal Container */
+    .terminal-window {
+      width: 100%;
+      max-width: 1060px;
+      min-height: 640px;
+      background: var(--bg-content);
+      border-radius: 12px;
+      border: 1px solid var(--border-dark);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.85);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Titlebar */
+    .titlebar {
+      height: 36px;
+      background: #090d16;
+      border-bottom: 1px solid var(--border-dark);
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      gap: 8px;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot-close { background: #ff5f56; }
+    .dot-min { background: #ffbd2e; }
+    .dot-max { background: #27c93f; }
+    .window-title { margin-left: 12px; font-size: 11px; color: var(--text-muted); }
+
+    /* Persistent Header Cluster Badge */
+    .header-cluster-badge {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      color: var(--accent-cyan);
+      background: rgba(21, 101, 192, 0.25);
+      border: 1px solid rgba(112, 214, 255, 0.35);
+      padding: 2px 10px;
+      border-radius: 12px;
+      transition: all 0.3s ease;
+    }
+    .badge-pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 6px var(--accent-green);
+      display: inline-block;
+    }
+    .badge-ns-tag {
+      font-size: 9px;
+      color: var(--text-muted);
+      background: #090d16;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+
+    /* Declarative Manifest / GitOps Drawer */
+    .manifest-drawer {
+      margin-bottom: 12px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      background: #11151c;
+      overflow: hidden;
+      transition: all 0.2s;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .manifest-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 12px;
+      background: #161b22;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      user-select: none;
+    }
+    .manifest-drawer-header:hover {
+      background: #1c222d;
+    }
+    .manifest-code-content {
+      display: none;
+      padding: 10px 14px;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #a8c7fa;
+      background: #090d16;
+      border-top: 1px solid var(--border-dark);
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-family: inherit;
+    }
+    .btn-copy-yaml {
+      background: #21262d;
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+    .btn-copy-yaml:hover {
+      border-color: var(--accent-cyan);
+      color: #fff;
+    }
+
+    /* Live Test Turn Playground */
+    .test-turn-container {
+      background: #11151c;
+      border: 1px solid var(--accent-cyan);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 0 16px rgba(112, 214, 255, 0.12);
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .test-turn-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .test-turn-badge {
+      font-size: 11px;
+      font-weight: 800;
+      color: var(--accent-cyan);
+      letter-spacing: 0.5px;
+    }
+    .btn-test-turn {
+      background: linear-gradient(135deg, #1565c0 0%, #00897b 100%);
+      color: #ffffff;
+      border: 1px solid var(--accent-cyan);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn-test-turn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0, 240, 255, 0.35);
+    }
+    .btn-test-turn:focus-visible, .btn-test-turn:focus {
+      outline: 2px solid #ffffff;
+      outline-offset: 3px;
+      border-color: #ffffff;
+      box-shadow: 0 0 0 4px rgba(112, 214, 255, 0.5), 0 0 16px rgba(0, 240, 255, 0.5);
+      transform: translateY(-1px);
+    }
+    .test-turn-console {
+      background: #090d16;
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11px;
+    }
+    .test-turn-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-white);
+      transition: opacity 0.2s;
+    }
+    .tt-icon { font-weight: bold; width: 14px; color: var(--accent-cyan); flex-shrink: 0; }
+    .tt-msg { flex: 1; min-width: 0; }
+    .tt-time { font-size: 10px; color: var(--accent-yellow); background: rgba(0,0,0,0.4); padding: 1px 5px; border-radius: 3px; }
+    .test-turn-result {
+      margin-top: 6px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-dark);
+    }
+    .tt-banner {
+      color: var(--accent-green);
+      font-weight: 700;
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+    .tt-output {
+      font-size: 11px;
+      color: #a8c7fa;
+      background: rgba(0,0,0,0.5);
+      padding: 6px 10px;
+      border-radius: 4px;
+      border-left: 2px solid var(--accent-green);
+      font-family: monospace;
+    }
+
+    /* Capacity Telemetry ROI Badge */
+    .capacity-telemetry-badge {
+      background: rgba(129, 201, 149, 0.08);
+      border: 1px solid rgba(129, 201, 149, 0.35);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: var(--text-white);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Persistent Bottom TUI Keymap Dock Bar */
+    .bottom-status-bar {
+      background: #090d16;
+      border-top: 1px solid var(--border-dark);
+      padding: 6px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      border-bottom-left-radius: 8px;
+      border-bottom-right-radius: 8px;
+      user-select: none;
+      min-height: 24px;
+    }
+    .status-legend {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .keymap-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--text-primary);
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: all 0.12s;
+    }
+    .keymap-action:hover {
+      background: #161b22;
+      color: var(--accent-cyan);
+    }
+    .keymap-action.primary-action {
+      color: #ffffff;
+      font-weight: 600;
+    }
+    .keymap-action.primary-action kbd {
+      background: #1976d2;
+      border-color: var(--accent-cyan);
+      color: #ffffff;
+      font-weight: bold;
+    }
+    .keymap-action kbd {
+      background: #161b22;
+      border: 1px solid var(--border-subtle);
+      color: var(--accent-cyan);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 10px;
+    }
+    .status-step-badge {
+      font-family: monospace;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      background: rgba(112, 214, 255, 0.08);
+      border: 1px solid rgba(112, 214, 255, 0.2);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+    }
+
+    /* Teardown Footnote */
+    .cleanup-footnote {
+      background: rgba(22, 27, 34, 0.7);
+      border: 1px dashed var(--border-subtle);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .inline-code {
+      color: var(--accent-cyan);
+      background: #090d16;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    /* ========================================================= */
+    /* WELCOME SCREEN (STEP 0) STYLES                            */
+    /* ========================================================= */
+    .welcome-screen-view {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 36px;
+      background: var(--bg-canvas);
+      flex: 1;
+      overflow-y: auto;
+      animation: fadeIn 0.3s ease-out;
+    }
+    .welcome-screen-view.active {
+      display: flex;
+    }
+
+    /* ========================================================= */
+    /* VIBRANT & 3D SHADED NEON ASCII ART LOGO STYLES            */
+    /* ========================================================= */
+    .ascii-logo {
+      font-family: 'JetBrains Mono', 'Menlo', 'Courier New', monospace;
+      font-size: 11.5px;
+      line-height: 1.15;
+      white-space: pre !important;
+      text-align: center;
+      margin: 4px auto 8px auto;
+      font-weight: 900;
+      letter-spacing: 0.6px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: radial-gradient(ellipse at center, rgba(0, 240, 255, 0.08) 0%, rgba(13, 17, 23, 0) 72%);
+      padding: 8px 18px 4px 18px;
+      border-radius: 8px;
+      position: relative;
+    }
+
+    .ascii-logo span,
+    .ascii-line-1, .ascii-line-2, .ascii-line-3, .ascii-line-4, .ascii-line-5 {
+      white-space: pre !important;
+      font-family: 'JetBrains Mono', 'Menlo', 'Courier New', monospace;
+      display: block;
+    }
+
+    /* 3D Extruded Deep Shading & Neon Ambient Highlights */
+    .ascii-line-1 {
+      color: #00f0ff;
+      text-shadow: 0 1px 0 #005f73, 0 2px 0 #003844, 0 3px 6px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 240, 255, 0.8), 0 0 28px rgba(0, 240, 255, 0.4);
+    }
+    .ascii-line-2 {
+      color: #ff3b69;
+      text-shadow: 0 1px 0 #9b1136, 0 2px 0 #59091e, 0 3px 6px rgba(0, 0, 0, 0.95), 0 0 14px rgba(255, 59, 105, 0.8), 0 0 28px rgba(255, 59, 105, 0.4);
+    }
+    .ascii-line-3 {
+      color: #ffd000;
+      text-shadow: 0 1px 0 #997a00, 0 2px 0 #594700, 0 3px 6px rgba(0, 0, 0, 0.95), 0 0 14px rgba(255, 208, 0, 0.8), 0 0 28px rgba(255, 208, 0, 0.4);
+    }
+    .ascii-line-4 {
+      color: #00ff88;
+      text-shadow: 0 1px 0 #008f4c, 0 2px 0 #004d29, 0 3px 6px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 255, 136, 0.8), 0 0 28px rgba(0, 255, 136, 0.4);
+    }
+    .ascii-line-5 {
+      color: #38b6ff;
+      text-shadow: 0 1px 0 #126699, 0 2px 0 #093854, 0 3px 6px rgba(0, 0, 0, 0.95), 0 0 14px rgba(56, 182, 255, 0.8), 0 0 28px rgba(56, 182, 255, 0.4);
+    }
+
+    .ascii-logo::after {
+      content: '';
+      width: 75%;
+      height: 3px;
+      background: radial-gradient(ellipse at center, rgba(0, 240, 255, 0.45) 0%, transparent 80%);
+      filter: blur(2px);
+      margin-top: 5px;
+    }
+
+    .welcome-tagline {
+      font-size: 12px;
+      font-weight: 700;
+      color: #00f0ff;
+      text-shadow: 0 0 12px rgba(0, 240, 255, 0.6);
+      text-align: center;
+      margin-bottom: 8px;
+      letter-spacing: 0.4px;
+    }
+
+    .welcome-typewriter {
+      font-size: 12px;
+      color: var(--text-primary);
+      line-height: 1.5;
+      text-align: center;
+      margin: 4px auto 14px auto;
+      max-width: 780px;
+      min-height: 38px;
+    }
+
+    /* Core Capabilities Feature Card */
+    .welcome-features-card {
+      background: rgba(22, 27, 34, 0.85);
+      border: 1px solid var(--accent-cyan);
+      border-radius: 10px;
+      padding: 14px 20px;
+      margin: 8px auto 16px auto;
+      width: 100%;
+      max-width: 800px;
+      position: relative;
+      text-align: left;
+    }
+
+    .welcome-features-badge {
+      position: absolute;
+      top: -11px;
+      left: 18px;
+      background: var(--accent-blue);
+      color: #ffffff;
+      border: 1px solid var(--accent-cyan);
+      font-size: 10px;
+      font-weight: bold;
+      padding: 2px 10px;
+      border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+
+    .welcome-feature-row {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      padding: 5px 0;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .welcome-feature-row:not(:last-child) {
+      border-bottom: 1px solid rgba(48, 54, 61, 0.6);
+    }
+
+    .welcome-feature-label {
+      font-weight: bold;
+      min-width: 160px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .welcome-feature-desc {
+      color: var(--text-white);
+    }
+
+    /* Track Option Cards */
+    .tracks-section {
+      width: 100%;
+      max-width: 800px;
+      margin-bottom: 14px;
+    }
+    .tracks-header {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-white);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .tracks-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .track-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 12px 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      transition: all 0.15s;
+    }
+    .track-card:hover {
+      background: #1c222d;
+      border-color: var(--accent-cyan);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(0, 240, 255, 0.25);
+    }
+    .track-card:focus-visible, .track-card:focus {
+      outline: 2px solid var(--accent-cyan);
+      outline-offset: 3px;
+      border-color: #ffffff;
+      background: #1c2433;
+      box-shadow: 0 0 0 4px rgba(112, 214, 255, 0.45), 0 0 18px rgba(0, 240, 255, 0.4);
+      transform: translateY(-1px);
+    }
+    .track-card.selected {
+      background: var(--accent-blue);
+      border-color: var(--accent-cyan);
+      border-width: 2px;
+      box-shadow: 0 0 0 3px rgba(112, 214, 255, 0.35), 0 4px 16px rgba(21, 101, 192, 0.5);
+    }
+    .track-key-badge {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-white);
+      background: rgba(0,0,0,0.3);
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+    .track-icon { font-size: 18px; margin-right: 2px; }
+    .track-info { display: flex; flex-direction: column; gap: 3px; }
+    .track-title { font-size: 12px; font-weight: 700; color: var(--text-white); }
+    .track-desc { font-size: 11px; color: var(--text-muted); }
+    .track-card.selected .track-desc { color: rgba(255, 255, 255, 0.9); }
+
+    /* Preflight Diagnostics Badge */
+    .preflight-badge {
+      width: 100%;
+      max-width: 800px;
+      background: #0d1117;
+      border: 1px solid var(--border-dark);
+      border-radius: 8px;
+      padding: 7px 14px;
+      font-size: 11px;
+      display: flex;
+      justify-content: space-around;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .badge-ok { color: var(--accent-green); font-weight: 700; margin-right: 4px; }
+    .badge-warn { color: var(--accent-yellow); font-weight: 700; margin-right: 4px; }
+
+    /* ========================================================= */
+    /* 2-COLUMN WIZARD (STEPS 1-7) STYLES                         */
+    /* ========================================================= */
+    .wizard-view {
+      display: none;
+      grid-template-columns: 240px minmax(0, 1fr);
+      flex: 1;
+      min-height: 580px;
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .wizard-view.active {
+      display: grid;
+    }
+
+    /* Left Sidebar */
+    .sidebar-nav {
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-dark);
+      padding: 20px 18px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      min-width: 0;
+    }
+    .sidebar-brand {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      margin-bottom: 2px;
+      cursor: pointer;
+    }
+    .sidebar-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 3px;
+      background: #21262d;
+      border-radius: 2px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--accent-cyan);
+      width: 15%;
+      transition: width 0.4s ease;
+    }
+
+    .sidebar-step-count {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    .step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .step-item {
+      font-size: 11px;
+      color: var(--text-dim);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 0;
+      transition: color 0.15s;
+      min-width: 0;
+    }
+    .step-item:hover { color: var(--text-primary); }
+    .step-item.completed { color: var(--text-primary); font-weight: 600; }
+    .step-item.completed .step-icon { color: var(--accent-green); font-weight: 700; }
+    .step-item.active { color: var(--accent-cyan); font-weight: 700; }
+    .step-item.active .step-icon { color: var(--accent-cyan); }
+
+    /* Right Content Area */
+    .content-area {
+      background: var(--bg-content);
+      padding: 24px 32px;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      overflow-x: hidden;
+      min-width: 0;
+      width: 100%;
+    }
+
+    .step-screen {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+      animation: fadeIn 0.25s ease-out;
+    }
+    .step-screen.active {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .step-counter { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+    .step-heading { font-size: 16px; font-weight: 700; color: var(--text-white); margin-bottom: 6px; }
+    .step-description { font-size: 13px; color: var(--text-primary); line-height: 1.5; margin-bottom: 12px; }
+
+    /* Command Callout */
+    .command-box {
+      background: #11151c;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .command-pill {
+      display: inline-block;
+      background: var(--accent-blue);
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      margin-bottom: 6px;
+    }
+    .command-text {
+      font-size: 12px;
+      color: var(--accent-cyan);
+      font-family: inherit;
+      white-space: pre-wrap;
+      word-break: break-all;
+      overflow-wrap: anywhere;
+      min-width: 0;
+    }
+
+    /* Node Pool Scan Status Card */
+    .scan-status-box {
+      background: #11151c;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .scan-status-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+    .scan-status-icon {
+      font-weight: 700;
+      width: 14px;
+    }
+    .scan-status-result {
+      font-size: 11px;
+      color: var(--accent-yellow);
+      padding: 6px 10px;
+      background: rgba(253, 214, 99, 0.1);
+      border-radius: 4px;
+      border: 1px solid rgba(253, 214, 99, 0.3);
+      line-height: 1.4;
+    }
+
+    /* Option Selection Cards (Steps 4, 5, 6) */
+    .option-cards-container {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-bottom: 12px;
+    }
+    .option-card-row {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 10px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: all 0.15s;
+    }
+    .option-card-row:hover {
+      background: #1c222d;
+      border-color: var(--accent-cyan);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0, 240, 255, 0.25);
+    }
+    .option-card-row:focus-visible, .option-card-row:focus {
+      outline: 2px solid var(--accent-cyan);
+      outline-offset: 3px;
+      border-color: #ffffff;
+      background: #1c2433;
+      box-shadow: 0 0 0 4px rgba(112, 214, 255, 0.45), 0 0 18px rgba(0, 240, 255, 0.4);
+      transform: translateY(-1px);
+    }
+    .option-card-row.selected {
+      background: var(--accent-blue);
+      border-color: var(--accent-cyan);
+      border-width: 2px;
+      box-shadow: 0 0 0 3px rgba(112, 214, 255, 0.35), 0 4px 14px rgba(21, 101, 192, 0.5);
+    }
+    .option-title { font-size: 12px; font-weight: 700; color: var(--text-white); }
+    .option-desc { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+    .option-card-row.selected .option-desc { color: rgba(255, 255, 255, 0.9); }
+
+    /* YAML Notice Alert Box */
+    .yaml-alert-box {
+      background: #191c14;
+      border: 1px solid var(--accent-yellow);
+      border-radius: 6px;
+      padding: 9px 14px;
+      font-size: 11px;
+      color: var(--text-white);
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+
+    /* Side-by-Side Container (Step 2) */
+    .cluster-side-by-side {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+      margin-bottom: 16px;
+      width: 100%;
+      min-width: 0;
+      flex: 1;
+    }
+    .column-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-white);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      min-width: 0;
+    }
+    .cluster-compact-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+    }
+    .cluster-compact-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: all 0.15s;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .cluster-compact-card:hover {
+      background: #1c222d;
+      border-color: var(--accent-cyan);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0, 240, 255, 0.25);
+    }
+    .cluster-compact-card:focus-visible, .cluster-compact-card:focus {
+      outline: 2px solid var(--accent-cyan);
+      outline-offset: 3px;
+      border-color: #ffffff;
+      background: #1c2433;
+      box-shadow: 0 0 0 4px rgba(112, 214, 255, 0.45), 0 0 18px rgba(0, 240, 255, 0.4);
+      transform: translateY(-1px);
+    }
+    .cluster-compact-card.selected {
+      background: var(--accent-blue);
+      border-color: var(--accent-cyan);
+      border-width: 2px;
+      box-shadow: 0 0 0 3px rgba(112, 214, 255, 0.35), 0 4px 14px rgba(21, 101, 192, 0.5);
+    }
+    .cluster-compact-card > div {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .cluster-name-title { font-size: 11px; font-weight: 700; color: var(--text-white); }
+    .cluster-name-desc { font-size: 10px; color: var(--text-muted); }
+    .cluster-compact-card.selected .cluster-name-desc { color: rgba(255, 255, 255, 0.9); }
+
+    .inspection-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+      min-width: 0;
+    }
+    .cluster-info-box {
+      background: #11151c;
+      border: 1px solid var(--accent-cyan);
+      border-radius: 8px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .cluster-info-header { font-size: 11px; font-weight: 700; color: var(--accent-cyan); margin-bottom: 2px; }
+    .cluster-info-line { font-size: 11px; color: var(--text-primary); line-height: 1.4; width: 100%; min-width: 0; }
+
+    /* Interactive GKE Private GA Box with Toggle Checkbox */
+    .gke-agreement-box {
+      background: #191c14;
+      border: 1px solid var(--accent-yellow);
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: all 0.2s;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .gke-agreement-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      min-width: 0;
+    }
+    .gke-agreement-title { font-size: 11px; font-weight: 700; color: var(--accent-yellow); }
+    .gke-token-pill {
+      font-size: 10px;
+      background: rgba(129, 201, 149, 0.15);
+      color: var(--accent-green);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(129, 201, 149, 0.3);
+      font-weight: 600;
+    }
+    .gke-agreement-sub { font-size: 10px; color: var(--text-white); width: 100%; min-width: 0; }
+    
+    .gke-agreement-checkbox-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 6px 10px;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid rgba(253, 214, 99, 0.4);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .gke-agreement-checkbox-row:hover {
+      background: rgba(253, 214, 99, 0.1);
+      border-color: var(--accent-yellow);
+    }
+    .gke-checkbox-box {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent-green);
+      margin-top: -1px;
+    }
+    .gke-checkbox-text {
+      font-size: 10px;
+      color: var(--accent-cyan);
+      font-weight: 600;
+      line-height: 1.3;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .compact-checklist-box {
+      background: #090d16;
+      border: 1px solid var(--border-dark);
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    /* Execution Checklist Card with Real-time Animation */
+    .execution-card {
+      background: #090d16;
+      border: 1px solid var(--border-dark);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 14px;
+      flex: 1;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .checklist-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      margin-bottom: 10px;
+    }
+    .checklist-items {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+      min-height: 60px;
+      width: 100%;
+      min-width: 0;
+    }
+    .check-line {
+      font-size: 12px;
+      color: var(--text-white);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      transition: opacity 0.2s ease;
+      width: 100%;
+      min-width: 0;
+    }
+    .check-line span:last-child {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: break-word;
+      word-wrap: break-word;
+      white-space: normal;
+    }
+    .check-line.pending {
+      color: var(--text-dim);
+    }
+    .check-line.running {
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+    .check-line.done {
+      color: var(--text-white);
+    }
+
+    .check-icon {
+      font-weight: 700;
+      width: 14px;
+      display: inline-block;
+      text-align: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .check-icon.done { color: var(--accent-green); }
+    .check-icon.running { color: var(--accent-cyan); }
+    .check-icon.pending { color: var(--text-dim); }
+
+    .done-status {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent-green);
+      margin-bottom: 4px;
+      transition: opacity 0.3s;
+      width: 100%;
+      min-width: 0;
+    }
+    .done-prompt {
+      font-size: 12px;
+      color: var(--text-primary);
+      font-style: italic;
+      transition: opacity 0.3s;
+      width: 100%;
+      min-width: 0;
+    }
+
+    /* Celebration Card (Step 7) */
+    .celebration-ascii-logo {
+      font-family: monospace;
+      font-size: 8px;
+      line-height: 1.15;
+      color: var(--accent-cyan);
+      white-space: pre;
+      margin: 4px 0 12px 0;
+      text-shadow: 0 0 12px rgba(112, 214, 255, 0.45);
+      width: 100%;
+      overflow-x: auto;
+    }
+    .celebration-hero {
+      background: linear-gradient(135deg, rgba(21, 101, 192, 0.25) 0%, rgba(0, 137, 123, 0.2) 50%, rgba(129, 201, 149, 0.2) 100%);
+      border: 1.5px solid var(--accent-green);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+      text-align: left;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      box-shadow: 0 0 20px rgba(129, 201, 149, 0.2), inset 0 0 16px rgba(112, 214, 255, 0.08);
+      position: relative;
+    }
+    .celebration-hero::before {
+      content: '✨ 🚀 🎉 ⚡';
+      position: absolute;
+      top: 14px;
+      right: 18px;
+      font-size: 14px;
+      letter-spacing: 4px;
+      opacity: 0.85;
+    }
+    .celebration-title {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--accent-green);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-shadow: 0 0 8px rgba(129, 201, 149, 0.4);
+    }
+    .celebration-desc {
+      font-size: 12px;
+      color: var(--text-white);
+      line-height: 1.5;
+      width: 100%;
+      min-width: 0;
+      margin-bottom: 10px;
+    }
+    .celebration-metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .celebration-metric-badge {
+      background: rgba(13, 17, 23, 0.85);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+    }
+    .celebration-metric-icon { font-size: 15px; }
+    .celebration-metric-text { color: var(--text-white); font-weight: 700; font-size: 11px; }
+    .celebration-metric-sub { color: var(--accent-cyan); font-size: 10px; margin-top: 1px; }
+
+    /* Next Steps Section */
+    .next-steps-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 14px;
+      width: 100%;
+      min-width: 0;
+    }
+    .next-step-box {
+      background: #11151c;
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 12px 16px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .next-step-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent-yellow);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+    }
+    .code-block {
+      background: #090d16;
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: var(--accent-cyan);
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      overflow-wrap: anywhere;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    /* Action Buttons Row */
+    .action-row {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 12px;
+      margin-top: auto;
+    }
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text-primary);
+      border: 1.5px solid var(--border-subtle);
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease-in-out;
+    }
+    .btn-secondary:hover {
+      background: #21262d;
+      color: var(--accent-cyan);
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 10px rgba(112, 214, 255, 0.25);
+    }
+    .btn-secondary:focus-visible, .btn-secondary:focus {
+      outline: 2px solid var(--accent-cyan);
+      outline-offset: 3px;
+      border-color: #ffffff;
+      background: #1c2433;
+      color: var(--accent-cyan);
+      box-shadow: 0 0 0 4px rgba(112, 214, 255, 0.45), 0 0 16px rgba(112, 214, 255, 0.35);
+      transform: translateY(-1px);
+    }
+    .btn-primary {
+      background: var(--accent-blue);
+      color: #ffffff;
+      border: 1.5px solid var(--accent-cyan);
+      padding: 7px 18px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      box-shadow: 0 4px 12px rgba(21, 101, 192, 0.4);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s ease-in-out;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-blue-hover);
+      border-color: #ffffff;
+      box-shadow: 0 0 14px rgba(112, 214, 255, 0.5), 0 4px 16px rgba(21, 101, 192, 0.6);
+    }
+    .btn-primary:focus-visible, .btn-primary:focus {
+      outline: 2px solid #ffffff;
+      outline-offset: 3px;
+      border-color: var(--accent-cyan);
+      border-width: 2px;
+      background: #1976d2;
+      box-shadow: 0 0 0 4px rgba(112, 214, 255, 0.55), 0 0 20px rgba(0, 240, 255, 0.6);
+      transform: translateY(-1px);
+    }
+
+    /* Modal Backdrop & Help Dialog */
+    .modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-backdrop.active {
+      display: flex;
+    }
+    .modal-dialog {
+      background: #0d1117;
+      border: 1px solid var(--accent-cyan);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8), 0 0 24px rgba(112, 214, 255, 0.2);
+      border-radius: 10px;
+      width: 680px;
+      max-width: 90vw;
+      max-height: 88vh;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      color: var(--text-primary);
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-dark);
+      padding-bottom: 12px;
+    }
+    .modal-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--accent-cyan);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-close-btn {
+      background: transparent;
+      border: 1px solid var(--border-dark);
+      color: var(--text-muted);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: all 0.15s;
+    }
+    .modal-close-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+      border-color: var(--accent-cyan);
+    }
+    .modal-section-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent-yellow);
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .shortcuts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 14px;
+      background: #070a0f;
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 11px;
+    }
+    .shortcut-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .shortcut-key-badge {
+      background: #161b22;
+      border: 1px solid var(--border-subtle);
+      color: var(--accent-cyan);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-weight: bold;
+      font-size: 10px;
+      min-width: 58px;
+      text-align: center;
+    }
+    .docs-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 11px;
+    }
+    .doc-link-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #11151c;
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      padding: 10px 14px;
+      color: var(--text-primary);
+      text-decoration: none;
+      transition: all 0.15s;
+      cursor: pointer;
+    }
+    .doc-link-item:hover {
+      border-color: var(--accent-cyan);
+      background: #151d28;
+      color: #ffffff;
+      transform: translateY(-1px);
+    }
+    .doc-link-title { font-weight: 700; color: var(--accent-cyan); }
+    .doc-link-desc { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+  <!-- Top Control Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-title">
+      <span>Agent Substrate <span style="font-size: 11px; opacity: 0.75; font-weight: normal; margin-left: 6px;">[UX Prototype Simulation]</span></span>
+    </div>
+    <div class="controls-group">
+      <button class="btn-tool" onclick="toggleHelpModal()">❓ Shortcuts & Docs <kbd style="font-size: 10px; opacity: 0.8; margin-left: 4px;">?</kbd></button>
+      <button class="btn-tool" onclick="resetWizard()">↺ Reset</button>
+    </div>
+  </div>
+
+  <!-- Terminal Container Window -->
+  <div class="terminal-window">
+    <div class="titlebar">
+      <div class="dot dot-close"></div>
+      <div class="dot dot-min"></div>
+      <div class="dot dot-max"></div>
+      <div class="window-title">rajithal@rajithal: ~/workspaces/substrate — substrate onboard [prototype]</div>
+      <div class="header-cluster-badge" id="header-cluster-badge" style="display: none;">
+        <span class="badge-pulse-dot"></span>
+        <span id="header-cluster-text">gke_enterprise_us-central1_prod (us-central1)</span>
+        <span class="badge-ns-tag">ns: substrate-system</span>
+      </div>
+    </div>
+
+    <!-- VIEW 0: WELCOME SCREEN (STREAMLINED & CLEAN) -->
+    <div class="welcome-screen-view active" id="view-welcome">
+      <!-- Crisp ASCII Art Logo -->
+      <div class="ascii-logo">
+<span class="ascii-line-1">    _    ____ _____ _   _ _____        ____  _   _ ____  ____ _____ ____     _  _____ _____ </span>
+<span class="ascii-line-2">   / \  / ___| ____| \ | |_   _|      / ___|| | | | __ )/ ___|_   _|  _ \   / \|_   _| ____|</span>
+<span class="ascii-line-3">  / _ \| |  _|  _| |  \| | | |        \___ \| | | |  _ \\___ \ | | | |_) | / _ \ | | |  _|  </span>
+<span class="ascii-line-4"> / ___ \ |_| | |___| |\  | | |         ___) | |_| | |_) |___) || | |  _ < / ___ \| | | |___ </span>
+<span class="ascii-line-5">/_/   \_\____|_____|_| \_| |_|        |____/ \___/|____/|____/ |_| |_| \_\_/   \_\_| |_____|</span>
+      </div>
+
+      <div class="welcome-tagline" style="margin-bottom: 24px; font-size: 13px;">High-Density AI Agent Sandboxing — Interactive Prototype Simulator</div>
+
+      <!-- Streamlined Tracks Selection -->
+      <div class="tracks-section" style="max-width: 680px; width: 100%;">
+        <div class="tracks-header" style="margin-bottom: 10px;">
+          <span style="font-weight: 700; font-size: 12px; color: var(--text-primary);">Choose installation track:</span>
+          <span style="font-size: 11px; color: var(--accent-cyan);">Press <kbd>1</kbd> or <kbd>2</kbd></span>
+        </div>
+        <div class="tracks-list" style="gap: 10px;">
+          <div class="track-card selected" id="track-0" onclick="selectTrack(0); startWizardFromWelcome();" style="cursor: pointer; padding: 12px 16px;">
+            <span class="track-key-badge">1</span>
+            <span class="track-icon">🚀</span>
+            <div class="track-info">
+              <div class="track-title" style="font-size: 13px;">Quickstart — Automated setup with sensible defaults (Recommended)</div>
+              <div class="track-desc" style="font-size: 11px;">Connects to current cluster and configures microVM sandboxes in seconds.</div>
+            </div>
+          </div>
+          <div class="track-card" id="track-1" onclick="selectTrack(1); startWizardFromWelcome();" style="cursor: pointer; padding: 12px 16px;">
+            <span class="track-key-badge">2</span>
+            <span class="track-icon">⚙️</span>
+            <div class="track-info">
+              <div class="track-title" style="font-size: 13px;">Advanced — Custom installation with declarative YAML manifests</div>
+              <div class="track-desc" style="font-size: 11px;">Customize node pools, resource quotas, autoscaling buffers, and eBPF network rules.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clean Status Context -->
+      <div style="margin-top: 18px; display: flex; align-items: center; justify-content: center; gap: 16px; font-size: 11px; color: var(--text-muted);">
+        <span><span style="color: var(--accent-green);">●</span> K8s Context: <strong style="color: var(--text-white);">gke_enterprise_us-central1_prod</strong></span>
+        <span><span style="color: var(--accent-green);">●</span> Preflight: <strong style="color: var(--text-white);">Ready</strong></span>
+      </div>
+
+      <div style="margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; color: var(--text-primary); cursor: pointer;" onclick="startWizardFromWelcome()">
+        <span style="color: var(--accent-cyan); font-weight: bold;">▸</span> Press <kbd style="background: #1976d2; border: 1px solid var(--accent-cyan); color: #fff; padding: 2px 7px; border-radius: 4px; font-weight: bold;">Enter ↵</kbd> or <kbd style="background: #161b22; border: 1px solid var(--border-subtle); color: var(--accent-cyan); padding: 2px 7px; border-radius: 4px; font-weight: bold;">1-2</kbd> to begin setup
+      </div>
+    </div>
+
+    <!-- VIEW 1: 2-COLUMN WIZARD (STEPS 1-7) -->
+    <div class="wizard-view" id="view-wizard">
+      
+      <!-- Left Sidebar Navigation (7 numbered steps) -->
+      <div class="sidebar-nav">
+        <div class="sidebar-brand" onclick="showWelcomeScreen()">Agent Substrate <span style="font-size: 9px; opacity: 0.7;">[Prototype]</span></div>
+        <div class="sidebar-subtitle">Getting set up</div>
+        
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" id="progress-fill"></div>
+        </div>
+
+        <div class="sidebar-step-count" id="sidebar-count">1 of 7 steps</div>
+
+        <div class="step-list">
+          <div class="step-item active" id="nav-step-0" onclick="goToStep(0)"><span class="step-icon">1</span> Check your setup</div>
+          <div class="step-item" id="nav-step-1" onclick="goToStep(1)"><span class="step-icon">2</span> Connect your cluster</div>
+          <div class="step-item" id="nav-step-2" onclick="goToStep(2)"><span class="step-icon">3</span> Turn on Substrate</div>
+          <div class="step-item" id="nav-step-3" onclick="goToStep(3)"><span class="step-icon">4</span> Compatible Node Pool</div>
+          <div class="step-item" id="nav-step-4" onclick="goToStep(4)"><span class="step-icon">5</span> Configure Autoscaling</div>
+          <div class="step-item" id="nav-step-5" onclick="goToStep(5)"><span class="step-icon">6</span> Deploy WorkerPool</div>
+          <div class="step-item" id="nav-step-6" onclick="goToStep(6)"><span class="step-icon">7</span> Installation Complete</div>
+        </div>
+      </div>
+
+      <!-- Right Main Content Area -->
+      <div class="content-area">
+        
+        <!-- STEP 1: Check your setup (Clean, No-Noise Preflight) -->
+        <div class="step-screen active" id="screen-0">
+          <div class="step-counter">Step 1 of 7</div>
+          <div class="step-heading">Check your environment</div>
+          <div class="step-description">We'll check if you have everything needed to run Substrate — a container runtime, Python, and kubectl CLI.</div>
+
+          <div class="execution-card" id="exec-card-0" onclick="goToStep(1)" style="cursor: pointer;">
+            <div class="checklist-title">Checking prerequisites...</div>
+            <div class="checklist-items" id="check-items-0"></div>
+            <div class="done-status" id="done-status-0" style="opacity: 0;">Done</div>
+            <div class="done-prompt" id="done-prompt-0" style="opacity: 0;">Prerequisites verified. Let's connect your pre-configured cluster next.</div>
+          </div>
+        </div>
+
+        <!-- STEP 2: Connect your cluster (SIDE-BY-SIDE + REGION + INTERACTIVE GKE GA AGREEMENT) -->
+        <div class="step-screen" id="screen-1">
+          <div class="step-counter">Step 2 of 7</div>
+          <div class="step-heading">Select Cluster & Verify Substrate Control Plane</div>
+          <div class="step-description">Choose a cluster from your kubeconfig. We'll verify its provider type, region, and probe for existing Substrate components in real-time.</div>
+
+          <div class="cluster-side-by-side">
+            <div>
+              <div class="column-title">
+                <span>Target Cluster:</span>
+                <span style="font-size: 11px; color: var(--accent-cyan);">Press <kbd>1-4</kbd></span>
+              </div>
+              <div class="cluster-compact-list">
+                <div class="cluster-compact-card selected" id="cluster-card-0" onclick="selectCluster(0); goToStep(2);" style="cursor: pointer;">
+                  <span class="track-key-badge">1</span>
+                  <span style="font-size: 16px;">🌐</span>
+                  <div>
+                    <div class="cluster-name-title">gke_enterprise_us-central1_prod</div>
+                    <div class="cluster-name-desc">GKE • Region: us-central1 (Iowa) • 12 nodes • KVM</div>
+                  </div>
+                </div>
+
+                <div class="cluster-compact-card" id="cluster-card-1" onclick="selectCluster(1); goToStep(2);" style="cursor: pointer;">
+                  <span class="track-key-badge">2</span>
+                  <span style="font-size: 16px;">☁️</span>
+                  <div>
+                    <div class="cluster-name-title">aws-eks-production-us-east-1</div>
+                    <div class="cluster-name-desc">EKS • Region: us-east-1 (N. Virginia) • 8 nodes • Nitro</div>
+                  </div>
+                </div>
+
+                <div class="cluster-compact-card" id="cluster-card-2" onclick="selectCluster(2); goToStep(2);" style="cursor: pointer;">
+                  <span class="track-key-badge">3</span>
+                  <span style="font-size: 16px;">🔷</span>
+                  <div>
+                    <div class="cluster-name-title">azure-aks-agent-fleet-eastus</div>
+                    <div class="cluster-name-desc">AKS • Region: eastus (Virginia) • 6 nodes • Hyper-V</div>
+                  </div>
+                </div>
+
+                <div class="cluster-compact-card" id="cluster-card-3" onclick="selectCluster(3); goToStep(2);" style="cursor: pointer;">
+                  <span class="track-key-badge">4</span>
+                  <span style="font-size: 16px;">🧪</span>
+                  <div>
+                    <div class="cluster-name-title">kind-substrate-sandbox</div>
+                    <div class="cluster-name-desc">Kind • Region: local (localhost) • 3 nodes</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="inspection-panel">
+              <div class="column-title"><span>Verification & Probe Status:</span></div>
+              
+              <div class="cluster-info-box" id="cluster-status-box">
+                <div class="cluster-info-header">🌐 CLUSTER VERIFICATION:</div>
+                <div class="cluster-info-line" id="cluster-line-provider"><strong>Provider:</strong> Google Kubernetes Engine (GKE v1.35.1) <span style="color: var(--accent-green);">[Verified ✓]</span></div>
+                <div class="cluster-info-line" id="cluster-line-region"><strong>Region:</strong> us-central1 (Iowa)</div>
+                <div class="cluster-info-line" id="cluster-line-capacity"><strong>Capacity:</strong> 12 ready nodes (Hardware virtualization ready)</div>
+                <div class="cluster-info-line" id="cluster-line-probe" style="color: var(--accent-yellow);"><strong>Substrate Probe:</strong> [substrate-system] ➔ Not Installed (Clean Ready)</div>
+              </div>
+
+              <div class="compact-checklist-box">
+                <div class="checklist-items" id="check-items-1" style="min-height: auto; gap: 5px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 3: Turn on Substrate -->
+        <div class="step-screen" id="screen-2">
+          <div class="step-counter">Step 3 of 7</div>
+          <div class="step-heading">Turn on Substrate Control Plane</div>
+          <div class="step-description">Installing the Substrate core controllers, state registry, and high-speed networking onto your cluster in namespace [substrate-system].</div>
+
+          <!-- DECLARATIVE GITOPS MANIFEST DRAWER -->
+          <div class="manifest-drawer" id="drawer-step-2">
+            <div class="manifest-drawer-header" onclick="toggleManifestDrawer('drawer-step-2')">
+              <span><span></></span> Declarative Control-Plane Manifest: <span style="color: #fff;">manifests/substrate-control-plane.yaml</span></span>
+              <button class="btn-copy-yaml" onclick="copyManifestYaml(event, 'drawer-step-2')">📋 Copy for GitOps</button>
+            </div>
+            <div class="manifest-code-content">apiVersion: v1
+kind: Namespace
+metadata:
+  name: substrate-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: substrate-controller-manager
+  namespace: substrate-system
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+      - name: controller
+        image: gcr.io/ate-platform/controller:v0.2.1
+        resources:
+          limits: { cpu: 500m, memory: 512Mi }</div>
+          </div>
+
+          <div class="execution-card" id="exec-card-2" onclick="goToStep(3)" style="cursor: pointer;">
+            <div class="checklist-title">Installing Substrate components...</div>
+            <div class="checklist-items" id="check-items-2"></div>
+            <div class="done-status" id="done-status-2" style="opacity: 0;">Done</div>
+            <div class="done-prompt" id="done-prompt-2" style="opacity: 0;">Substrate control plane is active! Next, let's configure the worker pool node fleet.</div>
+          </div>
+        </div>
+
+        <!-- STEP 4: Compatible Node Pool (PROGRESSIVE DISCLOSURE: SCAN -> OPTIONS -> ACTION STATUS) -->
+        <div class="step-screen" id="screen-3">
+          <div class="step-counter">Step 4 of 7</div>
+          <div class="step-heading">Set up Compatible WorkerPool Node Fleet</div>
+          <div class="step-description">Scanning cluster node pools for hardware nested virtualization (KVM/microVM). If no compatible pool is found, configure one via Custom Compute Class (CCC).</div>
+
+          <!-- PHASE 1: SCANNING STATUS BOX (Shows FIRST) -->
+          <div class="scan-status-box" id="node-scan-box">
+            <div class="scan-status-header">
+              <span class="scan-status-icon" id="node-scan-icon">⠋</span>
+              <span class="scan-status-title" id="node-scan-title">Scanning existing cluster node pools for hardware nested virtualization...</span>
+            </div>
+            <div class="scan-status-result" id="node-scan-result" style="display: none;">
+              ⚠️ <strong>Scan Result:</strong> No node pool detected with hardware nested virtualization enabled.
+            </div>
+          </div>
+
+          <!-- PHASE 2: OPTIONS CONTAINER (Revealed ONLY after scan completes) -->
+          <div id="nodepool-options-container" style="display: none; flex-direction: column;">
+            <div class="yaml-alert-box" id="yaml-notice-box-3" style="margin-bottom: 12px; margin-top: 4px;">
+              💡 <strong>Tip:</strong> You can modify and re-apply the Custom Compute Class YAML manifest later at any time (e.g. <code>manifests/workerpool-ccc.yaml</code>).
+            </div>
+
+            <div class="column-title">
+              <span>Select compatible node pool option:</span>
+              <span style="font-size: 11px; color: var(--accent-cyan);">Press <kbd>1-3</kbd></span>
+            </div>
+
+            <div class="option-cards-container">
+              <div class="option-card-row" id="nodepool-card-0" onclick="selectNodepoolOpt(0); proceedFromStep4();" style="cursor: pointer;">
+                <span class="track-key-badge">1</span>
+                <span style="font-size: 16px;">⚡</span>
+                <div style="flex: 1;">
+                  <div class="option-title">Automatically create a compatible node pool using Custom Compute Class (Recommended)</div>
+                  <div class="option-desc">Applies Custom Compute Class manifest with n2-standard-48, Spot fallback, and nested virtualization enabled.</div>
+                </div>
+              </div>
+              <div class="option-card-row" id="nodepool-card-1" onclick="selectNodepoolOpt(1); proceedFromStep4();" style="cursor: pointer;">
+                <span class="track-key-badge">2</span>
+                <span style="font-size: 16px;">🛠️</span>
+                <div style="flex: 1;">
+                  <div class="option-title">Create a compatible node pool manually via gcloud</div>
+                  <div class="option-desc">Generates gcloud container node-pools create command with --enable-nested-virtualization.</div>
+                </div>
+              </div>
+              <div class="option-card-row" id="nodepool-card-2" onclick="selectNodepoolOpt(2); goToStep(1);" style="cursor: pointer;">
+                <span class="track-key-badge">3</span>
+                <span style="font-size: 16px;">🔄</span>
+                <div style="flex: 1;">
+                  <div class="option-title">Choose a different cluster</div>
+                  <div class="option-desc">Return to Step 2 to select another cluster context from your kubeconfig.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PHASE 3A: PROGRESS STATUS CHECKLIST (Revealed ONLY when Option 1 is selected) -->
+          <div class="execution-card" id="exec-card-3" style="display: none;">
+            <div class="checklist-title" id="nodepool-exec-title">Applying Custom Compute Class...</div>
+            <div class="checklist-items" id="check-items-3"></div>
+            <div class="done-status" id="done-status-3" style="opacity: 0;">Done</div>
+            <div class="done-prompt" id="done-prompt-3" style="opacity: 0;">Compatible node pool configured! Now let's set up autoscaling.</div>
+          </div>
+
+          <!-- DECLARATIVE GITOPS MANIFEST DRAWER FOR STEP 4 -->
+          <div class="manifest-drawer" id="drawer-step-3" style="display: none;">
+            <div class="manifest-drawer-header" onclick="toggleManifestDrawer('drawer-step-3')">
+              <span><span></></span> Declarative Custom Compute Class: <span style="color: #fff;">manifests/workerpool-ccc.yaml</span></span>
+              <button class="btn-copy-yaml" onclick="copyManifestYaml(event, 'drawer-step-3')">📋 Copy for GitOps</button>
+            </div>
+            <div class="manifest-code-content">apiVersion: cloud.google.com/v1
+kind: CustomComputeClass
+metadata:
+  name: agent-spot-ccc
+spec:
+  nodePoolSpec:
+    machineType: n2-standard-48
+    enableNestedVirtualization: true
+    spot: true
+    autoScaling:
+      minNodes: 1
+      maxNodes: 10</div>
+          </div>
+
+          <!-- PHASE 3B: MANUAL COMMAND CALLOUT (Revealed ONLY when Option 2 is selected) -->
+          <div class="command-box" id="nodepool-manual-box" style="display: none;">
+            <div class="command-pill">🛠️ Manual gcloud Node Pool Provisioning</div>
+            <div class="command-text" style="line-height: 1.6; font-size: 11px; margin-top: 4px;">
+              gcloud container node-pools create substrate-worker-pool \<br/>
+              &nbsp;&nbsp;--cluster=gke_enterprise_us-central1_prod \<br/>
+              &nbsp;&nbsp;--machine-type=n2-standard-48 \<br/>
+              &nbsp;&nbsp;--enable-nested-virtualization \<br/>
+              &nbsp;&nbsp;--num-nodes=3
+            </div>
+            <div style="font-size: 11px; color: var(--accent-yellow); margin-top: 8px;">
+              💡 Run this command in your cloud console, then press <kbd>Enter ↵</kbd> to proceed to autoscaling.
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 5: WorkerPool Autoscaling (PROGRESSIVE DISCLOSURE: NO PRE-SELECTION -> REVEAL PROGRESS) -->
+        <div class="step-screen" id="screen-4">
+          <div class="step-counter">Step 5 of 7</div>
+          <div class="step-heading">Configure WorkerPool Autoscaling (HPA & CapacityBuffer)</div>
+          <div class="step-description">Configure horizontal pod autoscaling and standby capacity buffers so your agent fleet can absorb sudden traffic surges with instant (&lt;100ms) cold starts.</div>
+
+          <div class="yaml-alert-box" style="margin-bottom: 10px; margin-top: 8px;">
+            💡 <strong>Tip:</strong> You can modify and re-apply the HPA and CapacityBuffer YAML manifests later at any time (e.g. <code>manifests/workerpool-autoscaling.yaml</code>).
+          </div>
+
+          <div class="capacity-telemetry-badge" style="margin-bottom: 12px;">
+            <span style="font-size: 14px;">📈</span>
+            <span><strong>Standby Efficiency:</strong> 3 standby replicas absorb up to 300 bursty agent sessions with 0% CPU idle waste.</span>
+          </div>
+
+          <div class="column-title">
+            <span>Select autoscaling option:</span>
+            <span style="font-size: 11px; color: var(--accent-cyan);">Press <kbd>1-3</kbd></span>
+          </div>
+
+          <div class="option-cards-container">
+            <div class="option-card-row" id="hpa-card-0" onclick="selectHpaOpt(0); proceedFromStep5();" style="cursor: pointer;">
+              <span class="track-key-badge">1</span>
+              <span style="font-size: 16px;">⚡</span>
+              <div style="flex: 1;">
+                <div class="option-title">Automatically configure HPA & CapacityBuffer with sensible defaults (Recommended)</div>
+                <div class="option-desc">Applies OneHPA (min=10, max=100) and fixed-replica-buffer (3 standby replicas) for instant &lt;100ms agent session injection.</div>
+              </div>
+            </div>
+            <div class="option-card-row" id="hpa-card-1" onclick="selectHpaOpt(1); proceedFromStep5();" style="cursor: pointer;">
+              <span class="track-key-badge">2</span>
+              <span style="font-size: 16px;">🛠️</span>
+              <div style="flex: 1;">
+                <div class="option-title">Configure autoscaling manually via kubectl</div>
+                <div class="option-desc">Export template manifests to customize scaling metrics, CPU/memory thresholds, and buffer headroom.</div>
+              </div>
+            </div>
+            <div class="option-card-row" id="hpa-card-2" onclick="selectHpaOpt(2); proceedFromStep5();" style="cursor: pointer;">
+              <span class="track-key-badge">3</span>
+              <span style="font-size: 16px;">⏭️</span>
+              <div style="flex: 1;">
+                <div class="option-title">Skip autoscaling configuration</div>
+                <div class="option-desc">Keep fixed worker pool replica count without horizontal dynamic scaling.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- OPTION 1 PROGRESS CHECKLIST -->
+          <div class="execution-card" id="exec-card-4" style="display: none;">
+            <div class="checklist-title">Applying autoscaling & capacity buffer...</div>
+            <div class="checklist-items" id="check-items-4"></div>
+            <div class="done-status" id="done-status-4" style="opacity: 0;">Done</div>
+            <div class="done-prompt" id="done-prompt-4" style="opacity: 0;">Autoscaling active! Now let's deploy the default Substrate WorkerPool.</div>
+          </div>
+
+          <!-- DECLARATIVE GITOPS MANIFEST DRAWER FOR STEP 5 -->
+          <div class="manifest-drawer" id="drawer-step-4" style="display: none;">
+            <div class="manifest-drawer-header" onclick="toggleManifestDrawer('drawer-step-4')">
+              <span><span></></span> Declarative Autoscaling & Buffer: <span style="color: #fff;">manifests/workerpool-autoscaling.yaml</span></span>
+              <button class="btn-copy-yaml" onclick="copyManifestYaml(event, 'drawer-step-4')">📋 Copy for GitOps</button>
+            </div>
+            <div class="manifest-code-content">apiVersion: autoscaling.k8s.io/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: workerpool-hpa
+  namespace: substrate-system
+spec:
+  scaleTargetRef:
+    apiVersion: substrate.ate.dev/v1
+    kind: WorkerPool
+    name: default-worker-pool
+  minReplicas: 10
+  maxReplicas: 100
+---
+apiVersion: buffer.gke.io/v1
+kind: CapacityBuffer
+metadata:
+  name: standby-worker-buffer
+spec:
+  standbyReplicas: 3</div>
+          </div>
+
+          <!-- OPTION 2 MANUAL BOX -->
+          <div class="command-box" id="hpa-manual-box" style="display: none;">
+            <div class="command-pill">🛠️ Manual Kubectl Autoscaling</div>
+            <div class="command-text" style="font-size: 11px;">kubectl apply -f manifests/workerpool-autoscaling.yaml</div>
+            <div style="font-size: 11px; color: var(--accent-yellow); margin-top: 6px;">
+              💡 Modify the HPA thresholds and standby buffer target, then apply the manifest.
+            </div>
+          </div>
+
+          <!-- OPTION 3 SKIP NOTIFICATION -->
+          <div class="scan-status-box" id="hpa-skip-box" style="display: none;">
+            <div class="scan-status-header">
+              <span>⏭️ Autoscaling Skipped</span>
+            </div>
+            <div class="scan-status-result">
+              Worker pool will run with fixed capacity without horizontal dynamic scaling.
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 6: Confirm & Deploy Substrate WorkerPool (NO PRE-SELECTION -> OPTION 2 IS SKIP) -->
+        <div class="step-screen" id="screen-5">
+          <div class="step-counter">Step 6 of 7</div>
+          <div class="step-heading">Confirm & Deploy Substrate WorkerPool</div>
+          <div class="step-description">Deploy the default Substrate WorkerPool into namespace [substrate-system] with pre-warmed agent sandboxes and microVM isolation.</div>
+
+          <div class="column-title">
+            <span>Select deployment option:</span>
+            <span style="font-size: 11px; color: var(--accent-cyan);">Press <kbd>1-2</kbd></span>
+          </div>
+
+          <div class="option-cards-container">
+            <div class="option-card-row" id="wp-card-0" onclick="selectWpOpt(0); proceedFromStep6();" style="cursor: pointer;">
+              <span class="track-key-badge">1</span>
+              <span style="font-size: 16px;">🚀</span>
+              <div style="flex: 1;">
+                <div class="option-title">Yes, deploy default Substrate WorkerPool [default-worker-pool] (Recommended)</div>
+                <div class="option-desc">Bootstraps 10 warm worker sandboxes with microVM isolation and instant actor attachment in [substrate-system].</div>
+              </div>
+            </div>
+            <div class="option-card-row" id="wp-card-1" onclick="selectWpOpt(1); proceedFromStep6();" style="cursor: pointer;">
+              <span class="track-key-badge">2</span>
+              <span style="font-size: 16px;">⏭️</span>
+              <div style="flex: 1;">
+                <div class="option-title">No, skip default WorkerPool deployment</div>
+                <div class="option-desc">Skip initial worker pool provisioning. You can create custom worker pools at any time via kubectl or atectl.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- OPTION 1 PROGRESS CHECKLIST -->
+          <div class="execution-card" id="exec-card-5" style="display: none;">
+            <div class="checklist-title">Deploying default Substrate WorkerPool...</div>
+            <div class="checklist-items" id="check-items-5"></div>
+            <div class="done-status" id="done-status-5" style="opacity: 0;">Done</div>
+            <div class="done-prompt" id="done-prompt-5" style="opacity: 0;">Default WorkerPool deployed! Moving to installation complete summary.</div>
+          </div>
+
+          <!-- DECLARATIVE GITOPS MANIFEST DRAWER FOR STEP 6 -->
+          <div class="manifest-drawer" id="drawer-step-5" style="display: none;">
+            <div class="manifest-drawer-header" onclick="toggleManifestDrawer('drawer-step-5')">
+              <span><span></></span> Declarative WorkerPool Manifest: <span style="color: #fff;">manifests/default-workerpool.yaml</span></span>
+              <button class="btn-copy-yaml" onclick="copyManifestYaml(event, 'drawer-step-5')">📋 Copy for GitOps</button>
+            </div>
+            <div class="manifest-code-content">apiVersion: substrate.ate.dev/v1
+kind: WorkerPool
+metadata:
+  name: default-worker-pool
+  namespace: substrate-system
+spec:
+  replicas: 10
+  computeClassName: agent-spot-ccc
+  isolation:
+    driver: gvisor-microvm
+  runtimeTemplate:
+    image: gcr.io/ate-platform/worker:v1</div>
+          </div>
+
+          <!-- OPTION 2 SKIP NOTIFICATION -->
+          <div class="scan-status-box" id="wp-skip-box" style="display: none;">
+            <div class="scan-status-header">
+              <span>⏭️ Default WorkerPool Skipped</span>
+            </div>
+            <div class="scan-status-result">
+              Default WorkerPool creation skipped. You can deploy worker pools at any time using 'atectl create workerpools' or YAML manifests.
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 7: Installation Complete (CELEBRATORY HERO + LIVE TEST PLAYGROUND + GITOPS NEXT STEPS) -->
+        <div class="step-screen" id="screen-6">
+          <div class="step-counter">Step 7 of 7</div>
+          <div class="step-heading">Installation Complete 🎉</div>
+          <div class="step-description">Your cluster is fully configured and ready to host low-latency AI agent workloads.</div>
+
+          <!-- Celebratory ASCII Logo & Pizzazz Hero Card -->
+          <div class="celebration-hero">
+            <div class="celebration-ascii-logo">
+<span class="ascii-line-1">    _    ____ _____ _   _ _____        ____  _   _ ____  ____ _____ ____     _  _____ _____ </span>
+<span class="ascii-line-2">   / \  / ___| ____| \ | |_   _|      / ___|| | | | __ )/ ___|_   _|  _ \   / \|_   _| ____|</span>
+<span class="ascii-line-3">  / _ \| |  _|  _| |  \| | | |        \___ \| | | |  _ \\___ \ | | | |_) | / _ \ | | |  _|  </span>
+<span class="ascii-line-4"> / ___ \ |_| | |___| |\  | | |         ___) | |_| | |_) |___) || | |  _ < / ___ \| | | |___ </span>
+<span class="ascii-line-5">/_/   \_\____|_____|_| \_| |_|        |____/ \___/|____/|____/ |_| |_| \_\_/   \_\_| |_____|</span>
+            </div>
+
+            <div class="celebration-title">⚡ High-Density MicroVM Runtime Active</div>
+            <div class="celebration-desc">
+              Worker pools are warm, sandboxes are pre-allocated, and your gateway is listening for agent turns.
+            </div>
+
+            <!-- 3 High-Impact Pizzazz Metrics Badges -->
+            <div class="celebration-metrics-grid">
+              <div class="celebration-metric-badge">
+                <span class="celebration-metric-icon">⚡</span>
+                <div>
+                  <div class="celebration-metric-text">&lt;50ms Cold Starts</div>
+                  <div class="celebration-metric-sub">Pre-warmed microVMs</div>
+                </div>
+              </div>
+              <div class="celebration-metric-badge">
+                <span class="celebration-metric-icon">🛡️</span>
+                <div>
+                  <div class="celebration-metric-text">gVisor MicroVMs</div>
+                  <div class="celebration-metric-sub">Hardware /dev/kvm isolated</div>
+                </div>
+              </div>
+              <div class="celebration-metric-badge">
+                <span class="celebration-metric-icon">📈</span>
+                <div>
+                  <div class="celebration-metric-text">10x Fleet Density</div>
+                  <div class="celebration-metric-sub">Zero idle CPU waste</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- LIVE TEST TURN PLAYGROUND (Plain-Text Y/N Prompt) -->
+          <div class="test-turn-container" id="test-turn-card">
+            <div class="test-turn-header" id="test-turn-header" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+              <span class="test-turn-badge">⚡ LIVE VERIFICATION PLAYGROUND</span>
+              <div id="test-turn-prompt-row" style="font-size: 12px; color: var(--text-primary);">
+                Run live cold-start verification test turn on warm microVM? <strong style="color: var(--accent-cyan);">[y/n]</strong> <span style="color: var(--text-muted); font-size: 11px;">("y" = yes, "n" = no)</span>
+              </div>
+            </div>
+            <div class="test-turn-console" id="test-turn-console" style="display: none;">
+              <div class="test-turn-line" id="tt-step-1"><span class="tt-icon">⠋</span> <span class="tt-msg">Allocating warm microVM from default-worker-pool...</span> <span class="tt-time">14ms</span></div>
+              <div class="test-turn-line" id="tt-step-2" style="opacity: 0.3;"><span class="tt-icon">○</span> <span class="tt-msg">Injecting prompt payload {"role": "agent", "task": "hello-world"}...</span> <span class="tt-time">22ms</span></div>
+              <div class="test-turn-line" id="tt-step-3" style="opacity: 0.3;"><span class="tt-icon">○</span> <span class="tt-msg">Executing in sandboxed microVM (0.01 vCPU, zero cold-start delay)...</span> <span class="tt-time">12ms</span></div>
+              <div class="test-turn-result" id="tt-result" style="display: none;">
+                <div class="tt-banner">✅ Agent Turn Complete: 48ms total round-trip! Sub-100ms latency verified.</div>
+                <div class="tt-output">{"status": "ready", "worker": "default-worker-pool-8f4b", "message": "Agent Substrate microVM is warm and listening."}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Next Steps with Runnable Code -->
+          <div class="next-steps-container">
+            <div class="next-step-box" style="border-color: rgba(112, 214, 255, 0.4); background: #0c1018;">
+              <div class="next-step-title" style="color: var(--accent-cyan);">🔌 0. Connect your local workstation to the Substrate Gateway:</div>
+              <div class="code-block"># Port-forward the Substrate Gateway from your cluster to localhost
+kubectl port-forward svc/substrate-gateway 8080:8080 -n substrate-system
+
+# Configure local atectl CLI context
+export SUBSTRATE_GATEWAY=localhost:8080</div>
+            </div>
+
+            <div class="next-step-box">
+              <div class="next-step-title">🤖 1. Get started by deploying your first actor session:</div>
+              <div class="code-block"># Install the developer CLI
+curl -sSL https://ate.dev/atectl | sh
+
+# Deploy your first AI agent actor container from standard template
+atectl actor create my-first-actor \
+  --template=default-agent \
+  --workerpool=default-worker-pool
+
+# Send an interactive prompt to your running actor
+atectl actor execute my-first-actor \
+  --prompt="Analyze recent logs and report status"</div>
+            </div>
+
+            <div class="next-step-box">
+              <div class="next-step-title">📊 2. Inspect your standby workers at any time:</div>
+              <div class="code-block"># Inspect live worker fleet status & standby buffers
+atectl get workerpools
+
+# Stream live data plane turn execution and pause/resume telemetry
+atectl logs workerpool/default-worker-pool --follow</div>
+            </div>
+          </div>
+
+          <!-- Teardown & Uninstall Safety Footnote -->
+          <div class="cleanup-footnote">
+            <span class="cleanup-icon">💡</span>
+            <span>Need to tear down or uninstall? Clean up anytime with: <code class="inline-code">kubectl delete -f manifests/substrate-control-plane.yaml</code> or <code class="inline-code">atectl uninstall</code></span>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Persistent Bottom TUI Keymap Dock Bar -->
+    <div class="bottom-status-bar" id="bottom-status-bar">
+      <div class="status-legend" id="keymap-legend"></div>
+      <div class="status-step-badge" id="keymap-step-badge">Step 1 of 7</div>
+    </div>
+
+  </div>
+
+  <!-- GLOBAL HELP & DOCUMENTATION MODAL OVERLAY -->
+  <div class="modal-backdrop" id="modal-help" onclick="if(event.target === this) toggleHelpModal()">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <span class="modal-title">⚡ AGENT SUBSTRATE — SHORTCUTS & DOCUMENTATION</span>
+        <button class="modal-close-btn" onclick="toggleHelpModal()">✕ Close <kbd>Esc</kbd></button>
+      </div>
+
+      <!-- KEYBOARD SHORTCUTS SECTION -->
+      <div>
+        <div class="modal-section-title">⌨️ Keyboard Navigation Shortcuts:</div>
+        <div class="shortcuts-grid">
+          <div class="shortcut-row"><span class="shortcut-key-badge">Enter ↵</span> <span>Proceed to next step / Confirm</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">Space</span> <span>Toggle option or button</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">b / ⌫</span> <span>Go back to previous step</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">1 - 4</span> <span>Instant direct option selection</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">↑ / ↓</span> <span>Navigate items & lists</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">j / k</span> <span>Vim-style up / down navigation</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">Tab</span> <span>Cycle focus (Shift+Tab for prev)</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">m</span> <span>Expand / Collapse YAML drawer</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">c</span> <span>Copy YAML manifest to clipboard</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">t</span> <span>Run live test turn (Step 7)</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">0</span> <span>Return to Welcome Screen</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge">? / F1</span> <span>Toggle this Help & Docs modal</span></div>
+        </div>
+      </div>
+
+      <!-- DOCUMENTATION LINKS SECTION -->
+      <div>
+        <div class="modal-section-title">📖 Documentation & Developer References:</div>
+        <div class="docs-list">
+          <a class="doc-link-item" href="https://github.com/agent-substrate/substrate" target="_blank">
+            <div>
+              <div class="doc-link-title">🌐 Agent Substrate GitHub Repository</div>
+              <div class="doc-link-desc">Open-source codebase, architecture diagrams, and release changelogs.</div>
+            </div>
+            <span>↗</span>
+          </a>
+          <a class="doc-link-item" href="../../docs/blog/agent-substrate-onboarding-walkthrough.md" target="_blank">
+            <div>
+              <div class="doc-link-title">🛠️ Production Onboarding & SRE Runbook</div>
+              <div class="doc-link-desc">Comprehensive step-by-step engineering walkthrough and manifest reference.</div>
+            </div>
+            <span>↗</span>
+          </a>
+          <a class="doc-link-item" href="../../docs/dev/code-layout.md" target="_blank">
+            <div>
+              <div class="doc-link-title">📐 Architecture & Code Layout Guide</div>
+              <div class="doc-link-desc">Deep-dive into ateapi, atelet, atenet, and the pierceable abstraction layer.</div>
+            </div>
+            <span>↗</span>
+          </a>
+          <a class="doc-link-item" href="../../docs/roadmap.md" target="_blank">
+            <div>
+              <div class="doc-link-title">⚡ MicroVM Sandboxing & Performance Roadmap</div>
+              <div class="doc-link-desc">Benchmarks for sub-100ms cold starts and hardware nested virtualization (/dev/kvm).</div>
+            </div>
+            <span>↗</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- GLOBAL SLASH COMMANDS SECTION -->
+      <div>
+        <div class="modal-section-title">💻 Built-In Slash Commands:</div>
+        <div class="shortcuts-grid">
+          <div class="shortcut-row"><span class="shortcut-key-badge" style="color: var(--accent-green);">/help</span> <span>Open shortcuts and documentation modal</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge" style="color: var(--accent-green);">/status</span> <span>Display active cluster context & controller probe</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge" style="color: var(--accent-green);">/yaml</span> <span>Expand declarative GitOps manifest drawer</span></div>
+          <div class="shortcut-row"><span class="shortcut-key-badge" style="color: var(--accent-green);">/back</span> <span>Step back to previous onboarding screen</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentStep = 0;
+    const totalSteps = 7;
+    let selectedTrackIdx = 0;
+    let selectedClusterIdx = 0;
+    let selectedNodepoolIdx = -1;
+    let selectedHpaIdx = -1;
+    let selectedWpIdx = -1;
+    let gkeAgreementAccepted = true;
+
+    const clustersData = [
+      { provider: "Google Kubernetes Engine (GKE v1.35.1)", region: "us-central1 (Iowa)", capacity: "12 ready nodes (Hardware virtualization ready)", probe: "[substrate-system] ➔ Not Installed (Clean Ready)", isGke: true },
+      { provider: "Amazon Elastic Kubernetes Service (EKS v1.35.0)", region: "us-east-1 (N. Virginia)", capacity: "8 ready nodes (Nitro Enclaves enabled)", probe: "[substrate-system] ➔ Not Installed (Clean Ready)", isGke: false },
+      { provider: "Azure Kubernetes Service (AKS v1.35.0)", region: "eastus (Virginia)", capacity: "6 ready nodes (Hyper-V isolation ready)", probe: "[substrate-system] ➔ Not Installed (Clean Ready)", isGke: false },
+      { provider: "Kind Local Sandbox (Kubernetes v1.35.0)", region: "local (localhost)", capacity: "3 ready nodes (Docker container sandbox)", probe: "[substrate-system] ➔ Not Installed (Clean Ready)", isGke: false }
+    ];
+
+    const cccProgressItems = [
+      "Applying Custom Compute Class manifest [agent-spot-ccc] (n2-standard-48, KVM enabled)",
+      "Configuring Spot fallback & capacity reservation",
+      "Compatible node pool ready for high-density agent sandboxing"
+    ];
+
+    const stepChecklistItems = {
+      0: [
+        "Container runtime detected (Docker / Podman / Containerd)",
+        "Python 3.10+ runtime available",
+        "Kubectl command utility ready in PATH"
+      ],
+      1: [
+        "API Reachability: Connected to active context",
+        "Provider & Region Compatibility: Kubernetes v1.28+ verified",
+        "Clean cluster ready for Substrate install"
+      ],
+      2: [
+        "Applying CustomResourceDefinitions (WorkerPool, ActorTemplate, Actor)",
+        "Deploying Valkey Metadata & State Registry",
+        "Bootstrapping Substrate Gateway & API Server (listening on :8080)",
+        "Initializing eBPF network routing controller in [substrate-system]"
+      ],
+      3: cccProgressItems,
+      4: [
+        "Applying HorizontalPodAutoscaler (OneHPA: minReplicas=10, maxReplicas=100)",
+        "Applying CapacityBuffer (fixed-replica-buffer: 3 standby replicas via buffer.gke.io/standby-capacity)",
+        "Standby buffer verified: Ready for instant (<100ms) agent session injection"
+      ],
+      5: [
+        "Resolving worker sandbox image (gcr.io/ate-platform/worker:v1)",
+        "Deploying WorkerPool CR [default-worker-pool] in namespace [substrate-system]",
+        "Provisioning 10 warm worker sandboxes (3 standby buffer replicas active)",
+        "WorkerPool is ready: 10/10 warm pods listening for agent execution turns"
+      ],
+      6: [
+        "Substrate Control Plane: Healthy (Gateway :8080 active)",
+        "Worker Fleet: 10 warm microVM sandboxes listening",
+        "Standby CapacityBuffer: 3 standby pods pre-warmed (<100ms cold start)",
+        "GKE Cluster: Ready for high-density AI agent turns"
+      ]
+    };
+
+    const spinnerChars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let activeAnimationIntervals = [];
+
+    function clearAllAnimations() {
+      activeAnimationIntervals.forEach(clearInterval);
+      activeAnimationIntervals = [];
+    }
+
+    function runNodePoolScanAnimation(callback) {
+      const scanIcon = document.getElementById('node-scan-icon');
+      const scanTitle = document.getElementById('node-scan-title');
+      const scanResult = document.getElementById('node-scan-result');
+      const optContainer = document.getElementById('nodepool-options-container');
+      if (!scanIcon || !scanTitle) return;
+
+      // Phase 1: Active Scanning State
+      if (optContainer) optContainer.style.display = 'none';
+      if (scanResult) scanResult.style.display = 'none';
+      scanIcon.textContent = '⠋';
+      scanIcon.style.color = 'var(--accent-cyan)';
+      scanTitle.textContent = 'Scanning existing cluster node pools across zones for hardware nested virtualization (/dev/kvm)...';
+
+      let spinIdx = 0;
+      const spinTimer = setInterval(() => {
+        spinIdx = (spinIdx + 1) % spinnerChars.length;
+        scanIcon.textContent = spinnerChars[spinIdx];
+      }, 70);
+      activeAnimationIntervals.push(spinTimer);
+
+      // Phase 2: Scan Completes -> Show Status: None Found
+      setTimeout(() => {
+        clearInterval(spinTimer);
+        scanIcon.textContent = '⚠️';
+        scanIcon.style.color = 'var(--accent-yellow)';
+        scanTitle.textContent = 'Cluster node pool scan complete (0 / 12 nodes compatible)';
+        if (scanResult) {
+          scanResult.style.display = 'block';
+          scanResult.style.animation = 'fadeIn 0.3s ease-out';
+          scanResult.innerHTML = '⚠️ <strong>Scan Result:</strong> No existing node pool detected with hardware nested virtualization (<code>/dev/kvm</code>) enabled. Sandboxed microVM execution requires a compatible node pool.';
+        }
+
+        // Phase 3: Progressive Disclosure -> Present Options after user absorbs diagnosis
+        setTimeout(() => {
+          if (callback) callback();
+        }, 750);
+      }, 950);
+    }
+
+    function animateChecklistForStep(stepIdx) {
+      clearAllAnimations();
+      const container = document.getElementById(`check-items-${stepIdx}`);
+      const doneStatus = document.getElementById(`done-status-${stepIdx}`);
+      const donePrompt = document.getElementById(`done-prompt-${stepIdx}`);
+      
+      if (!container) return;
+
+      let items = stepChecklistItems[stepIdx] || [];
+      container.innerHTML = '';
+
+      if (doneStatus) doneStatus.style.opacity = '0';
+      if (donePrompt) donePrompt.style.opacity = '0';
+
+      // Create placeholders
+      items.forEach((itemText, i) => {
+        const line = document.createElement('div');
+        line.className = 'check-line pending';
+        line.id = `step-${stepIdx}-item-${i}`;
+        line.innerHTML = `<span class="check-icon pending" id="step-${stepIdx}-icon-${i}">○</span> <span>${itemText}</span>`;
+        container.appendChild(line);
+      });
+
+      // Stagger sequential item resolution with slower deliberate pace (~350ms per item)
+      let currentItemIdx = 0;
+      let spinnerIdx = 0;
+
+      function startItemSpinner(itemIdx) {
+        if (itemIdx >= items.length) {
+          if (doneStatus) doneStatus.style.opacity = '1';
+          if (donePrompt) donePrompt.style.opacity = '1';
+          return;
+        }
+
+        const line = document.getElementById(`step-${stepIdx}-item-${itemIdx}`);
+        const icon = document.getElementById(`step-${stepIdx}-icon-${itemIdx}`);
+        if (!line || !icon) return;
+
+        line.className = 'check-line running';
+        icon.className = 'check-icon running';
+
+        const spinInterval = setInterval(() => {
+          spinnerIdx = (spinnerIdx + 1) % spinnerChars.length;
+          icon.textContent = spinnerChars[spinnerIdx];
+        }, 60);
+        activeAnimationIntervals.push(spinInterval);
+
+        // Resolve to green checkmark after deliberate delay (320ms)
+        setTimeout(() => {
+          clearInterval(spinInterval);
+          icon.textContent = '✓';
+          icon.className = 'check-icon done';
+          line.className = 'check-line done';
+          startItemSpinner(itemIdx + 1);
+        }, 320);
+      }
+
+      startItemSpinner(0);
+    }
+
+    const INTRO_TEXT = "Welcome to Agent Substrate — the high-density execution runtime with a pierceable abstraction for Platform Engineers and AI Application Developers.";
+    let typeIdx = 0;
+    let typewriterTimeout = null;
+
+    function runTypewriter() {
+      const box = document.getElementById('typewriter-box');
+      if (!box) return;
+      if (typewriterTimeout) clearTimeout(typewriterTimeout);
+      box.innerHTML = '';
+      typeIdx = 0;
+      function step() {
+        if (typeIdx < INTRO_TEXT.length) {
+          box.innerHTML = INTRO_TEXT.substring(0, typeIdx + 1) + '<span style="color: var(--accent-cyan); font-weight: bold;">▌</span>';
+          typeIdx++;
+          typewriterTimeout = setTimeout(step, 18);
+        } else {
+          box.innerHTML = INTRO_TEXT;
+        }
+      }
+      step();
+    }
+
+    function showWelcomeScreen() {
+      clearAllAnimations();
+      document.getElementById('view-welcome').classList.add('active');
+      document.getElementById('view-wizard').classList.remove('active');
+      runTypewriter();
+      updateKeymapFooter();
+    }
+
+    function startWizardFromWelcome() {
+      document.getElementById('view-welcome').classList.remove('active');
+      document.getElementById('view-wizard').classList.add('active');
+      goToStep(0);
+    }
+
+    function selectTrack(idx) {
+      selectedTrackIdx = idx;
+      for (let i = 0; i < 2; i++) {
+        const card = document.getElementById(`track-${i}`);
+        if (card) {
+          if (i === idx) card.classList.add('selected');
+          else card.classList.remove('selected');
+        }
+      }
+    }
+
+    function toggleManifestDrawer(drawerId) {
+      const drawer = document.getElementById(drawerId);
+      if (!drawer) return;
+      const content = drawer.querySelector('.manifest-code-content');
+      if (!content) return;
+      if (content.style.display === 'block') {
+        content.style.display = 'none';
+      } else {
+        content.style.display = 'block';
+        content.style.animation = 'fadeIn 0.25s ease-out';
+      }
+    }
+
+    function copyManifestYaml(event, drawerId) {
+      if (event) event.stopPropagation();
+      const drawer = document.getElementById(drawerId);
+      if (!drawer) return;
+      const content = drawer.querySelector('.manifest-code-content');
+      const btn = drawer.querySelector('.btn-copy-yaml');
+      if (!content || !btn) return;
+
+      navigator.clipboard.writeText(content.textContent).then(() => {
+        const originalText = btn.textContent;
+        btn.textContent = '✓ Copied for GitOps!';
+        btn.style.color = 'var(--accent-green)';
+        btn.style.borderColor = 'var(--accent-green)';
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.style.color = '';
+          btn.style.borderColor = '';
+        }, 1800);
+      });
+    }
+
+    let isTestTurnRunning = false;
+    let testTurnRunCount = 0;
+    const testTurnScenarios = [
+      { alloc: '14ms', dispatch: '22ms', exec: '12ms', total: '48ms', worker: 'default-worker-pool-8f4b' },
+      { alloc: '11ms', dispatch: '18ms', exec: '10ms', total: '39ms', worker: 'default-worker-pool-4a2c' },
+      { alloc: '13ms', dispatch: '20ms', exec: '11ms', total: '44ms', worker: 'default-worker-pool-9e7f' },
+      { alloc: '12ms', dispatch: '19ms', exec: '11ms', total: '42ms', worker: 'default-worker-pool-1d3a' }
+    ];
+
+    function runLiveTestTurn() {
+      if (isTestTurnRunning) return;
+      isTestTurnRunning = true;
+
+      const scenario = testTurnScenarios[testTurnRunCount % testTurnScenarios.length];
+      testTurnRunCount++;
+
+      const consoleBox = document.getElementById('test-turn-console');
+      const promptRow = document.getElementById('test-turn-prompt-row');
+      const step1 = document.getElementById('tt-step-1');
+      const step2 = document.getElementById('tt-step-2');
+      const step3 = document.getElementById('tt-step-3');
+      const result = document.getElementById('tt-result');
+
+      if (promptRow) {
+        promptRow.innerHTML = `
+          <span style="color: var(--accent-green); font-weight: bold;">⚡ Running live cold-start verification...</span>
+        `;
+      }
+
+      if (!consoleBox) return;
+      consoleBox.style.display = 'flex';
+      consoleBox.style.animation = 'fadeIn 0.3s ease-out';
+
+      if (step1) {
+        step1.style.opacity = '1';
+        step1.querySelector('.tt-icon').textContent = '⠋';
+        step1.querySelector('.tt-icon').style.color = 'var(--accent-cyan)';
+        step1.querySelector('.tt-time').textContent = scenario.alloc;
+      }
+      if (step2) {
+        step2.style.opacity = '0.3';
+        step2.querySelector('.tt-icon').textContent = '○';
+        step2.querySelector('.tt-time').textContent = scenario.dispatch;
+      }
+      if (step3) {
+        step3.style.opacity = '0.3';
+        step3.querySelector('.tt-icon').textContent = '○';
+        step3.querySelector('.tt-time').textContent = scenario.exec;
+      }
+      if (result) result.style.display = 'none';
+
+      // Stage 1: MicroVM Allocation
+      setTimeout(() => {
+        if (step1) {
+          step1.querySelector('.tt-icon').textContent = '✓';
+          step1.querySelector('.tt-icon').style.color = 'var(--accent-green)';
+        }
+        if (step2) {
+          step2.style.opacity = '1';
+          step2.querySelector('.tt-icon').textContent = '⠋';
+          step2.querySelector('.tt-icon').style.color = 'var(--accent-cyan)';
+        }
+
+        // Stage 2: Prompt Dispatch
+        setTimeout(() => {
+          if (step2) {
+            step2.querySelector('.tt-icon').textContent = '✓';
+            step2.querySelector('.tt-icon').style.color = 'var(--accent-green)';
+          }
+          if (step3) {
+            step3.style.opacity = '1';
+            step3.querySelector('.tt-icon').textContent = '⠋';
+            step3.querySelector('.tt-icon').style.color = 'var(--accent-cyan)';
+          }
+
+          // Stage 3: Execution Response
+          setTimeout(() => {
+            if (step3) {
+              step3.querySelector('.tt-icon').textContent = '✓';
+              step3.querySelector('.tt-icon').style.color = 'var(--accent-green)';
+            }
+            if (result) {
+              result.style.display = 'block';
+              result.style.animation = 'fadeIn 0.3s ease-out';
+              result.querySelector('.tt-banner').textContent = `✅ Agent Turn Complete: ${scenario.total} total round-trip! Sub-100ms latency verified.`;
+              result.querySelector('.tt-output').textContent = `{"status": "ready", "worker": "${scenario.worker}", "latency": "${scenario.total}", "message": "Agent Substrate microVM is warm and listening."}`;
+            }
+            if (promptRow) {
+              promptRow.innerHTML = `
+                <span style="color: var(--accent-green); font-weight: bold;">✓ Live cold-start verified (${scenario.total})</span> • <span style="color: var(--text-muted); font-size: 11px;">("y" = re-run, "n" = clear)</span>
+              `;
+            }
+            isTestTurnRunning = false;
+          }, 320);
+        }, 320);
+      }, 320);
+    }
+
+    function skipLiveTestTurn() {
+      const consoleBox = document.getElementById('test-turn-console');
+      if (consoleBox) consoleBox.style.display = 'none';
+      const promptRow = document.getElementById('test-turn-prompt-row');
+      if (promptRow) {
+        promptRow.innerHTML = `
+          <span style="color: var(--text-muted);">⏭️ Verification skipped • Ready for production workloads ("y" = run test turn)</span>
+        `;
+      }
+    }
+
+    function selectCluster(idx) {
+      selectedClusterIdx = idx;
+      for (let i = 0; i < 4; i++) {
+        const card = document.getElementById(`cluster-card-${i}`);
+        if (card) {
+          if (i === idx) card.classList.add('selected');
+          else card.classList.remove('selected');
+        }
+      }
+      const data = clustersData[idx];
+      document.getElementById('cluster-line-provider').innerHTML = `<strong>Provider:</strong> ${data.provider} <span style="color: var(--accent-green);">[Verified ✓]</span>`;
+      document.getElementById('cluster-line-region').innerHTML = `<strong>Region:</strong> ${data.region}`;
+      document.getElementById('cluster-line-capacity').innerHTML = `<strong>Capacity:</strong> ${data.capacity}`;
+      document.getElementById('cluster-line-probe').innerHTML = `<strong>Substrate Probe:</strong> ${data.probe}`;
+
+      // Update Top Header Cluster Badge
+      const headerBadge = document.getElementById('header-cluster-badge');
+      const headerText = document.getElementById('header-cluster-text');
+      if (headerBadge && headerText) {
+        const cName = idx === 0 ? "gke_enterprise_us-central1_prod" : (idx === 1 ? "aws-eks-production" : (idx === 2 ? "azure-aks-agent-fleet" : "kind-sandbox"));
+        headerText.textContent = `Connected: ${cName} (${data.region})`;
+        headerBadge.style.display = 'flex';
+      }
+
+      // Re-trigger live probe check animation
+      animateChecklistForStep(1);
+    }
+
+    function proceedFromStep4() {
+      if (selectedNodepoolIdx === -1) {
+        selectNodepoolOpt(0);
+      }
+      goToStep(4);
+    }
+
+    function proceedFromStep5() {
+      if (selectedHpaIdx === -1) {
+        selectHpaOpt(0);
+      }
+      goToStep(5);
+    }
+
+    function proceedFromStep6() {
+      if (selectedWpIdx === -1) {
+        selectWpOpt(0);
+      }
+      goToStep(6);
+    }
+
+    function selectNodepoolOpt(idx) {
+      selectedNodepoolIdx = idx;
+      for (let i = 0; i < 3; i++) {
+        const card = document.getElementById(`nodepool-card-${i}`);
+        if (card) {
+          if (i === idx) card.classList.add('selected');
+          else card.classList.remove('selected');
+        }
+      }
+
+      const execCard = document.getElementById('exec-card-3');
+      const drawer = document.getElementById('drawer-step-3');
+      const manualBox = document.getElementById('nodepool-manual-box');
+      const nextBtn = document.getElementById('btn-next-step-3');
+
+      if (idx === 0) {
+        // Option 1: Automatic CCC -> Show progress checklist & GitOps drawer
+        if (manualBox) manualBox.style.display = 'none';
+        if (execCard) {
+          execCard.style.display = 'block';
+          execCard.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (drawer) {
+          drawer.style.display = 'block';
+          drawer.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.style.opacity = '1';
+          nextBtn.style.cursor = 'pointer';
+          nextBtn.innerHTML = 'Configure Autoscaling <kbd>Enter ↵</kbd> →';
+        }
+        animateChecklistForStep(3);
+      } else if (idx === 1) {
+        // Option 2: Manual via gcloud -> Show command box ONLY
+        if (execCard) execCard.style.display = 'none';
+        if (drawer) drawer.style.display = 'none';
+        if (manualBox) {
+          manualBox.style.display = 'block';
+          manualBox.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.style.opacity = '1';
+          nextBtn.style.cursor = 'pointer';
+          nextBtn.innerHTML = 'Proceed to Autoscaling <kbd>Enter ↵</kbd> →';
+        }
+      } else if (idx === 2) {
+        // Option 3: Choose different cluster -> Return to Step 2
+        goToStep(1);
+      }
+    }
+
+    function selectHpaOpt(idx) {
+      selectedHpaIdx = idx;
+      for (let i = 0; i < 3; i++) {
+        const card = document.getElementById(`hpa-card-${i}`);
+        if (card) {
+          if (i === idx) card.classList.add('selected');
+          else card.classList.remove('selected');
+        }
+      }
+
+      const execCard = document.getElementById('exec-card-4');
+      const drawer = document.getElementById('drawer-step-4');
+      const manualBox = document.getElementById('hpa-manual-box');
+      const skipBox = document.getElementById('hpa-skip-box');
+      const nextBtn = document.getElementById('btn-next-step-4');
+
+      if (idx === 0) {
+        // Option 1: Automatic HPA + Buffer -> Show progress checklist & GitOps drawer
+        if (manualBox) manualBox.style.display = 'none';
+        if (skipBox) skipBox.style.display = 'none';
+        if (execCard) {
+          execCard.style.display = 'block';
+          execCard.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (drawer) {
+          drawer.style.display = 'block';
+          drawer.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.style.opacity = '1';
+          nextBtn.style.cursor = 'pointer';
+          nextBtn.innerHTML = 'Deploy WorkerPool <kbd>Enter ↵</kbd> →';
+        }
+        animateChecklistForStep(4);
+      } else if (idx === 1) {
+        // Option 2: Manual via kubectl
+        if (execCard) execCard.style.display = 'none';
+        if (skipBox) skipBox.style.display = 'none';
+        if (drawer) drawer.style.display = 'none';
+        if (manualBox) {
+          manualBox.style.display = 'block';
+          manualBox.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.style.opacity = '1';
+          nextBtn.style.cursor = 'pointer';
+          nextBtn.innerHTML = 'Deploy WorkerPool <kbd>Enter ↵</kbd> →';
+        }
+      } else if (idx === 2) {
+        // Option 3: Skip autoscaling
+        if (execCard) execCard.style.display = 'none';
+        if (manualBox) manualBox.style.display = 'none';
+        if (drawer) drawer.style.display = 'none';
+        if (skipBox) {
+          skipBox.style.display = 'block';
+          skipBox.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.style.opacity = '1';
+          nextBtn.style.cursor = 'pointer';
+          nextBtn.innerHTML = 'Deploy WorkerPool <kbd>Enter ↵</kbd> →';
+        }
+      }
+    }
+
+    function selectWpOpt(idx) {
+      selectedWpIdx = idx;
+      for (let i = 0; i < 2; i++) {
+        const card = document.getElementById(`wp-card-${i}`);
+        if (card) {
+          if (i === idx) card.classList.add('selected');
+          else card.classList.remove('selected');
+        }
+      }
+
+      const execCard = document.getElementById('exec-card-5');
+      const drawer = document.getElementById('drawer-step-5');
+      const skipBox = document.getElementById('wp-skip-box');
+      const nextBtn = document.getElementById('btn-next-step-5');
+
+      if (idx === 0) {
+        // Option 1: Yes, deploy default -> Show progress checklist & GitOps drawer
+        if (skipBox) skipBox.style.display = 'none';
+        if (execCard) {
+          execCard.style.display = 'block';
+          execCard.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (drawer) {
+          drawer.style.display = 'block';
+          drawer.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.style.opacity = '1';
+          nextBtn.style.cursor = 'pointer';
+          nextBtn.innerHTML = 'Complete Installation <kbd>Enter ↵</kbd> →';
+        }
+        animateChecklistForStep(5);
+      } else if (idx === 1) {
+        // Option 2: No, skip default
+        if (execCard) execCard.style.display = 'none';
+        if (drawer) drawer.style.display = 'none';
+        if (skipBox) {
+          skipBox.style.display = 'block';
+          skipBox.style.animation = 'fadeIn 0.3s ease-out';
+        }
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.style.opacity = '1';
+          nextBtn.style.cursor = 'pointer';
+          nextBtn.innerHTML = 'Complete Installation <kbd>Enter ↵</kbd> →';
+        }
+      }
+    }
+
+    function goToStep(idx) {
+      if (idx < 0 || idx >= totalSteps) return;
+      currentStep = idx;
+
+      document.getElementById('view-welcome').classList.remove('active');
+      document.getElementById('view-wizard').classList.add('active');
+
+      const headerBadge = document.getElementById('header-cluster-badge');
+      if (headerBadge) {
+        if (currentStep >= 1) {
+          headerBadge.style.display = 'flex';
+        } else {
+          headerBadge.style.display = 'none';
+        }
+      }
+
+      for (let i = 0; i < totalSteps; i++) {
+        const navItem = document.getElementById(`nav-step-${i}`);
+        const iconSpan = navItem.querySelector('.step-icon');
+        navItem.className = 'step-item';
+
+        if (i < currentStep) {
+          navItem.classList.add('completed');
+          iconSpan.textContent = '✓';
+        } else if (i === currentStep) {
+          navItem.classList.add('active');
+          iconSpan.textContent = (i + 1);
+        } else {
+          iconSpan.textContent = (i + 1);
+        }
+
+        const screen = document.getElementById(`screen-${i}`);
+        if (screen) {
+          if (i === currentStep) screen.classList.add('active');
+          else screen.classList.remove('active');
+        }
+      }
+
+      const fillPct = Math.round(((currentStep + 1) / totalSteps) * 100);
+      document.getElementById('progress-fill').style.width = `${fillPct}%`;
+      document.getElementById('sidebar-count').textContent = `${currentStep} of ${totalSteps} steps`;
+
+      // Progressive disclosure handling
+      if (currentStep === 3) {
+        // Step 4: Reset state
+        selectedNodepoolIdx = -1;
+        for (let i = 0; i < 3; i++) {
+          const card = document.getElementById(`nodepool-card-${i}`);
+          if (card) card.classList.remove('selected');
+        }
+        const optContainer = document.getElementById('nodepool-options-container');
+        const execCard = document.getElementById('exec-card-3');
+        const drawer = document.getElementById('drawer-step-3');
+        const manualBox = document.getElementById('nodepool-manual-box');
+        const nextBtn = document.getElementById('btn-next-step-3');
+
+        if (optContainer) optContainer.style.display = 'none';
+        if (execCard) execCard.style.display = 'none';
+        if (drawer) drawer.style.display = 'none';
+        if (manualBox) manualBox.style.display = 'none';
+
+        // Run scanner animation first
+        runNodePoolScanAnimation(() => {
+          if (optContainer) {
+            optContainer.style.display = 'flex';
+            optContainer.style.animation = 'fadeIn 0.3s ease-out';
+          }
+        });
+      } else if (currentStep === 4) {
+        // Step 5: Reset state (no pre-selection)
+        selectedHpaIdx = -1;
+        for (let i = 0; i < 3; i++) {
+          const card = document.getElementById(`hpa-card-${i}`);
+          if (card) card.classList.remove('selected');
+        }
+        const execCard = document.getElementById('exec-card-4');
+        const drawer = document.getElementById('drawer-step-4');
+        const manualBox = document.getElementById('hpa-manual-box');
+        const skipBox = document.getElementById('hpa-skip-box');
+        if (execCard) execCard.style.display = 'none';
+        if (drawer) drawer.style.display = 'none';
+        if (manualBox) manualBox.style.display = 'none';
+        if (skipBox) skipBox.style.display = 'none';
+      } else if (currentStep === 5) {
+        // Step 6: Reset state (no pre-selection)
+        selectedWpIdx = -1;
+        for (let i = 0; i < 2; i++) {
+          const card = document.getElementById(`wp-card-${i}`);
+          if (card) card.classList.remove('selected');
+        }
+        const execCard = document.getElementById('exec-card-5');
+        const drawer = document.getElementById('drawer-step-5');
+        const skipBox = document.getElementById('wp-skip-box');
+        if (execCard) execCard.style.display = 'none';
+        if (drawer) drawer.style.display = 'none';
+        if (skipBox) skipBox.style.display = 'none';
+      } else {
+        animateChecklistForStep(currentStep);
+      }
+
+      updateKeymapFooter();
+    }
+
+    function toggleHelpModal() {
+      const modal = document.getElementById('modal-help');
+      if (!modal) return;
+      modal.classList.toggle('active');
+    }
+
+    // Enforce Dynamic Terminal Width Calculation & Strict Responsive Wrapping
+    function handleTerminalResize() {
+      const terminalWin = document.querySelector('.terminal-window');
+      if (!terminalWin) return;
+      const termWidth = terminalWin.clientWidth;
+      const sideBySide = document.querySelector('.cluster-side-by-side');
+      if (sideBySide) {
+        if (termWidth < 860) {
+          sideBySide.style.gridTemplateColumns = 'minmax(0, 1fr)';
+        } else {
+          sideBySide.style.gridTemplateColumns = 'minmax(0, 1fr) minmax(0, 1fr)';
+        }
+      }
+    }
+
+    window.addEventListener('resize', handleTerminalResize);
+
+    window.addEventListener('DOMContentLoaded', () => {
+      runTypewriter();
+      handleTerminalResize();
+      updateKeymapFooter();
+    });
+
+    function updateKeymapFooter() {
+      const legend = document.getElementById('keymap-legend');
+      const badge = document.getElementById('keymap-step-badge');
+      if (!legend || !badge) return;
+
+      const welcomeView = document.getElementById('view-welcome');
+      const isWelcome = welcomeView && welcomeView.classList.contains('active');
+
+      if (isWelcome) {
+        badge.innerText = "Welcome";
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="startWizardFromWelcome()"><kbd>Enter ↵</kbd> Begin Setup</span>
+          <span class="keymap-action" onclick="selectTrack(0); startWizardFromWelcome();"><kbd>1</kbd> Quickstart</span>
+          <span class="keymap-action" onclick="selectTrack(1); startWizardFromWelcome();"><kbd>2</kbd> Advanced</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+        return;
+      }
+
+      badge.innerText = `Step ${currentStep + 1} of ${totalSteps}`;
+
+      if (currentStep === 0) {
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="goToStep(1)"><kbd>Enter ↵</kbd> Next: Connect Cluster</span>
+          <span class="keymap-action" onclick="showWelcomeScreen()"><kbd>b</kbd> Back</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+      } else if (currentStep === 1) {
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="goToStep(2)"><kbd>Enter ↵</kbd> Next: Turn on Substrate</span>
+          <span class="keymap-action" style="color: var(--accent-cyan);" onclick="selectCluster(0); goToStep(2);"><kbd>1-4</kbd> Pick & Advance</span>
+          <span class="keymap-action"><kbd>↑/↓</kbd> Select</span>
+          <span class="keymap-action" onclick="goToStep(0)"><kbd>b</kbd> Back</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+      } else if (currentStep === 2) {
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="goToStep(3)"><kbd>Enter ↵</kbd> Next: Node Pool</span>
+          <span class="keymap-action" onclick="toggleManifestDrawer('drawer-step-2')"><kbd>m</kbd> YAML Manifest</span>
+          <span class="keymap-action" onclick="goToStep(1)"><kbd>b</kbd> Back</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+      } else if (currentStep === 3) {
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="proceedFromStep4()"><kbd>Enter ↵</kbd> Next: Autoscaling</span>
+          <span class="keymap-action" style="color: var(--accent-cyan);" onclick="selectNodepoolOpt(0); proceedFromStep4();"><kbd>1-3</kbd> Pick & Advance</span>
+          <span class="keymap-action"><kbd>↑/↓</kbd> Select</span>
+          <span class="keymap-action" onclick="toggleManifestDrawer('drawer-step-3')"><kbd>m</kbd> YAML Manifest</span>
+          <span class="keymap-action" onclick="goToStep(2)"><kbd>b</kbd> Back</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+      } else if (currentStep === 4) {
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="proceedFromStep5()"><kbd>Enter ↵</kbd> Next: WorkerPool</span>
+          <span class="keymap-action" style="color: var(--accent-cyan);" onclick="selectHpaOpt(0); proceedFromStep5();"><kbd>1-3</kbd> Pick & Advance</span>
+          <span class="keymap-action"><kbd>↑/↓</kbd> Select</span>
+          <span class="keymap-action" onclick="toggleManifestDrawer('drawer-step-4')"><kbd>m</kbd> YAML Manifest</span>
+          <span class="keymap-action" onclick="goToStep(3)"><kbd>b</kbd> Back</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+      } else if (currentStep === 5) {
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="proceedFromStep6()"><kbd>Enter ↵</kbd> Finish Installation</span>
+          <span class="keymap-action" style="color: var(--accent-cyan);" onclick="selectWpOpt(0); proceedFromStep6();"><kbd>1-2</kbd> Pick & Advance</span>
+          <span class="keymap-action"><kbd>↑/↓</kbd> Select</span>
+          <span class="keymap-action" onclick="toggleManifestDrawer('drawer-step-5')"><kbd>m</kbd> YAML Manifest</span>
+          <span class="keymap-action" onclick="goToStep(4)"><kbd>b</kbd> Back</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+      } else if (currentStep === 6) {
+        legend.innerHTML = `
+          <span class="keymap-action primary-action" onclick="alert('🎉 Agent Substrate on GKE is fully operational! Ready for high-density agent workloads.')"><kbd>Enter ↵</kbd> Close</span>
+          <span class="keymap-action" onclick="runLiveTestTurn()"><kbd>y</kbd> Run Test Turn</span>
+          <span class="keymap-action" onclick="skipLiveTestTurn()"><kbd>n</kbd> Skip</span>
+          <span class="keymap-action" onclick="showWelcomeScreen()"><kbd>0</kbd> Restart Setup</span>
+          <span class="keymap-action" onclick="goToStep(5)"><kbd>b</kbd> Back</span>
+          <span class="keymap-action" onclick="toggleHelpModal()"><kbd>?</kbd> Help</span>
+        `;
+      }
+    }
+
+    // Keyboard Event Handling
+    document.addEventListener('keydown', function(e) {
+      // Global Help Modal keybindings (? / / / F1 / h)
+      if (!e.ctrlKey && !e.metaKey && (e.key === '?' || e.key === '/' || e.key === 'h' || e.key === 'H' || e.key === 'F1' || (e.code === 'Slash' && e.shiftKey))) {
+        e.preventDefault();
+        toggleHelpModal();
+        return;
+      }
+      // Close Modal on Escape
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('modal-help');
+        if (modal && modal.classList.contains('active')) {
+          e.preventDefault();
+          toggleHelpModal();
+          return;
+        }
+      }
+
+      const welcomeView = document.getElementById('view-welcome');
+      const isWelcome = welcomeView && welcomeView.classList.contains('active');
+
+      // 1. Welcome Screen Keybindings (Pick & Advance)
+      if (isWelcome) {
+        if (e.key === '1') {
+          selectTrack(0);
+          startWizardFromWelcome();
+        } else if (e.key === '2') {
+          selectTrack(1);
+          startWizardFromWelcome();
+        } else if (e.key === 'ArrowUp' || e.key === 'k' || (e.shiftKey && e.key === 'Tab')) {
+          e.preventDefault();
+          selectTrack(0);
+        } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'Tab') {
+          e.preventDefault();
+          selectTrack(1 - selectedTrackIdx);
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          startWizardFromWelcome();
+        }
+      } else {
+        // 2. Active Step Keybindings (Pick & Advance)
+        if (currentStep === 1) {
+          // Step 2: Target Cluster Selection -> Pick & Advance
+          if (e.key === '1') { selectCluster(0); goToStep(2); }
+          else if (e.key === '2') { selectCluster(1); goToStep(2); }
+          else if (e.key === '3') { selectCluster(2); goToStep(2); }
+          else if (e.key === '4') { selectCluster(3); goToStep(2); }
+          else if (e.key === 'ArrowUp' || e.key === 'k' || (e.shiftKey && e.key === 'Tab')) {
+            e.preventDefault();
+            selectCluster(Math.max(0, selectedClusterIdx - 1));
+          } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'Tab') {
+            e.preventDefault();
+            selectCluster(Math.min(3, selectedClusterIdx + 1));
+          }
+        } else if (currentStep === 2) {
+          // Step 3: Turn on Substrate
+          if (e.key === 'm' || e.key === 'M') {
+            toggleManifestDrawer('drawer-step-2');
+          } else if (e.key === 'c' || e.key === 'C') {
+            copyManifestYaml(null, 'drawer-step-2');
+          }
+        } else if (currentStep === 3) {
+          // Step 4: Compatible Node Pool -> Pick & Advance
+          if (e.key === '1') { selectNodepoolOpt(0); proceedFromStep4(); }
+          else if (e.key === '2') { selectNodepoolOpt(1); proceedFromStep4(); }
+          else if (e.key === '3') { goToStep(1); }
+          else if (e.key === 'ArrowUp' || e.key === 'k' || (e.shiftKey && e.key === 'Tab')) {
+            e.preventDefault();
+            const cur = selectedNodepoolIdx === -1 ? 0 : selectedNodepoolIdx;
+            selectNodepoolOpt(Math.max(0, cur - 1));
+          } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'Tab') {
+            e.preventDefault();
+            const cur = selectedNodepoolIdx === -1 ? 0 : selectedNodepoolIdx;
+            selectNodepoolOpt(Math.min(2, cur + 1));
+          } else if (e.key === 'm' || e.key === 'M') {
+            toggleManifestDrawer('drawer-step-3');
+          } else if (e.key === 'c' || e.key === 'C') {
+            copyManifestYaml(null, 'drawer-step-3');
+          }
+        } else if (currentStep === 4) {
+          // Step 5: Autoscaling -> Pick & Advance
+          if (e.key === '1') { selectHpaOpt(0); proceedFromStep5(); }
+          else if (e.key === '2') { selectHpaOpt(1); proceedFromStep5(); }
+          else if (e.key === '3') { selectHpaOpt(2); proceedFromStep5(); }
+          else if (e.key === 'ArrowUp' || e.key === 'k' || (e.shiftKey && e.key === 'Tab')) {
+            e.preventDefault();
+            const cur = selectedHpaIdx === -1 ? 0 : selectedHpaIdx;
+            selectHpaOpt(Math.max(0, cur - 1));
+          } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'Tab') {
+            e.preventDefault();
+            const cur = selectedHpaIdx === -1 ? 0 : selectedHpaIdx;
+            selectHpaOpt(Math.min(2, cur + 1));
+          } else if (e.key === 'm' || e.key === 'M') {
+            toggleManifestDrawer('drawer-step-4');
+          } else if (e.key === 'c' || e.key === 'C') {
+            copyManifestYaml(null, 'drawer-step-4');
+          }
+        } else if (currentStep === 5) {
+          // Step 6: Deploy WorkerPool -> Pick & Advance
+          if (e.key === '1') { selectWpOpt(0); proceedFromStep6(); }
+          else if (e.key === '2') { selectWpOpt(1); proceedFromStep6(); }
+          else if (e.key === 'ArrowUp' || e.key === 'k' || (e.shiftKey && e.key === 'Tab')) {
+            e.preventDefault();
+            selectWpOpt(0);
+          } else if (e.key === 'ArrowDown' || e.key === 'j' || e.key === 'Tab') {
+            e.preventDefault();
+            const cur = selectedWpIdx === -1 ? 0 : selectedWpIdx;
+            selectWpOpt(1 - cur);
+          } else if (e.key === 'm' || e.key === 'M') {
+            toggleManifestDrawer('drawer-step-5');
+          } else if (e.key === 'c' || e.key === 'C') {
+            copyManifestYaml(null, 'drawer-step-5');
+          }
+        } else if (currentStep === 6) {
+          // Step 7: Installation Complete
+          if (e.key === 'y' || e.key === 'Y' || e.key === 't' || e.key === 'T') {
+            runLiveTestTurn();
+          } else if (e.key === 'n' || e.key === 'N') {
+            skipLiveTestTurn();
+          }
+        }
+        
+        // 3. Navigation Shortcuts
+        if (e.key === '0') {
+          showWelcomeScreen();
+        } else if (e.key === 'Enter') {
+          if (currentStep === 0) {
+            goToStep(1);
+          } else if (currentStep === 1) {
+            if (selectedClusterIdx === -1) selectCluster(0);
+            goToStep(2);
+          } else if (currentStep === 2) {
+            goToStep(3);
+          } else if (currentStep === 3) {
+            proceedFromStep4();
+          } else if (currentStep === 4) {
+            proceedFromStep5();
+          } else if (currentStep === 5) {
+            proceedFromStep6();
+          } else if (currentStep === 6) {
+            alert('🎉 Agent Substrate on GKE is fully operational! Ready for high-density agent workloads.');
+          } else if (currentStep < totalSteps - 1) {
+            goToStep(currentStep + 1);
+          }
+        } else if (e.key === 'b' || e.key === 'Backspace' || e.key === 'ArrowLeft') {
+          if (currentStep === 0) {
+            showWelcomeScreen();
+          } else {
+            goToStep(currentStep - 1);
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
