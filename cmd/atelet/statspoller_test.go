@@ -341,7 +341,7 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 		"uid-unpooled": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
 	}
 	p, _ := newPollerFixture(t, fakes)
-	p.workerPools = func(context.Context) map[string]workerPoolRef {
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
 		return map[string]workerPoolRef{"uid-pooled": {namespace: "pool-ns", name: "pool-a"}}
 	}
 
@@ -424,5 +424,83 @@ func TestStatsPollerCPUDeltaSaturatesCorruptCounter(t *testing.T) {
 	got := p.collect(context.Background())[key].cpuDeltaUsec
 	if got != math.MaxInt64 {
 		t.Errorf("corrupt-counter sweep delta = %d, want pinned at MaxInt64", got)
+	}
+}
+
+// TestStatsPollerPoolCacheSurvivesListFlap pins the fix for the label-set
+// split: a pod's pool is immutable, so a failed list must answer from the
+// cache and keep that tick's samples -- and the CPU counter's increments,
+// which can never be re-attributed -- on the pooled label set.
+func TestStatsPollerPoolCacheSurvivesListFlap(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 100, 80)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	listOK := true
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
+		if !listOK {
+			return nil // the apiserver list failed this sweep
+		}
+		return map[string]workerPoolRef{"uid-1": {namespace: "pool-ns", name: "pool-a"}}
+	}
+
+	pooled := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup",
+		workerPool: workerPoolRef{namespace: "pool-ns", name: "pool-a"}}
+
+	// Sweep 1 resolves and seeds the cache.
+	if got := p.collect(context.Background()); got[pooled] == nil {
+		t.Fatalf("sweep 1: no pooled aggregate; got %v", got)
+	}
+
+	// Sweep 2's list fails; the samples must STILL group under the pool.
+	listOK = false
+	got := p.collect(context.Background())
+	if got[pooled] == nil {
+		t.Errorf("sweep 2 (list flap): samples left the pooled label set; got %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("sweep 2 (list flap): %d label sets, want 1 (no pool-less split)", len(got))
+	}
+}
+
+// TestStatsPollerPoolCachePrunes: the cache is rebuilt against the pods whose
+// ateom directories exist, so a departed pod's entry does not linger.
+func TestStatsPollerPoolCachePrunes(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: noSampleResponse(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef {
+		return map[string]workerPoolRef{
+			"uid-1":    {namespace: "pool-ns", name: "pool-a"},
+			"uid-gone": {namespace: "pool-ns", name: "pool-a"}, // no ateom dir
+		}
+	}
+
+	p.collect(context.Background())
+
+	if _, ok := p.cachedPools["uid-1"]; !ok {
+		t.Errorf("cachedPools lost the live pod's entry: %v", p.cachedPools)
+	}
+	if _, ok := p.cachedPools["uid-gone"]; ok {
+		t.Errorf("cachedPools kept an entry with no ateom directory: %v", p.cachedPools)
+	}
+}
+
+// TestStatsPollerPoolCacheMissDuringOutage: a pod first seen while the list
+// is failing has no cache entry to fall back to -- it groups without pool
+// labels (the residual, documented case) and heals on the next good list.
+func TestStatsPollerPoolCacheMissDuringOutage(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-new": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 10, 8)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	p.fetchWorkerPools = func(context.Context) map[string]workerPoolRef { return nil }
+
+	got := p.collect(context.Background())
+
+	bare := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	if got[bare] == nil || len(got) != 1 {
+		t.Errorf("collect() during outage = %v, want the one pool-less group", got)
 	}
 }
