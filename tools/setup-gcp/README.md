@@ -64,7 +64,9 @@ go run ./tools/setup-gcp enable apis [flags]
 
 ### 2. Create Cluster
 
-Creates a GKE cluster configured for Agent Substrate.
+Creates a GKE cluster configured for Agent Substrate (with Workload Identity,
+required Kubernetes beta APIs, and Managed OpenTelemetry enabled, and the
+Filestore CSI driver disabled).
 
 > [!WARNING]
 > Agent Substrate requires two Kubernetes beta APIs —

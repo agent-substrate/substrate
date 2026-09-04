@@ -51,15 +51,14 @@ func deleteCluster(ctx context.Context, cfg *Config) error {
 	return waitContainerOperation(ctx, client, op.Name, cfg)
 }
 
-func createClusterInternal(ctx context.Context, cfg *Config, client *container.ClusterManagerClient, parent string) error {
-	slog.Info("Cluster does not exist. Creating...", slog.String("cluster", cfg.ClusterName))
+func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateClusterRequest {
 	var networkConfig *containerpb.NetworkConfig
 	if cfg.EnableDataplaneV2 {
 		networkConfig = &containerpb.NetworkConfig{
 			DatapathProvider: containerpb.DatapathProvider_ADVANCED_DATAPATH,
 		}
 	}
-	req := &containerpb.CreateClusterRequest{
+	return &containerpb.CreateClusterRequest{
 		Parent: parent,
 		Cluster: &containerpb.Cluster{
 			Name:                  cfg.ClusterName,
@@ -83,8 +82,22 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 			Subnetwork:                 cfg.Subnetwork,
 			NetworkConfig:              networkConfig,
 			ManagedOpentelemetryConfig: &containerpb.ManagedOpenTelemetryConfig{Scope: containerpb.ManagedOpenTelemetryConfig_COLLECTION_AND_INSTRUMENTATION_COMPONENTS.Enum()},
+			AddonsConfig: &containerpb.AddonsConfig{
+				GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
+					Enabled: false,
+				},
+			},
 		},
 	}
+}
+
+func filestoreCsiDriverEnabled(cluster *containerpb.Cluster) bool {
+	return cluster.GetAddonsConfig().GetGcpFilestoreCsiDriverConfig().GetEnabled()
+}
+
+func createClusterInternal(ctx context.Context, cfg *Config, client *container.ClusterManagerClient, parent string) error {
+	slog.Info("Cluster does not exist. Creating...", slog.String("cluster", cfg.ClusterName))
+	req := buildCreateClusterRequest(parent, cfg)
 	op, err := client.CreateCluster(ctx, req)
 	if err != nil {
 		return fmt.Errorf("create cluster: %w", err)
@@ -225,6 +238,31 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		}
 	} else {
 		slog.Info("Cluster ManagedOpentelemetryConfig match perfectly.", slog.String("cluster", cfg.ClusterName))
+	}
+
+	if filestoreCsiDriverEnabled(cluster) {
+		slog.Info("Mismatch in Filestore CSI driver config",
+			slog.Bool("current", true),
+			slog.Bool("expected", false))
+		slog.Info("Updating cluster to disable Filestore CSI driver...")
+		op, err := client.UpdateCluster(ctx, &containerpb.UpdateClusterRequest{
+			Name: clusterName,
+			Update: &containerpb.ClusterUpdate{
+				DesiredAddonsConfig: &containerpb.AddonsConfig{
+					GcpFilestoreCsiDriverConfig: &containerpb.GcpFilestoreCsiDriverConfig{
+						Enabled: false,
+					},
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("update cluster filestore csi driver: %w", err)
+		}
+		if err := waitContainerOperation(ctx, client, op.Name, cfg); err != nil {
+			return err
+		}
+	} else {
+		slog.Info("Cluster Filestore CSI driver match perfectly.", slog.String("cluster", cfg.ClusterName))
 	}
 
 	return nil
