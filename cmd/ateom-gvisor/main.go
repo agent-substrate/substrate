@@ -244,7 +244,7 @@ func do(ctx context.Context) error {
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
-			SocketPath:           ateompath.CredentialBrokerSocket,
+			SocketPath:           ateompath.AteomSupportSocket,
 			CredentialBundlePath: *workerCredentialBundle,
 			TrustBundlePath:      *podIdentityTrustBundle,
 		})
@@ -1061,7 +1061,7 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
 	}
 	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
-		SocketPath:           ateompath.CredentialBrokerSocket,
+		SocketPath:           ateompath.AteomSupportSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
 		ActorUID:             actorUID,

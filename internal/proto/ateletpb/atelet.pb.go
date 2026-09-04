@@ -2873,10 +2873,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_DATA\x10\x02\x12!\n" +
-	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x032w\n" +
-	"\x10CredentialBroker\x12c\n" +
-	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x002l\n" +
-	"\x0eWorkerCapacity\x12Z\n" +
+	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x032\xcf\x01\n" +
+	"\fAteomSupport\x12c\n" +
+	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Z\n" +
 	"\x11SetWorkerCapacity\x12 .atelet.SetWorkerCapacityRequest\x1a!.atelet.SetWorkerCapacityResponse\"\x002\xf3\x02\n" +
 	"\vAteomHerder\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
@@ -2988,15 +2987,15 @@ var file_atelet_proto_depIdxs = []int32{
 	10, // 37: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
 	11, // 38: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
 	12, // 39: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	5,  // 40: atelet.CredentialBroker.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 41: atelet.WorkerCapacity.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
+	5,  // 40: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 41: atelet.AteomSupport.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
 	9,  // 42: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
 	35, // 43: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
 	39, // 44: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
 	37, // 45: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
 	7,  // 46: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	6,  // 47: atelet.CredentialBroker.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	4,  // 48: atelet.WorkerCapacity.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
+	6,  // 47: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	4,  // 48: atelet.AteomSupport.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
 	32, // 49: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
 	36, // 50: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
 	40, // 51: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
@@ -3041,7 +3040,7 @@ func file_atelet_proto_init() {
 			NumEnums:      3,
 			NumMessages:   41,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   2,
 		},
 		GoTypes:           file_atelet_proto_goTypes,
 		DependencyIndexes: file_atelet_proto_depIdxs,

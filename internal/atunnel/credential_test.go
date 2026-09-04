@@ -92,15 +92,15 @@ func TestBrokerCertificateSourceRejectsUnexpectedActor(t *testing.T) {
 	}
 }
 
-type credentialBrokerStub struct {
-	ateletpb.UnimplementedCredentialBrokerServer
+type ateomSupportStub struct {
+	ateletpb.UnimplementedAteomSupportServer
 	ca         *testCA
 	lifetime   time.Duration
 	publicKeys chan []byte
 	actorUID   string
 }
 
-func (s *credentialBrokerStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
+func (s *ateomSupportStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
 	if req.GetActorUid() != "actor-uid" {
 		return nil, status.Error(codes.FailedPrecondition, "unexpected actor UID")
 	}
@@ -128,7 +128,7 @@ func (s *credentialBrokerStub) MintActorCertificate(_ context.Context, req *atel
 	return &ateletpb.MintActorCertificateResponse{ActorCertificates: [][]byte{der}}, nil
 }
 
-func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.PodIdentity, lifetime time.Duration) (*BrokerCertificateSource, *credentialBrokerStub) {
+func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.PodIdentity, lifetime time.Duration) (*BrokerCertificateSource, *ateomSupportStub) {
 	t.Helper()
 	ca := newTestCA(t)
 	workerCert := issueTestPodCertificate(t, ca, &substratex509.PodIdentity{
@@ -171,8 +171,8 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    clientCAs,
 	})))
-	broker := &credentialBrokerStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2), actorUID: "actor-uid"}
-	ateletpb.RegisterCredentialBrokerServer(server, broker)
+	broker := &ateomSupportStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2), actorUID: "actor-uid"}
+	ateletpb.RegisterAteomSupportServer(server, broker)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {
 		server.Stop()

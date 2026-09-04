@@ -40,9 +40,9 @@ var (
 	// under it.
 	ActorsDir = filepath.Join(BasePath, "actors")
 
-	// CredentialBrokerSocket is the node-local atelet socket used by atunnel
+	// AteomSupportSocket is the node-local atelet socket used by atunnel
 	// to request credentials for the worker's current actor assignment.
-	CredentialBrokerSocket = filepath.Join(BasePath, "credential-broker.sock")
+	AteomSupportSocket = filepath.Join(BasePath, "ateom-support.sock")
 )
 
 func RunSCBinaryPath(sha256 string) string {

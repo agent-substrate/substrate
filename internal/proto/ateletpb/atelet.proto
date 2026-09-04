@@ -20,23 +20,19 @@ option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletp
 
 import "pkg/proto/ateapipb/ateapi.proto";
 
-// CredentialBroker provides on-demand services to ateom.
+// AteomSupport provides callouts for ateom.
 //
-// TODO(identity): Rename to something more generic like AteomSupportService.
-service CredentialBroker {
+// Called by individual ateom pods over a local connection, authenticated with
+// ateom's k8s pod identity mTLS certificate.
+service AteomSupport {
   // Request an atunnel certificate for the given actor.
   //
   // TODO(identity): Rename to MintAtunnelCertificate, as distinct from
   // MintActorCertificate (which would be used for certificates projected into
   // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
-}
 
-// WorkerCapacity is how a worker tells the node-local atelet what it can
-// supply to the actors it hosts, for atelet to forward to the control plane's
-// WorkerService.SetWorkerCapacity, which this mirrors. The worker is identified
-// by its mTLS certificate, never by the request.
-service WorkerCapacity {
+  // Report capacity and supply for this worker back to atelet.
   rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse) {}
 }
 
@@ -68,6 +64,10 @@ message MintActorCertificateResponse {
   repeated bytes actor_certificates = 1;
 }
 
+// AteomHerder allows ate-apiserver to issue control calls to the atelet.
+//
+// Called by ate-api-server over cluster networking.  ate-api-server
+// authenticates with its k8s pod identity mTLS certificate.
 service AteomHerder {
   // Run tells atelet to create a new containerized workload from scratch on an
   // ateom.
