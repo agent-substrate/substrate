@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -301,8 +302,8 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				aggs[key] = agg
 			}
 			agg.sampledActors++
-			agg.memoryCurrentBytes += int64(sample.GetMemoryCurrentBytes())
-			agg.memoryWorkingSetBytes += int64(sample.GetMemoryWorkingSetBytes())
+			agg.memoryCurrentBytes = addSat(agg.memoryCurrentBytes, sample.GetMemoryCurrentBytes())
+			agg.memoryWorkingSetBytes = addSat(agg.memoryWorkingSetBytes, sample.GetMemoryWorkingSetBytes())
 
 			// The counter increase this sample represents. A decrease means the
 			// epoch reset underneath us (the cgroup source restarts at zero on
@@ -317,9 +318,9 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 			seenCPU[sample.GetActorUid()] = cpu
 			if last, ok := p.lastCPU[sample.GetActorUid()]; ok {
 				if last <= cpu {
-					agg.cpuDeltaUsec += int64(cpu - last)
+					agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu-last)
 				} else {
-					agg.cpuDeltaUsec += int64(cpu)
+					agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu)
 				}
 			}
 			return nil
@@ -332,6 +333,23 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 	// see, so lastCPU cannot grow with actor churn.
 	p.lastCPU = seenCPU
 	return aggs
+}
+
+// addSat adds a sample's uint64 counter onto an int64 aggregate, saturating at
+// MaxInt64 at both hops: converting the wire value and adding it. The wire
+// carries whatever the guest kernel -- or, on the micro-VM runtime, the guest
+// agent -- reported, and a corrupt reading above 2^63 must degrade to a pinned
+// ceiling, not flip a gauge negative or feed a negative Add into the CPU
+// counter (which the OTel spec forbids). The same reasoning as
+// agentstats.Sample.Plus, one type boundary later.
+func addSat(agg int64, v uint64) int64 {
+	if v > math.MaxInt64 {
+		v = math.MaxInt64
+	}
+	if agg > math.MaxInt64-int64(v) {
+		return math.MaxInt64
+	}
+	return agg + int64(v)
 }
 
 // sandboxClassLabel maps the wire enum to the ate.sandbox.class label values
