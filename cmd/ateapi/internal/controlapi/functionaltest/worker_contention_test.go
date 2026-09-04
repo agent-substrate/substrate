@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -117,7 +116,7 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 	}
 	// A listing reports occupancy through the allocation total; the assignments
 	// themselves are their own records.
-	if got := int(worker.GetStatus().GetAllocation().GetAllocated().GetActors()); got != actors {
+	if got := int(worker.GetStatus().GetAllocated().GetActors()); got != actors {
 		t.Errorf("worker allocation counts %d actors, want %d", got, actors)
 	}
 	page, err := tc.persistence.ListWorkerAssignments(context.Background(), worker.GetMetadata().GetName(), store.ListOptions{})
@@ -164,7 +163,7 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 		t.Fatalf("getting worker %s: %v", name, err)
 	}
 	if _, err := tc.persistence.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
-		resources.Allocation(toUpdate).Capacity = &ateapipb.WorkerResources{Actors: actors}
+		toUpdate.Status.Capacity = &ateapipb.WorkerResources{Actors: actors}
 		return nil
 	}); err != nil {
 		t.Fatalf("setting capacity on worker %s: %v", name, err)
@@ -172,7 +171,7 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 	if err := wait.PollUntilContextTimeout(ctx, 10*time.Millisecond, 5*time.Second, true,
 		func(context.Context) (bool, error) {
 			got, err := tc.workerCache.Worker(name)
-			return err == nil && got.GetStatus().GetAllocation().GetCapacity().GetActors() == actors, nil
+			return err == nil && got.GetStatus().GetCapacity().GetActors() == actors, nil
 		}); err != nil {
 		t.Fatalf("worker %s did not reach capacity.actors=%d in the cache: %v", name, actors, err)
 	}

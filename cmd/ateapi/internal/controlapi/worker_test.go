@@ -23,7 +23,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -199,17 +198,17 @@ func TestUpdateWorker_CannotChangeCapacity(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
 	seeded := seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
-	before := seeded.GetStatus().GetAllocation().GetCapacity()
+	before := seeded.GetStatus().GetCapacity()
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
 		Worker: updateFrom(seeded, func(w *ateapipb.Worker) {
-			resources.Allocation(w).Capacity = &ateapipb.WorkerResources{Actors: 4094}
+			w.Status.Capacity = &ateapipb.WorkerResources{Actors: 4094}
 		}),
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorker() failed: %v", err)
 	}
-	if diff := cmp.Diff(before, got.GetStatus().GetAllocation().GetCapacity(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(before, got.GetStatus().GetCapacity(), protocmp.Transform()); diff != "" {
 		t.Errorf("a client update moved capacity (-want +got):\n%s", diff)
 	}
 }
@@ -277,7 +276,7 @@ func TestCreateWorker_IgnoresRequestStatus(t *testing.T) {
 	svc, _ := newWorkerAPIService(t)
 
 	in := validWorker(apiWorkerName)
-	in.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Allocation: &ateapipb.WorkerAllocation{Allocated: &ateapipb.WorkerResources{Actors: 9}}}
+	in.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING, Allocated: &ateapipb.WorkerResources{Actors: 9}}
 
 	got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: in})
 	if err != nil {
@@ -583,7 +582,7 @@ func TestDeleteWorker_AssignedWorkerDeletesAnyway(t *testing.T) {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
 	// The record carries the total, not the assignments themselves.
-	if n := got.GetStatus().GetAllocation().GetAllocated().GetActors(); n != 1 {
+	if n := got.GetStatus().GetAllocated().GetActors(); n != 1 {
 		t.Errorf("deleted worker hosted %d actors, want the 1 it was holding", n)
 	}
 }
@@ -670,7 +669,7 @@ func TestDrainWorker_KeepsAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if n := got.GetStatus().GetAllocation().GetAllocated().GetActors(); n != 1 {
+	if n := got.GetStatus().GetAllocated().GetActors(); n != 1 {
 		t.Errorf("drained worker hosts %d actors, want the 1 left in place", n)
 	}
 }
@@ -1062,19 +1061,19 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
-	if capacity := got.GetStatus().GetAllocation().GetCapacity(); capacity != nil {
+	if capacity := got.GetStatus().GetCapacity(); capacity != nil {
 		t.Errorf("created worker capacity = %v, want none until its ateom reports", capacity)
 	}
 
 	// Capacity is status, so a request cannot bring its own: a Worker only
 	// gets one by reporting it.
 	carried := validWorker("11111111-2222-3333-4444-555555555555")
-	carried.Status = &ateapipb.WorkerStatus{Allocation: &ateapipb.WorkerAllocation{Capacity: &ateapipb.WorkerResources{Actors: 4094}}}
+	carried.Status = &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 4094}}
 	got, err = svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: carried})
 	if err != nil {
 		t.Fatalf("CreateWorker() carrying a capacity failed: %v", err)
 	}
-	if capacity := got.GetStatus().GetAllocation().GetCapacity(); capacity != nil {
+	if capacity := got.GetStatus().GetCapacity(); capacity != nil {
 		t.Errorf("a request carrying a ceiling set capacity to %v, want none", capacity)
 	}
 }

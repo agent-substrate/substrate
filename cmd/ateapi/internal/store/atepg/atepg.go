@@ -1544,11 +1544,11 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 					return nil, err
 				}
 			}
-			allocated, err := resources.AddToAllocated(resources.Allocation(worker).Allocated, assignment, +1)
+			allocated, err := resources.AddToAllocated(worker.Status.Allocated, assignment, +1)
 			if err != nil {
 				return nil, err
 			}
-			resources.Allocation(worker).Allocated = allocated
+			worker.Status.Allocated = allocated
 			if err := saveWorker(ctx, tx, worker); err != nil {
 				return nil, err
 			}
@@ -1566,11 +1566,11 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 
 		// Subtract before adding: the Actor is already counted, and its
 		// declared size may have changed.
-		allocated, err := resources.AddToAllocated(resources.Allocation(worker).Allocated, previous, -1)
+		allocated, err := resources.AddToAllocated(worker.Status.Allocated, previous, -1)
 		if err != nil {
 			return nil, err
 		}
-		resources.Allocation(worker).Allocated = allocated
+		worker.Status.Allocated = allocated
 
 		// Admit against the Worker without the old reservation. An
 		// ActorTemplate is mutable, so a replacement can be larger than what
@@ -1584,7 +1584,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 		if allocated, err = resources.AddToAllocated(allocated, assignment, +1); err != nil {
 			return nil, err
 		}
-		resources.Allocation(worker).Allocated = allocated
+		worker.Status.Allocated = allocated
 
 		// A rebind updates the assignment already recorded, so re-stamping it
 		// as a create would make a retried claim look like a new subresource.
@@ -1642,11 +1642,11 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 		if worker.Status == nil {
 			worker.Status = &ateapipb.WorkerStatus{}
 		}
-		allocated, err := resources.AddToAllocated(resources.Allocation(worker).Allocated, assignment, -1)
+		allocated, err := resources.AddToAllocated(worker.Status.Allocated, assignment, -1)
 		if err != nil {
 			return nil, err
 		}
-		resources.Allocation(worker).Allocated = allocated
+		worker.Status.Allocated = allocated
 		if err := saveWorker(ctx, tx, worker); err != nil {
 			return nil, err
 		}

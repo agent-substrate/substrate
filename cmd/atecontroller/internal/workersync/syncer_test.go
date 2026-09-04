@@ -286,8 +286,8 @@ func TestSyncer_DoesNotInferCapacityFromThePod(t *testing.T) {
 	// sent. The syncer writes no capacity: it comes from the Worker's own
 	// report, which is the ateom's to make.
 	got := waitForWorker(t, ctx, api, testPodUID, func(w *ateapipb.Worker) bool { return w != nil })
-	if got.GetStatus().GetAllocation().GetCapacity() != nil {
-		t.Errorf("worker capacity = %v, want none", got.GetStatus().GetAllocation().GetCapacity())
+	if got.GetStatus().GetCapacity() != nil {
+		t.Errorf("worker capacity = %v, want none", got.GetStatus().GetCapacity())
 	}
 }
 

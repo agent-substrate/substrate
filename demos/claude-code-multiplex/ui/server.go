@@ -220,7 +220,7 @@ func actorStateString(s ateapipb.ActorState) string {
 // The UI's badgeFor() treats "running" as green; "idle" falls through
 // to the neutral badge, which is the right visual treatment.
 func workerPhase(w *ateapipb.Worker) string {
-	if w.GetStatus().GetAllocation().GetAllocated().GetActors() > 0 {
+	if w.GetStatus().GetAllocated().GetActors() > 0 {
 		return "Running"
 	}
 	return "Idle"
@@ -374,7 +374,7 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 	for _, wk := range resp.GetWorkers() {
 		// No demo-namespace filter: a Worker listing does not name the Actors
 		// it holds, so there is no template namespace to compare against.
-		ready := wk.GetStatus().GetAllocation().GetAllocated().GetActors() > 0
+		ready := wk.GetStatus().GetAllocated().GetActors() > 0
 		pods = append(pods, podSummary{
 			Name:      wk.GetWorkerPod(),
 			Node:      wk.GetWorkerPool(), // closest semantic analog

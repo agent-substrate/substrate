@@ -65,16 +65,3 @@ func SumAllocated(assignments []*ateapipb.ActorAssignment) (*ateapipb.WorkerReso
 	}
 	return &ateapipb.WorkerResources{Actors: int32(len(assignments)), Resources: total.Proto()}, nil
 }
-
-// Allocation returns a Worker's allocation, creating the status and allocation
-// it hangs from when they are absent. A Worker that has never been placed on
-// nor reported carries neither.
-func Allocation(worker *ateapipb.Worker) *ateapipb.WorkerAllocation {
-	if worker.Status == nil {
-		worker.Status = &ateapipb.WorkerStatus{}
-	}
-	if worker.Status.Allocation == nil {
-		worker.Status.Allocation = &ateapipb.WorkerAllocation{}
-	}
-	return worker.Status.Allocation
-}

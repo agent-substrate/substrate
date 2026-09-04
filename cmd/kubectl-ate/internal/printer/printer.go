@@ -106,11 +106,11 @@ func PrintWorkers(workers []*ateapipb.Worker, format string) error {
 // count rather than the Actors themselves: a listing does not carry them, and
 // naming them all would be unreadable long before a Worker is full.
 func WorkerOccupancy(worker *ateapipb.Worker) string {
-	hosted := worker.GetStatus().GetAllocation().GetAllocated().GetActors()
+	hosted := worker.GetStatus().GetAllocated().GetActors()
 	if hosted == 0 {
 		return "FREE"
 	}
-	return fmt.Sprintf("ASSIGNED(%d/%d)", hosted, worker.GetStatus().GetAllocation().GetCapacity().GetActors())
+	return fmt.Sprintf("ASSIGNED(%d/%d)", hosted, worker.GetStatus().GetCapacity().GetActors())
 }
 
 func sortWorkers(workers []*ateapipb.Worker) {

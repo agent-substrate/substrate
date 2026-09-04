@@ -87,14 +87,14 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 	}
 
-	if proto.Equal(worker.GetStatus().GetAllocation().GetCapacity(), reported) {
+	if proto.Equal(worker.GetStatus().GetCapacity(), reported) {
 		return &ateapipb.SetWorkerCapacityResponse{Worker: worker}, nil
 	}
 
 	updated, err := s.store.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
 		// Replaces rather than merges: a Worker reports everything it has, so a
 		// dimension this report leaves out is one it no longer supplies.
-		resources.Allocation(toUpdate).Capacity = reported
+		toUpdate.Status.Capacity = reported
 		return nil
 	})
 	switch {
@@ -108,8 +108,8 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	}
 	slog.InfoContext(ctx, "Worker reported its capacity",
 		slog.String("worker", name),
-		slog.String("was", worker.GetStatus().GetAllocation().GetCapacity().String()),
-		slog.String("now", updated.GetStatus().GetAllocation().GetCapacity().String()))
+		slog.String("was", worker.GetStatus().GetCapacity().String()),
+		slog.String("now", updated.GetStatus().GetCapacity().String()))
 	return &ateapipb.SetWorkerCapacityResponse{Worker: updated}, nil
 }
 

@@ -112,9 +112,7 @@ func newTestWorker(name, pod string) *ateapipb.Worker {
 		WorkerPod:       pod,
 		WorkerPodUid:    testWorkerPodUID,
 		Status: &ateapipb.WorkerStatus{
-			Allocation: &ateapipb.WorkerAllocation{
-				Capacity: &ateapipb.WorkerResources{Resources: resources.CPUMemory(2000, 4<<30)},
-			},
+			Capacity: &ateapipb.WorkerResources{Resources: resources.CPUMemory(2000, 4<<30)},
 		},
 	}
 }
@@ -1491,10 +1489,10 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 				// assignments themselves are separate records. CpuMilli carries
 				// the claimant's number so the winner is identifiable.
 				_, err := s.UpdateWorker(ctx, testWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-					if toUpdate.GetStatus().GetAllocation().GetAllocated().GetActors() > 0 {
+					if toUpdate.GetStatus().GetAllocated().GetActors() > 0 {
 						return errTaken
 					}
-					toUpdate.Status.Allocation.Allocated = &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(int64(i)+1, 0)}
+					toUpdate.Status.Allocated = &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(int64(i)+1, 0)}
 					return nil
 				})
 				switch {
@@ -1522,7 +1520,7 @@ func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interfa
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if n := got.GetStatus().GetAllocation().GetAllocated().GetActors(); n < 1 || n > int32(claimants) {
+		if n := got.GetStatus().GetAllocated().GetActors(); n < 1 || n > int32(claimants) {
 			t.Errorf("stored claim names %d, want one of the claimants", n)
 		}
 		// One winning write on top of the create, and no partial ones.
@@ -1763,7 +1761,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			t.Fatalf("GetWorker failed: %v", err)
 		}
 		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(500, 1<<20)}
-		if diff := cmp.Diff(want, worker.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("allocated mismatch (-want +got):\n%s", diff)
 		}
 		if worker.GetMetadata().GetVersion() != 2 {
@@ -1774,7 +1772,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if event.Type != store.WorkerEventUpdated {
 			t.Errorf("expected WorkerEventUpdated, got %v", event.Type)
 		}
-		if diff := cmp.Diff(want, event.Worker.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(want, event.Worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("event allocated mismatch (-want +got):\n%s", diff)
 		}
 	})
@@ -1796,7 +1794,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			t.Fatalf("GetWorker failed: %v", err)
 		}
 		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(250, 1<<21)}
-		if diff := cmp.Diff(want, worker.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("allocated mismatch after rebinding the same actor (-want +got):\n%s", diff)
 		}
 		assignmentsPage, err := s.ListWorkerAssignments(ctx, testWorkerName, store.ListOptions{})
@@ -1865,7 +1863,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got := worker.GetStatus().GetAllocation().GetAllocated().GetActors(); got != 0 {
+		if got := worker.GetStatus().GetAllocated().GetActors(); got != 0 {
 			t.Errorf("a refused bind left %d actors allocated, want 0", got)
 		}
 	})
@@ -1890,7 +1888,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		full := errors.New("worker is full")
 		err := s.BindActorToWorker(ctx, testWorkerName, newTestAssignment("uid-1", 5000, 0),
 			func(fresh *ateapipb.Worker) error {
-				admitted = append(admitted, fresh.GetStatus().GetAllocation().GetAllocated())
+				admitted = append(admitted, fresh.GetStatus().GetAllocated())
 				return full
 			})
 		if !errors.Is(err, full) {
@@ -1911,7 +1909,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			t.Fatalf("GetWorker failed: %v", err)
 		}
 		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(500, 0)}
-		if diff := cmp.Diff(want, worker.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("a refused replacement changed the allocation (-want +got):\n%s", diff)
 		}
 	})
@@ -1927,7 +1925,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		const claims = 16
 		full := errors.New("worker is full")
 		roomForOne := func(w *ateapipb.Worker) error {
-			if w.GetStatus().GetAllocation().GetAllocated().GetActors() >= 1 {
+			if w.GetStatus().GetAllocated().GetActors() >= 1 {
 				return full
 			}
 			return nil
@@ -1957,7 +1955,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got := worker.GetStatus().GetAllocation().GetAllocated().GetActors(); got != 1 {
+		if got := worker.GetStatus().GetAllocated().GetActors(); got != 1 {
 			t.Errorf("worker allocation counts %d actors, want 1", got)
 		}
 	})
@@ -1998,14 +1996,14 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			t.Fatalf("GetWorker failed: %v", err)
 		}
 		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(500, 1<<20)}
-		if diff := cmp.Diff(want, first.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(want, first.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("first worker's allocation changed (-want +got):\n%s", diff)
 		}
 		refused, err := s.GetWorker(ctx, otherTestWorkerName)
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got := refused.GetStatus().GetAllocation().GetAllocated().GetActors(); got != 0 {
+		if got := refused.GetStatus().GetAllocated().GetActors(); got != 0 {
 			t.Errorf("refused worker counts %d actors, want 0", got)
 		}
 		if got, wantVersion := refused.GetMetadata().GetVersion(), other.GetMetadata().GetVersion(); got != wantVersion {
@@ -2068,7 +2066,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			// A Worker that never took anything has no allocation at all, while
 			// a sum over no assignments is a zeroed message; the two say the
 			// same thing, so compare what they mean rather than the messages.
-			got := worker.GetStatus().GetAllocation().GetAllocated()
+			got := worker.GetStatus().GetAllocated()
 			if got.GetActors() != want.GetActors() || !proto.Equal(got.GetResources(), want.GetResources()) {
 				t.Errorf("%s: allocation %v disagrees with the %d assignments it holds (%v)",
 					name, got, len(assignments), want)
@@ -2104,7 +2102,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		// The returned Worker is what the caller feeds the cache, so it has to
 		// be the post-release state, not the copy that went in.
 		wantReleased := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(250, 1<<21)}
-		if diff := cmp.Diff(wantReleased, released.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(wantReleased, released.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("returned worker's allocated mismatch (-want +got):\n%s", diff)
 		}
 
@@ -2120,7 +2118,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			t.Fatalf("GetWorker failed: %v", err)
 		}
 		want := &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(250, 1<<21)}
-		if diff := cmp.Diff(want, worker.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+		if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 			t.Errorf("allocated mismatch after release (-want +got):\n%s", diff)
 		}
 	})
@@ -2348,7 +2346,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 			if err != nil {
 				t.Fatalf("summing assignments: %v", err)
 			}
-			if diff := cmp.Diff(want, worker.GetStatus().GetAllocation().GetAllocated(), protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(want, worker.GetStatus().GetAllocated(), protocmp.Transform()); diff != "" {
 				t.Fatalf("after step %d (actor %s) the total no longer matches the assignments (-want +got):\n%s", step, actorUID, diff)
 			}
 		}
@@ -2369,7 +2367,7 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 		if err != nil {
 			t.Fatalf("GetWorker failed: %v", err)
 		}
-		if got := worker.GetStatus().GetAllocation().GetAllocated(); got.GetActors() != 0 || got.GetResources() != nil {
+		if got := worker.GetStatus().GetAllocated(); got.GetActors() != 0 || got.GetResources() != nil {
 			t.Errorf("after releasing everything the total is %v, want all zero", got)
 		}
 	})
@@ -2910,7 +2908,7 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 
 		worker := withUnknownField(newTestWorker(testWorkerName, "pod-1"))
 		withUnknownField(worker.Metadata)
-		withUnknownField(worker.Status.Allocation.Capacity)
+		withUnknownField(worker.Status.Capacity)
 		created, err := s.CreateWorker(ctx, worker)
 		if err != nil {
 			t.Fatalf("CreateWorker failed: %v", err)

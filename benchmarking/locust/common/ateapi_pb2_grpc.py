@@ -388,8 +388,7 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def ListWorkerActorAssignments(self, request, context):
-        """List the Actors a Worker hosts. A subresource of Worker rather than a field
-        on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
+        """List the Actors hosted by a given Worker.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

@@ -32,7 +32,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerPod:       "pod-1",
 			SandboxClass:    "microvm",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status:          &ateapipb.WorkerStatus{Allocation: &ateapipb.WorkerAllocation{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}}},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 		{
 			Metadata:        &ateapipb.ResourceMetadata{Name: "worker-2"},
@@ -49,7 +49,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerPod:       "pod-3",
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "counter"},
-			Status:          &ateapipb.WorkerStatus{Allocation: &ateapipb.WorkerAllocation{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}}},
+			Status:          &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 1}, Allocated: &ateapipb.WorkerResources{Actors: 1}},
 		},
 	}
 	actors := &mockActorLister{byAtespace: map[string][]*ateapipb.Actor{

@@ -50,7 +50,7 @@ func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capac
 		NodeName:        nodeName,
 		Ip:              "10.1.2.3",
 		SandboxClass:    "gvisor",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Allocation: &ateapipb.WorkerAllocation{Capacity: capacity}},
+		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity},
 	})
 	if err != nil {
 		t.Fatalf("seeding worker: %v", err)
@@ -77,13 +77,13 @@ func TestSetWorkerCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetWorkerCapacity() failed: %v", err)
 	}
-	if want := int32(4094); got.GetWorker().GetStatus().GetAllocation().GetCapacity().GetActors() != want {
-		t.Errorf("capacity.actors = %d, want %d", got.GetWorker().GetStatus().GetAllocation().GetCapacity().GetActors(), want)
+	if want := int32(4094); got.GetWorker().GetStatus().GetCapacity().GetActors() != want {
+		t.Errorf("capacity.actors = %d, want %d", got.GetWorker().GetStatus().GetCapacity().GetActors(), want)
 	}
 	// A report replaces what is recorded. The Worker reports everything it has,
 	// so a dimension this one leaves out is one it no longer supplies -- keeping
 	// the old value would advertise compute nothing claims to have.
-	if got := got.GetWorker().GetStatus().GetAllocation().GetCapacity().GetResources(); got != nil {
+	if got := got.GetWorker().GetStatus().GetCapacity().GetResources(); got != nil {
 		t.Errorf("capacity resources = %v, want the report's own (none)", got)
 	}
 }
@@ -107,7 +107,7 @@ func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorker: %v", err)
 	}
-	if got := after.GetStatus().GetAllocation().GetCapacity().GetActors(); got != 1 {
+	if got := after.GetStatus().GetCapacity().GetActors(); got != 1 {
 		t.Errorf("capacity.actors = %d, want 1 unchanged", got)
 	}
 }
@@ -206,7 +206,7 @@ func TestSetWorkerCapacity_RejectsNonsense(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorker: %v", err)
 	}
-	if diff := cmp.Diff(seeded.GetStatus().GetAllocation().GetCapacity(), after.GetStatus().GetAllocation().GetCapacity(), protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(seeded.GetStatus().GetCapacity(), after.GetStatus().GetCapacity(), protocmp.Transform()); diff != "" {
 		t.Errorf("capacity changed despite every report being refused (-want +got):\n%s", diff)
 	}
 }

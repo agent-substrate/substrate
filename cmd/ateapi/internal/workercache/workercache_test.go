@@ -113,7 +113,7 @@ func TestCache_UpdatedEvent_NewerVersionApplied(t *testing.T) {
 	}
 
 	updated := makeWorker("ns", "pod1", 2)
-	updated.Status.Allocation.Allocated = &ateapipb.WorkerResources{Actors: 1}
+	updated.Status.Allocated = &ateapipb.WorkerResources{Actors: 1}
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
 
 	eventually(t, func() bool {
@@ -121,7 +121,7 @@ func TestCache_UpdatedEvent_NewerVersionApplied(t *testing.T) {
 		if err != nil || len(workers) != 1 {
 			return false
 		}
-		return workers[0].GetStatus().GetAllocation().GetAllocated().GetActors() == 1
+		return workers[0].GetStatus().GetAllocated().GetActors() == 1
 	}, 2*time.Second)
 
 	got, _ := c.Workers()
@@ -142,7 +142,7 @@ func TestCache_UpdatedEvent_OlderVersionIgnored(t *testing.T) {
 
 	// Send a stale update followed by a sentinel we can detect.
 	stale := makeWorker("ns", "pod1", 3)
-	stale.Status.Allocation.Allocated = &ateapipb.WorkerResources{Actors: 7}
+	stale.Status.Allocated = &ateapipb.WorkerResources{Actors: 7}
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: stale})
 
 	sentinel := makeWorker("ns", "pod2", 1)
@@ -448,7 +448,7 @@ func makeWorker(namespace, pod string, version int64) *ateapipb.Worker {
 		WorkerNamespace: namespace,
 		WorkerPod:       pod,
 		WorkerPodUid:    workerName(namespace, pod),
-		Status:          &ateapipb.WorkerStatus{Allocation: &ateapipb.WorkerAllocation{}},
+		Status:          &ateapipb.WorkerStatus{},
 	}
 }
 

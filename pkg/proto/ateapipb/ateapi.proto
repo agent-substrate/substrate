@@ -1723,33 +1723,24 @@ message WorkerStatus {
   // +k8s:maximum=2 # keep this in sync with the WorkerState enum
   WorkerState state = 1;
 
-  // What this Worker has and what is spoken for. Observed, not requested: no
-  // client sets it, which is why it is status.
+  // The total resource capacity of the Worker.
+  //
+  // A Worker should report every dimension of resources it has available to be
+  // consumed by Actors. Any resource not specified here is assumed to be 0. An
+  // Actor which requests a resource which is not present in a Worker's
+  // capacity will prevent that Actor from running on that Worker.
+  //
+  // Shrinking capacity below allocated prevents new placements but does not
+  // evicts running Actors.
   //
   // +k8s:optional
-  WorkerAllocation allocation = 2;
-}
+  WorkerResources capacity = 2;
 
-// WorkerAllocation is a Worker's total against its committed share, in one
-// message because placement only ever reads the two together.
-message WorkerAllocation {
-  // What the Worker can supply, as it reports through
-  // WorkerService.SetWorkerCapacity.
-  //
-  // Complete, not partial: a Worker reports every dimension it has, so a name
-  // missing here is one it cannot supply at all and no Actor asking for that
-  // name is placed on it. Shrinking below allocated stops new placements and
-  // evicts nothing.
+  // The allocated resources of the Worker.  This is the sum of all the
+  // resources consumed by the Actors currently assigned to this Worker.
   //
   // +k8s:optional
-  WorkerResources capacity = 1;
-
-  // What the assignments consume of capacity. A running total because placement
-  // reads it for every Worker on every decision, and summing the assignments
-  // would cost the fleet's actor count each time.
-  //
-  // +k8s:optional
-  WorkerResources allocated = 2;
+  WorkerResources allocated = 3;
 }
 
 // WorkerResources represents a set of resources.

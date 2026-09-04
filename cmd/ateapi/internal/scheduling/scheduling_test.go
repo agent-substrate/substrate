@@ -344,7 +344,7 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		NodeName:     node,
 		Labels:       lbls,
 		// A stored Worker always carries a ceiling; CreateWorker reifies one.
-		Status: &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Allocation: &ateapipb.WorkerAllocation{Capacity: &ateapipb.WorkerResources{Actors: 1}}},
+		Status: &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -371,12 +371,12 @@ func assignedFor(atespace, name string, took *ateapipb.Resources) func(*ateapipb
 		if w.Status == nil {
 			w.Status = &ateapipb.WorkerStatus{}
 		}
-		allocated, err := resources.AddToAllocated(w.Status.Allocation.Allocated,
+		allocated, err := resources.AddToAllocated(w.Status.Allocated,
 			&ateapipb.ActorAssignment{ActorUid: atespace + "/" + name, Resources: took}, +1)
 		if err != nil {
 			panic(err)
 		}
-		w.Status.Allocation.Allocated = allocated
+		w.Status.Allocated = allocated
 	}
 }
 
@@ -385,19 +385,19 @@ func withMaxActors(n int32) func(*ateapipb.Worker) {
 		if w.Status == nil {
 			w.Status = &ateapipb.WorkerStatus{}
 		}
-		if w.Status.Allocation.Capacity == nil {
-			w.Status.Allocation.Capacity = &ateapipb.WorkerResources{}
+		if w.Status.Capacity == nil {
+			w.Status.Capacity = &ateapipb.WorkerResources{}
 		}
-		w.Status.Allocation.Capacity.Actors = n
+		w.Status.Capacity.Actors = n
 	}
 }
 
 func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		if w.Status.Allocation.Capacity == nil {
-			w.Status.Allocation.Capacity = &ateapipb.WorkerResources{}
+		if w.Status.Capacity == nil {
+			w.Status.Capacity = &ateapipb.WorkerResources{}
 		}
-		w.Status.Allocation.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
+		w.Status.Capacity.Resources = resources.CPUMemory(cpuMilli, memBytes)
 	}
 }
 
