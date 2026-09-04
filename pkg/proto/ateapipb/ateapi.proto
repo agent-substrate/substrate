@@ -666,8 +666,10 @@ message ActorSnapshotTagStatus {
 // created, and deleted when the tag is. Its owning Atespace cannot be deleted
 // until the tag is removed.
 message ActorSnapshotTag {
-  // Common resource metadata: name, uid, version, timestamps.
-  // +k8s:opaqueType
+  // Common resource metadata: atespace, name, uid, version, timestamps.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
   // status is set by the control plane; it is ignored on write.
@@ -676,6 +678,10 @@ message ActorSnapshotTag {
   ActorSnapshotTagStatus status = 2;
 
   // scope controls who may create an Actor from this tag.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the ActorSnapshotTagScope enum
   ActorSnapshotTagScope scope = 3;
 
   // source_actor is the suspended Actor whose external snapshot this tag

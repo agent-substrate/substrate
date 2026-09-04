@@ -1835,14 +1835,20 @@ func (x *ActorSnapshotTagStatus) GetSourceActorUid() string {
 // until the tag is removed.
 type ActorSnapshotTag struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Common resource metadata: name, uid, version, timestamps.
-	// +k8s:opaqueType
+	// Common resource metadata: atespace, name, uid, version, timestamps.
+	//
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// status is set by the control plane; it is ignored on write.
 	//
 	// +k8s:optional
 	Status *ActorSnapshotTagStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	// scope controls who may create an Actor from this tag.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the ActorSnapshotTagScope enum
 	Scope ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
 	// source_actor is the suspended Actor whose external snapshot this tag
 	// captures. The tag lives in this Actor's Atespace. Set once at creation and

@@ -1202,12 +1202,9 @@ func TestValidateNestedExternalSnapshot(t *testing.T) {
 			path: field.NewPath("status", "snapshot"),
 			validate: func(ctx context.Context) field.ErrorList {
 				op := operation.Operation{Type: operation.Create}
-				obj := &ateapipb.ActorSnapshotTag{
-					Metadata:    validResourceMetadata(),
-					Status:      &ateapipb.ActorSnapshotTagStatus{Snapshot: badExternalSnapshot()},
-					Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-					SourceActor: &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
-				}
+				obj := validActorSnapshotTag(func(tag *ateapipb.ActorSnapshotTag) {
+					tag.Status.Snapshot = badExternalSnapshot()
+				})
 				return Validate_ActorSnapshotTag(ctx, op, nil, obj, nil)
 			},
 		},
@@ -1236,19 +1233,147 @@ func TestValidateNestedExternalSnapshot(t *testing.T) {
 	}
 }
 
+func validActorSnapshotTag(mutate ...func(*ateapipb.ActorSnapshotTag)) *ateapipb.ActorSnapshotTag {
+	tag := &ateapipb.ActorSnapshotTag{
+		Metadata:    validResourceMetadata(),
+		Status:      &ateapipb.ActorSnapshotTagStatus{Snapshot: validExternalSnapshot()},
+		Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		SourceActor: &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
+	}
+	for _, m := range mutate {
+		m(tag)
+	}
+	return tag
+}
+
+func TestValidateActorSnapshotTag(t *testing.T) {
+	valid := validActorSnapshotTag
+	metadataPath := field.NewPath("metadata")
+	scopePath := field.NewPath("scope")
+	sourceActorPath := field.NewPath("source_actor")
+
+	tests := []struct {
+		name string
+		obj  *ateapipb.ActorSnapshotTag
+		want field.ErrorList
+	}{
+		{
+			name: "valid",
+			obj:  valid(),
+		},
+		{
+			name: "valid scope: published",
+			obj: valid(func(tag *ateapipb.ActorSnapshotTag) {
+				tag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+			}),
+		},
+		{
+			name: "missing status",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.Status = nil }),
+		},
+		{
+			name: "missing metadata",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.Metadata = nil }),
+			want: field.ErrorList{field.Required(metadataPath, "")},
+		},
+		{
+			// A tag is addressed through the atespace that owns it, so unlike a
+			// global-scoped resource it always has to name one.
+			name: "missing metadata.atespace",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.Metadata.Atespace = "" }),
+			want: field.ErrorList{field.Required(metadataPath.Child("atespace"), "")},
+		},
+		{
+			name: "invalid nested metadata.name",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.Metadata.Name = "" }),
+			want: field.ErrorList{field.Required(metadataPath.Child("name"), "")},
+		},
+		{
+			name: "unspecified scope",
+			obj: valid(func(tag *ateapipb.ActorSnapshotTag) {
+				tag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED
+			}),
+			want: field.ErrorList{field.Required(scopePath, "")},
+		},
+		{
+			name: "scope above the enum",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.Scope = ateapipb.ActorSnapshotTagScope(3) }),
+			want: field.ErrorList{field.Invalid(scopePath, nil, "").WithOrigin("maximum")},
+		},
+		{
+			name: "negative scope",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.Scope = ateapipb.ActorSnapshotTagScope(-1) }),
+			want: field.ErrorList{field.Invalid(scopePath, nil, "").WithOrigin("minimum")},
+		},
+		{
+			name: "missing source_actor",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.SourceActor = nil }),
+			want: field.ErrorList{field.Required(sourceActorPath, "")},
+		},
+		{
+			name: "missing source_actor.atespace",
+			obj:  valid(func(tag *ateapipb.ActorSnapshotTag) { tag.SourceActor.Atespace = "" }),
+			want: field.ErrorList{field.Required(sourceActorPath.Child("atespace"), "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Create}
+			assertValidateErr(t, Validate_ActorSnapshotTag(context.Background(), op, nil, tt.obj, nil), tt.want)
+		})
+	}
+}
+
+func TestValidateActorSnapshotTagUpdate(t *testing.T) {
+	valid := validActorSnapshotTag
+
+	tests := []struct {
+		name   string
+		oldObj *ateapipb.ActorSnapshotTag // should always be valid
+		newObj *ateapipb.ActorSnapshotTag
+		want   field.ErrorList
+	}{
+		{
+			name:   "unchanged",
+			oldObj: valid(),
+			newObj: valid(),
+		},
+		{
+			// The tag is addressed through its atespace; moving it would strand
+			// every reference to it.
+			name:   "metadata.atespace changed",
+			oldObj: valid(),
+			newObj: valid(func(tag *ateapipb.ActorSnapshotTag) { tag.Metadata.Atespace = "other" }),
+			want:   field.ErrorList{field.Invalid(field.NewPath("metadata", "atespace"), nil, "").WithOrigin("immutable")},
+		},
+		{
+			name:   "source_actor changed",
+			oldObj: valid(),
+			newObj: valid(func(tag *ateapipb.ActorSnapshotTag) { tag.SourceActor.Name = "other" }),
+			want:   field.ErrorList{field.Invalid(field.NewPath("source_actor"), nil, "").WithOrigin("immutable")},
+		},
+		{
+			name:   "scope changed",
+			oldObj: valid(),
+			newObj: valid(func(tag *ateapipb.ActorSnapshotTag) {
+				tag.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+			}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := operation.Operation{Type: operation.Update}
+			assertValidateErr(t, Validate_ActorSnapshotTag(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
+		})
+	}
+}
+
 // TestValidateActorSnapshotTagRequestPayloads covers the generated rules on the
 // tag write requests. Both RPCs validate by hand today (see
 // validateCreateActorSnapshotTagRequest), so these guard the schema itself
 // against drift rather than the wire behavior.
 func TestValidateActorSnapshotTagRequestPayloads(t *testing.T) {
-	validTag := func() *ateapipb.ActorSnapshotTag {
-		return &ateapipb.ActorSnapshotTag{
-			Metadata:    validResourceMetadata(),
-			Status:      &ateapipb.ActorSnapshotTagStatus{Snapshot: validExternalSnapshot()},
-			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-			SourceActor: &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
-		}
-	}
+	validTag := validActorSnapshotTag
 	tagPath := field.NewPath("actor_snapshot_tag")
 
 	tests := []struct {
