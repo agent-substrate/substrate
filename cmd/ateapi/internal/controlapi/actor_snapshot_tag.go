@@ -78,6 +78,8 @@ func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagR
 	var fldPath *field.Path
 	var errs field.ErrorList
 
+	// TODO: replace all validations with DV tags
+
 	actorPath := fldPath.Child("actor")
 	if req.GetActor() == nil {
 		errs = append(errs, field.Required(actorPath, ""))
@@ -131,6 +133,7 @@ func validateGetActorSnapshotTagRequest(req *ateapipb.GetActorSnapshotTagRequest
 	var fldPath *field.Path
 	var errs field.ErrorList
 
+	// TODO: replace all validations with DV tags
 	if val, fldPath := req.ActorSnapshotTag, fldPath.Child("actor_snapshot_tag"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
@@ -159,6 +162,8 @@ func (s *ServiceImpl) ListActorSnapshotTags(ctx context.Context, atespace string
 func validateListActorSnapshotTagsRequest(req *ateapipb.ListActorSnapshotTagsRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
+
+	// TODO: replace all validations with DV tags
 
 	// An empty atespace is allowed here and means "all atespaces".
 	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val != "" {
@@ -236,6 +241,8 @@ func (s *ServiceImpl) UpdateActorSnapshotTag(ctx context.Context, tagRef resourc
 func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
+
+	// TODO: replace all validations with DV tags
 
 	tag := req.GetActorSnapshotTag()
 	tagPath := fldPath.Child("actor_snapshot_tag")
@@ -332,6 +339,8 @@ func (s *ServiceImpl) DeleteActorSnapshotTag(ctx context.Context, tagRef resourc
 func validateDeleteActorSnapshotTagRequest(req *ateapipb.DeleteActorSnapshotTagRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
+
+	// TODO: replace all validations with DV tags
 
 	if val, fldPath := req.ActorSnapshotTag, fldPath.Child("actor_snapshot_tag"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))

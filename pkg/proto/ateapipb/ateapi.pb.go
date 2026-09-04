@@ -524,10 +524,14 @@ func (ExternalVolume_Status) EnumDescriptor() ([]byte, []int) {
 type ExternalSnapshot struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// snapshot_uri addresses the snapshot's prefix in object storage.
-	// TODO: Add DV (required, maxLength?)
+	//
+	// +k8s:required
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	// content_scope is what the snapshot captured.
-	// TODO: Add DV (optional, minimum, maximum?)
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
 	ContentScope  SnapshotContentScope `protobuf:"varint,2,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1745,6 +1749,8 @@ type ActorSnapshotTagStatus struct {
 	// snapshot is the external snapshot this tag points at. Unset while the tag
 	// is still being created, and immutable once set: a tag never moves between
 	// snapshots. A tag is usable only once this is set.
+	//
+	// +k8s:optional
 	Snapshot *ExternalSnapshot `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// UID of the ActorTemplate the snapshot was taken under. Actors can only be
 	// seeded from a tag under the same template.
@@ -1833,6 +1839,8 @@ type ActorSnapshotTag struct {
 	// +k8s:opaqueType
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// status is set by the control plane; it is ignored on write.
+	//
+	// +k8s:optional
 	Status *ActorSnapshotTagStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	// scope controls who may create an Actor from this tag.
 	Scope         ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
@@ -2247,6 +2255,8 @@ type GoldenSnapshotStatus struct {
 	// golden_snapshot is the external snapshot built for this version by
 	// ate-api, taken from the golden Actor in the reserved ate-golden system
 	// atespace. Set once state is READY. The golden Actor owns it.
+	//
+	// +k8s:optional
 	GoldenSnapshot *ExternalSnapshot `protobuf:"bytes,1,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
 	// take_golden_snapshot_at is when the golden-actor warmup ends and the
 	// golden snapshot may be taken.
@@ -2308,8 +2318,9 @@ func (x *GoldenSnapshotStatus) GetErrorMessage() string {
 }
 
 type ActorTemplateStatus struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	GoldenSnapshotStatus *GoldenSnapshotStatus  `protobuf:"bytes,1,opt,name=golden_snapshot_status,json=goldenSnapshotStatus,proto3" json:"golden_snapshot_status,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:optional
+	GoldenSnapshotStatus *GoldenSnapshotStatus `protobuf:"bytes,1,opt,name=golden_snapshot_status,json=goldenSnapshotStatus,proto3" json:"golden_snapshot_status,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -5049,6 +5060,8 @@ type CreateActorSnapshotTagRequest struct {
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// The tag to create. metadata.name and scope are honored; metadata.atespace
 	// must be empty or match the Actor's, and status is ignored on write.
+	//
+	// +k8s:required
 	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,2,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -5107,6 +5120,8 @@ type UpdateActorSnapshotTagRequest struct {
 	// identify which resource to update.
 	// actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
 	// are required preconditions
+	//
+	// +k8s:required
 	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

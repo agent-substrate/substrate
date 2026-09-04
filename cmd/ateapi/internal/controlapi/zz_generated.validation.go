@@ -383,6 +383,90 @@ func Validate_ActorMetadataItem(
 	return errs
 }
 
+// Validate_ActorSnapshotTag validates an instance of ActorSnapshotTag according
+// to declarative validation rules in the API schema.
+func Validate_ActorSnapshotTag(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ActorSnapshotTag) (errs field.ErrorList) {
+
+	// field ateapipb.ActorSnapshotTag.Metadata has no validation
+
+	{ // field ateapipb.ActorSnapshotTag.Status
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ActorSnapshotTagStatus,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorSnapshotTagStatus(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorSnapshotTag) *ateapipb.ActorSnapshotTagStatus {
+				return oldObj.Status
+			})
+		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
+	}
+
+	// field ateapipb.ActorSnapshotTag.Scope has no validation
+	return errs
+}
+
+// Validate_ActorSnapshotTagStatus validates an instance of ActorSnapshotTagStatus according
+// to declarative validation rules in the API schema.
+func Validate_ActorSnapshotTagStatus(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ActorSnapshotTagStatus) (errs field.ErrorList) {
+
+	{ // field ateapipb.ActorSnapshotTagStatus.Snapshot
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ExternalSnapshot,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ExternalSnapshot(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorSnapshotTagStatus) *ateapipb.ExternalSnapshot {
+				return oldObj.Snapshot
+			})
+		errs = append(errs, fn(fldPath.Child("snapshot"), obj.Snapshot, oldVal, oldObj != nil)...)
+	}
+
+	// field ateapipb.ActorSnapshotTagStatus.ActorTemplateUid has no validation
+	// field ateapipb.ActorSnapshotTagStatus.InProgressSnapshotUri has no validation
+	// field ateapipb.ActorSnapshotTagStatus.SourceActorUid has no validation
+	return errs
+}
+
 // Validate_ActorStatus validates an instance of ActorStatus according
 // to declarative validation rules in the API schema.
 func Validate_ActorStatus(
@@ -508,6 +592,8 @@ func Validate_ActorStatus(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_ExternalSnapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -945,6 +1031,8 @@ func Validate_ActorTemplate(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorTemplateStatus(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -952,6 +1040,45 @@ func Validate_ActorTemplate(
 				return oldObj.Status
 			})
 		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_ActorTemplateStatus validates an instance of ActorTemplateStatus according
+// to declarative validation rules in the API schema.
+func Validate_ActorTemplateStatus(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ActorTemplateStatus) (errs field.ErrorList) {
+
+	{ // field ateapipb.ActorTemplateStatus.GoldenSnapshotStatus
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.GoldenSnapshotStatus,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_GoldenSnapshotStatus(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorTemplateStatus) *ateapipb.GoldenSnapshotStatus {
+				return oldObj.GoldenSnapshotStatus
+			})
+		errs = append(errs, fn(fldPath.Child("golden_snapshot_status"), obj.GoldenSnapshotStatus, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -1640,6 +1767,48 @@ func Validate_CreateActorRequest(
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_CreateActorSnapshotTagRequest validates an instance of CreateActorSnapshotTagRequest according
+// to declarative validation rules in the API schema.
+func Validate_CreateActorSnapshotTagRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.CreateActorSnapshotTagRequest) (errs field.ErrorList) {
+
+	// field ateapipb.CreateActorSnapshotTagRequest.Actor has no validation
+
+	{ // field ateapipb.CreateActorSnapshotTagRequest.ActorSnapshotTag
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ActorSnapshotTag,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorSnapshotTag(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.CreateActorSnapshotTagRequest) *ateapipb.ActorSnapshotTag {
+				return oldObj.ActorSnapshotTag
+			})
+		errs = append(errs, fn(fldPath.Child("actor_snapshot_tag"), obj.ActorSnapshotTag, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2705,6 +2874,78 @@ func Validate_EnvVar(
 	return errs
 }
 
+// Validate_ExternalSnapshot validates an instance of ExternalSnapshot according
+// to declarative validation rules in the API schema.
+func Validate_ExternalSnapshot(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ExternalSnapshot) (errs field.ErrorList) {
+
+	{ // field ateapipb.ExternalSnapshot.SnapshotUri
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalSnapshot) *string {
+				return &oldObj.SnapshotUri
+			})
+		errs = append(errs, fn(fldPath.Child("snapshot_uri"), &obj.SnapshotUri, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ExternalSnapshot.ContentScope
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.SnapshotContentScope,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalSnapshot) *ateapipb.SnapshotContentScope {
+				return &oldObj.ContentScope
+			})
+		errs = append(errs, fn(fldPath.Child("content_scope"), &obj.ContentScope, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_ExternalVolume validates an instance of ExternalVolume according
 // to declarative validation rules in the API schema.
 func Validate_ExternalVolume(
@@ -3264,6 +3505,47 @@ func Validate_GetWorkerRequest(
 		errs = append(errs, fn(fldPath.Child("worker"), obj.Worker, oldVal, oldObj != nil)...)
 	}
 
+	return errs
+}
+
+// Validate_GoldenSnapshotStatus validates an instance of GoldenSnapshotStatus according
+// to declarative validation rules in the API schema.
+func Validate_GoldenSnapshotStatus(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.GoldenSnapshotStatus) (errs field.ErrorList) {
+
+	{ // field ateapipb.GoldenSnapshotStatus.GoldenSnapshot
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ExternalSnapshot,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ExternalSnapshot(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.GoldenSnapshotStatus) *ateapipb.ExternalSnapshot {
+				return oldObj.GoldenSnapshot
+			})
+		errs = append(errs, fn(fldPath.Child("golden_snapshot"), obj.GoldenSnapshot, oldVal, oldObj != nil)...)
+	}
+
+	// field ateapipb.GoldenSnapshotStatus.TakeGoldenSnapshotAt has no validation
+	// field ateapipb.GoldenSnapshotStatus.ErrorMessage has no validation
 	return errs
 }
 
@@ -5830,6 +6112,46 @@ func Validate_UpdateActorRequest(
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_UpdateActorSnapshotTagRequest validates an instance of UpdateActorSnapshotTagRequest according
+// to declarative validation rules in the API schema.
+func Validate_UpdateActorSnapshotTagRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.UpdateActorSnapshotTagRequest) (errs field.ErrorList) {
+
+	{ // field ateapipb.UpdateActorSnapshotTagRequest.ActorSnapshotTag
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ActorSnapshotTag,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorSnapshotTag(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.UpdateActorSnapshotTagRequest) *ateapipb.ActorSnapshotTag {
+				return oldObj.ActorSnapshotTag
+			})
+		errs = append(errs, fn(fldPath.Child("actor_snapshot_tag"), obj.ActorSnapshotTag, oldVal, oldObj != nil)...)
 	}
 
 	return errs

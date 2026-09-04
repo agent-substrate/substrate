@@ -132,11 +132,15 @@ service Control {
 // ExternalSnapshot addresses a snapshot held in object storage.
 message ExternalSnapshot {
   // snapshot_uri addresses the snapshot's prefix in object storage.
-  // TODO: Add DV (required, maxLength?)
+  //
+  // +k8s:required
   string snapshot_uri = 1;
 
   // content_scope is what the snapshot captured.
-  // TODO: Add DV (optional, minimum, maximum?)
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 2;
 }
 
@@ -634,6 +638,8 @@ message ActorSnapshotTagStatus {
   // snapshot is the external snapshot this tag points at. Unset while the tag
   // is still being created, and immutable once set: a tag never moves between
   // snapshots. A tag is usable only once this is set.
+  //
+  // +k8s:optional
   ExternalSnapshot snapshot = 1;
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be
@@ -665,6 +671,8 @@ message ActorSnapshotTag {
   ResourceMetadata metadata = 1;
 
   // status is set by the control plane; it is ignored on write.
+  //
+  // +k8s:optional
   ActorSnapshotTagStatus status = 2;
 
   // scope controls who may create an Actor from this tag.
@@ -781,6 +789,8 @@ message GoldenSnapshotStatus {
   // golden_snapshot is the external snapshot built for this version by
   // ate-api, taken from the golden Actor in the reserved ate-golden system
   // atespace. Set once state is READY. The golden Actor owns it.
+  //
+  // +k8s:optional
   ExternalSnapshot golden_snapshot = 1;
 
   // take_golden_snapshot_at is when the golden-actor warmup ends and the
@@ -791,6 +801,7 @@ message GoldenSnapshotStatus {
 }
 
 message ActorTemplateStatus {
+  // +k8s:optional
   GoldenSnapshotStatus golden_snapshot_status = 1;
 }
 
@@ -1449,6 +1460,8 @@ message CreateActorSnapshotTagRequest {
 
   // The tag to create. metadata.name and scope are honored; metadata.atespace
   // must be empty or match the Actor's, and status is ignored on write.
+  //
+  // +k8s:required
   ActorSnapshotTag actor_snapshot_tag = 2;
 }
 
@@ -1460,6 +1473,8 @@ message UpdateActorSnapshotTagRequest {
   // identify which resource to update.
   // actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
   // are required preconditions
+  //
+  // +k8s:required
   ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
