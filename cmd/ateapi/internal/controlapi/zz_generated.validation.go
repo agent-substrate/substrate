@@ -4449,8 +4449,7 @@ func Validate_MintCertRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			// custom validation
-			if e := ValidateCustom_MintCertRequest_CertificateSigningRequest(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.MaxBytesSlice(ctx, op, fldPath, obj, oldObj, 16384); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

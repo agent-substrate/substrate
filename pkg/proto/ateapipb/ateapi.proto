@@ -1944,7 +1944,7 @@ message MintCertRequest {
   // subject public key.
   //
   // +k8s:required
-  // +k8s:customValidation # size bound; maxLength is string-only
+  // +k8s:maxBytes=16384
   bytes certificate_signing_request = 2;
 
   // Actor incarnation expected by the activation. This is only a stale-request

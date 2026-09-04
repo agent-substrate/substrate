@@ -6765,7 +6765,7 @@ type MintCertRequest struct {
 	// subject public key.
 	//
 	// +k8s:required
-	// +k8s:customValidation # size bound; maxLength is string-only
+	// +k8s:maxBytes=16384
 	CertificateSigningRequest []byte `protobuf:"bytes,2,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
 	// Actor incarnation expected by the activation. This is only a stale-request
 	// guard: ateapi derives the actor and its identity from the worker assignment.
