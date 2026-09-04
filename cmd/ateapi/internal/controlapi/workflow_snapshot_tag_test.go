@@ -51,10 +51,11 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 }
 
 // tagToCreate is the part of an ActorSnapshotTag a client owns on create.
-func tagToCreate(name string) *ateapipb.ActorSnapshotTag {
+func tagToCreate(sourceActor resources.ActorRef, name string) *ateapipb.ActorSnapshotTag {
 	return &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Name: name},
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		Metadata:    &ateapipb.ResourceMetadata{Name: name},
+		Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		SourceActor: sourceActor.ToObjectRef(),
 	}
 }
 
@@ -95,7 +96,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	actor, actorSnapshot := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
 
-	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestTagActorSnapshot_ActorRepointedToAnotherTemplate(t *testing.T) {
 		t.Fatalf("repointing actor %s: %v", actorRef, err)
 	}
 
-	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -217,7 +218,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 				})
 			}
 
-			_, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 			if code := status.Code(err); code != tt.wantCode {
 				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
@@ -251,7 +252,7 @@ func TestTagActorSnapshot_RetriesAfterCopyFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 
@@ -273,7 +274,7 @@ func TestTagActorSnapshot_RetriesAfterCopyFailure(t *testing.T) {
 
 	// The retry adopts the pending row: same destination, now complete.
 	objects.OnCopy = nil
-	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if err != nil {
 		t.Fatalf("retried TagActorSnapshot: %v", err)
 	}
@@ -289,7 +290,7 @@ func TestTagActorSnapshot_RetriesAfterCopyFailure(t *testing.T) {
 
 	// A further retry finds a finished tag. Its own copy's URI says nothing
 	// about which suspend it was taken from, so the name is simply taken.
-	_, err = w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot over the finished tag = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -311,14 +312,14 @@ func TestTagActorSnapshot_RetryWithAnotherScope(t *testing.T) {
 
 	// Leave a pending row behind: the reservation lands, the copy does not.
 	objects.OnCopy = func(_, _, _, _ string) error { return errObjectStore }
-	if _, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	objects.OnCopy = nil
 
-	published := tagToCreate("v1")
+	published := tagToCreate(actorRef, "v1")
 	published.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
-	_, err := w.TagActorSnapshot(ctx, actorRef, published)
+	_, err := w.TagActorSnapshot(ctx, published)
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot with another scope = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -331,7 +332,7 @@ func TestTagActorSnapshot_RetryWithAnotherScope(t *testing.T) {
 	}
 
 	// The reserved scope still adopts, so the rejection did not cost idempotency.
-	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if err != nil {
 		t.Fatalf("retried TagActorSnapshot with the reserved scope: %v", err)
 	}
@@ -371,7 +372,7 @@ func TestTagActorSnapshot_RetryAfterResuspendDropsStaleObjects(t *testing.T) {
 		},
 	})
 
-	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if err != nil {
 		t.Fatalf("TagActorSnapshot: %v", err)
 	}
@@ -411,7 +412,7 @@ func TestTagActorSnapshot_RetriesAfterClearFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	pending, err := persistence.GetActorSnapshotTag(ctx, tagRef)
@@ -424,7 +425,7 @@ func TestTagActorSnapshot_RetriesAfterClearFailure(t *testing.T) {
 	// The second attempt adopts that row but cannot clear the partial copy.
 	objects.OnCopy = nil
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot over the failing clear = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	stillPending, err := persistence.GetActorSnapshotTag(ctx, tagRef)
@@ -440,7 +441,7 @@ func TestTagActorSnapshot_RetriesAfterClearFailure(t *testing.T) {
 
 	// A third attempt runs the clear the second one never got through, and finishes.
 	objects.OnDelete = nil
-	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if err != nil {
 		t.Fatalf("retried TagActorSnapshot: %v", err)
 	}
@@ -475,7 +476,7 @@ func TestTagActorSnapshot_RetryWhileActorRunning(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	objects.OnCopy = nil
@@ -489,7 +490,7 @@ func TestTagActorSnapshot_RetryWhileActorRunning(t *testing.T) {
 	// The actor is resumed before the retry. It keeps the external snapshot it
 	// restored from, so only its state rules the retry out.
 	running := mustUpdateActorState(t, ctx, persistence, actor, ateapipb.ActorState_ACTOR_STATE_RUNNING)
-	if _, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1")); status.Code(err) != codes.FailedPrecondition {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("TagActorSnapshot over the running actor = %v (code %v), want code FailedPrecondition", err, status.Code(err))
 	}
 	stillPending, err := persistence.GetActorSnapshotTag(ctx, tagRef)
@@ -508,7 +509,7 @@ func TestTagActorSnapshot_RetryWhileActorRunning(t *testing.T) {
 
 	// Suspended again, the actor finishes the row it left pending.
 	mustUpdateActorState(t, ctx, persistence, running, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-	tag, err := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if err != nil {
 		t.Fatalf("TagActorSnapshot once the actor is suspended again: %v", err)
 	}
@@ -551,7 +552,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 		return nil
 	}
 
-	tag, createErr := w.TagActorSnapshot(ctx, actorRef, tagToCreate("v1"))
+	tag, createErr := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if pendingURI == "" {
 		t.Fatalf("the create never reserved a row to race with (TagActorSnapshot = %v)", createErr)
 	}
@@ -598,7 +599,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, resources.ActorRefFromActor(first), tagToCreate("v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot(actor-1) = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	pending, err := persistence.GetActorSnapshotTag(ctx, tagRef)
@@ -610,7 +611,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	// The second actor asks for the same name, with object storage healthy: it
 	// must not inherit the first actor's prefix.
 	objects.OnCopy = nil
-	_, err = w.TagActorSnapshot(ctx, resources.ActorRefFromActor(second), tagToCreate("v1"))
+	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"))
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot(actor-2) = %v (code %v), want code AlreadyExists", err, code)
 	}
@@ -630,7 +631,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	}
 
 	// The actor the row belongs to can still finish it.
-	if _, err := w.TagActorSnapshot(ctx, resources.ActorRefFromActor(first), tagToCreate("v1")); err != nil {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); err != nil {
 		t.Fatalf("TagActorSnapshot(actor-1) retry: %v", err)
 	}
 }

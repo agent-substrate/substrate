@@ -1,10 +1,5 @@
 [
   {
-    "rule": "create-request-shape",
-    "subject": "ateapi.Control.CreateActorSnapshotTag",
-    "message": "field \"actor\" is ateapi.ObjectRef, want ateapi.ActorSnapshotTag or ateapi.CreateOptions - non-resource control fields belong in ateapi.CreateOptions"
-  },
-  {
     "rule": "delete-request-shape",
     "subject": "ateapi.Control.DeleteActor",
     "message": "field \"any_state\" is not a message, want ateapi.ObjectRef or ateapi.DeleteOptions - non-resource control fields belong in ateapi.DeleteOptions"

@@ -1843,7 +1843,15 @@ type ActorSnapshotTag struct {
 	// +k8s:optional
 	Status *ActorSnapshotTagStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	// scope controls who may create an Actor from this tag.
-	Scope         ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
+	Scope ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
+	// source_actor is the suspended Actor whose external snapshot this tag
+	// captures. The tag lives in this Actor's Atespace. Set once at creation and
+	// immutable afterward.
+	//
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
+	// +k8s:immutable
+	SourceActor   *ObjectRef `protobuf:"bytes,4,opt,name=source_actor,json=sourceActor,proto3" json:"source_actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1897,6 +1905,13 @@ func (x *ActorSnapshotTag) GetScope() ActorSnapshotTagScope {
 		return x.Scope
 	}
 	return ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED
+}
+
+func (x *ActorSnapshotTag) GetSourceActor() *ObjectRef {
+	if x != nil {
+		return x.SourceActor
+	}
+	return nil
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
@@ -5053,16 +5068,12 @@ func (x *ListActorSnapshotTagsResponse) GetNextPageToken() string {
 // tag of a different Actor, is ALREADY_EXISTS.
 type CreateActorSnapshotTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The suspended Actor whose external snapshot to tag. The tag is created in
-	// this Actor's Atespace.
-	//
-	// +k8s:opaqueType
-	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
-	// The tag to create. metadata.name and scope are honored; metadata.atespace
-	// must be empty or match the Actor's, and status is ignored on write.
+	// The tag to create. metadata.name, scope and source_actor are honored;
+	// metadata.atespace must be empty or match source_actor's, and status is
+	// ignored on write.
 	//
 	// +k8s:required
-	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,2,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
+	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -5095,13 +5106,6 @@ func (x *CreateActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use CreateActorSnapshotTagRequest.ProtoReflect.Descriptor instead.
 func (*CreateActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{69}
-}
-
-func (x *CreateActorSnapshotTagRequest) GetActor() *ObjectRef {
-	if x != nil {
-		return x.Actor
-	}
-	return nil
 }
 
 func (x *CreateActorSnapshotTagRequest) GetActorSnapshotTag() *ActorSnapshotTag {
@@ -6810,11 +6814,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bsnapshot\x18\x01 \x01(\v2\x18.ateapi.ExternalSnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\x127\n" +
 	"\x18in_progress_snapshot_uri\x18\x03 \x01(\tR\x15inProgressSnapshotUri\x12(\n" +
-	"\x10source_actor_uid\x18\x04 \x01(\tR\x0esourceActorUid\"\xb5\x01\n" +
+	"\x10source_actor_uid\x18\x04 \x01(\tR\x0esourceActorUid\"\xeb\x01\n" +
 	"\x10ActorSnapshotTag\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x126\n" +
 	"\x06status\x18\x02 \x01(\v2\x1e.ateapi.ActorSnapshotTagStatusR\x06status\x123\n" +
-	"\x05scope\x18\x03 \x01(\x0e2\x1d.ateapi.ActorSnapshotTagScopeR\x05scope\"@\n" +
+	"\x05scope\x18\x03 \x01(\x0e2\x1d.ateapi.ActorSnapshotTagScopeR\x05scope\x124\n" +
+	"\fsource_actor\x18\x04 \x01(\v2\x11.ateapi.ObjectRefR\vsourceActor\"@\n" +
 	"\bAtespace\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\";\n" +
 	"\tObjectRef\x12\x1a\n" +
@@ -6977,10 +6982,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"\x91\x01\n" +
 	"\x1dListActorSnapshotTagsResponse\x12H\n" +
 	"\x13actor_snapshot_tags\x18\x01 \x03(\v2\x18.ateapi.ActorSnapshotTagR\x11actorSnapshotTags\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x90\x01\n" +
-	"\x1dCreateActorSnapshotTagRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12F\n" +
-	"\x12actor_snapshot_tag\x18\x02 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"g\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"g\n" +
+	"\x1dCreateActorSnapshotTagRequest\x12F\n" +
+	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"g\n" +
 	"\x1dUpdateActorSnapshotTagRequest\x12F\n" +
 	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"`\n" +
 	"\x1dDeleteActorSnapshotTagRequest\x12?\n" +
@@ -7305,67 +7309,67 @@ var file_ateapi_proto_depIdxs = []int32{
 	12,  // 26: ateapi.ActorSnapshotTag.metadata:type_name -> ateapi.ResourceMetadata
 	23,  // 27: ateapi.ActorSnapshotTag.status:type_name -> ateapi.ActorSnapshotTagStatus
 	1,   // 28: ateapi.ActorSnapshotTag.scope:type_name -> ateapi.ActorSnapshotTagScope
-	12,  // 29: ateapi.Atespace.metadata:type_name -> ateapi.ResourceMetadata
-	12,  // 30: ateapi.ActorTemplate.metadata:type_name -> ateapi.ResourceMetadata
-	11,  // 31: ateapi.ActorTemplate.worker_selector:type_name -> ateapi.Selector
-	35,  // 32: ateapi.ActorTemplate.containers:type_name -> ateapi.Container
-	41,  // 33: ateapi.ActorTemplate.volumes:type_name -> ateapi.Volume
-	33,  // 34: ateapi.ActorTemplate.snapshots_config:type_name -> ateapi.SnapshotsConfig
-	32,  // 35: ateapi.ActorTemplate.sandbox_config:type_name -> ateapi.SandboxConfig
-	28,  // 36: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
-	31,  // 37: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
-	29,  // 38: ateapi.Resources.limits:type_name -> ateapi.Limits
-	9,   // 39: ateapi.GoldenSnapshotStatus.golden_snapshot:type_name -> ateapi.ExternalSnapshot
-	106, // 40: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
-	30,  // 41: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
-	3,   // 42: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
-	0,   // 43: ateapi.SnapshotsConfig.on_pause:type_name -> ateapi.SnapshotContentScope
-	0,   // 44: ateapi.SnapshotsConfig.on_commit:type_name -> ateapi.SnapshotContentScope
-	34,  // 45: ateapi.SnapshotsConfig.on_resume:type_name -> ateapi.OnResumeConfig
-	4,   // 46: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
-	38,  // 47: ateapi.Container.env:type_name -> ateapi.EnvVar
-	39,  // 48: ateapi.Container.readyz:type_name -> ateapi.ContainerReadyz
-	50,  // 49: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
-	36,  // 50: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
-	28,  // 51: ateapi.Container.resources:type_name -> ateapi.Resources
-	37,  // 52: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
-	40,  // 53: ateapi.ContainerReadyz.http_get:type_name -> ateapi.HTTPGetAction
-	43,  // 54: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
-	44,  // 55: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
-	45,  // 56: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource
-	42,  // 57: ateapi.Volume.image:type_name -> ateapi.ImageVolumeSource
-	46,  // 58: ateapi.SystemInfoVolumeSource.data_sources:type_name -> ateapi.SystemInfoDataSource
-	47,  // 59: ateapi.SystemInfoDataSource.actor_metadata:type_name -> ateapi.ActorMetadataDataSource
-	49,  // 60: ateapi.SystemInfoDataSource.trust_bundle:type_name -> ateapi.TrustBundleDataSource
-	48,  // 61: ateapi.ActorMetadataDataSource.items:type_name -> ateapi.ActorMetadataItem
-	5,   // 62: ateapi.ActorMetadataItem.field:type_name -> ateapi.ActorMetadataField
-	25,  // 63: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
-	26,  // 64: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	25,  // 65: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
-	26,  // 66: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	27,  // 67: ateapi.CreateActorTemplateRequest.actor_template:type_name -> ateapi.ActorTemplate
-	26,  // 68: ateapi.GetActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
-	27,  // 69: ateapi.ListActorTemplatesResponse.actor_templates:type_name -> ateapi.ActorTemplate
-	26,  // 70: ateapi.DeleteActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
-	26,  // 71: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
-	14,  // 72: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
-	14,  // 73: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
-	26,  // 74: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
-	14,  // 75: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
-	26,  // 76: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
-	14,  // 77: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
-	26,  // 78: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
-	14,  // 79: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
-	26,  // 80: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
-	26,  // 81: ateapi.GetActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	26,  // 82: ateapi.CreateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	15,  // 83: ateapi.CreateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
-	26,  // 84: ateapi.UpdateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	15,  // 85: ateapi.UpdateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
-	26,  // 86: ateapi.DeleteActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	26,  // 87: ateapi.GetActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ObjectRef
-	24,  // 88: ateapi.ListActorSnapshotTagsResponse.actor_snapshot_tags:type_name -> ateapi.ActorSnapshotTag
-	26,  // 89: ateapi.CreateActorSnapshotTagRequest.actor:type_name -> ateapi.ObjectRef
+	26,  // 29: ateapi.ActorSnapshotTag.source_actor:type_name -> ateapi.ObjectRef
+	12,  // 30: ateapi.Atespace.metadata:type_name -> ateapi.ResourceMetadata
+	12,  // 31: ateapi.ActorTemplate.metadata:type_name -> ateapi.ResourceMetadata
+	11,  // 32: ateapi.ActorTemplate.worker_selector:type_name -> ateapi.Selector
+	35,  // 33: ateapi.ActorTemplate.containers:type_name -> ateapi.Container
+	41,  // 34: ateapi.ActorTemplate.volumes:type_name -> ateapi.Volume
+	33,  // 35: ateapi.ActorTemplate.snapshots_config:type_name -> ateapi.SnapshotsConfig
+	32,  // 36: ateapi.ActorTemplate.sandbox_config:type_name -> ateapi.SandboxConfig
+	28,  // 37: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
+	31,  // 38: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
+	29,  // 39: ateapi.Resources.limits:type_name -> ateapi.Limits
+	9,   // 40: ateapi.GoldenSnapshotStatus.golden_snapshot:type_name -> ateapi.ExternalSnapshot
+	106, // 41: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
+	30,  // 42: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
+	3,   // 43: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
+	0,   // 44: ateapi.SnapshotsConfig.on_pause:type_name -> ateapi.SnapshotContentScope
+	0,   // 45: ateapi.SnapshotsConfig.on_commit:type_name -> ateapi.SnapshotContentScope
+	34,  // 46: ateapi.SnapshotsConfig.on_resume:type_name -> ateapi.OnResumeConfig
+	4,   // 47: ateapi.OnResumeConfig.from_data:type_name -> ateapi.ResumeSource
+	38,  // 48: ateapi.Container.env:type_name -> ateapi.EnvVar
+	39,  // 49: ateapi.Container.readyz:type_name -> ateapi.ContainerReadyz
+	50,  // 50: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount
+	36,  // 51: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
+	28,  // 52: ateapi.Container.resources:type_name -> ateapi.Resources
+	37,  // 53: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
+	40,  // 54: ateapi.ContainerReadyz.http_get:type_name -> ateapi.HTTPGetAction
+	43,  // 55: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
+	44,  // 56: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
+	45,  // 57: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource
+	42,  // 58: ateapi.Volume.image:type_name -> ateapi.ImageVolumeSource
+	46,  // 59: ateapi.SystemInfoVolumeSource.data_sources:type_name -> ateapi.SystemInfoDataSource
+	47,  // 60: ateapi.SystemInfoDataSource.actor_metadata:type_name -> ateapi.ActorMetadataDataSource
+	49,  // 61: ateapi.SystemInfoDataSource.trust_bundle:type_name -> ateapi.TrustBundleDataSource
+	48,  // 62: ateapi.ActorMetadataDataSource.items:type_name -> ateapi.ActorMetadataItem
+	5,   // 63: ateapi.ActorMetadataItem.field:type_name -> ateapi.ActorMetadataField
+	25,  // 64: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
+	26,  // 65: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	25,  // 66: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
+	26,  // 67: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	27,  // 68: ateapi.CreateActorTemplateRequest.actor_template:type_name -> ateapi.ActorTemplate
+	26,  // 69: ateapi.GetActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
+	27,  // 70: ateapi.ListActorTemplatesResponse.actor_templates:type_name -> ateapi.ActorTemplate
+	26,  // 71: ateapi.DeleteActorTemplateRequest.actor_template:type_name -> ateapi.ObjectRef
+	26,  // 72: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
+	14,  // 73: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
+	14,  // 74: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
+	26,  // 75: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
+	14,  // 76: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
+	26,  // 77: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
+	14,  // 78: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
+	26,  // 79: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
+	14,  // 80: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
+	26,  // 81: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
+	26,  // 82: ateapi.GetActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	26,  // 83: ateapi.CreateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	15,  // 84: ateapi.CreateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
+	26,  // 85: ateapi.UpdateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	15,  // 86: ateapi.UpdateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
+	26,  // 87: ateapi.DeleteActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
+	26,  // 88: ateapi.GetActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ObjectRef
+	24,  // 89: ateapi.ListActorSnapshotTagsResponse.actor_snapshot_tags:type_name -> ateapi.ActorSnapshotTag
 	24,  // 90: ateapi.CreateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
 	24,  // 91: ateapi.UpdateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
 	26,  // 92: ateapi.DeleteActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ObjectRef

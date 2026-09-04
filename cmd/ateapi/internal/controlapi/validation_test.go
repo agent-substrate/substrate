@@ -1203,9 +1203,10 @@ func TestValidateNestedExternalSnapshot(t *testing.T) {
 			validate: func(ctx context.Context) field.ErrorList {
 				op := operation.Operation{Type: operation.Create}
 				obj := &ateapipb.ActorSnapshotTag{
-					Metadata: validResourceMetadata(),
-					Status:   &ateapipb.ActorSnapshotTagStatus{Snapshot: badExternalSnapshot()},
-					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+					Metadata:    validResourceMetadata(),
+					Status:      &ateapipb.ActorSnapshotTagStatus{Snapshot: badExternalSnapshot()},
+					Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+					SourceActor: &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
 				}
 				return Validate_ActorSnapshotTag(ctx, op, nil, obj, nil)
 			},
@@ -1242,9 +1243,10 @@ func TestValidateNestedExternalSnapshot(t *testing.T) {
 func TestValidateActorSnapshotTagRequestPayloads(t *testing.T) {
 	validTag := func() *ateapipb.ActorSnapshotTag {
 		return &ateapipb.ActorSnapshotTag{
-			Metadata: validResourceMetadata(),
-			Status:   &ateapipb.ActorSnapshotTagStatus{Snapshot: validExternalSnapshot()},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			Metadata:    validResourceMetadata(),
+			Status:      &ateapipb.ActorSnapshotTagStatus{Snapshot: validExternalSnapshot()},
+			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			SourceActor: &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
 		}
 	}
 	tagPath := field.NewPath("actor_snapshot_tag")
@@ -1257,19 +1259,14 @@ func TestValidateActorSnapshotTagRequestPayloads(t *testing.T) {
 		{
 			name: "create: valid",
 			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
-				req := &ateapipb.CreateActorSnapshotTagRequest{
-					Actor:            &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
-					ActorSnapshotTag: validTag(),
-				}
+				req := &ateapipb.CreateActorSnapshotTagRequest{ActorSnapshotTag: validTag()}
 				return Validate_CreateActorSnapshotTagRequest(ctx, op, nil, req, nil)
 			},
 		},
 		{
 			name: "create: missing actor_snapshot_tag",
 			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
-				req := &ateapipb.CreateActorSnapshotTagRequest{
-					Actor: &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
-				}
+				req := &ateapipb.CreateActorSnapshotTagRequest{}
 				return Validate_CreateActorSnapshotTagRequest(ctx, op, nil, req, nil)
 			},
 			want: field.ErrorList{field.Required(tagPath, "")},
@@ -1279,10 +1276,7 @@ func TestValidateActorSnapshotTagRequestPayloads(t *testing.T) {
 			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
 				tag := validTag()
 				tag.Status.Snapshot = badExternalSnapshot()
-				req := &ateapipb.CreateActorSnapshotTagRequest{
-					Actor:            &ateapipb.ObjectRef{Atespace: "as", Name: "nm"},
-					ActorSnapshotTag: tag,
-				}
+				req := &ateapipb.CreateActorSnapshotTagRequest{ActorSnapshotTag: tag}
 				return Validate_CreateActorSnapshotTagRequest(ctx, op, nil, req, nil)
 			},
 			want: field.ErrorList{

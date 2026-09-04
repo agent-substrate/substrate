@@ -677,6 +677,15 @@ message ActorSnapshotTag {
 
   // scope controls who may create an Actor from this tag.
   ActorSnapshotTagScope scope = 3;
+
+  // source_actor is the suspended Actor whose external snapshot this tag
+  // captures. The tag lives in this Actor's Atespace. Set once at creation and
+  // immutable afterward.
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
+  // +k8s:immutable
+  ObjectRef source_actor = 4;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
@@ -1452,17 +1461,12 @@ message ListActorSnapshotTagsResponse {
 // the copy for the same Actor; a name held by a finished tag, or by a pending
 // tag of a different Actor, is ALREADY_EXISTS.
 message CreateActorSnapshotTagRequest {
-  // The suspended Actor whose external snapshot to tag. The tag is created in
-  // this Actor's Atespace.
-  //
-  // +k8s:opaqueType
-  ObjectRef actor = 1;
-
-  // The tag to create. metadata.name and scope are honored; metadata.atespace
-  // must be empty or match the Actor's, and status is ignored on write.
+  // The tag to create. metadata.name, scope and source_actor are honored;
+  // metadata.atespace must be empty or match source_actor's, and status is
+  // ignored on write.
   //
   // +k8s:required
-  ActorSnapshotTag actor_snapshot_tag = 2;
+  ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
 // Request to update mutable fields on an existing ActorSnapshotTag.

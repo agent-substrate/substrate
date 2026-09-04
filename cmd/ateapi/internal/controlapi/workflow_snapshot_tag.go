@@ -27,7 +27,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TagActorSnapshot tags the external snapshot a suspended actor holds.
+// TagActorSnapshot tags the external snapshot held by the suspended actor the
+// tag's source_actor names.
 // The tag is given its own copy of that snapshot, so suspending the actor again
 // or deleting the actor does not garbage collect the tag's snapshot.
 //
@@ -43,7 +44,9 @@ import (
 //
 // Idempotent: a re-entered workflow adopts the pending row its previous attempt
 // left, re-copies to the URI that row already names, and finalizes.
-func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, actorRef resources.ActorRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+	actorRef := resources.ActorRefFromObjectRef(tag.GetSourceActor())
+
 	// Serializes against a suspend of the same actor, which would otherwise
 	// collect the snapshot out from under the copy.
 	leaseCtx, lease, err := w.acquireActorLease(ctx, actorRef)
@@ -129,8 +132,9 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 		return nil, "", fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
 	}
 	tagToCreate := &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
-		Scope:    tag.GetScope(),
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
+		Scope:       tag.GetScope(),
+		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.ActorSnapshotTagStatus{
 			// The tag records the template the snapshot's guest state was built under, not
 			// the one the actor currently points at. A suspended actor can be repointed,

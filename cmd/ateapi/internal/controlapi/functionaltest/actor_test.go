@@ -2186,10 +2186,10 @@ func TestSuspendActor(t *testing.T) {
 	const tagName = "before-upgrade"
 	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName}
 	tagged, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		},
 	})
 	if err != nil {
@@ -2206,8 +2206,9 @@ func TestSuspendActor(t *testing.T) {
 	assertSnapshotPresent(t, tc, tagSnapshotURI)
 
 	wantTag := &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+		Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		Status: &ateapipb.ActorSnapshotTagStatus{
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
@@ -2416,10 +2417,10 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 
 			const tagName = "before-upgrade"
 			if _, err := tc.client.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
-				Actor: actorRef,
 				ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
-					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+					Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+					Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+					SourceActor: actorRef,
 				},
 			}); err != nil {
 				t.Fatalf("CreateActorSnapshotTag failed: %v", err)

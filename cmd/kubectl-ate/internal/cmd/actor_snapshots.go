@@ -111,10 +111,10 @@ var createActorSnapshotTagCmd = &cobra.Command{
 		defer client.Close()
 
 		tag, err := client.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
-				Scope:    scope,
+				Metadata:    &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
+				Scope:       scope,
+				SourceActor: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagActorFlag},
 			},
 		})
 		if err != nil {
