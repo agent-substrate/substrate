@@ -43,10 +43,12 @@ type resumeSnapshotSource struct {
 	// the actor holds a local snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
 	// GoldenForDataSnapshotURI is the storage location of the ActorTemplate's
-	// golden snapshot. Populated only when the template's onResume
-	// configuration selects the golden snapshot for a pending data-only
-	// restore: the restore then combines the golden snapshot with the
-	// actor's data.
+	// golden snapshot. Populated only when the pending restore must ride the
+	// golden:
+	//   - the actor was repointed to a replacement template, so its snapshot's
+	//     guest state was captured under the replaced one, or
+	//   - the template's onResume configuration selects the golden for a
+	//     data-only restore.
 	GoldenForDataSnapshotURI resources.SnapshotURI
 	// WireScope is the scope of the restore operation, not of any stored
 	// snapshot:
@@ -166,13 +168,14 @@ func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
 //  1. An explicit boot request restores data-only from whatever snapshot
 //     exists (none: cold boot from the spec), never riding a golden.
 //  2. A repointed actor's snapshot holds guest state from the replaced
-//     template, so the restore carries the actor's durable data alone.
+//     template, so only its durable data survives; see
+//     resolveResumeScopeAfterUpdatedTemplate.
 //  3. A paused actor restores its local pause checkpoint at the template's
-//     onPause scope; a Data-scoped pause rides the golden when the onResume
-//     policy selects it.
-//  4. An actor on its own template restores its snapshot at the captured
-//     scope; a Data-scoped capture rides the golden when the onResume
-//     policy selects it.
+//     onPause scope; a Data-scoped checkpoint rides the golden when the
+//     onResume policy selects it.
+//  4. An actor with a durable snapshot restores it at the captured scope;
+//     a Data-scoped capture rides the golden when the onResume policy
+//     selects it.
 //  5. An actor with no snapshot restores the template's golden when one
 //     exists, and cold boots from the spec otherwise.
 func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef, boot bool) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
@@ -199,12 +202,11 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
-	external := actor.GetStatus().GetExternalSnapshot()
-	if uri := external.GetSnapshotUri(); uri != "" {
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(uri); err != nil {
-			return nil, nil, src, status.Errorf(codes.DataLoss, "Actor %s external snapshot: %v", actorRef, err)
-		}
+	lastDurableSnapshot, err := resolveActorLatestDurableSnapshot(actor)
+	if err != nil {
+		return nil, nil, src, err
 	}
+	src.SnapshotURI = lastDurableSnapshot.uri
 
 	// Rule 1: an explicit boot request discards any captured guest state and
 	// carries the actor's durable data alone (none: cold boot from the spec).
@@ -214,11 +216,11 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	}
 
 	onResumeGolden := actorTemplate.GetSnapshotsConfig().GetOnResume().GetFromData() == ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN
-	// Rule 2: An actor whose template was updated will cold boot.
-	builtOnTemplateUID := actor.GetStatus().GetCurrentActorTemplateUid()
-	if external.GetSnapshotUri() != "" && builtOnTemplateUID != "" && builtOnTemplateUID != actorTemplate.GetMetadata().GetUid() {
-		src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-		return actor, actorTemplate, src, nil
+
+	// Rule 2: the actor was repointed, so its snapshot's guest state belongs
+	// to the replaced template.
+	if isActorTemplateReplaced(actorTemplate, actor) {
+		return resolveResumeScopeAfterUpdatedTemplate(actor, actorTemplate, lastDurableSnapshot)
 	}
 
 	// Rule 3: a paused actor restores its local pause checkpoint, which the
@@ -226,9 +228,15 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if actor.GetStatus().GetLocalSnapshotInfo() != nil {
 		if actorTemplate.GetSnapshotsConfig().GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 			if onResumeGolden {
-				if src.GoldenForDataSnapshotURI, err = resolveGoldenForDataResume(actorTemplate); err != nil {
+				golden, err := resolveGoldenSnapshot(actorTemplate)
+				if errors.Is(err, errNoGoldenSnapshot) {
+					return nil, nil, src, status.Error(codes.FailedPrecondition,
+						"a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
+				}
+				if err != nil {
 					return nil, nil, src, err
 				}
+				src.GoldenForDataSnapshotURI = golden.uri
 				src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 				return actor, actorTemplate, src, nil
 			}
@@ -242,12 +250,18 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	// Rule 4: the actor restores its own durable snapshot at the captured
 	// scope; the onResume policy only governs data-only restores, so a valid
 	// Full (or legacy Unspecified) capture restores from its own content.
-	if external.GetSnapshotUri() != "" {
-		if external.GetContentScope() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+	if lastDurableSnapshot.exists {
+		if lastDurableSnapshot.capturedScope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 			if onResumeGolden {
-				if src.GoldenForDataSnapshotURI, err = resolveGoldenForDataResume(actorTemplate); err != nil {
+				golden, err := resolveGoldenSnapshot(actorTemplate)
+				if errors.Is(err, errNoGoldenSnapshot) {
+					return nil, nil, src, status.Error(codes.FailedPrecondition,
+						"a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
+				}
+				if err != nil {
 					return nil, nil, src, err
 				}
+				src.GoldenForDataSnapshotURI = golden.uri
 				src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 				return actor, actorTemplate, src, nil
 			}
@@ -257,22 +271,126 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 		return actor, actorTemplate, src, nil
 	}
-
 	// Rule 5: an actor with no snapshot of its own restores the template's
 	// golden snapshot as its own content when one exists, and cold boots
 	// from the spec otherwise (the wire scope is inert then: RunRequest
 	// carries no scope).
-	goldenURI, err := resolveGoldenSnapshot(actorTemplate)
+	golden, err := resolveGoldenSnapshot(actorTemplate)
 	if errors.Is(err, errNoGoldenSnapshot) {
 		return actor, actorTemplate, src, nil
 	}
 	if err != nil {
 		return nil, nil, src, err
 	}
-	src.SnapshotURI = goldenURI
+	src.SnapshotURI = golden.uri
 	// A golden snapshot is always FULL scope.
 	src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	return actor, actorTemplate, src, nil
+}
+
+// resolveResumeScopeAfterUpdatedTemplate resolves the boot source for an
+// actor repointed to a replacement template, based on its last snapshot:
+//   - No snapshot at all: restore the new template's golden snapshot (cold
+//     boot from the spec when there is none).
+//   - Data-scoped: ride the new template's golden when onResume.fromData
+//     selects it, restore data-only otherwise.
+//   - Full-scoped: the guest state belongs to the replaced template, so
+//     downgrade to data on the new template's golden.
+func resolveResumeScopeAfterUpdatedTemplate(actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, lastDurableSnapshot durableSnapshot) (*ateapipb.Actor, *ateapipb.ActorTemplate, resumeSnapshotSource, error) {
+	var src resumeSnapshotSource
+
+	// The actor does not have any snapshot, so nothing captured under the
+	// replaced template carries over: restore the new template's golden
+	// snapshot as the actor's own Full content when one exists, and cold
+	// boot from the spec otherwise (the Full scope is inert then:
+	// RunRequest carries no scope).
+	if !lastDurableSnapshot.exists && actor.GetStatus().GetLocalSnapshotInfo() == nil {
+		golden, err := resolveGoldenSnapshot(actorTemplate)
+		switch {
+		case errors.Is(err, errNoGoldenSnapshot):
+			// Cold boot from the spec; the Full scope below is inert then.
+		case err != nil:
+			return nil, nil, src, err
+		default:
+			src.SnapshotURI = golden.uri
+		}
+		src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
+		return actor, actorTemplate, src, nil
+	}
+
+	// The actor has a local or a durable snapshot; resolve the scope its last
+	// snapshot was captured with. A local snapshot only exists for a paused
+	// actor, and its scope is the template's onPause scope.
+	var lastSnapshotScope ateapipb.SnapshotContentScope
+	if actor.GetStatus().GetLocalSnapshotInfo() != nil {
+		lastSnapshotScope = actorTemplate.GetSnapshotsConfig().GetOnPause()
+	} else {
+		lastSnapshotScope = lastDurableSnapshot.capturedScope
+	}
+
+	src.SnapshotURI = lastDurableSnapshot.uri
+
+	// A Data-scoped capture carried no guest state to lose, so it follows the
+	// onResume policy like any data resume: data-only unless the policy
+	// selects the golden.
+	if lastSnapshotScope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
+		actorTemplate.GetSnapshotsConfig().GetOnResume().GetFromData() != ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN {
+		src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		return actor, actorTemplate, src, nil
+	}
+
+	// A Full capture (its guest state belongs to the replaced template), or a
+	// Data capture whose onResume policy selects the golden: ride the new
+	// template's golden snapshot.
+	golden, err := resolveGoldenSnapshot(actorTemplate)
+	if errors.Is(err, errNoGoldenSnapshot) {
+		return nil, nil, src, status.Error(codes.FailedPrecondition,
+			"a repointed actor's resume requires the new ActorTemplate's golden snapshot, which is not available")
+	}
+	if err != nil {
+		return nil, nil, src, err
+	}
+	src.GoldenForDataSnapshotURI = golden.uri
+	src.WireScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+	return actor, actorTemplate, src, nil
+}
+
+// isActorTemplateReplaced reports whether the actor was repointed: the actor
+// records the template UID its guest state was built on, and a different UID
+// on its current template means it was repointed since the capture.
+func isActorTemplateReplaced(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor) bool {
+	builtOnTemplateUID := actor.GetStatus().GetCurrentActorTemplateUid()
+	return builtOnTemplateUID != "" && builtOnTemplateUID != actorTemplate.GetMetadata().GetUid()
+}
+
+// durableSnapshot is a resolved external snapshot record (the actor's own
+// latest durable snapshot, or the template's golden), resolved once per
+// resume.
+type durableSnapshot struct {
+	// exists reports whether the record names a snapshot at all.
+	exists bool
+	// uri is the storage location of the snapshot's content.
+	uri resources.SnapshotURI
+	// capturedScope is the content scope the snapshot was taken with.
+	capturedScope ateapipb.SnapshotContentScope
+}
+
+// resolveActorLatestDurableSnapshot resolves the actor's latest durable
+// snapshot, when one exists, from the external snapshot the actor records.
+func resolveActorLatestDurableSnapshot(actor *ateapipb.Actor) (durableSnapshot, error) {
+	var d durableSnapshot
+	external := actor.GetStatus().GetExternalSnapshot()
+	if external.GetSnapshotUri() == "" {
+		return d, nil
+	}
+	var err error
+	if d.uri, err = resources.ParseSnapshotURI(external.GetSnapshotUri()); err != nil {
+		return d, status.Errorf(codes.DataLoss, "Actor %s/%s external snapshot: %v",
+			actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName(), err)
+	}
+	d.exists = true
+	d.capturedScope = external.GetContentScope()
+	return d, nil
 }
 
 // errNoGoldenSnapshot reports that the ActorTemplate records no golden
@@ -280,34 +398,25 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 // status naming the path that needed the golden, or a fallback source.
 var errNoGoldenSnapshot = errors.New("ActorTemplate has no golden snapshot")
 
-// resolveGoldenSnapshot resolves the storage location of the template's
-// golden snapshot, validating that it can serve as a boot source or as the
-// guest half of a combined restore. Returns errNoGoldenSnapshot when the
-// template records no golden snapshot.
-func resolveGoldenSnapshot(actorTemplate *ateapipb.ActorTemplate) (resources.SnapshotURI, error) {
+// resolveGoldenSnapshot resolves the template's golden snapshot, validating
+// that it can serve as the guest half of a combined restore. Returns
+// errNoGoldenSnapshot when the template records no golden snapshot.
+func resolveGoldenSnapshot(actorTemplate *ateapipb.ActorTemplate) (durableSnapshot, error) {
 	golden := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot()
 	if golden.GetSnapshotUri() == "" {
-		return resources.SnapshotURI{}, errNoGoldenSnapshot
+		return durableSnapshot{}, errNoGoldenSnapshot
 	}
 	if err := validateGoldenSnapshotScope(golden); err != nil {
-		return resources.SnapshotURI{}, err
+		return durableSnapshot{}, err
 	}
-	uri, err := resources.ParseSnapshotURI(golden.GetSnapshotUri())
-	if err != nil {
-		return resources.SnapshotURI{}, status.Errorf(codes.DataLoss, "golden external snapshot %q: %v", golden.GetSnapshotUri(), err)
+	var d durableSnapshot
+	var err error
+	if d.uri, err = resources.ParseSnapshotURI(golden.GetSnapshotUri()); err != nil {
+		return durableSnapshot{}, status.Errorf(codes.DataLoss, "golden external snapshot %q: %v", golden.GetSnapshotUri(), err)
 	}
-	return uri, nil
-}
-
-// resolveGoldenForDataResume resolves the golden snapshot a Golden data
-// resume rides, failing with FailedPrecondition when the template records
-// none.
-func resolveGoldenForDataResume(actorTemplate *ateapipb.ActorTemplate) (resources.SnapshotURI, error) {
-	uri, err := resolveGoldenSnapshot(actorTemplate)
-	if errors.Is(err, errNoGoldenSnapshot) {
-		return resources.SnapshotURI{}, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
-	}
-	return uri, err
+	d.exists = true
+	d.capturedScope = golden.GetContentScope()
+	return d, nil
 }
 
 // ensureVolumesCreated provisions any initial actor volumes that are in
@@ -784,10 +893,6 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
 			tele.SnapshotKind = ateattr.SnapshotKindLatest
 		}
-		var goldenSnapshotURI string
-		if src.WireScope == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-			goldenSnapshotURI = src.GoldenForDataSnapshotURI.String()
-		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(src.WireScope)
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
@@ -802,13 +907,16 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
-			Scope: src.WireScope,
-			// Empty unless this is a Golden data resume.
-			GoldenSnapshotUri: goldenSnapshotURI,
-			ActorUid:          actor.GetMetadata().Uid,
-			EgressGateway:     egressGateway,
-			CpuMilli:          cpuMilli,
-			MemoryBytes:       memBytes,
+			Scope:         src.WireScope,
+			ActorUid:      actor.GetMetadata().Uid,
+			EgressGateway: egressGateway,
+			CpuMilli:      cpuMilli,
+			MemoryBytes:   memBytes,
+		}
+		// Set only when the restore rides the golden snapshot (a Golden data
+		// resume, or a repointed actor).
+		if src.WireScope == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
+			req.GoldenSnapshotUri = src.GoldenForDataSnapshotURI.String()
 		}
 		_, err = client.Restore(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
