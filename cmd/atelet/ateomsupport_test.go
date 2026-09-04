@@ -16,20 +16,75 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"math/big"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/testing/protocmp"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
+func workerContext(t *testing.T, podUID string) context.Context {
+	t.Helper()
+	cert := workerCertificate(t, podUID, "node")
+	return peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}}})
+}
+
+func TestVerifyClientOnSameNode(t *testing.T) {
+	state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{workerCertificate(t, "worker-uid", "node-a")}}
+	nodeA := &substratex509.PodIdentity{NodeName: "node-a", NodeUID: "node-uid"}
+	if err := verifyClientOnSameNode(nodeA)(state); err != nil {
+		t.Fatalf("same-node worker rejected: %v", err)
+	}
+	if err := verifyClientOnSameNode(&substratex509.PodIdentity{NodeName: "node-b", NodeUID: "node-uid"})(state); err == nil {
+		t.Fatal("cross-node worker accepted")
+	}
+	if err := verifyClientOnSameNode(&substratex509.PodIdentity{NodeName: "node-a", NodeUID: "replacement-node"})(state); err == nil {
+		t.Fatal("replacement node accepted")
+	}
+}
+
+func workerCertificate(t *testing.T, podUID, nodeName string) *x509.Certificate {
+	t.Helper()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour)}
+	if err := substratex509.AddPodIdentityToCertificate(&substratex509.PodIdentity{
+		Namespace: "workers", ServiceAccountName: "default", ServiceAccountUID: "sa-uid",
+		PodName: "worker", PodUID: podUID, NodeName: nodeName, NodeUID: "node-uid",
+	}, template); err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// TODO: Use bufconn + an actual server implementation.
+//
+// https://google.github.io/styleguide/go/best-practices.html#use-real-transports
 type fakeWorkerService struct {
 	ateapipb.WorkerServiceClient
 
@@ -47,7 +102,7 @@ func (s *fakeWorkerService) SetWorkerCapacity(_ context.Context, in *ateapipb.Se
 
 func TestSetWorkerCapacityRecordsWhatTheWorkerSays(t *testing.T) {
 	workers := &fakeWorkerService{}
-	svc := &workerCapacityService{workers: workers}
+	svc := &ateomSupportServer{workers: workers}
 
 	ctx := workerContext(t, "pod-a")
 	reported := &ateapipb.WorkerResources{
@@ -73,7 +128,7 @@ func TestSetWorkerCapacityRecordsWhatTheWorkerSays(t *testing.T) {
 
 func TestSetWorkerCapacityOmitsUndeterminedCompute(t *testing.T) {
 	workers := &fakeWorkerService{}
-	svc := &workerCapacityService{workers: workers}
+	svc := &ateomSupportServer{workers: workers}
 
 	ctx := workerContext(t, "pod-a")
 	if _, err := svc.SetWorkerCapacity(ctx, &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}}); err != nil {
@@ -87,7 +142,7 @@ func TestSetWorkerCapacityOmitsUndeterminedCompute(t *testing.T) {
 
 func TestSetWorkerCapacityRequiresACertificate(t *testing.T) {
 	workers := &fakeWorkerService{}
-	svc := &workerCapacityService{workers: workers}
+	svc := &ateomSupportServer{workers: workers}
 
 	// No peer identity: a worker may report only what its certificate proves
 	// it is, so there is nothing to attribute this to.
@@ -105,7 +160,7 @@ func TestSetWorkerCapacitySurfacesRejection(t *testing.T) {
 	// it retries: it reports once, so a swallowed failure leaves the Worker
 	// with no capacity forever.
 	workers := &fakeWorkerService{err: errors.New("no such worker")}
-	svc := &workerCapacityService{workers: workers}
+	svc := &ateomSupportServer{workers: workers}
 
 	ctx := workerContext(t, "pod-a")
 	if _, err := svc.SetWorkerCapacity(ctx, &ateletpb.SetWorkerCapacityRequest{Capacity: &ateapipb.WorkerResources{Actors: 1}}); err == nil {
