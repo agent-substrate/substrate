@@ -83,6 +83,17 @@ function usage() {
   echo "  --experimental-additional-egress-extproc-service NS/SVC:PORT"
   echo "                                         Run an additional ext_proc authorization filter, served by that Service."
   echo "                                         Requires --experimental-use-sdsmint. (experimental)"
+  echo "  --experimental-egress-credential-injection"
+  echo "                                         Deploy the egress credential-injection stack (credprovider, injector,"
+  echo "                                         namespace policy, sample secret) and wire the egress gateway to it."
+  echo "                                         Implies --experimental-use-sdsmint; requires --atenet-router=envoy. (experimental)"
+  echo "  --credential-provider-name NAME        Provider the injector serves, as a substrate-secret:// class prefix,"
+  echo "                                         e.g. substrate-secret://kubernetes.io (default substrate-secret://kubernetes.io)."
+  echo "                                         Only meaningful with --experimental-egress-credential-injection. (experimental)"
+  echo "  --credential-provider-address HOST:PORT"
+  echo "                                         Address the injector dials the credential provider at"
+  echo "                                         (default credprovider.ate-system.svc:50051)."
+  echo "                                         Only meaningful with --experimental-egress-credential-injection. (experimental)"
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -1092,6 +1103,55 @@ deploy_atenet() {
   run_kubectl rollout status deployment/dns -n ate-system --timeout="$(rollout_timeout)"
 }
 
+# render_atenet_egress_inject_manifest echoes the injector manifest with its
+# --credential-provider-name and --credential-provider-address arguments set to
+# the configured values. The manifest ships the in-cluster defaults;
+# --credential-provider-name / --credential-provider-address override them (e.g.
+# to point at a different provider class or address). Substituting the literal
+# defaults keeps the manifest applyable by hand with no placeholder.
+render_atenet_egress_inject_manifest() {
+  local name="${ATE_CREDENTIAL_PROVIDER_NAME:-substrate-secret://kubernetes.io}"
+  local addr="${ATE_CREDENTIAL_PROVIDER_ADDRESS:-credprovider.ate-system.svc:50051}"
+  sed -e "s|--credential-provider-name=substrate-secret://kubernetes.io|--credential-provider-name=${name}|" \
+      -e "s|--credential-provider-address=credprovider.ate-system.svc:50051|--credential-provider-address=${addr}|" \
+      manifests/egress-credential-injection/atenet-egress-inject.yaml
+}
+
+# deploy_egress_credential_injection deploys the credential provider and the
+# egress injector, then re-wires the egress gateway to dial the injector's
+# ext_proc Service. The prescan sets ATE_EXPERIMENTAL_USE_SDSMINT and
+# ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE so apply_atenet_egress splices the
+# injector's filter into the sdsmint egress bootstrap.
+deploy_egress_credential_injection() {
+  log_step "deploy_egress_credential_injection"
+  if [[ "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
+    echo "Error: --experimental-egress-credential-injection requires --experimental-use-sdsmint" >&2
+    return 1
+  fi
+  ensure_crds
+
+  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
+    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  # The authorization mapping and sample secret first, so the pods that mount
+  # them start cleanly.
+  run_kubectl apply -f manifests/egress-credential-injection/namespace-policy.yaml
+  run_kubectl apply -f manifests/egress-credential-injection/sample-secret.yaml
+
+  # The provider and the injector. Roll both out before wiring the gateway: the
+  # gateway's ext_proc filter is failure_mode_allow: false, so the Service must
+  # be answering before it starts receiving traffic.
+  run_ko apply -f manifests/egress-credential-injection/credprovider.yaml
+  render_atenet_egress_inject_manifest | run_ko apply -f -
+  run_kubectl rollout status deployment/credprovider -n ate-system --timeout="$(rollout_timeout)"
+  run_kubectl rollout status deployment/atenet-egress-inject -n ate-system --timeout="$(rollout_timeout)"
+
+  # Re-wire the egress gateway to splice in the injector's ext_proc filter.
+  ensure_egress_mitm_ca_pool_secret
+  apply_atenet_egress
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
+}
+
 # get_actor_state echoes the actor's state enum (e.g. ACTOR_STATE_SUSPENDED).
 get_actor_state() {
   local actor_name="$1"
@@ -1449,6 +1509,36 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE="${prescan_args[$((i + 1))]}"
       ;;
+    # Deploying the credential-injection stack implies sdsmint and points the
+    # egress gateway's additional ext_proc filter at the injector Service. Set
+    # in the prescan so any apply_atenet_egress in this invocation is wired,
+    # whether from this flag's own function or a co-passed --deploy-atenet.
+    --experimental-egress-credential-injection)
+      ATE_EXPERIMENTAL_USE_SDSMINT=true
+      ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE="ate-system/atenet-egress-inject:50051"
+      ;;
+    # Read in the prescan so the values are set before the main loop dispatches
+    # deploy_egress_credential_injection, regardless of flag order in argv.
+    --credential-provider-name=*)
+      ATE_CREDENTIAL_PROVIDER_NAME="${prescan_args[i]#*=}"
+      ;;
+    --credential-provider-name)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --credential-provider-name requires a value" >&2
+        exit 1
+      fi
+      ATE_CREDENTIAL_PROVIDER_NAME="${prescan_args[$((i + 1))]}"
+      ;;
+    --credential-provider-address=*)
+      ATE_CREDENTIAL_PROVIDER_ADDRESS="${prescan_args[i]#*=}"
+      ;;
+    --credential-provider-address)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --credential-provider-address requires <host>:<port>" >&2
+        exit 1
+      fi
+      ATE_CREDENTIAL_PROVIDER_ADDRESS="${prescan_args[$((i + 1))]}"
+      ;;
     --podcert-workers-per-signer=*) ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${prescan_args[i]#*=}" ;;
     --podcert-workers-per-signer)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1548,6 +1638,13 @@ while [[ "$#" -gt 0 ]]; do
     --experimental-use-sdsmint) ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --experimental-additional-egress-extproc-service=*) ;;
+    --experimental-egress-credential-injection) deploy_egress_credential_injection ;;
+    # Captured in the pre-scan above; matched here only so they are consumed and
+    # the `*)` branch does not reject them as unknown options.
+    --credential-provider-name) shift ;;
+    --credential-provider-name=*) ;;
+    --credential-provider-address) shift ;;
+    --credential-provider-address=*) ;;
     --podcert-workers-per-signer=*) ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${1#*=}" ;;
     --podcert-workers-per-signer)
       shift
