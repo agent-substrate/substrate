@@ -24,6 +24,7 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
+	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workerpod"
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
@@ -90,7 +91,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 	labels["ate.dev/worker-pool"] = wp.Name
 
 	containerAC := corev1ac.Container().
-		WithName("ateom").
+		WithName(workerpod.AteomContainerName).
 		WithImage(wp.Spec.WorkerImage).
 		WithArgs(
 			"--pod-uid=$(POD_UID)",

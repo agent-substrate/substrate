@@ -160,6 +160,22 @@ The counter carries the same reason but no actor identity, so this record is the
 
 The domain is a strict function of the reason, so it costs no series and no consumer needs it to disambiguate a value. It exists because the alternative is every consumer keeping its own map from reason to domain, and that map breaks silently: a component running ahead of the control plane can report a reason this build's `ateerrors.AllReasons` rejects, `ExtractReason` turns it into `UNKNOWN`, and a name-matching consumer would file every one of those as an infrastructure fault. `UNKNOWN` therefore reports `unknown` and not `infrastructure` — a gap in the taxonomy stays visible instead of inflating one side.
 
+### When a worker loses its sandbox
+
+Worker pods run one `ateom` container under `restartPolicy: Always`, so the kubelet can replace it in place: same pod, same UID, same IP, an empty sandbox. Every actor that container held is gone, and nothing about the pod says so — which is why the Worker's status carries `ateom_container_id`, and why atecontroller compares it rather than keeping the last-seen value in memory, where an ate-controller restart would lose it.
+
+On a mismatch the control plane recycles the Worker: it releases every actor bound to it, crashing the ones still running as `WORKER_SANDBOX_GONE`, and hands the Worker back schedulable at the capacity its ateom already reported. The record survives on purpose. An ateom reports its capacity once per process and `CreateWorker` leaves capacity unset, so a Worker that was deregistered and re-registered would come back with none and could never be placed on again.
+
+The whole fault is one trace. An informer callback carries no span, so atecontroller opens one around the recycle; the `RecycleWorker` call and every `Actor crashed` record ateapi writes under it inherit that trace id, whether or not the trace itself is sampled. So the record naming the cause and the records naming the cost join on `trace_id`.
+
+When the kubelet gives up restarting the ateom altogether and reports `CrashLoopBackOff`, the control plane stops there: the Worker is drained so nothing new is placed on a sandbox that keeps dying, and the pod is deleted so its Deployment replaces it. Substrate keeps no restart threshold of its own — the kubelet already backs off and resets once a container stays up — and every actor placed on a looping worker is destroyed for good, because `ACTOR_STATE_CRASHED` is terminal. The record for that carries `k8s.container.status.reason=CrashLoopBackOff` and the restart count.
+
+Three things to know before querying it:
+
+- **The kubelet's own word rides along**, as `k8s.container.status.last_terminated_reason` on both the crash record and the counter. That is where `OOMKilled` comes from; `ate.failure.reason` deliberately does not encode it, so a kubelet reason substrate does not know reports `_OTHER` rather than adding a series. The reason stays `infrastructure`: the container's memory limit comes from `WorkerPool.spec.podTemplate.resources`, its cgroup also charges the sandbox runtime, and one container can host several actors, so no single actor can be shown to have caused the kill. An actor exceeding its *own* declared limit is confined to its own sub-cgroup and is a different fault.
+- **These crashes report `ate.actor.operation.name=unknown`**, because an actor killed by its worker was not in the middle of a lifecycle operation. A panel that filters the counter by operation drops them.
+- **The counter is occupancy-weighted.** It counts actors lost, not sandboxes replaced, so a worker that loses its sandbox with nothing placed on it raises nothing. Substrate emits no worker-scoped equivalent on purpose — that fact belongs to Kubernetes, and `k8sclusterreceiver` is where it should come from. See `worker sandbox loss` in [`docs/metrics/substrate.yaml`](metrics/substrate.yaml).
+
 One caveat belongs on any panel built from this. A `workload` domain says what the actor **reported**, not what substrate measured: the actor picks its own exit and can hold memory until the kernel kills it, so it can raise the failure count for its own template and pool, or exit cleanly to hide a fault. See `workload-domain-is-a-report` in [`docs/metrics/substrate.yaml`](metrics/substrate.yaml).
 
 ---
@@ -173,7 +189,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
-| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.failure.domain`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
+| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.failure.domain`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, plus `k8s.container.status.last_terminated_reason` on `WORKER_SANDBOX_GONE`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |

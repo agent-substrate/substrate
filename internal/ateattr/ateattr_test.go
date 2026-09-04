@@ -162,6 +162,11 @@ func TestKeySpellings(t *testing.T) {
 		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
 		{WorkerPoolNameKey, "ate.workerpool.name"},
 		{WorkerStateKey, "ate.worker.state"},
+		{WorkerNameKey, "ate.worker.name"},
+		{WorkerPodNameKey, "ate.worker.pod.name"},
+		{ContainerLastTerminatedReasonKey, "k8s.container.status.last_terminated_reason"},
+		{ContainerStatusReasonKey, "k8s.container.status.reason"},
+		{ContainerRestartCountKey, "k8s.container.restart_count"},
 		{SandboxClassKey, "ate.sandbox.class"},
 		{SnapshotKindKey, "ate.snapshot.kind"},
 		{SnapshotScopeKey, "ate.snapshot.scope"},
@@ -610,6 +615,36 @@ func TestNormalizeSandboxClass(t *testing.T) {
 	}
 }
 
+// TestNormalizeContainerTerminationReason pins the bound on a label whose
+// values come from the kubelet rather than from substrate: the known vocabulary
+// passes through, and everything else collapses onto _OTHER instead of adding a
+// series to ate.actor.crashes.
+func TestNormalizeContainerTerminationReason(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+		want   string
+	}{
+		{name: "oom killed", reason: "OOMKilled", want: "OOMKilled"},
+		{name: "non-zero exit", reason: "Error", want: "Error"},
+		{name: "clean exit", reason: "Completed", want: "Completed"},
+		{name: "cannot run", reason: "ContainerCannotRun", want: "ContainerCannotRun"},
+		{name: "deadline", reason: "DeadlineExceeded", want: "DeadlineExceeded"},
+		{name: "evicted", reason: "Evicted", want: "Evicted"},
+		{name: "kubelet gave no reason", reason: "", want: ContainerTerminationReasonOther},
+		{name: "reason from a newer kubelet", reason: "SomethingNew", want: ContainerTerminationReasonOther},
+		{name: "casing is not normalized away", reason: "oomkilled", want: ContainerTerminationReasonOther},
+		{name: "label injection", reason: "OOMKilled\",evil=\"1", want: ContainerTerminationReasonOther},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeContainerTerminationReason(tt.reason); got != tt.want {
+				t.Errorf("NormalizeContainerTerminationReason(%q) = %q, want %q", tt.reason, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestFailureReason pins the error-to-label mapping: only the registered
 // ateerrors taxonomy may reach the label, so anything unclassified collapses
 // onto UNKNOWN instead of leaking an unbounded error message.
@@ -699,6 +734,7 @@ func TestFailureDomain(t *testing.T) {
 		{"bad sandbox asset stays infrastructure", string(ateerrors.ReasonInvalidSandboxAsset), FailureDomainInfrastructure},
 		{"node infrastructure reason", string(ateerrors.ReasonTerminalFileSystemError), FailureDomainInfrastructure},
 		{"control-plane infrastructure reason", string(ateerrors.ReasonWorkerPodGone), FailureDomainInfrastructure},
+		{"sandbox gone stays infrastructure", string(ateerrors.ReasonWorkerSandboxGone), FailureDomainInfrastructure},
 		{"unknown asserts no domain", ReasonUnknown, FailureDomainUnknown},
 		{"empty", "", FailureDomainUnknown},
 		{"unregistered reason", "SOMETHING_ELSE", FailureDomainUnknown},

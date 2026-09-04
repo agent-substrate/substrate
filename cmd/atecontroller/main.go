@@ -225,7 +225,7 @@ func main() {
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolLister).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient, workerPodInformer, workerPoolLister).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())
