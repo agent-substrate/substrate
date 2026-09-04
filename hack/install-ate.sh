@@ -403,8 +403,12 @@ render_ate_system_manifests() {
     # Build everything resolved with Kustomize for Kind
     kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
   else
-    # Build everything resolved with base manifests for GKE
-    run_ko resolve -f manifests/ate-install | substitute_version
+    # Build everything resolved with the base kustomization for GKE. Not the
+    # raw directory: that would also re-apply pod-certificate-controller.yaml
+    # (reverting the size10 flags and the WORKERS_PER_SIGNER override made
+    # earlier in the install), both atenet-egress variants, and the
+    # sandboxconfig files, all of which have their own apply steps.
+    kubectl kustomize manifests/ate-install/base --load-restrictor LoadRestrictionsNone | run_ko resolve -f - | substitute_version
   fi
 }
 
@@ -1043,10 +1047,9 @@ deploy_ate_system() {
 
   # Ahead of the bundle below, for the same reason as the namespace: every
   # workload pulls this ConfigMap in via envFrom, and a container whose envFrom
-  # target is missing will not start. The bundle contains it, but a raw
-  # directory apply orders by filename, so ate-api-server.yaml and
-  # ate-controller.yaml would otherwise be created before it and sit in
-  # CreateContainerConfigError until it caught up.
+  # target is missing will not start. The bundle contains it too, but applying
+  # it first keeps the Deployments from depending on the order the renderer
+  # happens to emit resources in.
   apply_otel_config
 
   ensure_apiserver_prerequisites
@@ -1482,6 +1485,9 @@ delete_ate_system() {
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone \
       | kubectl_delete_tolerant --ignore-not-found -f -
+    # Not part of the kind bundle (see its kustomization), so delete it directly.
+    # The non-kind branch covers it through the directory delete below.
+    kubectl_delete_tolerant --ignore-not-found -f manifests/ate-install/pod-certificate-controller.yaml
   else
     kubectl_delete_tolerant --ignore-not-found -f manifests/ate-install
   fi
