@@ -201,3 +201,56 @@ func TestRetireLayerVsEnsureImageRace(t *testing.T) {
 		t.Errorf("final layer dir missing: %v", err)
 	}
 }
+
+// ensureLayer must never hand back a dir that a retirement renamed away.
+// Joining a flight runs no closure, so the reuse/retire interlock says
+// nothing about the dir in that case — the layer has to be unpacked again.
+//
+// Deterministic on purpose: the natural window is a few microseconds wide,
+// so a timing-dependent test would only catch this under load (it surfaced
+// as a rare "layer dir vanished during pull" in CI). Occupying the flight
+// exactly as retireLayer does closes it every run.
+func TestEnsureLayerJoiningRetireFlightRepacksLayer(t *testing.T) {
+	_, host := newTestRegistry(t)
+	ref := host + "/test/join-retire:latest"
+	layer := layerFromEntries(t, []tarEntry{
+		{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("j", 512)},
+	})
+	pushImage(t, ref, v1.Config{}, layer)
+	store := newTestStore(t)
+	if _, err := store.EnsureImage(context.Background(), ref); err != nil {
+		t.Fatalf("EnsureImage: %v", err)
+	}
+	diffID, err := layer.DiffID()
+	if err != nil {
+		t.Fatalf("layer diffID: %v", err)
+	}
+	dir := store.layerDir(diffID)
+
+	// Hold the layer's flight open across a rename, the way a retirement
+	// caught mid-pass does, so the ensureLayer below is forced to join it.
+	retired, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_, _, _ = store.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+			if err := os.Rename(dir, dir+"-retired"); err != nil {
+				t.Errorf("renaming layer aside: %v", err)
+			}
+			close(retired)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-retired
+	go func() {
+		time.Sleep(20 * time.Millisecond) // outlive the join
+		close(release)
+	}()
+
+	got, err := store.ensureLayer(context.Background(), diffID, layer)
+	if err != nil {
+		t.Fatalf("ensureLayer: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(got, layerFSDirName)); err != nil {
+		t.Fatalf("ensureLayer returned a retired dir: %v", err)
+	}
+}

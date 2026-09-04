@@ -95,6 +95,12 @@ const (
 	// layer size.
 	layerPullConcurrency = 4
 
+	// maxEnsureLayerFlights bounds how often ensureLayer re-enters the layer
+	// singleflight after joining another call. Two covers a layer retired
+	// once under us — the retirement has finished by the time we re-enter, so
+	// the next flight is ours to unpack in — and the third is margin.
+	maxEnsureLayerFlights = 3
+
 	// defaultPullTimeout is the default per-pull bound (see WithPullTimeout).
 	// Generous enough for multi-GiB images on a busy node.
 	defaultPullTimeout = 10 * time.Minute
@@ -650,26 +656,51 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 
 // ensureLayer makes the unpacked tree for diffID present in the pool,
 // collapsing concurrent requests for the same layer across images.
+//
+// A Do that joins a call already in flight runs no closure of its own, so it
+// proves nothing about the dir: the flight it joined may have been
+// retireLayer renaming that dir away, leaving nothing behind the path we are
+// about to return. Only a flight we ran ourselves, or a tree still on disk
+// once the joined flight finishes, settles it; anything else re-enters.
+//
+// Re-entry cannot livelock against eviction: retireLayer vetoes on the
+// symmetric join (see its !ran guard), so the two never trade the flight
+// indefinitely.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
-			// Refresh the dir mtime inside the flight: retireLayer re-checks
-			// the mtime in this same flight, so a layer reused here can
-			// never be renamed away between this stat and the image record
-			// that will re-reference it.
-			now := time.Now()
-			if err := os.Chtimes(dir, now, now); err != nil {
-				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+	for i := 0; i < maxEnsureLayerFlights; i++ {
+		ran := false
+		_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+			ran = true
+			if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+				// Refresh the dir mtime inside the flight: retireLayer re-checks
+				// the mtime in this same flight, so a layer reused here can
+				// never be renamed away between this stat and the image record
+				// that will re-reference it.
+				now := time.Now()
+				if err := os.Chtimes(dir, now, now); err != nil {
+					slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+				}
+				return nil, nil
 			}
-			return nil, nil
+			return nil, s.unpackLayerToPool(ctx, diffID, layer)
+		})
+		if err != nil {
+			return "", err
 		}
-		return nil, s.unpackLayerToPool(ctx, diffID, layer)
-	})
-	if err != nil {
-		return "", err
+		if ran {
+			return dir, nil
+		}
+		// Joined someone else's flight. A tree on disk means it was theirs to
+		// unpack or reuse and the dedup did its job; nothing there means we
+		// joined a retirement and must unpack the layer again ourselves.
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+			return dir, nil
+		}
+		slog.InfoContext(ctx, "Layer retired while joining its flight; unpacking again",
+			slog.String("diffid", diffID.String()))
 	}
-	return dir, nil
+	return "", fmt.Errorf("layer %s retired repeatedly under concurrent eviction", diffID)
 }
 
 // unpackLayerToPool streams the layer (download → decompress → untar) into a
