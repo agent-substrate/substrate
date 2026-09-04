@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -910,6 +911,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 		goldenScope   ateapipb.SnapshotContentScope
 		wantCode      codes.Code
 		wantGoldenURI string
+		wantWireScope ateletpb.SnapshotScope
 	}{
 		{
 			name:          "resolves golden location for Data durable snapshot",
@@ -919,6 +921,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:      codes.OK,
 			wantGoldenURI: goldenSnapshotURI,
+			wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
 		},
 		{
 			name:          "resolves golden location for paused actor with Data onPause",
@@ -929,6 +932,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:      codes.OK,
 			wantGoldenURI: goldenSnapshotURI,
+			wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
 		},
 		{
 			// A Full pause snapshot restores from its own content; the policy
@@ -941,6 +945,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:      codes.OK,
 			wantGoldenURI: "",
+			wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 		{
 			name:         "fails when golden snapshot is not Full",
@@ -974,6 +979,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:      codes.OK,
 			wantGoldenURI: "",
+			wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 		{
 			name:          "leaves golden location empty under ColdBoot fromData",
@@ -983,6 +989,7 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:      codes.OK,
 			wantGoldenURI: "",
+			wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 		},
 	}
 
@@ -1035,11 +1042,11 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if got := src.GoldenSnapshotURI.String(); got != tt.wantGoldenURI {
-				t.Errorf("src.GoldenSnapshotURI = %q, want %q", got, tt.wantGoldenURI)
+			if got := src.GoldenForDataSnapshotURI.String(); got != tt.wantGoldenURI {
+				t.Errorf("src.GoldenForDataSnapshotURI = %q, want %q", got, tt.wantGoldenURI)
 			}
-			if !tt.paused && src.Scope != tt.contentScope {
-				t.Errorf("src.Scope = %v, want %v", src.Scope, tt.contentScope)
+			if src.WireScope != tt.wantWireScope {
+				t.Errorf("src.WireScope = %v, want %v", src.WireScope, tt.wantWireScope)
 			}
 		})
 	}
@@ -1085,8 +1092,8 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 
 // TestLoadActorForResume_TemplateReplaced covers the detection of a repointed
 // actor: the actor records the template UID its guest state was built on, and
-// a mismatch with its current template marks the source TemplateReplaced,
-// forcing the restore to data-only.
+// a mismatch with its current template means the snapshot's guest state must
+// not be restored, forcing the restore operation to data-only.
 func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
@@ -1097,12 +1104,15 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 		// "" leaves the field unset (an actor from before it was recorded).
 		builtOnTemplateUID string
 		noSnapshot         bool
-		want               bool
+		// wantWireScope is the resolved restore scope: DATA for a repointed
+		// actor's Full snapshot, FULL for a snapshot restored as-is, and
+		// unspecified (inert) for a cold boot with no snapshot or golden.
+		wantWireScope ateletpb.SnapshotScope
 	}{
-		{name: "snapshot taken under the current template", builtOnTemplateUID: "current", want: false},
-		{name: "snapshot taken under a replaced template", builtOnTemplateUID: "some-other-uid", want: true},
-		{name: "snapshot without a recorded template UID", builtOnTemplateUID: "", want: false},
-		{name: "no durable snapshot", noSnapshot: true, want: false},
+		{name: "snapshot taken under the current template", builtOnTemplateUID: "current", wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
+		{name: "snapshot taken under a replaced template", builtOnTemplateUID: "some-other-uid", wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA},
+		{name: "snapshot without a recorded template UID", builtOnTemplateUID: "", wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
+		{name: "no durable snapshot", noSnapshot: true, wantWireScope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED},
 	}
 
 	for _, tt := range tests {
@@ -1142,8 +1152,121 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 			if err != nil {
 				t.Fatalf("loadActorForResume: %v", err)
 			}
-			if src.TemplateReplaced != tt.want {
-				t.Errorf("src.TemplateReplaced = %v, want %v", src.TemplateReplaced, tt.want)
+			if src.WireScope != tt.wantWireScope {
+				t.Errorf("src.WireScope = %v, want %v", src.WireScope, tt.wantWireScope)
+			}
+		})
+	}
+}
+
+// TestLoadActorForResume_BootForcesDataScope covers the explicit boot
+// request: the restore discards any captured guest state and carries the
+// actor's durable data alone, so the wire scope is Data regardless of the
+// snapshot's captured scope, the pause scope, or the onResume policy — and
+// no golden snapshot is resolved (an unusable golden must not block a boot).
+func TestLoadActorForResume_BootForcesDataScope(t *testing.T) {
+	goldenSnapshotURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+	tests := []struct {
+		name string
+		// paused seeds a local pause checkpoint; noSnapshot leaves the actor
+		// without a durable snapshot; otherwise a durable snapshot captured
+		// with contentScope is seeded.
+		paused       bool
+		noSnapshot   bool
+		contentScope ateapipb.SnapshotContentScope
+		// fromData seeds the template's onResume policy; goldenURI the
+		// template's recorded golden snapshot.
+		fromData  ateapipb.ResumeSource
+		goldenURI string
+		// wantSnapshotURI reports whether the actor's own durable snapshot
+		// must be the boot source; a boot never resolves the golden as one.
+		wantSnapshotURI bool
+	}{
+		{
+			name:            "Full durable snapshot resumes data-only",
+			contentScope:    ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			wantSnapshotURI: true,
+		},
+		{
+			name:            "Data durable snapshot skips the golden ride under the Golden policy",
+			contentScope:    ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			fromData:        ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
+			goldenURI:       goldenSnapshotURI,
+			wantSnapshotURI: true,
+		},
+		{
+			name:       "no snapshot skips the golden fallback and cold boots",
+			noSnapshot: true,
+			goldenURI:  goldenSnapshotURI,
+		},
+		{
+			name:   "paused actor restores its checkpoint data-only",
+			paused: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+
+			durableSnapshotURI := someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1")
+			var seedOpts []func(*ateapipb.Actor)
+			if !tt.noSnapshot && !tt.paused {
+				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
+					a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+						SnapshotUri:  durableSnapshotURI,
+						ContentScope: tt.contentScope,
+					}
+				})
+			}
+			actorState := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+			if tt.paused {
+				actorState = ateapipb.ActorState_ACTOR_STATE_PAUSED
+				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
+					a.Status.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "pause-1"}
+				})
+			}
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, seedOpts...)
+
+			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+			tmpl := &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+				SnapshotsConfig: &ateapipb.SnapshotsConfig{
+					OnResume: &ateapipb.OnResumeConfig{FromData: tt.fromData},
+				},
+			}
+			if tt.goldenURI != "" {
+				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+					GoldenSnapshot: &ateapipb.ExternalSnapshot{
+						SnapshotUri:  tt.goldenURI,
+						ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+					},
+				}}
+			}
+			if _, err := persistence.CreateActorTemplate(ctx, tmpl); err != nil {
+				t.Fatalf("create template: %v", err)
+			}
+
+			w := &ActorWorkflow{store: persistence}
+			_, _, src, err := w.loadActorForResume(ctx, actorRef, true)
+			if err != nil {
+				t.Fatalf("loadActorForResume: %v", err)
+			}
+			wantSnapshotURI := ""
+			if tt.wantSnapshotURI {
+				wantSnapshotURI = durableSnapshotURI
+			}
+			if got := src.SnapshotURI.String(); got != wantSnapshotURI {
+				t.Errorf("src.SnapshotURI = %q, want %q", got, wantSnapshotURI)
+			}
+			if !src.GoldenForDataSnapshotURI.IsZero() {
+				t.Errorf("src.GoldenForDataSnapshotURI = %q, want empty", src.GoldenForDataSnapshotURI)
+			}
+			if src.WireScope != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+				t.Errorf("src.WireScope = %v, want %v", src.WireScope, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA)
 			}
 		})
 	}
@@ -1171,7 +1294,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	if tmpl != nil {
 		t.Errorf("expected nil template, got %v", tmpl)
 	}
-	if !src.SnapshotURI.IsZero() || !src.GoldenSnapshotURI.IsZero() {
+	if !src.SnapshotURI.IsZero() || !src.GoldenForDataSnapshotURI.IsZero() {
 		t.Errorf("expected empty snapshot source, got %+v", src)
 	}
 }
