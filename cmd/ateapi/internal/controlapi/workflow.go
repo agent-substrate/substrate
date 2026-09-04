@@ -126,9 +126,9 @@ type actorWorkflowStore interface {
 	// Read from the records rather than the Worker's status: only the service
 	// layer attaches assignments on read, and this workflow holds the store.
 	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
-	CreateActorSnapshotTag(ctx context.Context, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
-	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
-	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
+	CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error)
+	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
+	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
@@ -183,6 +183,6 @@ func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resource
 	return acquireLease(ctx, w.store, "lease:actor:"+actorRef.Atespace+":"+actorRef.Name, "actor")
 }
 
-func acquireActorSnapshotTagLease(ctx context.Context, holder leaseHolder, tagRef resources.ActorSnapshotTagRef) (context.Context, *store.Lease, error) {
-	return acquireLease(ctx, holder, "lease:actor-snapshot-tag:"+tagRef.Atespace+":"+tagRef.Name, "ActorSnapshotTag")
+func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {
+	return acquireLease(ctx, holder, "lease:tag:"+tagRef.Atespace+":"+tagRef.Name, "Tag")
 }

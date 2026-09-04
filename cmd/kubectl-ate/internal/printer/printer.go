@@ -286,16 +286,16 @@ func PrintActorTemplate(template *ateapipb.ActorTemplate, format string) error {
 	return PrintActorTemplates([]*ateapipb.ActorTemplate{template}, format)
 }
 
-// PrintActorSnapshotTags prints actor snapshot tags to stdout in the requested
+// PrintTags prints tags to stdout in the requested
 // format.
-func PrintActorSnapshotTags(tags []*ateapipb.ActorSnapshotTag, format string) error {
-	return PrintActorSnapshotTagsTo(os.Stdout, tags, format)
+func PrintTags(tags []*ateapipb.Tag, format string) error {
+	return PrintTagsTo(os.Stdout, tags, format)
 }
 
-// PrintActorSnapshotTagsTo prints a slice of actor snapshot tags to the
+// PrintTagsTo prints a slice of tags to the
 // provided writer.
-func PrintActorSnapshotTagsTo(out io.Writer, tags []*ateapipb.ActorSnapshotTag, format string) error {
-	slices.SortFunc(tags, func(a, b *ateapipb.ActorSnapshotTag) int {
+func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
+	slices.SortFunc(tags, func(a, b *ateapipb.Tag) int {
 		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
 			return c
 		}
@@ -303,7 +303,7 @@ func PrintActorSnapshotTagsTo(out io.Writer, tags []*ateapipb.ActorSnapshotTag, 
 	})
 	switch format {
 	case "json", "yaml":
-		return printProto(out, &ateapipb.ListActorSnapshotTagsResponse{ActorSnapshotTags: tags}, format)
+		return printProto(out, &ateapipb.ListTagsResponse{Tags: tags}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tCONTENT SCOPE\tAGE")
@@ -317,7 +317,7 @@ func PrintActorSnapshotTagsTo(out io.Writer, tags []*ateapipb.ActorSnapshotTag, 
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(), tag.GetScope(),
-				actorSnapshotTagState(tag), snapshotURI, contentScope,
+				tagState(tag), snapshotURI, contentScope,
 				formatAge(tag.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
@@ -326,22 +326,22 @@ func PrintActorSnapshotTagsTo(out io.Writer, tags []*ateapipb.ActorSnapshotTag, 
 	}
 }
 
-// actorSnapshotTagState reports whether a tag is usable. A tag is Pending until
+// tagState reports whether a tag is usable. A tag is Pending until
 // the copy of its own snapshot lands; until then it names nothing an Actor can
 // be created from, and deleting it collects whatever the create stranded.
-func actorSnapshotTagState(tag *ateapipb.ActorSnapshotTag) string {
+func tagState(tag *ateapipb.Tag) string {
 	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
 		return "Pending"
 	}
 	return "Ready"
 }
 
-// PrintActorSnapshotTag prints a single actor snapshot tag to stdout.
-func PrintActorSnapshotTag(tag *ateapipb.ActorSnapshotTag, format string) error {
+// PrintTag prints a single tag to stdout.
+func PrintTag(tag *ateapipb.Tag, format string) error {
 	if format == "json" || format == "yaml" {
 		return printProto(os.Stdout, tag, format)
 	}
-	return PrintActorSnapshotTags([]*ateapipb.ActorSnapshotTag{tag}, format)
+	return PrintTags([]*ateapipb.Tag{tag}, format)
 }
 
 // PrintAtespaces prints a slice of atespaces to stdout in the requested format.

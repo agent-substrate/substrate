@@ -25,56 +25,56 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-// fakeTagClient serves GetActorSnapshotTag from a stored tag and records the
+// fakeTagClient serves GetTag from a stored tag and records the
 // update it is asked to make.
 type fakeTagClient struct {
-	tag *ateapipb.ActorSnapshotTag
+	tag *ateapipb.Tag
 
 	getCalls  int
-	updateReq *ateapipb.UpdateActorSnapshotTagRequest
+	updateReq *ateapipb.UpdateTagRequest
 }
 
-func (f *fakeTagClient) GetActorSnapshotTag(_ context.Context, _ *ateapipb.GetActorSnapshotTagRequest, _ ...grpc.CallOption) (*ateapipb.ActorSnapshotTag, error) {
+func (f *fakeTagClient) GetTag(_ context.Context, _ *ateapipb.GetTagRequest, _ ...grpc.CallOption) (*ateapipb.Tag, error) {
 	f.getCalls++
-	return proto.Clone(f.tag).(*ateapipb.ActorSnapshotTag), nil
+	return proto.Clone(f.tag).(*ateapipb.Tag), nil
 }
 
-func (f *fakeTagClient) UpdateActorSnapshotTag(_ context.Context, in *ateapipb.UpdateActorSnapshotTagRequest, _ ...grpc.CallOption) (*ateapipb.ActorSnapshotTag, error) {
+func (f *fakeTagClient) UpdateTag(_ context.Context, in *ateapipb.UpdateTagRequest, _ ...grpc.CallOption) (*ateapipb.Tag, error) {
 	f.updateReq = in
 	// Bump the version the way a real server does, so the returned tag is
 	// distinguishable from the one the caller sent.
-	updated := proto.Clone(in.GetActorSnapshotTag()).(*ateapipb.ActorSnapshotTag)
+	updated := proto.Clone(in.GetTag()).(*ateapipb.Tag)
 	updated.Metadata.Version++
 	return updated, nil
 }
 
-// TestUpdateActorSnapshotTagScope checks the read-modify-write wiring: the scope
+// TestUpdateTagScope checks the read-modify-write wiring: the scope
 // change is written against the uid and version that were just read.
-func TestUpdateActorSnapshotTagScope(t *testing.T) {
-	testTag := &ateapipb.ActorSnapshotTag{
+func TestUpdateTagScope(t *testing.T) {
+	testTag := &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{
 			Atespace: "space-1",
 			Name:     "tag-1",
 			Uid:      "8ba9b6ee-2e1a-4c0f-9f4e-2f0a0f1c3d55",
 			Version:  1,
 		},
-		Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-		Status: &ateapipb.ActorSnapshotTagStatus{
-			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/space-1/actor-snapshot-tags/tag-1"},
+		Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+		Status: &ateapipb.TagStatus{
+			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/space-1/tags/tag-1"},
 		},
 	}
 
 	client := &fakeTagClient{tag: testTag}
 	ref := &ateapipb.ObjectRef{Atespace: "space-1", Name: "tag-1"}
-	want := ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+	want := ateapipb.TagScope_TAG_SCOPE_PUBLISHED
 
-	resp, err := updateActorSnapshotTagScope(context.Background(), client, ref, want)
+	resp, err := updateTagScope(context.Background(), client, ref, want)
 	if err != nil {
-		t.Fatalf("updateActorSnapshotTagScope() error = %v", err)
+		t.Fatalf("updateTagScope() error = %v", err)
 	}
 
 	if client.getCalls != 1 {
-		t.Errorf("GetActorSnapshotTag called %d times, want 1", client.getCalls)
+		t.Errorf("GetTag called %d times, want 1", client.getCalls)
 	}
 
 	wantResp := testTag

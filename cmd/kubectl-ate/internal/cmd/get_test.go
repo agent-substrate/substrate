@@ -57,11 +57,11 @@ func TestGetCommandArgs(t *testing.T) {
 }
 
 func TestParseActorSnapshotFlags(t *testing.T) {
-	if got, err := parseActorSnapshotTagScope("published"); err != nil || got != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
-		t.Fatalf("parseActorSnapshotTagScope(published) = (%v, %v)", got, err)
+	if got, err := parseTagScope("published"); err != nil || got != ateapipb.TagScope_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("parseTagScope(published) = (%v, %v)", got, err)
 	}
-	if _, err := parseActorSnapshotTagScope("global"); err == nil {
-		t.Fatal("parseActorSnapshotTagScope(global) succeeded")
+	if _, err := parseTagScope("global"); err == nil {
+		t.Fatal("parseTagScope(global) succeeded")
 	}
 	ref, err := parseNamespacedName("team-a/before-upgrade")
 	if err != nil || ref.GetAtespace() != "team-a" || ref.GetName() != "before-upgrade" {

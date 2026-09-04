@@ -61,22 +61,21 @@ service Control {
   // Tag the external snapshot a suspended Actor holds. The tag gets its own
   // copy of that snapshot, so suspending or deleting the Actor afterwards
   // cannot collect it.
-  rpc CreateActorSnapshotTag(CreateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+  rpc CreateTag(CreateTagRequest) returns (Tag) {}
 
-  // Get an ActorSnapshot tag.
-  rpc GetActorSnapshotTag(GetActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+  // Get a Tag.
+  rpc GetTag(GetTagRequest) returns (Tag) {}
 
-  // List ActorSnapshot tags.
-  rpc ListActorSnapshotTags(ListActorSnapshotTagsRequest) returns (ListActorSnapshotTagsResponse) {}
+  // List Tags.
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {}
 
-  // Publish or unpublish an ActorSnapshot tag without changing its address.
-  rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+  // Publish or unpublish a Tag without changing its address.
+  rpc UpdateTag(UpdateTagRequest) returns (Tag) {}
 
-  // Delete an ActorSnapshot tag and the external snapshot it owns. Actors
-  // created from the tag that have not yet been suspended still point at that
-  // external snapshot and become unrecoverable, so do not delete a tag while
-  // such Actors exist.
-  rpc DeleteActorSnapshotTag(DeleteActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+  // Delete a Tag and the external snapshot it owns. Actors created from the
+  // tag that have not yet been suspended still point at that external snapshot
+  // and become unrecoverable, so do not delete a tag while such Actors exist.
+  rpc DeleteTag(DeleteTagRequest) returns (Tag) {}
 
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
@@ -115,7 +114,7 @@ service Control {
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
   // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
-  // ActorSnapshotTags remain.
+  // Tags remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
 
   rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {}
@@ -183,14 +182,14 @@ enum SnapshotContentScope {
   // Keep this in sync with the maximums on fields of this type.
 }
 
-enum ActorSnapshotTagScope {
+enum TagScope {
   // Not set and rejected wherever a client supplies a scope
-  ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED = 0;
+  TAG_SCOPE_UNSPECIFIED = 0;
   // May initialize Actors only in the tag's owning Atespace.
-  ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE = 1;
+  TAG_SCOPE_ATESPACE = 1;
   // Published for use by Actors in any Atespace. The tag remains addressed
   // through its owning Atespace.
-  ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED = 2;
+  TAG_SCOPE_PUBLISHED = 2;
 }
 
 // Selector matches worker pools by label.
@@ -361,7 +360,7 @@ message Actor {
   // +k8s:optional
   // +k8s:subfield(atespace)=+k8s:required
   // +k8s:immutable
-  ObjectRef source_snapshot_tag = 6;
+  ObjectRef source_tag = 6;
 
   // status is the system-managed state of the Actor. It is updated by the
   // server and ignored on input. It is always present in output.
@@ -537,9 +536,9 @@ message ActorStatus {
   string in_progress_snapshot_name = 3;
 
   // external_snapshot is the Actor's current external snapshot.
-  // If the Actor was created from an ActorSnapshotTag this is the tag's
-  // snapshot, borrowed until the Actor's first suspend writes one of its own.
-  // Otherwise it is unset until the Actor is first suspended.
+  // If the Actor was created from a Tag this is the tag's snapshot, borrowed
+  // until the Actor's first suspend writes one of its own. Otherwise it is
+  // unset until the Actor is first suspended.
   // +k8s:optional
   ExternalSnapshot external_snapshot = 4;
 
@@ -569,9 +568,9 @@ message ActorStatus {
 
   // The UID of the actor template the Actor's guest state is currently built
   // on: the one its latest sprint booted with, recorded when the resume (or
-  // first boot) commits RUNNING, or at creation for an Actor seeded from a
-  // snapshot tag, since that Actor borrows guest state that was already built.
-  // Empty means the Actor has no guest state yet.
+  // first boot) commits RUNNING, or at creation for an Actor seeded from a tag,
+  // since that Actor borrows guest state that was already built. Empty means
+  // the Actor has no guest state yet.
   // Diverges from the UID of the Actor's actor_template ref when a suspended
   // Actor is repointed at a replacement template, which forces the next
   // restore to data-only.
@@ -631,10 +630,10 @@ message WorkerAssignment {
   string worker_pod_ip = 5;
 }
 
-// ActorSnapshotTagStatus is the server-owned state of an ActorSnapshotTag.
+// TagStatus is the server-owned state of a Tag.
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
-message ActorSnapshotTagStatus {
+message TagStatus {
   // snapshot is the external snapshot this tag points at. Unset while the tag
   // is still being created, and immutable once set: a tag never moves between
   // snapshots. A tag is usable only once this is set.
@@ -646,11 +645,10 @@ message ActorSnapshotTagStatus {
   // seeded from a tag under the same template.
   string actor_template_uid = 2;
 
-  // in_progress_snapshot_uri is where CreateActorSnapshotTag is copying the
-  // tag's own snapshot to. It is minted before a single object is written and
-  // cleared once snapshot is set, so a tag left with it set names exactly the
-  // objects its unfinished create stranded, and deleting the tag collects
-  // them.
+  // in_progress_snapshot_uri is where CreateTag is copying the tag's own
+  // snapshot to. It is minted before a single object is written and cleared
+  // once snapshot is set, so a tag left with it set names exactly the objects
+  // its unfinished create stranded, and deleting the tag collects them.
   string in_progress_snapshot_uri = 3;
 
   // source_actor_uid is the UID of the Actor this tag's snapshot was copied
@@ -658,12 +656,11 @@ message ActorSnapshotTagStatus {
   string source_actor_uid = 4;
 }
 
-// ActorSnapshotTag is an Atespace-owned, stable name for one external
-// snapshot. The external snapshot pointed by a tag is a copy of an actor snapshot.
-// The snapshot is copied when the tag is
-// created, and deleted when the tag is. Its owning Atespace cannot be deleted
-// until the tag is removed.
-message ActorSnapshotTag {
+// Tag is an Atespace-owned, stable name for one external snapshot. The
+// external snapshot pointed by a tag is a copy of an actor snapshot. The
+// snapshot is copied when the tag is created, and deleted when the tag is. Its
+// owning Atespace cannot be deleted until the tag is removed.
+message Tag {
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -673,14 +670,14 @@ message ActorSnapshotTag {
   // status is set by the control plane; it is ignored on write.
   //
   // +k8s:optional
-  ActorSnapshotTagStatus status = 2;
+  TagStatus status = 2;
 
   // scope controls who may create an Actor from this tag.
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the ActorSnapshotTagScope enum
-  ActorSnapshotTagScope scope = 3;
+  // +k8s:maximum=2 # keep this in sync with the TagScope enum
+  TagScope scope = 3;
 
   // source_actor is the suspended Actor whose external snapshot this tag
   // captures. The tag lives in this Actor's Atespace. Set once at creation and
@@ -1435,13 +1432,13 @@ message DeleteActorEgressPolicyRequest {
   ObjectRef actor = 1;
 }
 
-message GetActorSnapshotTagRequest {
+message GetTagRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
-  ObjectRef actor_snapshot_tag = 1;
+  ObjectRef tag = 1;
 }
 
-message ListActorSnapshotTagsRequest {
+message ListTagsRequest {
   // The atespace to list tags from. Empty lists across all atespaces.
   //
   // +k8s:optional
@@ -1456,7 +1453,7 @@ message ListActorSnapshotTagsRequest {
   // +k8s:minimum=1
   int32 page_size = 2;
 
-  // Pagination token from a previous ListActorSnapshotTags response.
+  // Pagination token from a previous ListTags response.
   // Omit or leave empty for the first request.
   //
   // +k8s:optional
@@ -1464,8 +1461,8 @@ message ListActorSnapshotTagsRequest {
   string page_token = 3;
 }
 
-message ListActorSnapshotTagsResponse {
-  repeated ActorSnapshotTag actor_snapshot_tags = 1;
+message ListTagsResponse {
+  repeated Tag tags = 1;
   string next_page_token = 2;
 }
 
@@ -1483,35 +1480,34 @@ message ListActorSnapshotTagsResponse {
 // which collects whatever that attempt stranded, and create it again.
 //
 // +k8s:customValidation # metadata.atespace must match source_actor.atespace
-message CreateActorSnapshotTagRequest {
+message CreateTagRequest {
   // The tag to create. metadata.atespace, metadata.name, scope and source_actor
   // are honored; metadata.atespace must match source_actor's, and status is
   // ignored on write.
   //
   // +k8s:required
-  ActorSnapshotTag actor_snapshot_tag = 1;
+  Tag tag = 1;
 }
 
-// Request to update mutable fields on an existing ActorSnapshotTag.
+// Request to update mutable fields on an existing Tag.
 // The tag keeps its address: the snapshot it points at cannot be changed.
-message UpdateActorSnapshotTagRequest {
+message UpdateTagRequest {
   // The tag to update.
-  // actor_snapshot_tag.metadata.atespace and actor_snapshot_tag.metadata.name
-  // identify which resource to update.
-  // actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
-  // are required preconditions
+  // tag.metadata.atespace and tag.metadata.name identify which resource to
+  // update.
+  // tag.metadata.version and tag.metadata.uid are required preconditions
   //
   // +k8s:required
   // +k8s:opaqueType # updates are handled in 2 steps, do not descend
   // +k8s:subfield(metadata)=+k8s:required
   // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
-  ActorSnapshotTag actor_snapshot_tag = 1;
+  Tag tag = 1;
 }
 
-message DeleteActorSnapshotTagRequest {
+message DeleteTagRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
-  ObjectRef actor_snapshot_tag = 1;
+  ObjectRef tag = 1;
 }
 
 // DeleteOptions carries per-delete controls. Today it holds optional

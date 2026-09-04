@@ -31,25 +31,25 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// CreateActorSnapshotTag tags the external snapshot a suspended Actor holds,
-// giving the tag its own copy of that snapshot so the Actor being suspended
+// CreateTag tags the external snapshot a suspended Actor holds, giving the
+// tag its own copy of that snapshot so the Actor being suspended
 // again or deleted cannot collect it. The work is a workflow because it spans
 // two transactions around an object copy; see TagActorSnapshot.
-func (s *RPCService) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
+func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagRequest) (*ateapipb.Tag, error) {
 	// First scrub any fields that users are not allowed to set.
-	inTag := req.ActorSnapshotTag
+	inTag := req.Tag
 	if inTag != nil { // otherwise validation will flag it
 		scrubResourceMetadataForCreate(inTag.Metadata)
 		inTag.Status = nil
 	}
 
-	if errs := validateCreateActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
+	if errs := validateCreateTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	actorRef := resources.ActorRefFromObjectRef(req.GetActorSnapshotTag().GetSourceActor())
+	actorRef := resources.ActorRefFromObjectRef(req.GetTag().GetSourceActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetActorSnapshotTag())
+	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
@@ -59,18 +59,18 @@ func (s *RPCService) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.C
 	return tag, nil
 }
 
-func (s *ServiceImpl) CreateActorSnapshotTag(ctx context.Context, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+func (s *ServiceImpl) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error) {
 	// TODO: implement this
-	return s.store.CreateActorSnapshotTag(ctx, tag)
+	return s.store.CreateTag(ctx, tag)
 }
 
-func validateCreateActorSnapshotTagRequest(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) field.ErrorList {
+func validateCreateTagRequest(ctx context.Context, req *ateapipb.CreateTagRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_CreateActorSnapshotTagRequest(ctx, op, nil, req, nil)
+	return Validate_CreateTagRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateCustom_CreateActorSnapshotTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateActorSnapshotTagRequest) field.ErrorList {
-	tag := req.GetActorSnapshotTag()
+func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateTagRequest) field.ErrorList {
+	tag := req.GetTag()
 	sourceActorAtespace := tag.GetSourceActor().GetAtespace()
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	if sourceActorAtespace == "" || tagAtespace == "" {
@@ -78,77 +78,77 @@ func ValidateCustom_CreateActorSnapshotTagRequest(_ context.Context, _ operation
 	}
 	if tagAtespace != sourceActorAtespace {
 		return field.ErrorList{
-			field.Invalid(p.Child("actor_snapshot_tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"),
+			field.Invalid(p.Child("tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"),
 		}
 	}
 	return nil
 }
 
-func (s *RPCService) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
-	if errs := validateGetActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
+func (s *RPCService) GetTag(ctx context.Context, req *ateapipb.GetTagRequest) (*ateapipb.Tag, error) {
+	if errs := validateGetTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tag, err := s.impl.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag()))
+	tag, err := s.impl.GetTag(ctx, resources.TagRefFromObjectRef(req.GetTag()))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "ActorSnapshotTag not found")
+		return nil, status.Error(codes.NotFound, "Tag not found")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
 	return tag, nil
 }
 
-func (s *ServiceImpl) GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+func (s *ServiceImpl) GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
 	// TODO: implement this
-	return s.store.GetActorSnapshotTag(ctx, tagRef)
+	return s.store.GetTag(ctx, tagRef)
 }
 
-func validateGetActorSnapshotTagRequest(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) field.ErrorList {
+func validateGetTagRequest(ctx context.Context, req *ateapipb.GetTagRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_GetActorSnapshotTagRequest(ctx, op, nil, req, nil)
+	return Validate_GetTagRequest(ctx, op, nil, req, nil)
 }
 
-func (s *RPCService) ListActorSnapshotTags(ctx context.Context, req *ateapipb.ListActorSnapshotTagsRequest) (*ateapipb.ListActorSnapshotTagsResponse, error) {
-	if errs := validateListActorSnapshotTagsRequest(ctx, req); len(errs) > 0 {
+func (s *RPCService) ListTags(ctx context.Context, req *ateapipb.ListTagsRequest) (*ateapipb.ListTagsResponse, error) {
+	if errs := validateListTagsRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	page, err := s.impl.ListActorSnapshotTags(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.impl.ListTags(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
-		return nil, mapListError(fmt.Errorf("while listing actor snapshot tags: %w", err))
+		return nil, mapListError(fmt.Errorf("while listing tags: %w", err))
 	}
-	return &ateapipb.ListActorSnapshotTagsResponse{ActorSnapshotTags: page.Items, NextPageToken: page.NextPageToken}, nil
+	return &ateapipb.ListTagsResponse{Tags: page.Items, NextPageToken: page.NextPageToken}, nil
 }
 
-func (s *ServiceImpl) ListActorSnapshotTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshotTag], error) {
+func (s *ServiceImpl) ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Tag], error) {
 	// TODO: implement this
-	return s.store.ListActorSnapshotTags(ctx, atespace, opts)
+	return s.store.ListTags(ctx, atespace, opts)
 }
 
-func validateListActorSnapshotTagsRequest(ctx context.Context, req *ateapipb.ListActorSnapshotTagsRequest) field.ErrorList {
+func validateListTagsRequest(ctx context.Context, req *ateapipb.ListTagsRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_ListActorSnapshotTagsRequest(ctx, op, nil, req, nil)
+	return Validate_ListTagsRequest(ctx, op, nil, req, nil)
 }
 
 // errTagPending is what the update's mutate closure returns when the stored
 // tag's create never finished, so the caller can tell it apart from a store
 // failure and answer FAILED_PRECONDITION.
-var errTagPending = errors.New("ActorSnapshotTag is still being created")
+var errTagPending = errors.New("tag is still being created")
 
-func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
+func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagRequest) (*ateapipb.Tag, error) {
 	// First scrub any fields that users are not allowed to set.
-	inTag := req.ActorSnapshotTag
+	inTag := req.Tag
 	if inTag != nil { // otherwise validation will flag it
 		scrubResourceMetadataForUpdate(inTag.Metadata)
 		inTag.Status = nil
 	}
 
-	if errs := validateUpdateActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
+	if errs := validateUpdateTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	in := req.GetActorSnapshotTag()
-	tagRef := resources.ActorSnapshotTagRefFromActorSnapshotTag(in)
+	in := req.GetTag()
+	tagRef := resources.TagRefFromTag(in)
 
-	storedTag, err := s.impl.UpdateActorSnapshotTag(ctx, tagRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	storedTag, err := s.impl.UpdateTag(ctx, tagRef, store.PreconditionFrom(in), func(toUpdate *ateapipb.Tag) error {
 		// A tag whose create never finished names a partial copy. Publishing it
 		// — or changing its scope at all — would hand out content that is still
 		// being written, or may never be.
@@ -172,30 +172,30 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 	})
 	if err != nil {
 		if errors.Is(err, errTagPending) {
-			return nil, status.Errorf(codes.FailedPrecondition, "ActorSnapshotTag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
+			return nil, status.Errorf(codes.FailedPrecondition, "Tag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
 		}
 		if errors.Is(err, store.ErrImmutableField) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating actor snapshot tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
+			return nil, status.Errorf(codes.InvalidArgument, "while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "ActorSnapshotTag %s/%s not found with uid %s", tagRef.Atespace, tagRef.Name, in.GetMetadata().GetUid())
+			return nil, status.Errorf(codes.Aborted, "Tag %s/%s not found with uid %s", tagRef.Atespace, tagRef.Name, in.GetMetadata().GetUid())
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "ActorSnapshotTag %s/%s not found", tagRef.Atespace, tagRef.Name)
+			return nil, status.Errorf(codes.NotFound, "Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
 		}
 		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating actor snapshot tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
+			return nil, status.Errorf(codes.InvalidArgument, "while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
 		}
-		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)
+		return nil, fmt.Errorf("while updating tag: %w", err)
 	}
 	return storedTag, nil
 }
 
-func (s *ServiceImpl) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
-	return s.store.UpdateActorSnapshotTag(ctx, tagRef, precondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+func (s *ServiceImpl) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error) {
+	return s.store.UpdateTag(ctx, tagRef, precondition, func(toUpdate *ateapipb.Tag) error {
 		// Apply the mutation function to the stored value.
 		oldVal := proto.CloneOf(toUpdate)
 		if err := mutate(toUpdate); err != nil {
@@ -205,29 +205,29 @@ func (s *ServiceImpl) UpdateActorSnapshotTag(ctx context.Context, tagRef resourc
 		// Validate the merged tag against the one it replaces. This is where
 		// the rules the request could not be checked against land: scope, and
 		// the immutability of metadata and source_actor.
-		if errs := validateActorSnapshotTagUpdate(ctx, field.NewPath("actor_snapshot_tag"), toUpdate, oldVal); len(errs) > 0 {
+		if errs := validateTagUpdate(ctx, field.NewPath("tag"), toUpdate, oldVal); len(errs) > 0 {
 			return toGRPCStatusError(errs)
 		}
 		return nil
 	})
 }
 
-func validateUpdateActorSnapshotTagRequest(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
+func validateUpdateTagRequest(ctx context.Context, req *ateapipb.UpdateTagRequest) field.ErrorList {
 	// We model this as a create rather than an update because updates assume
 	// the existence of a "current" value, which we do not have yet.  This is
 	// validating the request itself. The result will be validated later, after
 	// we have a current value to compare against.
 	op := operation.Operation{Type: operation.Create}
-	return Validate_UpdateActorSnapshotTagRequest(ctx, op, nil, req, nil)
+	return Validate_UpdateTagRequest(ctx, op, nil, req, nil)
 }
 
-func validateActorSnapshotTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorSnapshotTag) field.ErrorList {
+func validateTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Tag) field.ErrorList {
 	op := operation.Operation{Type: operation.Update}
-	return Validate_ActorSnapshotTag(ctx, op, fldPath, newVal, oldVal)
+	return Validate_Tag(ctx, op, fldPath, newVal, oldVal)
 }
 
 // This exists only because nested subfield tags are not supported yet.
-func ValidateCustom_UpdateActorSnapshotTagRequest_ActorSnapshotTag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapipb.ActorSnapshotTag) field.ErrorList {
+func ValidateCustom_UpdateTagRequest_Tag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapipb.Tag) field.ErrorList {
 	if tag == nil || tag.Metadata == nil {
 		return nil // handled by DV
 	}
@@ -242,7 +242,7 @@ func ValidateCustom_UpdateActorSnapshotTagRequest_ActorSnapshotTag(ctx context.C
 	return errs
 }
 
-// DeleteActorSnapshotTag releases the external snapshot the tag owns and then
+// DeleteTag releases the external snapshot the tag owns and then
 // removes the row, in that order: the row is the only handle on that snapshot,
 // so dropping it first would leak. A failure at any point fails the whole RPC;
 // the client retries the same delete, which rediscovers the work from the row
@@ -255,38 +255,38 @@ func ValidateCustom_UpdateActorSnapshotTagRequest_ActorSnapshotTag(ctx context.C
 // Note that this destroys the external snapshot: an Actor created from the tag
 // and never suspended is still borrowing it and becomes unrecoverable. Do not
 // delete a tag while clones of it exist.
-func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.DeleteActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
+func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagRequest) (*ateapipb.Tag, error) {
 	// TODO: mode delete orchestration to a workflow.
-	if errs := validateDeleteActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
+	if errs := validateDeleteTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	tagRef := resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag())
+	tagRef := resources.TagRefFromObjectRef(req.GetTag())
 
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
-	ctx, lease, err := acquireActorSnapshotTagLease(ctx, s.impl, tagRef)
+	ctx, lease, err := acquireTagLease(ctx, s.impl, tagRef)
 	if err != nil {
 		return nil, err
 	}
 	defer lease.Close()
 
-	stored, err := s.impl.GetActorSnapshotTag(ctx, tagRef)
+	stored, err := s.impl.GetTag(ctx, tagRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "ActorSnapshotTag %s/%s not found", tagRef.Atespace, tagRef.Name)
+			return nil, status.Errorf(codes.NotFound, "Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
 		}
-		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
 	if err := s.releaseTagSnapshot(ctx, stored); err != nil {
 		return nil, err
 	}
 
-	tag, err := s.impl.DeleteActorSnapshotTag(ctx, tagRef)
+	tag, err := s.impl.DeleteTag(ctx, tagRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorSnapshotTag %s/%s not found", tagRef.Atespace, tagRef.Name)
+		return nil, status.Errorf(codes.NotFound, "Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("while deleting actor snapshot tag: %w", err)
+		return nil, fmt.Errorf("while deleting tag: %w", err)
 	}
 	return tag, nil
 }
@@ -294,7 +294,7 @@ func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.D
 // releaseTagSnapshot deletes the objects the tag's external snapshot is made
 // of. It tolerates a partly-collected snapshot, so a retry finishes cleanly.
 // It collects the in-progress snapshot too.
-func (s *RPCService) releaseTagSnapshot(ctx context.Context, tag *ateapipb.ActorSnapshotTag) error {
+func (s *RPCService) releaseTagSnapshot(ctx context.Context, tag *ateapipb.Tag) error {
 	if s.objectStore == nil {
 		return nil
 	}
@@ -317,12 +317,12 @@ func (s *RPCService) releaseTagSnapshot(ctx context.Context, tag *ateapipb.Actor
 	return nil
 }
 
-func (s *ServiceImpl) DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error) {
+func (s *ServiceImpl) DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error) {
 	// TODO: implement this
-	return s.store.DeleteActorSnapshotTag(ctx, tagRef)
+	return s.store.DeleteTag(ctx, tagRef)
 }
 
-func validateDeleteActorSnapshotTagRequest(ctx context.Context, req *ateapipb.DeleteActorSnapshotTagRequest) field.ErrorList {
+func validateDeleteTagRequest(ctx context.Context, req *ateapipb.DeleteTagRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_DeleteActorSnapshotTagRequest(ctx, op, nil, req, nil)
+	return Validate_DeleteTagRequest(ctx, op, nil, req, nil)
 }

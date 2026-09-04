@@ -27,9 +27,9 @@ import (
 // is expected.
 func TestRefAliasesAreDistinctTypes(t *testing.T) {
 	types := map[string]reflect.Type{
-		"ActorRef":            reflect.TypeFor[ActorRef](),
-		"ActorTemplateRef":    reflect.TypeFor[ActorTemplateRef](),
-		"ActorSnapshotTagRef": reflect.TypeFor[ActorSnapshotTagRef](),
+		"ActorRef":         reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef": reflect.TypeFor[ActorTemplateRef](),
+		"TagRef":           reflect.TypeFor[TagRef](),
 	}
 	seen := make(map[reflect.Type]string)
 	for name, typ := range types {
@@ -224,46 +224,46 @@ func TestActorTemplateRefFromActorTemplate(t *testing.T) {
 	}
 }
 
-func TestActorSnapshotTagRefString(t *testing.T) {
-	got := ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-1"}.String()
+func TestTagRefString(t *testing.T) {
+	got := TagRef{Atespace: "team-a", Name: "tag-1"}.String()
 	if want := "team-a/tag-1"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
 }
 
-func TestActorSnapshotTagRefObjectRefRoundTrip(t *testing.T) {
-	tagRef := ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-1"}
+func TestTagRefObjectRefRoundTrip(t *testing.T) {
+	tagRef := TagRef{Atespace: "team-a", Name: "tag-1"}
 
 	obj := tagRef.ToObjectRef()
 	if obj.GetAtespace() != "team-a" || obj.GetName() != "tag-1" {
 		t.Errorf("ToObjectRef() = (%q, %q), want (team-a, tag-1)", obj.GetAtespace(), obj.GetName())
 	}
-	if got := ActorSnapshotTagRefFromObjectRef(obj); got != tagRef {
+	if got := TagRefFromObjectRef(obj); got != tagRef {
 		t.Errorf("round-trip = %+v, want %+v", got, tagRef)
 	}
 }
 
-func TestActorSnapshotTagRefFromActorSnapshotTag(t *testing.T) {
+func TestTagRefFromTag(t *testing.T) {
 	tests := []struct {
 		name string
-		tag  *ateapipb.ActorSnapshotTag
-		want ActorSnapshotTagRef
+		tag  *ateapipb.Tag
+		want TagRef
 	}{
 		{
 			name: "populated",
-			tag: &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{
+			tag: &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{
 				Atespace: "team-a",
 				Name:     "tag-1",
 			}},
-			want: ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-1"},
+			want: TagRef{Atespace: "team-a", Name: "tag-1"},
 		},
-		{"nil tag", nil, ActorSnapshotTagRef{}},
-		{"nil metadata", &ateapipb.ActorSnapshotTag{}, ActorSnapshotTagRef{}},
+		{"nil tag", nil, TagRef{}},
+		{"nil metadata", &ateapipb.Tag{}, TagRef{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ActorSnapshotTagRefFromActorSnapshotTag(tt.tag); got != tt.want {
-				t.Errorf("ActorSnapshotTagRefFromActorSnapshotTag() = %+v, want %+v", got, tt.want)
+			if got := TagRefFromTag(tt.tag); got != tt.want {
+				t.Errorf("TagRefFromTag() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

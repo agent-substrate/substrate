@@ -141,18 +141,17 @@ func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateR
 	}
 }
 
-// ActorSnapshotTagRef identifies an ActorSnapshotTag by the (atespace, name).
-type ActorSnapshotTagRef = ResourceRef[*ateapipb.ActorSnapshotTag]
+// TagRef identifies a Tag by the (atespace, name).
+type TagRef = ResourceRef[*ateapipb.Tag]
 
-// ActorSnapshotTagRefFromObjectRef converts an Ibjectref to an ActorSnapshotTagRef.
-func ActorSnapshotTagRefFromObjectRef(ref *ateapipb.ObjectRef) ActorSnapshotTagRef {
-	return resourceRefFromObjectRef[*ateapipb.ActorSnapshotTag](ref)
+// TagRefFromObjectRef converts an ObjectRef to a TagRef.
+func TagRefFromObjectRef(ref *ateapipb.ObjectRef) TagRef {
+	return resourceRefFromObjectRef[*ateapipb.Tag](ref)
 }
 
-// ActorSnapshotTagRefFromActorSnapshotTag returns the reference addressing the
-// given tag.
-func ActorSnapshotTagRefFromActorSnapshotTag(t *ateapipb.ActorSnapshotTag) ActorSnapshotTagRef {
-	return ActorSnapshotTagRef{
+// TagRefFromTag returns the reference addressing the given tag.
+func TagRefFromTag(t *ateapipb.Tag) TagRef {
+	return TagRef{
 		Atespace: t.GetMetadata().GetAtespace(),
 		Name:     t.GetMetadata().GetName(),
 	}

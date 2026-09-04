@@ -173,21 +173,21 @@ func TestNewTagSnapshotURI(t *testing.T) {
 			location: "gs://bucket/root",
 			atespace: "team-a",
 			snapshot: "snap-1",
-			want:     "gs://bucket/root/atespaces/team-a/actor-snapshot-tags/snap-1",
+			want:     "gs://bucket/root/atespaces/team-a/tags/snap-1",
 		},
 		{
 			name:     "trailing slash",
 			location: "gs://bucket/root/",
 			atespace: "team-a",
 			snapshot: "snap-1",
-			want:     "gs://bucket/root/atespaces/team-a/actor-snapshot-tags/snap-1",
+			want:     "gs://bucket/root/atespaces/team-a/tags/snap-1",
 		},
 		{
 			name:     "bucket only",
 			location: "gs://bucket",
 			atespace: "team-a",
 			snapshot: "snap-1",
-			want:     "gs://bucket/atespaces/team-a/actor-snapshot-tags/snap-1",
+			want:     "gs://bucket/atespaces/team-a/tags/snap-1",
 		},
 		{
 			name:     "empty location",
@@ -320,7 +320,7 @@ func TestSnapshotOwnerPrefix(t *testing.T) {
 			name:     "tag",
 			owner:    TagSnapshotOwner("team-a", "snap-1"),
 			location: "gs://bucket/root",
-			want:     "gs://bucket/root/atespaces/team-a/actor-snapshot-tags/snap-1",
+			want:     "gs://bucket/root/atespaces/team-a/tags/snap-1",
 		},
 		{
 			name:     "the zero owner has no prefix",
@@ -386,7 +386,7 @@ func TestParseSnapshotURI(t *testing.T) {
 		},
 		{
 			name:         "reads a tag snapshot",
-			uri:          "gs://bucket/root/atespaces/team-a/actor-snapshot-tags/snap-1",
+			uri:          "gs://bucket/root/atespaces/team-a/tags/snap-1",
 			wantLocation: "gs://bucket/root",
 			wantAtespace: "team-a",
 			wantName:     "snap-1",
@@ -428,7 +428,7 @@ func TestParseSnapshotURI(t *testing.T) {
 		},
 		{
 			name:    "rejects an object within a tag snapshot",
-			uri:     "gs://bucket/root/atespaces/team-a/actor-snapshot-tags/snap-1/manifest.json",
+			uri:     "gs://bucket/root/atespaces/team-a/tags/snap-1/manifest.json",
 			wantErr: true,
 		},
 		{
@@ -551,7 +551,7 @@ func TestSnapshotURIObject(t *testing.T) {
 			name:       "tag snapshot object",
 			uri:        tagURI,
 			objectName: "manifest.json",
-			want:       "gs://bucket/root/atespaces/team-a/actor-snapshot-tags/snap-2/manifest.json",
+			want:       "gs://bucket/root/atespaces/team-a/tags/snap-2/manifest.json",
 		},
 		{
 			name:       "malformed escape",

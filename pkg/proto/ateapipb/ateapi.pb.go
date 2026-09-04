@@ -89,56 +89,56 @@ func (SnapshotContentScope) EnumDescriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{0}
 }
 
-type ActorSnapshotTagScope int32
+type TagScope int32
 
 const (
 	// Not set and rejected wherever a client supplies a scope
-	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED ActorSnapshotTagScope = 0
+	TagScope_TAG_SCOPE_UNSPECIFIED TagScope = 0
 	// May initialize Actors only in the tag's owning Atespace.
-	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE ActorSnapshotTagScope = 1
+	TagScope_TAG_SCOPE_ATESPACE TagScope = 1
 	// Published for use by Actors in any Atespace. The tag remains addressed
 	// through its owning Atespace.
-	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED ActorSnapshotTagScope = 2
+	TagScope_TAG_SCOPE_PUBLISHED TagScope = 2
 )
 
-// Enum value maps for ActorSnapshotTagScope.
+// Enum value maps for TagScope.
 var (
-	ActorSnapshotTagScope_name = map[int32]string{
-		0: "ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED",
-		1: "ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE",
-		2: "ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED",
+	TagScope_name = map[int32]string{
+		0: "TAG_SCOPE_UNSPECIFIED",
+		1: "TAG_SCOPE_ATESPACE",
+		2: "TAG_SCOPE_PUBLISHED",
 	}
-	ActorSnapshotTagScope_value = map[string]int32{
-		"ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED": 0,
-		"ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE":    1,
-		"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED":   2,
+	TagScope_value = map[string]int32{
+		"TAG_SCOPE_UNSPECIFIED": 0,
+		"TAG_SCOPE_ATESPACE":    1,
+		"TAG_SCOPE_PUBLISHED":   2,
 	}
 )
 
-func (x ActorSnapshotTagScope) Enum() *ActorSnapshotTagScope {
-	p := new(ActorSnapshotTagScope)
+func (x TagScope) Enum() *TagScope {
+	p := new(TagScope)
 	*p = x
 	return p
 }
 
-func (x ActorSnapshotTagScope) String() string {
+func (x TagScope) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (ActorSnapshotTagScope) Descriptor() protoreflect.EnumDescriptor {
+func (TagScope) Descriptor() protoreflect.EnumDescriptor {
 	return file_ateapi_proto_enumTypes[1].Descriptor()
 }
 
-func (ActorSnapshotTagScope) Type() protoreflect.EnumType {
+func (TagScope) Type() protoreflect.EnumType {
 	return &file_ateapi_proto_enumTypes[1]
 }
 
-func (x ActorSnapshotTagScope) Number() protoreflect.EnumNumber {
+func (x TagScope) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use ActorSnapshotTagScope.Descriptor instead.
-func (ActorSnapshotTagScope) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use TagScope.Descriptor instead.
+func (TagScope) EnumDescriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{1}
 }
 
@@ -991,7 +991,7 @@ type Actor struct {
 	// +k8s:optional
 	// +k8s:subfield(atespace)=+k8s:required
 	// +k8s:immutable
-	SourceSnapshotTag *ObjectRef `protobuf:"bytes,6,opt,name=source_snapshot_tag,json=sourceSnapshotTag,proto3" json:"source_snapshot_tag,omitempty"`
+	SourceTag *ObjectRef `protobuf:"bytes,6,opt,name=source_tag,json=sourceTag,proto3" json:"source_tag,omitempty"`
 	// status is the system-managed state of the Actor. It is updated by the
 	// server and ignored on input. It is always present in output.
 	//
@@ -1052,9 +1052,9 @@ func (x *Actor) GetWorkerSelector() *Selector {
 	return nil
 }
 
-func (x *Actor) GetSourceSnapshotTag() *ObjectRef {
+func (x *Actor) GetSourceTag() *ObjectRef {
 	if x != nil {
-		return x.SourceSnapshotTag
+		return x.SourceTag
 	}
 	return nil
 }
@@ -1493,9 +1493,9 @@ type ActorStatus struct {
 	// +k8s:format=k8s-short-name
 	InProgressSnapshotName string `protobuf:"bytes,3,opt,name=in_progress_snapshot_name,json=inProgressSnapshotName,proto3" json:"in_progress_snapshot_name,omitempty"`
 	// external_snapshot is the Actor's current external snapshot.
-	// If the Actor was created from an ActorSnapshotTag this is the tag's
-	// snapshot, borrowed until the Actor's first suspend writes one of its own.
-	// Otherwise it is unset until the Actor is first suspended.
+	// If the Actor was created from a Tag this is the tag's snapshot, borrowed
+	// until the Actor's first suspend writes one of its own. Otherwise it is
+	// unset until the Actor is first suspended.
 	// +k8s:optional
 	ExternalSnapshot *ExternalSnapshot `protobuf:"bytes,4,opt,name=external_snapshot,json=externalSnapshot,proto3" json:"external_snapshot,omitempty"`
 	// Node-local state used only while the Actor is paused.
@@ -1521,9 +1521,9 @@ type ActorStatus struct {
 	InProgressLocalSnapshotName string `protobuf:"bytes,8,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`
 	// The UID of the actor template the Actor's guest state is currently built
 	// on: the one its latest sprint booted with, recorded when the resume (or
-	// first boot) commits RUNNING, or at creation for an Actor seeded from a
-	// snapshot tag, since that Actor borrows guest state that was already built.
-	// Empty means the Actor has no guest state yet.
+	// first boot) commits RUNNING, or at creation for an Actor seeded from a tag,
+	// since that Actor borrows guest state that was already built. Empty means
+	// the Actor has no guest state yet.
 	// Diverges from the UID of the Actor's actor_template ref when a suspended
 	// Actor is repointed at a replacement template, which forces the next
 	// restore to data-only.
@@ -1741,10 +1741,10 @@ func (x *WorkerAssignment) GetWorkerPodIp() string {
 	return ""
 }
 
-// ActorSnapshotTagStatus is the server-owned state of an ActorSnapshotTag.
+// TagStatus is the server-owned state of a Tag.
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
-type ActorSnapshotTagStatus struct {
+type TagStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// snapshot is the external snapshot this tag points at. Unset while the tag
 	// is still being created, and immutable once set: a tag never moves between
@@ -1755,11 +1755,10 @@ type ActorSnapshotTagStatus struct {
 	// UID of the ActorTemplate the snapshot was taken under. Actors can only be
 	// seeded from a tag under the same template.
 	ActorTemplateUid string `protobuf:"bytes,2,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
-	// in_progress_snapshot_uri is where CreateActorSnapshotTag is copying the
-	// tag's own snapshot to. It is minted before a single object is written and
-	// cleared once snapshot is set, so a tag left with it set names exactly the
-	// objects its unfinished create stranded, and deleting the tag collects
-	// them.
+	// in_progress_snapshot_uri is where CreateTag is copying the tag's own
+	// snapshot to. It is minted before a single object is written and cleared
+	// once snapshot is set, so a tag left with it set names exactly the objects
+	// its unfinished create stranded, and deleting the tag collects them.
 	InProgressSnapshotUri string `protobuf:"bytes,3,opt,name=in_progress_snapshot_uri,json=inProgressSnapshotUri,proto3" json:"in_progress_snapshot_uri,omitempty"`
 	// source_actor_uid is the UID of the Actor this tag's snapshot was copied
 	// from.
@@ -1768,20 +1767,20 @@ type ActorSnapshotTagStatus struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *ActorSnapshotTagStatus) Reset() {
-	*x = ActorSnapshotTagStatus{}
+func (x *TagStatus) Reset() {
+	*x = TagStatus{}
 	mi := &file_ateapi_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActorSnapshotTagStatus) String() string {
+func (x *TagStatus) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActorSnapshotTagStatus) ProtoMessage() {}
+func (*TagStatus) ProtoMessage() {}
 
-func (x *ActorSnapshotTagStatus) ProtoReflect() protoreflect.Message {
+func (x *TagStatus) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1793,45 +1792,44 @@ func (x *ActorSnapshotTagStatus) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActorSnapshotTagStatus.ProtoReflect.Descriptor instead.
-func (*ActorSnapshotTagStatus) Descriptor() ([]byte, []int) {
+// Deprecated: Use TagStatus.ProtoReflect.Descriptor instead.
+func (*TagStatus) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *ActorSnapshotTagStatus) GetSnapshot() *ExternalSnapshot {
+func (x *TagStatus) GetSnapshot() *ExternalSnapshot {
 	if x != nil {
 		return x.Snapshot
 	}
 	return nil
 }
 
-func (x *ActorSnapshotTagStatus) GetActorTemplateUid() string {
+func (x *TagStatus) GetActorTemplateUid() string {
 	if x != nil {
 		return x.ActorTemplateUid
 	}
 	return ""
 }
 
-func (x *ActorSnapshotTagStatus) GetInProgressSnapshotUri() string {
+func (x *TagStatus) GetInProgressSnapshotUri() string {
 	if x != nil {
 		return x.InProgressSnapshotUri
 	}
 	return ""
 }
 
-func (x *ActorSnapshotTagStatus) GetSourceActorUid() string {
+func (x *TagStatus) GetSourceActorUid() string {
 	if x != nil {
 		return x.SourceActorUid
 	}
 	return ""
 }
 
-// ActorSnapshotTag is an Atespace-owned, stable name for one external
-// snapshot. The external snapshot pointed by a tag is a copy of an actor snapshot.
-// The snapshot is copied when the tag is
-// created, and deleted when the tag is. Its owning Atespace cannot be deleted
-// until the tag is removed.
-type ActorSnapshotTag struct {
+// Tag is an Atespace-owned, stable name for one external snapshot. The
+// external snapshot pointed by a tag is a copy of an actor snapshot. The
+// snapshot is copied when the tag is created, and deleted when the tag is. Its
+// owning Atespace cannot be deleted until the tag is removed.
+type Tag struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
 	//
@@ -1841,13 +1839,13 @@ type ActorSnapshotTag struct {
 	// status is set by the control plane; it is ignored on write.
 	//
 	// +k8s:optional
-	Status *ActorSnapshotTagStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	Status *TagStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	// scope controls who may create an Actor from this tag.
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the ActorSnapshotTagScope enum
-	Scope ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
+	// +k8s:maximum=2 # keep this in sync with the TagScope enum
+	Scope TagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.TagScope" json:"scope,omitempty"`
 	// source_actor is the suspended Actor whose external snapshot this tag
 	// captures. The tag lives in this Actor's Atespace. Set once at creation and
 	// immutable afterward.
@@ -1860,20 +1858,20 @@ type ActorSnapshotTag struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ActorSnapshotTag) Reset() {
-	*x = ActorSnapshotTag{}
+func (x *Tag) Reset() {
+	*x = Tag{}
 	mi := &file_ateapi_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActorSnapshotTag) String() string {
+func (x *Tag) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActorSnapshotTag) ProtoMessage() {}
+func (*Tag) ProtoMessage() {}
 
-func (x *ActorSnapshotTag) ProtoReflect() protoreflect.Message {
+func (x *Tag) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1885,33 +1883,33 @@ func (x *ActorSnapshotTag) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActorSnapshotTag.ProtoReflect.Descriptor instead.
-func (*ActorSnapshotTag) Descriptor() ([]byte, []int) {
+// Deprecated: Use Tag.ProtoReflect.Descriptor instead.
+func (*Tag) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{15}
 }
 
-func (x *ActorSnapshotTag) GetMetadata() *ResourceMetadata {
+func (x *Tag) GetMetadata() *ResourceMetadata {
 	if x != nil {
 		return x.Metadata
 	}
 	return nil
 }
 
-func (x *ActorSnapshotTag) GetStatus() *ActorSnapshotTagStatus {
+func (x *Tag) GetStatus() *TagStatus {
 	if x != nil {
 		return x.Status
 	}
 	return nil
 }
 
-func (x *ActorSnapshotTag) GetScope() ActorSnapshotTagScope {
+func (x *Tag) GetScope() TagScope {
 	if x != nil {
 		return x.Scope
 	}
-	return ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED
+	return TagScope_TAG_SCOPE_UNSPECIFIED
 }
 
-func (x *ActorSnapshotTag) GetSourceActor() *ObjectRef {
+func (x *Tag) GetSourceActor() *ObjectRef {
 	if x != nil {
 		return x.SourceActor
 	}
@@ -4900,29 +4898,29 @@ func (x *DeleteActorEgressPolicyRequest) GetActor() *ObjectRef {
 	return nil
 }
 
-type GetActorSnapshotTagRequest struct {
+type GetTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
-	ActorSnapshotTag *ObjectRef `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	Tag           *ObjectRef `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GetActorSnapshotTagRequest) Reset() {
-	*x = GetActorSnapshotTagRequest{}
+func (x *GetTagRequest) Reset() {
+	*x = GetTagRequest{}
 	mi := &file_ateapi_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GetActorSnapshotTagRequest) String() string {
+func (x *GetTagRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GetActorSnapshotTagRequest) ProtoMessage() {}
+func (*GetTagRequest) ProtoMessage() {}
 
-func (x *GetActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
+func (x *GetTagRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4934,19 +4932,19 @@ func (x *GetActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GetActorSnapshotTagRequest.ProtoReflect.Descriptor instead.
-func (*GetActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetTagRequest.ProtoReflect.Descriptor instead.
+func (*GetTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{66}
 }
 
-func (x *GetActorSnapshotTagRequest) GetActorSnapshotTag() *ObjectRef {
+func (x *GetTagRequest) GetTag() *ObjectRef {
 	if x != nil {
-		return x.ActorSnapshotTag
+		return x.Tag
 	}
 	return nil
 }
 
-type ListActorSnapshotTagsRequest struct {
+type ListTagsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The atespace to list tags from. Empty lists across all atespaces.
 	//
@@ -4960,7 +4958,7 @@ type ListActorSnapshotTagsRequest struct {
 	// +k8s:optional
 	// +k8s:minimum=1
 	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	// Pagination token from a previous ListActorSnapshotTags response.
+	// Pagination token from a previous ListTags response.
 	// Omit or leave empty for the first request.
 	//
 	// +k8s:optional
@@ -4970,20 +4968,20 @@ type ListActorSnapshotTagsRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListActorSnapshotTagsRequest) Reset() {
-	*x = ListActorSnapshotTagsRequest{}
+func (x *ListTagsRequest) Reset() {
+	*x = ListTagsRequest{}
 	mi := &file_ateapi_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListActorSnapshotTagsRequest) String() string {
+func (x *ListTagsRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListActorSnapshotTagsRequest) ProtoMessage() {}
+func (*ListTagsRequest) ProtoMessage() {}
 
-func (x *ListActorSnapshotTagsRequest) ProtoReflect() protoreflect.Message {
+func (x *ListTagsRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -4995,54 +4993,54 @@ func (x *ListActorSnapshotTagsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListActorSnapshotTagsRequest.ProtoReflect.Descriptor instead.
-func (*ListActorSnapshotTagsRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListTagsRequest.ProtoReflect.Descriptor instead.
+func (*ListTagsRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{67}
 }
 
-func (x *ListActorSnapshotTagsRequest) GetAtespace() string {
+func (x *ListTagsRequest) GetAtespace() string {
 	if x != nil {
 		return x.Atespace
 	}
 	return ""
 }
 
-func (x *ListActorSnapshotTagsRequest) GetPageSize() int32 {
+func (x *ListTagsRequest) GetPageSize() int32 {
 	if x != nil {
 		return x.PageSize
 	}
 	return 0
 }
 
-func (x *ListActorSnapshotTagsRequest) GetPageToken() string {
+func (x *ListTagsRequest) GetPageToken() string {
 	if x != nil {
 		return x.PageToken
 	}
 	return ""
 }
 
-type ListActorSnapshotTagsResponse struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	ActorSnapshotTags []*ActorSnapshotTag    `protobuf:"bytes,1,rep,name=actor_snapshot_tags,json=actorSnapshotTags,proto3" json:"actor_snapshot_tags,omitempty"`
-	NextPageToken     string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+type ListTagsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tags          []*Tag                 `protobuf:"bytes,1,rep,name=tags,proto3" json:"tags,omitempty"`
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListActorSnapshotTagsResponse) Reset() {
-	*x = ListActorSnapshotTagsResponse{}
+func (x *ListTagsResponse) Reset() {
+	*x = ListTagsResponse{}
 	mi := &file_ateapi_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListActorSnapshotTagsResponse) String() string {
+func (x *ListTagsResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListActorSnapshotTagsResponse) ProtoMessage() {}
+func (*ListTagsResponse) ProtoMessage() {}
 
-func (x *ListActorSnapshotTagsResponse) ProtoReflect() protoreflect.Message {
+func (x *ListTagsResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5054,19 +5052,19 @@ func (x *ListActorSnapshotTagsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListActorSnapshotTagsResponse.ProtoReflect.Descriptor instead.
-func (*ListActorSnapshotTagsResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListTagsResponse.ProtoReflect.Descriptor instead.
+func (*ListTagsResponse) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{68}
 }
 
-func (x *ListActorSnapshotTagsResponse) GetActorSnapshotTags() []*ActorSnapshotTag {
+func (x *ListTagsResponse) GetTags() []*Tag {
 	if x != nil {
-		return x.ActorSnapshotTags
+		return x.Tags
 	}
 	return nil
 }
 
-func (x *ListActorSnapshotTagsResponse) GetNextPageToken() string {
+func (x *ListTagsResponse) GetNextPageToken() string {
 	if x != nil {
 		return x.NextPageToken
 	}
@@ -5087,32 +5085,32 @@ func (x *ListActorSnapshotTagsResponse) GetNextPageToken() string {
 // which collects whatever that attempt stranded, and create it again.
 //
 // +k8s:customValidation # metadata.atespace must match source_actor.atespace
-type CreateActorSnapshotTagRequest struct {
+type CreateTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The tag to create. metadata.atespace, metadata.name, scope and source_actor
 	// are honored; metadata.atespace must match source_actor's, and status is
 	// ignored on write.
 	//
 	// +k8s:required
-	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	Tag           *Tag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CreateActorSnapshotTagRequest) Reset() {
-	*x = CreateActorSnapshotTagRequest{}
+func (x *CreateTagRequest) Reset() {
+	*x = CreateTagRequest{}
 	mi := &file_ateapi_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CreateActorSnapshotTagRequest) String() string {
+func (x *CreateTagRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CreateActorSnapshotTagRequest) ProtoMessage() {}
+func (*CreateTagRequest) ProtoMessage() {}
 
-func (x *CreateActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
+func (x *CreateTagRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5124,51 +5122,50 @@ func (x *CreateActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CreateActorSnapshotTagRequest.ProtoReflect.Descriptor instead.
-func (*CreateActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use CreateTagRequest.ProtoReflect.Descriptor instead.
+func (*CreateTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{69}
 }
 
-func (x *CreateActorSnapshotTagRequest) GetActorSnapshotTag() *ActorSnapshotTag {
+func (x *CreateTagRequest) GetTag() *Tag {
 	if x != nil {
-		return x.ActorSnapshotTag
+		return x.Tag
 	}
 	return nil
 }
 
-// Request to update mutable fields on an existing ActorSnapshotTag.
+// Request to update mutable fields on an existing Tag.
 // The tag keeps its address: the snapshot it points at cannot be changed.
-type UpdateActorSnapshotTagRequest struct {
+type UpdateTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The tag to update.
-	// actor_snapshot_tag.metadata.atespace and actor_snapshot_tag.metadata.name
-	// identify which resource to update.
-	// actor_snapshot_tag.metadata.version and actor_snapshot_tag.metadata.uid
-	// are required preconditions
+	// tag.metadata.atespace and tag.metadata.name identify which resource to
+	// update.
+	// tag.metadata.version and tag.metadata.uid are required preconditions
 	//
 	// +k8s:required
 	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
 	// +k8s:subfield(metadata)=+k8s:required
 	// +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
-	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	Tag           *Tag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *UpdateActorSnapshotTagRequest) Reset() {
-	*x = UpdateActorSnapshotTagRequest{}
+func (x *UpdateTagRequest) Reset() {
+	*x = UpdateTagRequest{}
 	mi := &file_ateapi_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *UpdateActorSnapshotTagRequest) String() string {
+func (x *UpdateTagRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*UpdateActorSnapshotTagRequest) ProtoMessage() {}
+func (*UpdateTagRequest) ProtoMessage() {}
 
-func (x *UpdateActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
+func (x *UpdateTagRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5180,41 +5177,41 @@ func (x *UpdateActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use UpdateActorSnapshotTagRequest.ProtoReflect.Descriptor instead.
-func (*UpdateActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use UpdateTagRequest.ProtoReflect.Descriptor instead.
+func (*UpdateTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{70}
 }
 
-func (x *UpdateActorSnapshotTagRequest) GetActorSnapshotTag() *ActorSnapshotTag {
+func (x *UpdateTagRequest) GetTag() *Tag {
 	if x != nil {
-		return x.ActorSnapshotTag
+		return x.Tag
 	}
 	return nil
 }
 
-type DeleteActorSnapshotTagRequest struct {
+type DeleteTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
-	ActorSnapshotTag *ObjectRef `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	Tag           *ObjectRef `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DeleteActorSnapshotTagRequest) Reset() {
-	*x = DeleteActorSnapshotTagRequest{}
+func (x *DeleteTagRequest) Reset() {
+	*x = DeleteTagRequest{}
 	mi := &file_ateapi_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DeleteActorSnapshotTagRequest) String() string {
+func (x *DeleteTagRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DeleteActorSnapshotTagRequest) ProtoMessage() {}
+func (*DeleteTagRequest) ProtoMessage() {}
 
-func (x *DeleteActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
+func (x *DeleteTagRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5226,14 +5223,14 @@ func (x *DeleteActorSnapshotTagRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DeleteActorSnapshotTagRequest.ProtoReflect.Descriptor instead.
-func (*DeleteActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use DeleteTagRequest.ProtoReflect.Descriptor instead.
+func (*DeleteTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{71}
 }
 
-func (x *DeleteActorSnapshotTagRequest) GetActorSnapshotTag() *ObjectRef {
+func (x *DeleteTagRequest) GetTag() *ObjectRef {
 	if x != nil {
-		return x.ActorSnapshotTag
+		return x.Tag
 	}
 	return nil
 }
@@ -6791,12 +6788,13 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTATUS_PENDING\x10\x01\x12\x12\n" +
 	"\x0eSTATUS_CREATED\x10\x02\x12\x13\n" +
-	"\x0fSTATUS_DELETING\x10\x03\"\xa2\x02\n" +
+	"\x0fSTATUS_DELETING\x10\x03\"\x91\x02\n" +
 	"\x05Actor\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
 	"\x0eactor_template\x18\x04 \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x129\n" +
-	"\x0fworker_selector\x18\x05 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12A\n" +
-	"\x13source_snapshot_tag\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\x11sourceSnapshotTag\x12+\n" +
+	"\x0fworker_selector\x18\x05 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x120\n" +
+	"\n" +
+	"source_tag\x18\x06 \x01(\v2\x11.ateapi.ObjectRefR\tsourceTag\x12+\n" +
 	"\x06status\x18\a \x01(\v2\x13.ateapi.ActorStatusR\x06status\"n\n" +
 	"\fEgressPolicy\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12(\n" +
@@ -6834,16 +6832,16 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
-	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xdf\x01\n" +
-	"\x16ActorSnapshotTagStatus\x124\n" +
+	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xd2\x01\n" +
+	"\tTagStatus\x124\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x18.ateapi.ExternalSnapshotR\bsnapshot\x12,\n" +
 	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\x127\n" +
 	"\x18in_progress_snapshot_uri\x18\x03 \x01(\tR\x15inProgressSnapshotUri\x12(\n" +
-	"\x10source_actor_uid\x18\x04 \x01(\tR\x0esourceActorUid\"\xeb\x01\n" +
-	"\x10ActorSnapshotTag\x124\n" +
-	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x126\n" +
-	"\x06status\x18\x02 \x01(\v2\x1e.ateapi.ActorSnapshotTagStatusR\x06status\x123\n" +
-	"\x05scope\x18\x03 \x01(\x0e2\x1d.ateapi.ActorSnapshotTagScopeR\x05scope\x124\n" +
+	"\x10source_actor_uid\x18\x04 \x01(\tR\x0esourceActorUid\"\xc4\x01\n" +
+	"\x03Tag\x124\n" +
+	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12)\n" +
+	"\x06status\x18\x02 \x01(\v2\x11.ateapi.TagStatusR\x06status\x12&\n" +
+	"\x05scope\x18\x03 \x01(\x0e2\x10.ateapi.TagScopeR\x05scope\x124\n" +
 	"\fsource_actor\x18\x04 \x01(\v2\x11.ateapi.ObjectRefR\vsourceActor\"@\n" +
 	"\bAtespace\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\";\n" +
@@ -6997,23 +6995,23 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x129\n" +
 	"\regress_policy\x18\x02 \x01(\v2\x14.ateapi.EgressPolicyR\fegressPolicy\"I\n" +
 	"\x1eDeleteActorEgressPolicyRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"]\n" +
-	"\x1aGetActorSnapshotTagRequest\x12?\n" +
-	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x10actorSnapshotTag\"v\n" +
-	"\x1cListActorSnapshotTagsRequest\x12\x1a\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"4\n" +
+	"\rGetTagRequest\x12#\n" +
+	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"i\n" +
+	"\x0fListTagsRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x03 \x01(\tR\tpageToken\"\x91\x01\n" +
-	"\x1dListActorSnapshotTagsResponse\x12H\n" +
-	"\x13actor_snapshot_tags\x18\x01 \x03(\v2\x18.ateapi.ActorSnapshotTagR\x11actorSnapshotTags\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"g\n" +
-	"\x1dCreateActorSnapshotTagRequest\x12F\n" +
-	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"g\n" +
-	"\x1dUpdateActorSnapshotTagRequest\x12F\n" +
-	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x10actorSnapshotTag\"`\n" +
-	"\x1dDeleteActorSnapshotTagRequest\x12?\n" +
-	"\x12actor_snapshot_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x10actorSnapshotTag\";\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"[\n" +
+	"\x10ListTagsResponse\x12\x1f\n" +
+	"\x04tags\x18\x01 \x03(\v2\v.ateapi.TagR\x04tags\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"1\n" +
+	"\x10CreateTagRequest\x12\x1d\n" +
+	"\x03tag\x18\x01 \x01(\v2\v.ateapi.TagR\x03tag\"1\n" +
+	"\x10UpdateTagRequest\x12\x1d\n" +
+	"\x03tag\x18\x01 \x01(\v2\v.ateapi.TagR\x03tag\"7\n" +
+	"\x10DeleteTagRequest\x12#\n" +
+	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\";\n" +
 	"\rDeleteOptions\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12\x10\n" +
 	"\x03uid\x18\x02 \x01(\tR\x03uid\"\x8a\x01\n" +
@@ -7103,11 +7101,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x14SnapshotContentScope\x12&\n" +
 	"\"SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bSNAPSHOT_CONTENT_SCOPE_FULL\x10\x01\x12\x1f\n" +
-	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02*\x90\x01\n" +
-	"\x15ActorSnapshotTagScope\x12(\n" +
-	"$ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED\x10\x00\x12%\n" +
-	"!ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE\x10\x01\x12&\n" +
-	"\"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED\x10\x02*\xf7\x01\n" +
+	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02*V\n" +
+	"\bTagScope\x12\x19\n" +
+	"\x15TAG_SCOPE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12TAG_SCOPE_ATESPACE\x10\x01\x12\x17\n" +
+	"\x13TAG_SCOPE_PUBLISHED\x10\x02*\xf7\x01\n" +
 	"\n" +
 	"ActorState\x12\x1b\n" +
 	"\x17ACTOR_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -7138,7 +7136,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x15WORKER_STATE_DRAINING\x10\x02*k\n" +
 	"\x17ActorCertificatePurpose\x12)\n" +
 	"%ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED\x10\x00\x12%\n" +
-	"!ACTOR_CERTIFICATE_PURPOSE_ATUNNEL\x10\x012\xb6\x13\n" +
+	"!ACTOR_CERTIFICATE_PURPOSE_ATUNNEL\x10\x012\xf3\x11\n" +
 	"\aControl\x124\n" +
 	"\bGetActor\x12\x17.ateapi.GetActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
 	"\vCreateActor\x12\x1a.ateapi.CreateActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
@@ -7151,12 +7149,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x14GetActorEgressPolicy\x12#.ateapi.GetActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x12Y\n" +
 	"\x17CreateActorEgressPolicy\x12&.ateapi.CreateActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x12Y\n" +
 	"\x17UpdateActorEgressPolicy\x12&.ateapi.UpdateActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x12Y\n" +
-	"\x17DeleteActorEgressPolicy\x12&.ateapi.DeleteActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x12[\n" +
-	"\x16CreateActorSnapshotTag\x12%.ateapi.CreateActorSnapshotTagRequest\x1a\x18.ateapi.ActorSnapshotTag\"\x00\x12U\n" +
-	"\x13GetActorSnapshotTag\x12\".ateapi.GetActorSnapshotTagRequest\x1a\x18.ateapi.ActorSnapshotTag\"\x00\x12f\n" +
-	"\x15ListActorSnapshotTags\x12$.ateapi.ListActorSnapshotTagsRequest\x1a%.ateapi.ListActorSnapshotTagsResponse\"\x00\x12[\n" +
-	"\x16UpdateActorSnapshotTag\x12%.ateapi.UpdateActorSnapshotTagRequest\x1a\x18.ateapi.ActorSnapshotTag\"\x00\x12[\n" +
-	"\x16DeleteActorSnapshotTag\x12%.ateapi.DeleteActorSnapshotTagRequest\x1a\x18.ateapi.ActorSnapshotTag\"\x00\x12H\n" +
+	"\x17DeleteActorEgressPolicy\x12&.ateapi.DeleteActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x124\n" +
+	"\tCreateTag\x12\x18.ateapi.CreateTagRequest\x1a\v.ateapi.Tag\"\x00\x12.\n" +
+	"\x06GetTag\x12\x15.ateapi.GetTagRequest\x1a\v.ateapi.Tag\"\x00\x12?\n" +
+	"\bListTags\x12\x17.ateapi.ListTagsRequest\x1a\x18.ateapi.ListTagsResponse\"\x00\x124\n" +
+	"\tUpdateTag\x12\x18.ateapi.UpdateTagRequest\x1a\v.ateapi.Tag\"\x00\x124\n" +
+	"\tDeleteTag\x12\x18.ateapi.DeleteTagRequest\x1a\v.ateapi.Tag\"\x00\x12H\n" +
 	"\vListWorkers\x12\x1a.ateapi.ListWorkersRequest\x1a\x1b.ateapi.ListWorkersResponse\"\x00\x127\n" +
 	"\tGetWorker\x12\x18.ateapi.GetWorkerRequest\x1a\x0e.ateapi.Worker\"\x00\x12=\n" +
 	"\fCreateWorker\x12\x1b.ateapi.CreateWorkerRequest\x1a\x0e.ateapi.Worker\"\x00\x12=\n" +
@@ -7196,7 +7194,7 @@ var file_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
 var file_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 97)
 var file_ateapi_proto_goTypes = []any{
 	(SnapshotContentScope)(0),                  // 0: ateapi.SnapshotContentScope
-	(ActorSnapshotTagScope)(0),                 // 1: ateapi.ActorSnapshotTagScope
+	(TagScope)(0),                              // 1: ateapi.TagScope
 	(ActorState)(0),                            // 2: ateapi.ActorState
 	(SandboxClass)(0),                          // 3: ateapi.SandboxClass
 	(ResumeSource)(0),                          // 4: ateapi.ResumeSource
@@ -7218,8 +7216,8 @@ var file_ateapi_proto_goTypes = []any{
 	(*CredentialHeaderInjection)(nil),          // 20: ateapi.CredentialHeaderInjection
 	(*ActorStatus)(nil),                        // 21: ateapi.ActorStatus
 	(*WorkerAssignment)(nil),                   // 22: ateapi.WorkerAssignment
-	(*ActorSnapshotTagStatus)(nil),             // 23: ateapi.ActorSnapshotTagStatus
-	(*ActorSnapshotTag)(nil),                   // 24: ateapi.ActorSnapshotTag
+	(*TagStatus)(nil),                          // 23: ateapi.TagStatus
+	(*Tag)(nil),                                // 24: ateapi.Tag
 	(*Atespace)(nil),                           // 25: ateapi.Atespace
 	(*ObjectRef)(nil),                          // 26: ateapi.ObjectRef
 	(*ActorTemplate)(nil),                      // 27: ateapi.ActorTemplate
@@ -7270,12 +7268,12 @@ var file_ateapi_proto_goTypes = []any{
 	(*CreateActorEgressPolicyRequest)(nil),     // 72: ateapi.CreateActorEgressPolicyRequest
 	(*UpdateActorEgressPolicyRequest)(nil),     // 73: ateapi.UpdateActorEgressPolicyRequest
 	(*DeleteActorEgressPolicyRequest)(nil),     // 74: ateapi.DeleteActorEgressPolicyRequest
-	(*GetActorSnapshotTagRequest)(nil),         // 75: ateapi.GetActorSnapshotTagRequest
-	(*ListActorSnapshotTagsRequest)(nil),       // 76: ateapi.ListActorSnapshotTagsRequest
-	(*ListActorSnapshotTagsResponse)(nil),      // 77: ateapi.ListActorSnapshotTagsResponse
-	(*CreateActorSnapshotTagRequest)(nil),      // 78: ateapi.CreateActorSnapshotTagRequest
-	(*UpdateActorSnapshotTagRequest)(nil),      // 79: ateapi.UpdateActorSnapshotTagRequest
-	(*DeleteActorSnapshotTagRequest)(nil),      // 80: ateapi.DeleteActorSnapshotTagRequest
+	(*GetTagRequest)(nil),                      // 75: ateapi.GetTagRequest
+	(*ListTagsRequest)(nil),                    // 76: ateapi.ListTagsRequest
+	(*ListTagsResponse)(nil),                   // 77: ateapi.ListTagsResponse
+	(*CreateTagRequest)(nil),                   // 78: ateapi.CreateTagRequest
+	(*UpdateTagRequest)(nil),                   // 79: ateapi.UpdateTagRequest
+	(*DeleteTagRequest)(nil),                   // 80: ateapi.DeleteTagRequest
 	(*DeleteOptions)(nil),                      // 81: ateapi.DeleteOptions
 	(*ListWorkerActorAssignmentsRequest)(nil),  // 82: ateapi.ListWorkerActorAssignmentsRequest
 	(*ListWorkerActorAssignmentsResponse)(nil), // 83: ateapi.ListWorkerActorAssignmentsResponse
@@ -7315,7 +7313,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	12,  // 7: ateapi.Actor.metadata:type_name -> ateapi.ResourceMetadata
 	26,  // 8: ateapi.Actor.actor_template:type_name -> ateapi.ObjectRef
 	11,  // 9: ateapi.Actor.worker_selector:type_name -> ateapi.Selector
-	26,  // 10: ateapi.Actor.source_snapshot_tag:type_name -> ateapi.ObjectRef
+	26,  // 10: ateapi.Actor.source_tag:type_name -> ateapi.ObjectRef
 	21,  // 11: ateapi.Actor.status:type_name -> ateapi.ActorStatus
 	12,  // 12: ateapi.EgressPolicy.metadata:type_name -> ateapi.ResourceMetadata
 	16,  // 13: ateapi.EgressPolicy.rules:type_name -> ateapi.EgressRule
@@ -7330,11 +7328,11 @@ var file_ateapi_proto_depIdxs = []int32{
 	10,  // 22: ateapi.ActorStatus.local_snapshot_info:type_name -> ateapi.LocalSnapshotInfo
 	13,  // 23: ateapi.ActorStatus.actor_volumes:type_name -> ateapi.ExternalVolume
 	26,  // 24: ateapi.WorkerAssignment.worker:type_name -> ateapi.ObjectRef
-	9,   // 25: ateapi.ActorSnapshotTagStatus.snapshot:type_name -> ateapi.ExternalSnapshot
-	12,  // 26: ateapi.ActorSnapshotTag.metadata:type_name -> ateapi.ResourceMetadata
-	23,  // 27: ateapi.ActorSnapshotTag.status:type_name -> ateapi.ActorSnapshotTagStatus
-	1,   // 28: ateapi.ActorSnapshotTag.scope:type_name -> ateapi.ActorSnapshotTagScope
-	26,  // 29: ateapi.ActorSnapshotTag.source_actor:type_name -> ateapi.ObjectRef
+	9,   // 25: ateapi.TagStatus.snapshot:type_name -> ateapi.ExternalSnapshot
+	12,  // 26: ateapi.Tag.metadata:type_name -> ateapi.ResourceMetadata
+	23,  // 27: ateapi.Tag.status:type_name -> ateapi.TagStatus
+	1,   // 28: ateapi.Tag.scope:type_name -> ateapi.TagScope
+	26,  // 29: ateapi.Tag.source_actor:type_name -> ateapi.ObjectRef
 	12,  // 30: ateapi.Atespace.metadata:type_name -> ateapi.ResourceMetadata
 	12,  // 31: ateapi.ActorTemplate.metadata:type_name -> ateapi.ResourceMetadata
 	11,  // 32: ateapi.ActorTemplate.worker_selector:type_name -> ateapi.Selector
@@ -7393,11 +7391,11 @@ var file_ateapi_proto_depIdxs = []int32{
 	26,  // 85: ateapi.UpdateActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
 	15,  // 86: ateapi.UpdateActorEgressPolicyRequest.egress_policy:type_name -> ateapi.EgressPolicy
 	26,  // 87: ateapi.DeleteActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
-	26,  // 88: ateapi.GetActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ObjectRef
-	24,  // 89: ateapi.ListActorSnapshotTagsResponse.actor_snapshot_tags:type_name -> ateapi.ActorSnapshotTag
-	24,  // 90: ateapi.CreateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
-	24,  // 91: ateapi.UpdateActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ActorSnapshotTag
-	26,  // 92: ateapi.DeleteActorSnapshotTagRequest.actor_snapshot_tag:type_name -> ateapi.ObjectRef
+	26,  // 88: ateapi.GetTagRequest.tag:type_name -> ateapi.ObjectRef
+	24,  // 89: ateapi.ListTagsResponse.tags:type_name -> ateapi.Tag
+	24,  // 90: ateapi.CreateTagRequest.tag:type_name -> ateapi.Tag
+	24,  // 91: ateapi.UpdateTagRequest.tag:type_name -> ateapi.Tag
+	26,  // 92: ateapi.DeleteTagRequest.tag:type_name -> ateapi.ObjectRef
 	26,  // 93: ateapi.ListWorkerActorAssignmentsRequest.worker:type_name -> ateapi.ObjectRef
 	96,  // 94: ateapi.ListWorkerActorAssignmentsResponse.actor_assignments:type_name -> ateapi.ActorAssignment
 	93,  // 95: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
@@ -7435,11 +7433,11 @@ var file_ateapi_proto_depIdxs = []int32{
 	72,  // 127: ateapi.Control.CreateActorEgressPolicy:input_type -> ateapi.CreateActorEgressPolicyRequest
 	73,  // 128: ateapi.Control.UpdateActorEgressPolicy:input_type -> ateapi.UpdateActorEgressPolicyRequest
 	74,  // 129: ateapi.Control.DeleteActorEgressPolicy:input_type -> ateapi.DeleteActorEgressPolicyRequest
-	78,  // 130: ateapi.Control.CreateActorSnapshotTag:input_type -> ateapi.CreateActorSnapshotTagRequest
-	75,  // 131: ateapi.Control.GetActorSnapshotTag:input_type -> ateapi.GetActorSnapshotTagRequest
-	76,  // 132: ateapi.Control.ListActorSnapshotTags:input_type -> ateapi.ListActorSnapshotTagsRequest
-	79,  // 133: ateapi.Control.UpdateActorSnapshotTag:input_type -> ateapi.UpdateActorSnapshotTagRequest
-	80,  // 134: ateapi.Control.DeleteActorSnapshotTag:input_type -> ateapi.DeleteActorSnapshotTagRequest
+	78,  // 130: ateapi.Control.CreateTag:input_type -> ateapi.CreateTagRequest
+	75,  // 131: ateapi.Control.GetTag:input_type -> ateapi.GetTagRequest
+	76,  // 132: ateapi.Control.ListTags:input_type -> ateapi.ListTagsRequest
+	79,  // 133: ateapi.Control.UpdateTag:input_type -> ateapi.UpdateTagRequest
+	80,  // 134: ateapi.Control.DeleteTag:input_type -> ateapi.DeleteTagRequest
 	84,  // 135: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
 	86,  // 136: ateapi.Control.GetWorker:input_type -> ateapi.GetWorkerRequest
 	87,  // 137: ateapi.Control.CreateWorker:input_type -> ateapi.CreateWorkerRequest
@@ -7470,11 +7468,11 @@ var file_ateapi_proto_depIdxs = []int32{
 	15,  // 162: ateapi.Control.CreateActorEgressPolicy:output_type -> ateapi.EgressPolicy
 	15,  // 163: ateapi.Control.UpdateActorEgressPolicy:output_type -> ateapi.EgressPolicy
 	15,  // 164: ateapi.Control.DeleteActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	24,  // 165: ateapi.Control.CreateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	24,  // 166: ateapi.Control.GetActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	77,  // 167: ateapi.Control.ListActorSnapshotTags:output_type -> ateapi.ListActorSnapshotTagsResponse
-	24,  // 168: ateapi.Control.UpdateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	24,  // 169: ateapi.Control.DeleteActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
+	24,  // 165: ateapi.Control.CreateTag:output_type -> ateapi.Tag
+	24,  // 166: ateapi.Control.GetTag:output_type -> ateapi.Tag
+	77,  // 167: ateapi.Control.ListTags:output_type -> ateapi.ListTagsResponse
+	24,  // 168: ateapi.Control.UpdateTag:output_type -> ateapi.Tag
+	24,  // 169: ateapi.Control.DeleteTag:output_type -> ateapi.Tag
 	85,  // 170: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
 	93,  // 171: ateapi.Control.GetWorker:output_type -> ateapi.Worker
 	93,  // 172: ateapi.Control.CreateWorker:output_type -> ateapi.Worker

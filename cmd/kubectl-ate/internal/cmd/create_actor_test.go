@@ -26,7 +26,7 @@ func TestBuildCreateActorRequest(t *testing.T) {
 	tests := []struct {
 		name        string
 		templateRef string
-		snapshotTag string
+		tag         string
 		want        *ateapipb.Actor
 		wantErr     bool
 	}{
@@ -39,21 +39,21 @@ func TestBuildCreateActorRequest(t *testing.T) {
 			},
 		},
 		{
-			name:        "template ref with snapshot tag",
+			name:        "template ref with tag",
 			templateRef: "counter",
-			snapshotTag: "demo/before-upgrade",
+			tag:         "demo/before-upgrade",
 			want: &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
-				ActorTemplate:     &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
-				SourceSnapshotTag: &ateapipb.ObjectRef{Atespace: "demo", Name: "before-upgrade"},
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: "demo", Name: "my-counter"},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "demo", Name: "counter"},
+				SourceTag:     &ateapipb.ObjectRef{Atespace: "demo", Name: "before-upgrade"},
 			},
 		},
-		{name: "malformed snapshot tag", templateRef: "counter", snapshotTag: "before-upgrade", wantErr: true},
+		{name: "malformed tag", templateRef: "counter", tag: "before-upgrade", wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.snapshotTag)
+			got, err := buildCreateActorRequest("my-counter", "demo", test.templateRef, test.tag)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("buildCreateActorRequest error = %v, wantErr %t", err, test.wantErr)
 			}

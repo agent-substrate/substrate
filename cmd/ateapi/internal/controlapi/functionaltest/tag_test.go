@@ -28,11 +28,11 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-// seedActorSnapshotTag seeds a suspended actor holding an external snapshot plus
-// a finished tag over a copy of it: the state CreateActorSnapshotTag leaves
+// seedTag seeds a suspended actor holding an external snapshot plus
+// a finished tag over a copy of it: the state CreateTag leaves
 // behind. actorName must be unique within the test, since a tag records the
 // actor it was taken from; opts adjust the tag before it is written.
-func seedActorSnapshotTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...func(*ateapipb.ActorSnapshotTag)) *ateapipb.ActorSnapshotTag {
+func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...func(*ateapipb.Tag)) *ateapipb.Tag {
 	t.Helper()
 	ctx := context.Background()
 	actor := storetest.MustCreateActor(t, ctx, tc.persistence, &ateapipb.Actor{
@@ -58,11 +58,11 @@ func seedActorSnapshotTag(t *testing.T, tc *testContext, actorName, tagName stri
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
-	tag := &ateapipb.ActorSnapshotTag{
+	tag := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-		Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
-		Status: &ateapipb.ActorSnapshotTagStatus{
+		Status: &ateapipb.TagStatus{
 			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI.String(), ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope()},
 			SourceActorUid: actor.GetMetadata().GetUid(),
 		},
@@ -70,14 +70,14 @@ func seedActorSnapshotTag(t *testing.T, tc *testContext, actorName, tagName stri
 	for _, opt := range opts {
 		opt(tag)
 	}
-	return storetest.MustCreateActorSnapshotTag(t, ctx, tc.persistence, tag)
+	return storetest.MustCreateTag(t, ctx, tc.persistence, tag)
 }
 
-// TestCreateActorSnapshotTag_ReusedTagName tests that a tag does not move
+// TestCreateTag_ReusedTagName tests that a tag does not move
 // between external snapshots. A tag name that is already taken must be reported
 // as taken, and the objects the existing tag names must be exactly what its own
 // creator wrote, because the rejected create reserves the name before it copies anything.
-func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
+func TestCreateTag_ReusedTagName(t *testing.T) {
 	ns := namespaceForTest("ns-tag-reused-name")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -88,15 +88,15 @@ func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
 	// Actor A is suspended and tagged, the ordinary way.
 	const tagName = "before-upgrade"
 	actorFirstSnapshotURI := suspendActorForTest(t, tc, workerName, "actor-a")
-	first, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+	first, err := tc.client.CreateTag(context.Background(), &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
 			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateActorSnapshotTag(actor-a) failed: %v", err)
+		t.Fatalf("CreateTag(actor-a) failed: %v", err)
 	}
 	tagSnapshotURI := first.GetStatus().GetSnapshot().GetSnapshotUri()
 	// Tag owns a snapshot. So it must not be empty.
@@ -111,22 +111,22 @@ func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
 	if secondSnapshotURI == actorFirstSnapshotURI {
 		t.Fatalf("both actors suspended to %s, want distinct external snapshots", secondSnapshotURI)
 	}
-	_, err = tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+	_, err = tc.client.CreateTag(context.Background(), &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
 			// Same tagName that was written before.
 			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-b"},
 		},
 	})
-	assertGrpcError(t, err, codes.AlreadyExists, fmt.Sprintf("ActorSnapshotTag %s/%s already exists; delete it and create it again to retry", testAtespace, tagName))
+	assertGrpcError(t, err, codes.AlreadyExists, fmt.Sprintf("Tag %s/%s already exists; delete it and create it again to retry", testAtespace, tagName))
 
 	// The row still contains actor A's tag
-	stored, err := tc.client.GetActorSnapshotTag(context.Background(), &ateapipb.GetActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName},
+	stored, err := tc.client.GetTag(context.Background(), &ateapipb.GetTagRequest{
+		Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName},
 	})
 	if err != nil {
-		t.Fatalf("GetActorSnapshotTag failed: %v", err)
+		t.Fatalf("GetTag failed: %v", err)
 	}
 	if diff := cmp.Diff(first, stored, protocmp.Transform()); diff != "" {
 		t.Errorf("the rejected create modified the tag (-before +after):\n%s", diff)
@@ -139,14 +139,14 @@ func TestCreateActorSnapshotTag_ReusedTagName(t *testing.T) {
 	assertSnapshotPresent(t, tc, secondSnapshotURI)
 
 	// The collision is not a dead end: a free name works.
-	if _, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+	if _, err := tc.client.CreateTag(context.Background(), &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
 			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "after-upgrade"},
-			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-b"},
 		},
 	}); err != nil {
-		t.Fatalf("CreateActorSnapshotTag under a free name failed: %v", err)
+		t.Fatalf("CreateTag under a free name failed: %v", err)
 	}
 }
 
@@ -183,9 +183,9 @@ func suspendActorForTest(t *testing.T, tc *testContext, workerName, name string)
 	return uri
 }
 
-// TestUpdateActorSnapshotTag_Preconditions verifies the required version and uid
+// TestUpdateTag_Preconditions verifies the required version and uid
 // guards carried in the tag's metadata.
-func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
+func TestUpdateTag_Preconditions(t *testing.T) {
 	ns := namespaceForTest("ns-update-tag-preconditions")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -199,10 +199,10 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	// observable write that bumps the version.
 	// The tag under test is seeded from actor-2; source_actor is immutable, so
 	// every update has to echo it back.
-	update := func(meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
+	update := func(meta *ateapipb.ResourceMetadata, scope ateapipb.TagScope) (*ateapipb.Tag, error) {
 		meta.Atespace, meta.Name = testAtespace, tagName
-		return tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-			ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+		return tc.client.UpdateTag(context.Background(), &ateapipb.UpdateTagRequest{
+			Tag: &ateapipb.Tag{
 				Metadata:    meta,
 				Scope:       scope,
 				SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-2"},
@@ -212,54 +212,54 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 
 	// Delete and recreate the same atespace/name tag, so the first lifecycle's
 	// uid becomes stale.
-	staleUID := seedActorSnapshotTag(t, tc, "actor-1", tagName).GetMetadata().GetUid()
-	if _, err := tc.client.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName},
+	staleUID := seedTag(t, tc, "actor-1", tagName).GetMetadata().GetUid()
+	if _, err := tc.client.DeleteTag(ctx, &ateapipb.DeleteTagRequest{
+		Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName},
 	}); err != nil {
-		t.Fatalf("DeleteActorSnapshotTag failed: %v", err)
+		t.Fatalf("DeleteTag failed: %v", err)
 	}
 
-	tagged := seedActorSnapshotTag(t, tc, "actor-2", tagName)
+	tagged := seedTag(t, tc, "actor-2", tagName)
 	staleVersion := tagged.GetMetadata().GetVersion()
 	uid := tagged.GetMetadata().GetUid()
 	if uid == staleUID {
 		t.Fatalf("recreated tag reused uid %s, want a fresh one", uid)
 	}
 	// No preconditions
-	_, err := update(&ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.InvalidArgument, fmt.Sprintf("while updating actor snapshot tag %s/%s: persistence: precondition required: uid", testAtespace, tagName))
+	_, err := update(&ateapipb.ResourceMetadata{}, ateapipb.TagScope_TAG_SCOPE_PUBLISHED)
+	assertGrpcError(t, err, codes.InvalidArgument, fmt.Sprintf("while updating tag %s/%s: persistence: precondition required: uid", testAtespace, tagName))
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it
 	// guards on matches the recreated tag's.
-	_, err = update(&ateapipb.ResourceMetadata{Uid: staleUID, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("ActorSnapshotTag %s/%s not found with uid %s", testAtespace, tagName, staleUID))
+	_, err = update(&ateapipb.ResourceMetadata{Uid: staleUID, Version: staleVersion}, ateapipb.TagScope_TAG_SCOPE_PUBLISHED)
+	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("Tag %s/%s not found with uid %s", testAtespace, tagName, staleUID))
 
 	// Both guards matching the observed state: the update goes through, and
 	// moves the tag past the version observed above.
-	first, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	first, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, ateapipb.TagScope_TAG_SCOPE_PUBLISHED)
 	if err != nil {
-		t.Fatalf("UpdateActorSnapshotTag(matching guards) failed: %v", err)
+		t.Fatalf("UpdateTag(matching guards) failed: %v", err)
 	}
 	currentVersion := first.GetMetadata().GetVersion()
 	if currentVersion <= staleVersion {
 		t.Fatalf("version = %d, want greater than %d after an update", currentVersion, staleVersion)
 	}
-	if got, want := first.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED; got != want {
+	if got, want := first.GetScope(), ateapipb.TagScope_TAG_SCOPE_PUBLISHED; got != want {
 		t.Errorf("scope = %v, want %v", got, want)
 	}
 
 	// The version observed before that write is now stale: rejected rather than
 	// silently overwriting the concurrent change.
-	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
+	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: staleVersion}, ateapipb.TagScope_TAG_SCOPE_ATESPACE)
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 
 	// Guarding on the version the last write produced succeeds again.
-	updated, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
+	updated, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.TagScope_TAG_SCOPE_ATESPACE)
 	if err != nil {
-		t.Fatalf("UpdateActorSnapshotTag(matching guards) failed: %v", err)
+		t.Fatalf("UpdateTag(matching guards) failed: %v", err)
 	}
-	if got, want := updated.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE; got != want {
+	if got, want := updated.GetScope(), ateapipb.TagScope_TAG_SCOPE_ATESPACE; got != want {
 		t.Errorf("scope = %v, want %v", got, want)
 	}
 	if updated.GetMetadata().GetVersion() <= currentVersion {
@@ -267,17 +267,17 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	}
 
 	// The guard the client just satisfied is now stale in turn.
-	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	_, err = update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.TagScope_TAG_SCOPE_PUBLISHED)
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
 }
 
-func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
+func TestUpdateTag_NotFound(t *testing.T) {
 	ns := namespaceForTest("ns-update-tag-notfound")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	_, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+	_, err := tc.client.UpdateTag(context.Background(), &ateapipb.UpdateTagRequest{
+		Tag: &ateapipb.Tag{
 			Metadata: &ateapipb.ResourceMetadata{
 				Atespace: testAtespace,
 				Name:     "does-not-exist",
@@ -285,9 +285,9 @@ func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
 				Uid:     "9a2b1c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
 				Version: 1,
 			},
-			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+			Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
 		},
 	})
-	assertGrpcError(t, err, codes.NotFound, "ActorSnapshotTag test-atespace/does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "Tag test-atespace/does-not-exist not found")
 }

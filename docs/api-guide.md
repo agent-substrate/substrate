@@ -327,16 +327,16 @@ snapshotsConfig:
 
 ```
 <location>/atespaces/<atespace>/actors/<actor uid>/snapshots/<snapshot name>
-<location>/atespaces/<atespace>/actor-snapshot-tags/<snapshot name>
+<location>/atespaces/<atespace>/tags/<snapshot name>
 ```
 
 The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden actor lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/actors/<uid>/snapshots/<name>`.
 
 An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. The actor level is keyed on the UID rather than the name, so an actor recreated under a name that was used before never inherits its predecessor's objects.
 
-An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `actor-snapshot-tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
+An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot`, an `ActorSnapshotTag` in `status.snapshot`, and an `ActorTemplate` its golden one in `status.goldenSnapshotStatus.goldenSnapshot` — each an `ExternalSnapshot` carrying `snapshotUri` and the `contentScope` it captured. The URI is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. All three are server-owned: do not send them on input, and parse a URI only against the scheme above.
+An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot`, a `Tag` in `status.snapshot`, and an `ActorTemplate` its golden one in `status.goldenSnapshotStatus.goldenSnapshot` — each an `ExternalSnapshot` carrying `snapshotUri` and the `contentScope` it captured. The URI is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. All three are server-owned: do not send them on input, and parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
@@ -431,13 +431,13 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
-    *   `actor.source_snapshot_tag`: (Optional) `ObjectRef` of an `ActorSnapshotTag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.externalSnapshot` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.externalSnapshot` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`
 Replaces the mutable fields of an existing actor with the ones in the request.
 *   **Request:** `UpdateActorRequest`
-    *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_snapshot_tag` is immutable.
+    *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
 *   **Response:** the updated `Actor`.
 *   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `ABORTED` if either guard no longer matches the stored resource.
 
@@ -455,7 +455,7 @@ Hibernate a running actor, capturing its current RAM and disk state into a snaps
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.externalSnapshot`.
-*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateActorSnapshotTag` while the actor is still suspended.
+*   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended.
 
 #### Snapshot lifetime
 

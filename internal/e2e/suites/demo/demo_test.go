@@ -125,7 +125,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 
 	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
 	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef})
+		_, _ = clients.SubstrateAPI.DeleteTag(context.Background(), &ateapipb.DeleteTagRequest{Tag: tagRef})
 	})
 	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName},
@@ -139,52 +139,52 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	// The tag is given its own copy of the snapshot the suspend just wrote, so
 	// it survives the Actor being suspended again or deleted.
-	tagToUpdate, err := clients.SubstrateAPI.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
-		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
+	tagToUpdate, err := clients.SubstrateAPI.CreateTag(ctx, &ateapipb.CreateTagRequest{
+		Tag: &ateapipb.Tag{
 			Metadata:    &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: tagRef.GetName()},
-			Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			SourceActor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName},
 		},
 	})
 	if err != nil {
-		t.Fatalf("failed to create the ActorSnapshotTag: %v", err)
+		t.Fatalf("failed to create the Tag: %v", err)
 	}
 	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got == "" || got == snapshotURI {
-		t.Fatalf("ActorSnapshotTag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
+		t.Fatalf("Tag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
 	}
 	if got := tagToUpdate.GetStatus().GetInProgressSnapshotUri(); got != "" {
-		t.Fatalf("ActorSnapshotTag %s in-progress snapshot uri = %q, want it cleared", tagRef.GetName(), got)
+		t.Fatalf("Tag %s in-progress snapshot uri = %q, want it cleared", tagRef.GetName(), got)
 	}
-	listed, err := clients.SubstrateAPI.ListActorSnapshotTags(ctx, &ateapipb.ListActorSnapshotTagsRequest{Atespace: demoAtespace})
+	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
 	if err != nil {
-		t.Fatalf("failed to list ActorSnapshotTags: %v", err)
+		t.Fatalf("failed to list Tags: %v", err)
 	}
 	found := false
-	for _, candidate := range listed.GetActorSnapshotTags() {
+	for _, candidate := range listed.GetTags() {
 		if candidate.GetMetadata().GetName() == tagRef.GetName() {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("tag %q missing from ListActorSnapshotTags", tagRef.GetName())
+		t.Fatalf("tag %q missing from ListTags", tagRef.GetName())
 	}
 
-	tagToUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
-	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		ActorSnapshotTag: tagToUpdate,
+	tagToUpdate.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
+	if _, err := clients.SubstrateAPI.UpdateTag(ctx, &ateapipb.UpdateTagRequest{
+		Tag: tagToUpdate,
 	}); err != nil {
-		t.Fatalf("failed to publish ActorSnapshotTag: %v", err)
+		t.Fatalf("failed to publish Tag: %v", err)
 	}
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
-			Metadata:          &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
-			ActorTemplate:     e2e.TemplateRef(at),
-			SourceSnapshotTag: tagRef,
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
+			ActorTemplate: e2e.TemplateRef(at),
+			SourceTag:     tagRef,
 		},
 	}); err != nil {
-		t.Fatalf("failed to create Actor from ActorSnapshotTag: %v", err)
+		t.Fatalf("failed to create Actor from Tag: %v", err)
 	}
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
 		t.Fatalf("failed to resume cloned Actor: %v", err)
@@ -196,8 +196,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	validateCounterResponse(t, response, "clone", 2, 2)
 
-	if _, err := clients.SubstrateAPI.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef}); err != nil {
-		t.Fatalf("failed to delete ActorSnapshotTag: %v", err)
+	if _, err := clients.SubstrateAPI.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("failed to delete Tag: %v", err)
 	}
 }
 

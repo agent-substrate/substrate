@@ -77,11 +77,11 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		return nil, err
 	}
 
-	// If a source snapshot tag is requested, resolve it to the external
+	// If a source tag is requested, resolve it to the external
 	// snapshot the new Actor starts from.
-	var sourceTag *ateapipb.ActorSnapshotTag
-	if tagRef := inActor.GetSourceSnapshotTag(); tagRef != nil {
-		sourceTag, err = s.resolveSnapshotTagSource(ctx, inActor.GetMetadata().GetAtespace(), tagRef, template)
+	var sourceTag *ateapipb.Tag
+	if tagRef := inActor.GetSourceTag(); tagRef != nil {
+		sourceTag, err = s.resolveTagSource(ctx, inActor.GetMetadata().GetAtespace(), tagRef, template)
 		if err != nil {
 			return nil, err
 		}
@@ -135,38 +135,38 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	return stored, nil
 }
 
-// resolveSnapshotTagSource resolves a CreateActor request's source snapshot tag
+// resolveTagSource resolves a CreateActor request's source tag
 // and checks that the tag is usable for creating an Actor in actorAtespace
 // from template.
-func (s *ServiceImpl) resolveSnapshotTagSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.ActorSnapshotTag, error) {
-	tag, err := s.store.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(tagRef))
+func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.Tag, error) {
+	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "ActorSnapshotTag not found")
+		return nil, status.Error(codes.NotFound, "Tag not found")
 	}
 	if err != nil {
-		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+		return nil, fmt.Errorf("while getting tag: %w", err)
 	}
 	switch tag.GetScope() {
-	case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE:
+	case ateapipb.TagScope_TAG_SCOPE_ATESPACE:
 		if tag.GetMetadata().GetAtespace() != actorAtespace {
-			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshotTag is not published outside its Atespace")
+			return nil, status.Error(codes.FailedPrecondition, "Tag is not published outside its Atespace")
 		}
-	case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED:
+	case ateapipb.TagScope_TAG_SCOPE_PUBLISHED:
 	default:
-		return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshotTag has an invalid scope")
+		return nil, status.Error(codes.FailedPrecondition, "source Tag has an invalid scope")
 	}
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
 	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
-		return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshotTag is still being created or failed creation")
+		return nil, status.Error(codes.FailedPrecondition, "source Tag is still being created or failed creation")
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
-		return nil, status.Errorf(codes.FailedPrecondition, "source ActorSnapshotTag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
+		return nil, status.Errorf(codes.FailedPrecondition, "source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
 	}
 	for _, volume := range template.GetVolumes() {
 		if volume.GetExternalVolumeTemplate() != nil {
 			// TODO: Permit cloning after CSI volume snapshots are supported.
-			return nil, status.Error(codes.FailedPrecondition, "ActorSnapshotTag cloning does not support ActorTemplates with external volumes")
+			return nil, status.Error(codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
 		}
 	}
 	return tag, nil

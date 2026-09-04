@@ -464,7 +464,7 @@ func appliedMigrationVersions(t *testing.T, pool *pgxpool.Pool) []int64 {
 // state, so the statement lives here rather than on Persistence.
 func clearAll(t *testing.T, p *Persistence) {
 	t.Helper()
-	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshot_tags, workers, worker_assignments, leases, worker_outbox, worker_outbox_trim`); err != nil {
+	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, tags, workers, worker_assignments, leases, worker_outbox, worker_outbox_trim`); err != nil {
 		t.Fatalf("truncating tables: %v", err)
 	}
 }
@@ -597,7 +597,7 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 }
 
 // createTestSuspendedActor seeds an actor holding an external snapshot, which
-// is what CreateActorSnapshotTag tags.
+// is what CreateTag tags.
 func createTestSuspendedActor(t *testing.T, s *Persistence, atespace, name string) *ateapipb.Actor {
 	t.Helper()
 	created, err := s.CreateActor(context.Background(), &ateapipb.Actor{
@@ -614,69 +614,69 @@ func createTestSuspendedActor(t *testing.T, s *Persistence, atespace, name strin
 	return created
 }
 
-// createTestActorSnapshotTag creates tagName over its own copy of actor's
+// createTestTag creates tagName over its own copy of actor's
 // external snapshot, already finalized.
-func createTestActorSnapshotTag(t *testing.T, s *Persistence, actor *ateapipb.Actor, tagAtespace, tagName string) *ateapipb.ActorSnapshotTag {
+func createTestTag(t *testing.T, s *Persistence, actor *ateapipb.Actor, tagAtespace, tagName string) *ateapipb.Tag {
 	t.Helper()
-	tag, err := s.CreateActorSnapshotTag(context.Background(), &ateapipb.ActorSnapshotTag{
+	tag, err := s.CreateTag(context.Background(), &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagAtespace, Name: tagName},
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-		Status: &ateapipb.ActorSnapshotTagStatus{
-			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/actor-snapshot-tags/" + tagName},
+		Scope:    ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+		Status: &ateapipb.TagStatus{
+			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
 			SourceActorUid: actor.GetMetadata().GetUid(),
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateActorSnapshotTag(%s/%s) failed: %v", tagAtespace, tagName, err)
+		t.Fatalf("CreateTag(%s/%s) failed: %v", tagAtespace, tagName, err)
 	}
 	return tag
 }
 
-func TestUpdateActorSnapshotTag_CASPreventsDeleteRecreateABA(t *testing.T) {
+func TestUpdateTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 	actorA := createTestSuspendedActor(t, s, "team-a", "actor-a")
 	actorB := createTestSuspendedActor(t, s, "team-a", "actor-b")
-	original := createTestActorSnapshotTag(t, s, actorA, "team-a", "tag-a")
+	original := createTestTag(t, s, actorA, "team-a", "tag-a")
 
 	mutations := 0
-	var recreated *ateapipb.ActorSnapshotTag
-	_, err := s.UpdateActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"}, store.PreconditionFrom(original), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	var recreated *ateapipb.Tag
+	_, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}, store.PreconditionFrom(original), func(toUpdate *ateapipb.Tag) error {
 		mutations++
-		if _, err := s.DeleteActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"}); err != nil {
+		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}); err != nil {
 			return fmt.Errorf("deleting original tag: %w", err)
 		}
-		recreated = createTestActorSnapshotTag(t, s, actorB, "team-a", "tag-a")
-		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+		recreated = createTestTag(t, s, actorB, "team-a", "tag-a")
+		toUpdate.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
 		return nil
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
-		t.Fatalf("UpdateActorSnapshotTag error = %v, want ErrVersionConflict", err)
+		t.Fatalf("UpdateTag error = %v, want ErrVersionConflict", err)
 	}
 	if mutations != 1 {
 		t.Errorf("guarded mutation ran %d times, want 1", mutations)
 	}
-	stored, err := s.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"})
+	stored, err := s.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"})
 	if err != nil {
-		t.Fatalf("GetActorSnapshotTag failed: %v", err)
+		t.Fatalf("GetTag failed: %v", err)
 	}
 	if diff := cmp.Diff(recreated, stored, protocmp.Transform()); diff != "" {
 		t.Errorf("recreated tag was overwritten (-want +got):\n%s", diff)
 	}
 }
 
-func TestCreateActorSnapshotTag_TagForeignKeyErrors(t *testing.T) {
+func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
 	actor := createTestSuspendedActor(t, s, "team-a", "actor-a")
 
 	// A tag in an atespace that does not exist trips the tag's atespace FK.
-	_, err := s.CreateActorSnapshotTag(ctx, &ateapipb.ActorSnapshotTag{
+	_, err := s.CreateTag(ctx, &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "latest"},
-		Status: &ateapipb.ActorSnapshotTagStatus{
-			InProgressSnapshotUri: "gs://bucket/atespaces/gone/actor-snapshot-tags/latest",
+		Status: &ateapipb.TagStatus{
+			InProgressSnapshotUri: "gs://bucket/atespaces/gone/tags/latest",
 			SourceActorUid:        actor.GetMetadata().GetUid(),
 		},
 	})

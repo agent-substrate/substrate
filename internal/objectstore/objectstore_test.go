@@ -116,7 +116,7 @@ func TestDeletePrefix(t *testing.T) {
 				mustTagSnapshotURI(t, testLocation, "team-a", "snap-2"):              {"manifest.json"},
 			},
 			target:        mustOwnerPrefix(t, resources.ActorSnapshotOwner("team-a", "actor-1"), testLocation),
-			wantRemaining: []string{"bucket/root/atespaces/team-a/actor-snapshot-tags/snap-2/manifest.json"},
+			wantRemaining: []string{"bucket/root/atespaces/team-a/tags/snap-2/manifest.json"},
 		},
 		{
 			name:          "an already collected snapshot succeeds",
@@ -235,7 +235,7 @@ func TestCopyPrefix_AcrossBuckets(t *testing.T) {
 		t.Fatalf("CopyPrefix(%s, %s) = %v, want nil", src, dst, err)
 	}
 	want := []string{
-		"new-bucket/atespaces/team-a/actor-snapshot-tags/snap-2/manifest.json",
+		"new-bucket/atespaces/team-a/tags/snap-2/manifest.json",
 		"old-bucket/root/atespaces/team-a/actors/actor-1/snapshots/snap-1/manifest.json",
 	}
 	if diff := cmp.Diff(want, fake.Objects()); diff != "" {
@@ -319,7 +319,7 @@ func TestBucketPrefix(t *testing.T) {
 			name:       "a tag's prefix",
 			prefix:     mustTagSnapshotURI(t, "gs://bucket/root", "team-a", "snap-1").Prefix(),
 			wantBucket: "bucket",
-			wantPrefix: "root/atespaces/team-a/actor-snapshot-tags/snap-1/",
+			wantPrefix: "root/atespaces/team-a/tags/snap-1/",
 		},
 		{
 			name:    "the zero prefix",

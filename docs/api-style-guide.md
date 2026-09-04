@@ -142,7 +142,7 @@ Rules:
 - Request message name **must** match the RPC name with a `Request` suffix.
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
 - Request **must** identify the resource with a single `ObjectRef` field (for both atespace-scoped and global-scoped resources).
-- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot_tag` for `ActorSnapshotTag`), not a generic name like `name` or `ref`.
+- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `tag` for `Tag`), not a generic name like `name` or `ref`.
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List
@@ -278,7 +278,7 @@ Rules:
 - RPC name **must** begin with `Delete` followed by the singular resource name.
 - Response **must** be the deleted resource.
 - Request **must** identify the resource with an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
-- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `actor_snapshot_tag` for `ActorSnapshotTag`), not a generic name like `name` or `ref`.
+- That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `tag` for `Tag`), not a generic name like `name` or `ref`.
 - If the resource does not exist: return `NOT_FOUND`.
 - `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
 - Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.

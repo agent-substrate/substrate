@@ -108,18 +108,18 @@ func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor
 	return created
 }
 
-// MustCreateActorSnapshotTag ensures tag's parent atespace exists, then stores
+// MustCreateTag ensures tag's parent atespace exists, then stores
 // tag as given — ready or still pending, whichever state the test needs to
 // start from. Use the store method directly only in tests that exercise
 // missing-parent behavior.
-func MustCreateActorSnapshotTag(t *testing.T, ctx context.Context, s store.Interface, tag *ateapipb.ActorSnapshotTag) *ateapipb.ActorSnapshotTag {
+func MustCreateTag(t *testing.T, ctx context.Context, s store.Interface, tag *ateapipb.Tag) *ateapipb.Tag {
 	t.Helper()
 	atespace := tag.GetMetadata().GetAtespace()
 	name := tag.GetMetadata().GetName()
 	MustCreateAtespace(t, ctx, s, atespace)
-	created, err := s.CreateActorSnapshotTag(ctx, tag)
+	created, err := s.CreateTag(ctx, tag)
 	if err != nil {
-		t.Fatalf("creating test actor snapshot tag %q/%q: %v", atespace, name, err)
+		t.Fatalf("creating test tag %q/%q: %v", atespace, name, err)
 	}
 	return created
 }

@@ -50,11 +50,11 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	return actor, uri
 }
 
-// tagToCreate is the part of an ActorSnapshotTag a client owns on create.
-func tagToCreate(sourceActor resources.ActorRef, name string) *ateapipb.ActorSnapshotTag {
-	return &ateapipb.ActorSnapshotTag{
+// tagToCreate is the part of a Tag a client owns on create.
+func tagToCreate(sourceActor resources.ActorRef, name string) *ateapipb.Tag {
+	return &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Name: name},
-		Scope:       ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: sourceActor.ToObjectRef(),
 	}
 }
@@ -209,8 +209,8 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
 			// A rejected create takes the name with it.
-			if _, err := persistence.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "v1"}); !errors.Is(err, store.ErrNotFound) {
-				t.Errorf("GetActorSnapshotTag = %v, want ErrNotFound: the rejected create reserved the name", err)
+			if _, err := persistence.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "v1"}); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetTag = %v, want ErrNotFound: the rejected create reserved the name", err)
 			}
 		})
 	}
@@ -230,7 +230,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
-	tagRef := resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "v1"}
+	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
 
 	// The copy dies halfway through: the first object lands, the second does not.
 	objects.OnCopy = func(_, srcObject, _, _ string) error {
@@ -244,9 +244,9 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 	objects.OnCopy = nil
 
-	pending, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+	pending, err := persistence.GetTag(ctx, tagRef)
 	if err != nil {
-		t.Fatalf("GetActorSnapshotTag after the external store failure: %v", err)
+		t.Fatalf("GetTag after the external store failure: %v", err)
 	}
 	if got := pending.GetStatus().GetSnapshot().GetSnapshotUri(); got != "" {
 		t.Errorf("snapshot uri after the failure = %q, want unset: the copy never finished", got)
@@ -266,9 +266,9 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if code := status.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot over the pending tag = %v (code %v), want code AlreadyExists", err, code)
 	}
-	stillPending, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+	stillPending, err := persistence.GetTag(ctx, tagRef)
 	if err != nil {
-		t.Fatalf("GetActorSnapshotTag after the refused create: %v", err)
+		t.Fatalf("GetTag after the refused create: %v", err)
 	}
 	if got := stillPending.GetStatus().GetInProgressSnapshotUri(); got != stranded {
 		t.Errorf("in-progress snapshot uri after the refused create = %q, want the prefix the row already named, %q", got, stranded)
@@ -278,8 +278,8 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	}
 
 	// Deleting the tag collects the partial copy and frees the name.
-	if _, err := svc.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef.ToObjectRef()}); err != nil {
-		t.Fatalf("DeleteActorSnapshotTag on the pending tag: %v", err)
+	if _, err := svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()}); err != nil {
+		t.Fatalf("DeleteTag on the pending tag: %v", err)
 	}
 	if got := objects.Snapshot(t, strandedURI); len(got) != 0 {
 		t.Errorf("the stranded prefix after the delete = %v, want collected", got)
@@ -319,7 +319,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 
 	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	actorRef := resources.ActorRefFromActor(actor)
-	tagRef := resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "v1"}
+	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
 
 	var once sync.Once
 	var pendingURI string
@@ -328,13 +328,13 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 	// the file copy to GCS/S3.
 	objects.OnCopy = func(_, _, _, _ string) error {
 		once.Do(func() {
-			reserved, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+			reserved, err := persistence.GetTag(ctx, tagRef)
 			if err != nil {
-				t.Errorf("GetActorSnapshotTag during the copy: %v", err)
+				t.Errorf("GetTag during the copy: %v", err)
 				return
 			}
 			pendingURI = reserved.GetStatus().GetInProgressSnapshotUri()
-			_, deleteErr = svc.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: tagRef.ToObjectRef()})
+			_, deleteErr = svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()})
 		})
 		return nil
 	}
@@ -349,7 +349,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 	// The delete is refused rather than queued behind the copy: the create
 	// holds the tag's lease until it has finished writing.
 	if code := status.Code(deleteErr); code != codes.Aborted {
-		t.Errorf("DeleteActorSnapshotTag during the copy = %v (code %v), want code Aborted", deleteErr, code)
+		t.Errorf("DeleteTag during the copy = %v (code %v), want code Aborted", deleteErr, code)
 	}
 
 	// Nothing was collected out from under the copy, and the row in the store it
@@ -360,8 +360,8 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, pendingURI))); diff != "" {
 		t.Errorf("the tag's external snapshot mismatch (-want +got):\n%s", diff)
 	}
-	if _, err := persistence.GetActorSnapshotTag(ctx, tagRef); err != nil {
-		t.Errorf("GetActorSnapshotTag after the race: %v", err)
+	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+		t.Errorf("GetTag after the race: %v", err)
 	}
 }
 
@@ -377,7 +377,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 
 	first, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
 	second, secondSnapshot := seedTagSource(t, ctx, persistence, objects, template, "actor-2", "other.json")
-	tagRef := resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "v1"}
+	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
 
 	// The first actor reserves the name, then dies in the copy.
 	objects.OnCopy = func(_, srcObject, _, _ string) error {
@@ -389,9 +389,9 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !errors.Is(err, errObjectStore) {
 		t.Fatalf("TagActorSnapshot(actor-1) = %v, want an error wrapping %v", err, errObjectStore)
 	}
-	pending, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+	pending, err := persistence.GetTag(ctx, tagRef)
 	if err != nil {
-		t.Fatalf("GetActorSnapshotTag: %v", err)
+		t.Fatalf("GetTag: %v", err)
 	}
 	strandedURI := mustParseSnapshotURI(t, pending.GetStatus().GetInProgressSnapshotUri())
 
@@ -405,9 +405,9 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, strandedURI)); diff != "" {
 		t.Errorf("the rejected create wrote into the pending tag's prefix (-want +got):\n%s", diff)
 	}
-	stored, err := persistence.GetActorSnapshotTag(ctx, tagRef)
+	stored, err := persistence.GetTag(ctx, tagRef)
 	if err != nil {
-		t.Fatalf("GetActorSnapshotTag after the rejected create: %v", err)
+		t.Fatalf("GetTag after the rejected create: %v", err)
 	}
 	if got, want := stored.GetStatus().GetSourceActorUid(), first.GetMetadata().GetUid(); got != want {
 		t.Errorf("source actor uid = %q, want the first actor's %q", got, want)

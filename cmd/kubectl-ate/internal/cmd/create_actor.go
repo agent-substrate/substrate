@@ -25,14 +25,14 @@ import (
 
 var templateRefFlag string
 var atespaceFlag string
-var sourceSnapshotTagFlag string
+var sourceTagFlag string
 
 var createActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Create an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateRefFlag, sourceSnapshotTagFlag)
+		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateRefFlag, sourceTagFlag)
 		if err != nil {
 			return err
 		}
@@ -55,7 +55,7 @@ var createActorCmd = &cobra.Command{
 
 // buildCreateActorRequest assembles the CreateActor request from the command
 // flags.
-func buildCreateActorRequest(actorName, atespace, templateName, snapshotTag string) (*ateapipb.CreateActorRequest, error) {
+func buildCreateActorRequest(actorName, atespace, templateName, tag string) (*ateapipb.CreateActorRequest, error) {
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
 			Atespace: atespace,
@@ -67,12 +67,12 @@ func buildCreateActorRequest(actorName, atespace, templateName, snapshotTag stri
 		},
 	}
 
-	if snapshotTag != "" {
-		ref, err := parseNamespacedName(snapshotTag)
+	if tag != "" {
+		ref, err := parseNamespacedName(tag)
 		if err != nil {
 			return nil, err
 		}
-		actor.SourceSnapshotTag = ref
+		actor.SourceTag = ref
 	}
 	return &ateapipb.CreateActorRequest{Actor: actor}, nil
 }
@@ -83,6 +83,6 @@ func init() {
 	_ = createActorCmd.MarkFlagRequired("template-ref")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
-	createActorCmd.Flags().StringVar(&sourceSnapshotTagFlag, "snapshot-tag", "", "Initialize from an ActorSnapshotTag in <atespace>/<name> format")
+	createActorCmd.Flags().StringVar(&sourceTagFlag, "tag", "", "Initialize from a Tag in <atespace>/<name> format")
 	createCmd.AddCommand(createActorCmd)
 }
