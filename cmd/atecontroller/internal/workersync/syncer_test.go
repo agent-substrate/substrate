@@ -22,14 +22,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workerpod"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -127,7 +133,7 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, workerInformer, lister).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s, workerInformer, lister).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -139,12 +145,21 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 // factories or worker goroutines. It returns those caches alongside the syncer.
 func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer) {
 	t.Helper()
+	s, pods, poolIndexer, _ := setupReconcileTestWithK8s(t, api, initPools...)
+	return s, pods, poolIndexer
+}
+
+// setupReconcileTestWithK8s is setupReconcileTest for a case that also asserts
+// on what the syncer did to the pod itself.
+func setupReconcileTestWithK8s(t *testing.T, api *fakeControl, initPools ...*atev1alpha1.WorkerPool) (*WorkerPoolSyncer, cache.Indexer, cache.Indexer, *fake.Clientset) {
+	t.Helper()
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
-	_, workerInformer := WorkerPodInformer(fake.NewSimpleClientset())
+	fakeK8s := fake.NewSimpleClientset()
+	_, workerInformer := WorkerPodInformer(fakeK8s)
 	lister, poolIndexer := poolLister(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, workerInformer, lister), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s, workerInformer, lister), workerInformer.GetIndexer(), poolIndexer, fakeK8s
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -841,5 +856,337 @@ func TestSyncer_ReconcileErrorsAreClassified(t *testing.T) {
 				t.Errorf("registry holds %v, want nothing written for a rejected create", got)
 			}
 		})
+	}
+}
+
+// withAteomContainer gives the pod the container status the syncer compares
+// against the Worker record. The fixture's default container is named "main",
+// so the ateom entry is added rather than replacing anything.
+func withAteomContainer(pod *corev1.Pod, containerID string, restarts int32, terminated string) *corev1.Pod {
+	cs := corev1.ContainerStatus{
+		Name:         workerpod.AteomContainerName,
+		ContainerID:  containerID,
+		RestartCount: restarts,
+	}
+	if terminated != "" {
+		cs.LastTerminationState = corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{Reason: terminated},
+		}
+	}
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, cs)
+	return pod
+}
+
+// The kubelet restarts the ateom container in place, so the pod, its UID and
+// its IP are all unchanged and nothing else in the reconcile notices. The
+// container id is the only thing that says the sandbox behind the Worker — and
+// every actor in it — is gone.
+func TestSyncer_ReplacedAteomContainerRecyclesTheWorker(t *testing.T) {
+	const (
+		oldContainer = "containerd://aaaa1111"
+		newContainer = "containerd://bbbb2222"
+	)
+	tests := []struct {
+		name         string
+		registeredID string
+		observedID   string
+		restarts     int32
+		terminated   string
+		wantRecycle  bool
+		wantReason   string
+	}{
+		{
+			name:         "same container is left alone",
+			registeredID: oldContainer,
+			observedID:   oldContainer,
+			wantRecycle:  false,
+		},
+		{
+			name:         "replaced container is recycled",
+			registeredID: oldContainer,
+			observedID:   newContainer,
+			restarts:     1,
+			terminated:   "OOMKilled",
+			wantRecycle:  true,
+			wantReason:   "OOMKilled",
+		},
+		{
+			name:         "a reason the control plane does not know is bounded",
+			registeredID: oldContainer,
+			observedID:   newContainer,
+			restarts:     1,
+			terminated:   "SomethingNew",
+			wantRecycle:  true,
+			wantReason:   ateattr.ContainerTerminationReasonOther,
+		},
+		{
+			name:         "a restart the kubelet gave no reason for still reports",
+			registeredID: oldContainer,
+			observedID:   newContainer,
+			restarts:     1,
+			wantRecycle:  true,
+			wantReason:   ateattr.ContainerTerminationReasonOther,
+		},
+		{
+			// The server adopts rather than recycles, but the syncer still has
+			// to make the call: it is what records the id for next time.
+			name:         "a worker registered before ids were recorded",
+			registeredID: "",
+			observedID:   newContainer,
+			wantRecycle:  true,
+			wantReason:   ateattr.ContainerTerminationReasonOther,
+		},
+		{
+			name:         "no container status yet",
+			registeredID: oldContainer,
+			observedID:   "",
+			wantRecycle:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			ns, poolName, podName, ip := "ns-recycle", "pool1", "worker-recycle", "10.0.0.5"
+
+			api := newFakeControl()
+			registered := registeredWorker(ns, poolName, podName, testPodUID, ip)
+			if tt.registeredID != "" {
+				registered.Status = &ateapipb.WorkerStatus{
+					State:            ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+					AteomContainerId: tt.registeredID,
+				}
+			}
+			api.put(registered)
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+
+			pod := workerPod(ns, podName, poolName, testPodUID, ip)
+			if tt.observedID != "" {
+				pod = withAteomContainer(pod, tt.observedID, tt.restarts, tt.terminated)
+			}
+			mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+			got := api.recycleRequests()
+			if !tt.wantRecycle {
+				if len(got) != 0 {
+					t.Fatalf("RecycleWorker calls = %d, want none: nothing says the sandbox was replaced", len(got))
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("RecycleWorker calls = %d, want 1", len(got))
+			}
+			if got[0].GetWorker().GetName() != testPodUID {
+				t.Errorf("recycled worker = %q, want %q", got[0].GetWorker().GetName(), testPodUID)
+			}
+			if got[0].GetAteomContainerId() != tt.observedID {
+				t.Errorf("reported container = %q, want %q", got[0].GetAteomContainerId(), tt.observedID)
+			}
+			if got[0].GetSandboxTerminatedReason() != tt.wantReason {
+				t.Errorf("reported reason = %q, want %q", got[0].GetSandboxTerminatedReason(), tt.wantReason)
+			}
+		})
+	}
+}
+
+// A recycle that fails has to requeue: leaving it is the stranding this whole
+// check exists to end, and the next reconcile is what retries.
+func TestSyncer_FailedRecycleRequeues(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-recycle-fail", "pool1", "worker-recycle-fail", "10.0.0.6"
+
+	api := newFakeControl()
+	registered := registeredWorker(ns, poolName, podName, testPodUID, ip)
+	registered.Status = &ateapipb.WorkerStatus{
+		State:            ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		AteomContainerId: "containerd://aaaa1111",
+	}
+	api.put(registered)
+	api.setRecycleHook(func(*ateapipb.RecycleWorkerRequest) error {
+		return status.Error(codes.Unavailable, "control plane is down")
+	})
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+
+	pod := withAteomContainer(workerPod(ns, podName, poolName, testPodUID, ip), "containerd://bbbb2222", 1, "OOMKilled")
+	key := seedPod(t, pods, pod)
+
+	s.queue.Add(key)
+	if !s.processNextWorkItem(ctx) {
+		t.Fatal("processNextWorkItem reported the queue was shut down")
+	}
+	if got := s.queue.NumRequeues(key); got != 1 {
+		t.Errorf("queue requeues = %d, want 1", got)
+	}
+}
+
+// A worker fault and the actor crashes it causes have to be one trace, or the
+// record naming the cause cannot be joined to its effects. Informer callbacks
+// carry no span, so the syncer opens one; everything downstream — the
+// RecycleWorker call, and every Actor crashed record ateapi writes under it —
+// inherits it.
+func TestSyncer_ReplacedSandboxIsOneTrace(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-trace", "pool1", "worker-trace", "10.0.0.8"
+
+	api := newFakeControl()
+	registered := registeredWorker(ns, poolName, podName, testPodUID, ip)
+	registered.Status = &ateapipb.WorkerStatus{
+		State:            ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		AteomContainerId: "containerd://aaaa1111",
+	}
+	registered.SandboxClass = "gvisor"
+	api.put(registered)
+
+	// A local provider, never the global one, so this stays parallel-safe.
+	sr := tracetest.NewSpanRecorder()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	s.tracer = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)).Tracer("test")
+
+	pod := withAteomContainer(workerPod(ns, podName, poolName, testPodUID, ip), "containerd://bbbb2222", 2, "OOMKilled")
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	var span sdktrace.ReadOnlySpan
+	for _, ended := range sr.Ended() {
+		if ended.Name() == "ReconcileReplacedSandbox" {
+			span = ended
+		}
+	}
+	if span == nil {
+		t.Fatal("no ReconcileReplacedSandbox span recorded; the fault has nothing to correlate it to its actor crashes")
+	}
+
+	got := map[attribute.Key]attribute.Value{}
+	for _, kv := range span.Attributes() {
+		got[kv.Key] = kv.Value
+	}
+	want := map[attribute.Key]string{
+		ateattr.WorkerNameKey:                    testPodUID,
+		ateattr.WorkerPodNameKey:                 podName,
+		ateattr.FailureReasonKey:                 ateattr.ReasonWorkerSandboxGone,
+		ateattr.FailureDomainKey:                 ateattr.FailureDomainInfrastructure,
+		ateattr.SandboxClassKey:                  "gvisor",
+		ateattr.ContainerLastTerminatedReasonKey: "OOMKilled",
+		ateattr.WorkerPoolNamespaceKey:           ns,
+		ateattr.WorkerPoolNameKey:                poolName,
+	}
+	for k, v := range want {
+		if got[k].AsString() != v {
+			t.Errorf("span attribute %s = %q, want %q", k, got[k].AsString(), v)
+		}
+	}
+	if c := got[ateattr.ContainerRestartCountKey].AsInt64(); c != 2 {
+		t.Errorf("span attribute %s = %d, want 2", ateattr.ContainerRestartCountKey, c)
+	}
+
+	spans := api.recycleSpanContexts()
+	if len(spans) != 1 {
+		t.Fatalf("RecycleWorker calls = %d, want 1", len(spans))
+	}
+	if spans[0].TraceID() != span.SpanContext().TraceID() {
+		t.Errorf("RecycleWorker ran under trace %s, want %s: the call must join the fault's trace, not start its own",
+			spans[0].TraceID(), span.SpanContext().TraceID())
+	}
+}
+
+// Registration cannot record the ateom container, because the id is status and
+// the Worker does not exist yet. The gap has to close immediately: a restart
+// while it is open reads as a Worker that never had a container — adopted
+// rather than recycled — and anything already placed on it stays bound to a
+// sandbox that is gone.
+func TestSyncer_RegistrationRequeuesToRecordTheContainer(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-register-requeue", "pool1", "worker-register", "10.0.0.11"
+
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+
+	pod := withAteomContainer(workerPod(ns, podName, poolName, testPodUID, ip), "containerd://cccc3333", 0, "")
+	key := seedPod(t, pods, pod)
+	mustReconcile(t, ctx, s, key)
+
+	if api.get(testPodUID) == nil {
+		t.Fatal("worker was not registered")
+	}
+	if s.queue.Len() == 0 {
+		t.Fatal("registration did not requeue; the ateom container would go unrecorded until the next pod event or resync")
+	}
+
+	// The requeued pass is what adopts the container.
+	mustReconcile(t, ctx, s, key)
+	got := api.recycleRequests()
+	if len(got) != 1 {
+		t.Fatalf("RecycleWorker calls after the requeued reconcile = %d, want 1", len(got))
+	}
+	if got[0].GetAteomContainerId() != "containerd://cccc3333" {
+		t.Errorf("adopted container = %q, want containerd://cccc3333", got[0].GetAteomContainerId())
+	}
+}
+
+// A crash-looping ateom is a poison worker: every Actor placed on it is
+// destroyed, and ACTOR_STATE_CRASHED is terminal, so the loss is permanent. The
+// Worker must come out of the recycle unschedulable, and the pod must go back to
+// its Deployment — quarantining alone would leave the pool a worker short with
+// nothing to repair it.
+func TestSyncer_CrashLoopingAteomQuarantinesAndReplacesThePod(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-crashloop", "pool1", "worker-crashloop", "10.0.0.12"
+
+	api := newFakeControl()
+	registered := registeredWorker(ns, poolName, podName, testPodUID, ip)
+	registered.Status = &ateapipb.WorkerStatus{
+		State:            ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		AteomContainerId: "containerd://aaaa1111",
+	}
+	api.put(registered)
+	s, pods, _, fakeK8s := setupReconcileTestWithK8s(t, api, workerPool(ns, poolName, "gvisor", nil))
+
+	// The kubelet is refusing to start a replacement, so the container id is
+	// still the one on record: a crash loop is not a completed restart.
+	pod := withAteomContainer(workerPod(ns, podName, poolName, testPodUID, ip), "containerd://aaaa1111", 5, "Error")
+	for i := range pod.Status.ContainerStatuses {
+		if pod.Status.ContainerStatuses[i].Name == workerpod.AteomContainerName {
+			pod.Status.ContainerStatuses[i].State = corev1.ContainerState{
+				Waiting: &corev1.ContainerStateWaiting{Reason: workerpod.CrashLoopBackOff},
+			}
+		}
+	}
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seeding pod in the fake API: %v", err)
+	}
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING: nothing may be placed on a sandbox that keeps dying", got)
+	}
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("pod get after reconcile = %v, want NotFound: it should have gone back to its Deployment", err)
+	}
+}
+
+// A sandbox that was replaced once is not a crash loop, and the worker has to go
+// straight back to work or a single restart costs the pool a worker.
+func TestSyncer_SingleRestartDoesNotQuarantine(t *testing.T) {
+	ctx := context.Background()
+	ns, poolName, podName, ip := "ns-single", "pool1", "worker-single", "10.0.0.13"
+
+	api := newFakeControl()
+	registered := registeredWorker(ns, poolName, podName, testPodUID, ip)
+	registered.Status = &ateapipb.WorkerStatus{
+		State:            ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+		AteomContainerId: "containerd://aaaa1111",
+	}
+	api.put(registered)
+	s, pods, _, fakeK8s := setupReconcileTestWithK8s(t, api, workerPool(ns, poolName, "gvisor", nil))
+
+	pod := withAteomContainer(workerPod(ns, podName, poolName, testPodUID, ip), "containerd://bbbb2222", 1, "OOMKilled")
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seeding pod in the fake API: %v", err)
+	}
+	mustReconcile(t, ctx, s, seedPod(t, pods, pod))
+
+	if got := api.get(testPodUID).GetStatus().GetState(); got != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("worker state = %v, want ACTIVE", got)
+	}
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err != nil {
+		t.Errorf("pod get after reconcile = %v, want it left alone", err)
 	}
 }

@@ -98,6 +98,13 @@ service Control {
   // Returns ABORTED if another write lands on the Worker first; retry.
   rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
 
+  // Reclaim a Worker whose ateom container was replaced under it. Releases
+  // every Actor it hosted, crashing the ones still running, and hands the
+  // Worker back schedulable at the capacity its ateom already reported — the
+  // pod never went away, so neither does the record. Idempotent on
+  // ateom_container_id.
+  rpc RecycleWorker(RecycleWorkerRequest) returns (Worker) {}
+
   // List the Actors a Worker hosts. A subresource of Worker rather than a field
   // on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
   rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
@@ -1605,6 +1612,36 @@ message DrainWorkerRequest {
   ObjectRef worker = 1;
 }
 
+// RecycleWorkerRequest reports the ateom container a Worker is running now, so
+// the control plane can tell a Worker whose sandbox was replaced under it from
+// one that is simply being seen again.
+message RecycleWorkerRequest {
+  // The Worker whose sandbox runtime restarted.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef worker = 1;
+
+  // The ateom container the Worker runs now. Recycling is skipped when this
+  // already matches the record, which is what makes a retry safe, and a Worker
+  // that carries no container id yet adopts this one without releasing anything
+  // — the upgrade path from a control plane that did not record it.
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string ateom_container_id = 2;
+
+  // Why the previous container terminated, as
+  // k8s.container.status.last_terminated_reason. A value from the bounded set
+  // the control plane knows and not a passthrough of the kubelet's string: it
+  // reaches ate.actor.crashes as a label, so an unrecognized one is recorded as
+  // _OTHER.
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  string sandbox_terminated_reason = 3;
+}
+
 // List actors with pagination. Provides "soft" guarantees: actors may be
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
@@ -1729,6 +1766,20 @@ message WorkerStatus {
   //
   // +k8s:optional
   WorkerAllocation allocation = 2;
+
+  // ateom_container_id is the ateom container the Worker is running, as the
+  // kubelet's ContainerStatus.ContainerID. The kubelet restarts that container
+  // in place and leaves the pod and its UID untouched, so a value that no
+  // longer matches the pod is the only thing that says the sandbox behind this
+  // Worker was replaced. Observed like the allocation beside it: the syncer
+  // reports what it sees and RecycleWorker records it.
+  //
+  // Absent until the first report, which is also what a Worker registered by a
+  // control plane that did not record it adopts on its next reconcile.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=128
+  string ateom_container_id = 3;
 }
 
 // WorkerAllocation is a Worker's total against its committed share, in one

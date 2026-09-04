@@ -56,6 +56,7 @@ const (
 	Control_UpdateWorker_FullMethodName               = "/ateapi.Control/UpdateWorker"
 	Control_DeleteWorker_FullMethodName               = "/ateapi.Control/DeleteWorker"
 	Control_DrainWorker_FullMethodName                = "/ateapi.Control/DrainWorker"
+	Control_RecycleWorker_FullMethodName              = "/ateapi.Control/RecycleWorker"
 	Control_ListWorkerActorAssignments_FullMethodName = "/ateapi.Control/ListWorkerActorAssignments"
 	Control_ListActors_FullMethodName                 = "/ateapi.Control/ListActors"
 	Control_CreateAtespace_FullMethodName             = "/ateapi.Control/CreateAtespace"
@@ -126,6 +127,12 @@ type ControlClient interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	// Reclaim a Worker whose ateom container was replaced under it. Releases
+	// every Actor it hosted, crashing the ones still running, and hands the
+	// Worker back schedulable at the capacity its ateom already reported — the
+	// pod never went away, so neither does the record. Idempotent on
+	// ateom_container_id.
+	RecycleWorker(ctx context.Context, in *RecycleWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	// List the Actors a Worker hosts. A subresource of Worker rather than a field
 	// on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
@@ -386,6 +393,16 @@ func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest,
 	return out, nil
 }
 
+func (c *controlClient) RecycleWorker(ctx context.Context, in *RecycleWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Worker)
+	err := c.cc.Invoke(ctx, Control_RecycleWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListWorkerActorAssignmentsResponse)
@@ -544,6 +561,12 @@ type ControlServer interface {
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
 	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
+	// Reclaim a Worker whose ateom container was replaced under it. Releases
+	// every Actor it hosted, crashing the ones still running, and hands the
+	// Worker back schedulable at the capacity its ateom already reported — the
+	// pod never went away, so neither does the record. Idempotent on
+	// ateom_container_id.
+	RecycleWorker(context.Context, *RecycleWorkerRequest) (*Worker, error)
 	// List the Actors a Worker hosts. A subresource of Worker rather than a field
 	// on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
@@ -642,6 +665,9 @@ func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerReq
 }
 func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
+}
+func (UnimplementedControlServer) RecycleWorker(context.Context, *RecycleWorkerRequest) (*Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecycleWorker not implemented")
 }
 func (UnimplementedControlServer) ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWorkerActorAssignments not implemented")
@@ -1108,6 +1134,24 @@ func _Control_DrainWorker_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_RecycleWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecycleWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).RecycleWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_RecycleWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).RecycleWorker(ctx, req.(*RecycleWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListWorkerActorAssignments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListWorkerActorAssignmentsRequest)
 	if err := dec(in); err != nil {
@@ -1386,6 +1430,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DrainWorker",
 			Handler:    _Control_DrainWorker_Handler,
+		},
+		{
+			MethodName: "RecycleWorker",
+			Handler:    _Control_RecycleWorker_Handler,
 		},
 		{
 			MethodName: "ListWorkerActorAssignments",

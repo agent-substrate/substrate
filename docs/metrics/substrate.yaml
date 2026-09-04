@@ -244,6 +244,26 @@ blind_spots:
       Nothing counts the actors by state. These metrics count the operations and
       not the actors. They can count one actor more than one time. Issue #433
       has the ate.actors instrument. It does not exist at this time.
+  - area: worker sandbox loss
+    code: cmd/atecontroller/internal/workersync/syncer.go
+    brief: >
+      Nothing counts the sandboxes that the kubelet replaced. ate.actor.crashes
+      with the reason WORKER_SANDBOX_GONE counts the actors that were lost, thus
+      it is weighted by occupancy: a worker that loses its sandbox with no actor
+      on it raises no metric at all, and the record of the syncer is the only
+      signal. This is deliberate. The restart of a container is a fact of
+      Kubernetes, and the k8sclusterreceiver of the collector reports it for each
+      container of the cluster. A counter here would repeat that receiver in
+      process. Deploy the receiver, and use the label ate.dev/worker-pool of the
+      pod through k8sattributes to group by pool.
+  - area: a worker that is alive and not ready
+    code: cmd/atecontroller/internal/workersync/syncer.go
+    brief: >
+      The syncer sees a replaced ateom container, thus each restart reaches
+      ate.actor.crashes as WORKER_SANDBOX_GONE, and a crash loop also takes the
+      worker out of the pool. An ateom that stays up and stops passing its
+      readyz probe replaces no container, thus the reconcile does nothing and no
+      metric moves. The actors on it are unreachable and still read as RUNNING.
   - area: image cache cost and eviction
     code: internal/imagecache
     brief: >

@@ -164,6 +164,11 @@ class ControlStub:
                 request_serializer=ateapi__pb2.DrainWorkerRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.Worker.FromString,
                 _registered_method=True)
+        self.RecycleWorker = channel.unary_unary(
+                '/ateapi.Control/RecycleWorker',
+                request_serializer=ateapi__pb2.RecycleWorkerRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.Worker.FromString,
+                _registered_method=True)
         self.ListWorkerActorAssignments = channel.unary_unary(
                 '/ateapi.Control/ListWorkerActorAssignments',
                 request_serializer=ateapi__pb2.ListWorkerActorAssignmentsRequest.SerializeToString,
@@ -387,6 +392,17 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RecycleWorker(self, request, context):
+        """Reclaim a Worker whose ateom container was replaced under it. Releases
+        every Actor it hosted, crashing the ones still running, and hands the
+        Worker back schedulable at the capacity its ateom already reported — the
+        pod never went away, so neither does the record. Idempotent on
+        ateom_container_id.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListWorkerActorAssignments(self, request, context):
         """List the Actors a Worker hosts. A subresource of Worker rather than a field
         on it, so GetWorker and ListWorkers cost the same whatever the occupancy.
@@ -573,6 +589,11 @@ def add_ControlServicer_to_server(servicer, server):
             'DrainWorker': grpc.unary_unary_rpc_method_handler(
                     servicer.DrainWorker,
                     request_deserializer=ateapi__pb2.DrainWorkerRequest.FromString,
+                    response_serializer=ateapi__pb2.Worker.SerializeToString,
+            ),
+            'RecycleWorker': grpc.unary_unary_rpc_method_handler(
+                    servicer.RecycleWorker,
+                    request_deserializer=ateapi__pb2.RecycleWorkerRequest.FromString,
                     response_serializer=ateapi__pb2.Worker.SerializeToString,
             ),
             'ListWorkerActorAssignments': grpc.unary_unary_rpc_method_handler(
@@ -1247,6 +1268,33 @@ class Control:
             target,
             '/ateapi.Control/DrainWorker',
             ateapi__pb2.DrainWorkerRequest.SerializeToString,
+            ateapi__pb2.Worker.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RecycleWorker(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/RecycleWorker',
+            ateapi__pb2.RecycleWorkerRequest.SerializeToString,
             ateapi__pb2.Worker.FromString,
             options,
             channel_credentials,

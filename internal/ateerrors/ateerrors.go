@@ -70,6 +70,16 @@ const (
 	// separates the two.
 	ReasonWorkloadNotReady Reason = "WORKLOAD_NOT_READY"
 
+	// ReasonWorkerSandboxGone marks a worker pod that outlived the ateom
+	// container holding its sandbox, unlike ReasonWorkerPodGone where the pod
+	// itself disappeared. k8s.container.status.last_terminated_reason carries
+	// the kubelet's word for the termination beside this value.
+	//
+	// Infrastructure even when OOMKilled: the container's limit is the
+	// operator's and its cgroup covers the sandbox runtime and every actor on
+	// the worker, so no one actor can be shown to have caused the kill.
+	ReasonWorkerSandboxGone Reason = "WORKER_SANDBOX_GONE"
+
 	// Control-plane failure reasons for ate.actor.crashes metric.
 	ReasonCorruptedAssignment Reason = "CORRUPTED_ASSIGNMENT"
 	ReasonWorkerReassigned    Reason = "WORKER_REASSIGNED"
@@ -88,6 +98,7 @@ var AllReasons = []Reason{
 	ReasonInvalidContainerConfig,
 	ReasonLocalSnapshotGone,
 	ReasonWorkloadNotReady,
+	ReasonWorkerSandboxGone,
 	ReasonCorruptedAssignment,
 	ReasonWorkerReassigned,
 	ReasonWorkerPodGone,
