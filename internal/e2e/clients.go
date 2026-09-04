@@ -45,7 +45,7 @@ func GetClients() *Clients {
 
 func NewClients(ctx context.Context) (*Clients, error) {
 	// Kube API
-	config, err := ateclient.LoadConfig(KubeConfig, KubeContext)
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("LoadConfig error %q %s: %w", KubeConfig, KubeContext, err)
 	}

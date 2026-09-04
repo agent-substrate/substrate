@@ -50,7 +50,7 @@ type Client struct {
 // selects the kubeconfig's current context, matching the KUBECTL_CONTEXT
 // convention in the shell scripts.
 func New(kubeconfig, kubeContext string) (*Client, error) {
-	restCfg, err := ateclient.LoadConfig(kubeconfig, kubeContext)
+	restCfg, err := ateclient.LoadKubeConfig(kubeconfig, kubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("while reading kubeconfig: %w", err)
 	}

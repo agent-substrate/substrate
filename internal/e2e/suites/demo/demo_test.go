@@ -1234,7 +1234,7 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 	}
 	targetPod := pods.Items[0]
 
-	config, err := ateclient.LoadConfig(e2e.KubeConfig, e2e.KubeContext)
+	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
 	if err != nil {
 		return "", fmt.Errorf("failed to load kubeconfig: %w", err)
 	}

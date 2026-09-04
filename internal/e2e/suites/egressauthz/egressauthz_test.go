@@ -175,7 +175,7 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 
 	waitForProbeReady(t, ctx, ns)
 
-	config, err := ateclient.LoadConfig(e2e.KubeConfig, e2e.KubeContext)
+	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
 	if err != nil {
 		t.Fatalf("loading kubeconfig: %v", err)
 	}
