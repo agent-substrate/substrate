@@ -29,11 +29,11 @@ Do not run a large data backfill during startup. Propose a separate migration pr
 
 ## Keep the actors table partitionable
 
-To preserve the option to partition the `actors` table by `atespace` or by `name`, and the other atespace-scoped tables (`actor_egress_policies`, `actor_templates`, `actor_snapshots`, `actor_snapshot_tags`) by `atespace`, do not add a schema change or a query that introduces:
+To preserve the option to partition the `actors` table by `atespace` or by `name`, and every other table with an `atespace` column by `atespace`, do not add a schema change or a query that introduces:
 
 - A unique index or constraint on one of these tables that omits `atespace`, or on `actors` that omits `name`.
 - A foreign key that references one of these tables by columns that omit `atespace`, or `actors` by anything other than `(atespace, name)`.
-- A query on one of these tables that does not filter on `atespace`. A statement whose result spans every partition by definition, such as a global list, must be listed in `TestActorsTablePartitionable`. Anything else that reads more than one partition needs an exemption there, agreed with the community.
+- A query on one of these tables that does not filter on `atespace`, or a query on `actors` that does not also filter on `name`. A statement whose result spans every partition by definition, such as a global list, must be listed in `TestActorsTablePartitionable`. Anything else that reads more than one partition needs an exemption there, agreed with the community.
 
 ## Expand and contract
 
