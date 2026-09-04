@@ -102,7 +102,13 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 			if w.GetStatus().GetAllocated().GetActors() > 0 {
 				state = ateattr.WorkerStateAssigned
 			}
-			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, w.GetSandboxClass()}]++
+			// Empty is not a member of ate.sandbox.class: CreateWorker does not
+			// validate the field, so a worker can carry one. Report it as unknown
+			// rather than the pool's class. Scheduling matches the class exactly,
+			// so such a worker can host no actor, and folding it into the pool's
+			// series would count it as idle capacity and mute an idle==0 alert.
+			class := ateattr.NormalizeSandboxClass(w.GetSandboxClass())
+			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, class}]++
 		}
 		for k, n := range tally {
 			o.ObserveInt64(counter, n, metric.WithAttributes(

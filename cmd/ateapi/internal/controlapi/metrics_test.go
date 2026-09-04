@@ -400,3 +400,102 @@ func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkerCountReportsEmptyClassWorkerAsUnknown asserts that workers registered
+// through CreateWorker with no sandbox class report as unknown, not as an
+// empty-string class and not as capacity of the pool they name.
+func TestWorkerCountReportsEmptyClassWorkerAsUnknown(t *testing.T) {
+	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
+		return []*atev1alpha1.WorkerPool{
+			workerPool("ns-1", "pool-empty", ""),
+		}, nil
+	}
+	workers := func() ([]*ateapipb.Worker, error) {
+		return []*ateapipb.Worker{
+			worker("ns-1", "pool-empty", "", false),
+			worker("ns-1", "pool-empty", "", false),
+			worker("ns-1", "pool-empty", "", false),
+		}, nil
+	}
+	reader := newWorkerCountReader(t, workers, pools)
+
+	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
+	got := seriesCounts(sum)
+	// The pool's own series stays at 0: none of the three can be scheduled, so
+	// an idle==0 alert on the gvisor capacity still fires, and the three stay
+	// visible under unknown.
+	want := map[series]int64{
+		{"ns-1", "pool-empty", ateattr.WorkerStateIdle, "gvisor"}:                    0,
+		{"ns-1", "pool-empty", ateattr.WorkerStateAssigned, "gvisor"}:                0,
+		{"ns-1", "pool-empty", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 3,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if gv, ok := got[k]; !ok || gv != v {
+			t.Errorf("series %v = %d (present=%v), want %d", k, gv, ok, v)
+		}
+	}
+}
+
+// TestWorkerCountMicroVMPoolWithEmptyClassWorker asserts that the same holds for
+// a microvm pool: the empty-class worker reports as unknown, and no gvisor series
+// appears for a pool that runs no gvisor.
+func TestWorkerCountMicroVMPoolWithEmptyClassWorker(t *testing.T) {
+	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
+		return []*atev1alpha1.WorkerPool{
+			workerPool("ns-1", "pool-micro", atev1alpha1.SandboxClassMicroVM),
+		}, nil
+	}
+	workers := func() ([]*ateapipb.Worker, error) {
+		return []*ateapipb.Worker{
+			worker("ns-1", "pool-micro", "", false),
+		}, nil
+	}
+	reader := newWorkerCountReader(t, workers, pools)
+
+	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
+	got := seriesCounts(sum)
+	want := map[series]int64{
+		{"ns-1", "pool-micro", ateattr.WorkerStateIdle, "microvm"}:                   0,
+		{"ns-1", "pool-micro", ateattr.WorkerStateAssigned, "microvm"}:               0,
+		{"ns-1", "pool-micro", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if gv, ok := got[k]; !ok || gv != v {
+			t.Errorf("series %v = %d (present=%v), want %d", k, gv, ok, v)
+		}
+	}
+}
+
+// TestWorkerCountOrphanWorkerWithEmptyClass asserts that an empty-class worker belonging
+// to no known pool falls back to unknown rather than emitting an empty-string class.
+func TestWorkerCountOrphanWorkerWithEmptyClass(t *testing.T) {
+	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
+		return nil, nil
+	}
+	workers := func() ([]*ateapipb.Worker, error) {
+		return []*ateapipb.Worker{
+			worker("ns-1", "pool-orphan", "", false),
+		}, nil
+	}
+	reader := newWorkerCountReader(t, workers, pools)
+
+	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
+	got := seriesCounts(sum)
+	want := map[series]int64{
+		{"ns-1", "pool-orphan", ateattr.WorkerStateIdle, ateattr.SandboxClassUnknown}: 1,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if gv, ok := got[k]; !ok || gv != v {
+			t.Errorf("series %v = %d (present=%v), want %d", k, gv, ok, v)
+		}
+	}
+}
