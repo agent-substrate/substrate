@@ -84,8 +84,12 @@ google.golang.org/protobuf v1.36.12 h1:pJOKDDOyeXErUroCihFAd5LQuwXBSpVnKGrj5o/fw
 google.golang.org/protobuf v1.36.12/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
 gopkg.in/inf.v0 v0.9.1 h1:73M5CoZyi3ZLMOyDlQh031Cx6N9NDJ2Vvfl76EDAgDc=
 gopkg.in/inf.v0 v0.9.1/go.mod h1:cWUDdTG/fYaXco+Dcufb5Vnc6Gp2YChqWtbxRZE0mXw=
+k8s.io/apimachinery v0.36.0-alpha.2.0.20260904054801-5a60cf1c6b81 h1:RwCPehCTEZyBA64K7xaHTyXwIwsoBdsLmq21B0P/VcY=
+k8s.io/apimachinery v0.36.0-alpha.2.0.20260904054801-5a60cf1c6b81/go.mod h1:1Um7tr4O65Pd822NFLn+MI08uCzUIPahh2lCPsWzNgk=
 k8s.io/apimachinery v0.37.0-rc.0 h1:z92lapcEJUiMb38pzUIp81kEXT6lIWXhs6auvm8+/s4=
 k8s.io/apimachinery v0.37.0-rc.0/go.mod h1:mhq6CPCzI6XJNHSiek+w7Ws9/rP9qL5s+7aBrh5ODSI=
+k8s.io/code-generator v0.30.0-alpha.3.0.20260904060942-0cddac4383e4 h1:WgL8fyPUJi6VbagUkeOhvYYKCIB/ChMCtIalZ9TBh1Q=
+k8s.io/code-generator v0.30.0-alpha.3.0.20260904060942-0cddac4383e4/go.mod h1:AA8MJmGgNcxTDTeJgSh2SFpNtAqq9KvjpYooMOcZmDk=
 k8s.io/code-generator v0.35.0 h1:TvrtfKYZTm9oDF2z+veFKSCcgZE3Igv0svY+ehCmjHQ=
 k8s.io/code-generator v0.35.0/go.mod h1:iS1gvVf3c/T71N5DOGYO+Gt3PdJ6B9LYSvIyQ4FHzgc=
 k8s.io/code-generator v0.37.0-rc.0 h1:d0i65nsz5LS2HUl3CgJcjxFr3IvLBGs82IZth2UuQEk=
