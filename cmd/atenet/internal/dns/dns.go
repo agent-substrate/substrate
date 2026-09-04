@@ -26,17 +26,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atenetconsts"
 	"github.com/agent-substrate/substrate/internal/resources"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-)
-
-const (
-	// serviceName is the name of the CoreDNS service.
-	serviceName     = "dns"
-	systemNamespace = "ate-system"
 )
 
 // Controller manages the DNS configuration for the ATE.
@@ -73,7 +68,7 @@ func (c *Controller) reconcile(ctx context.Context) error {
 
 	// 1. Get the ClusterIP of atenet-router in ate-system namespace
 	routerSvc := &corev1.Service{}
-	if err := c.Client.Get(ctx, types.NamespacedName{Name: "atenet-router", Namespace: systemNamespace}, routerSvc); err != nil {
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: atenetconsts.RouterService, Namespace: atenetconsts.NamespaceATESystem}, routerSvc); err != nil {
 		if errors.IsNotFound(err) {
 			slog.WarnContext(ctx, "atenet-router service not found, skipping until it is available")
 			return nil
@@ -89,7 +84,7 @@ func (c *Controller) reconcile(ctx context.Context) error {
 
 	// 2. Get the ClusterIP of dns service in ate-system namespace
 	dnsSvc := &corev1.Service{}
-	if err := c.Client.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: systemNamespace}, dnsSvc); err != nil {
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: atenetconsts.DNSService, Namespace: atenetconsts.NamespaceATESystem}, dnsSvc); err != nil {
 		if errors.IsNotFound(err) {
 			slog.WarnContext(ctx, "dns service not found, skipping until it is available")
 			return nil

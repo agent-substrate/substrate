@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/atenetconsts"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"k8s.io/client-go/kubernetes"
 )
@@ -51,7 +52,7 @@ func NewStatuszClient(ctx context.Context) (*StatuszClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, routerStatusPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, atenetconsts.NamespaceATESystem, atenetconsts.RouterService, routerStatusPort)
 	if err != nil {
 		return nil, err
 	}

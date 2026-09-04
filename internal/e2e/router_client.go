@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/atenetconsts"
 	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"k8s.io/client-go/kubernetes"
@@ -36,28 +37,22 @@ import (
 )
 
 const (
-	routerNamespace = "ate-system"
-	routerService   = "atenet-router"
-	// routerConnectServicePort is atenet-router's Service port for
-	// CONNECT-tunneled traffic (see manifests/ate-install/atenet-router.yaml).
-	// It is a distinct listener from the plain HTTP one Get/PostJSON use:
-	// atenet-router's ingress_http_listener never enables the CONNECT method,
-	// only connect_terminate does.
+	// routerConnectServicePort is atenet-router's CONNECT listener port (see
+	// manifests/ate-install/atenet-router.yaml); the plain HTTP listener does
+	// not enable the CONNECT method.
 	routerConnectServicePort = 8081
 )
 
 // RouterClient sends HTTP requests to actors through the ingress atenet-router, the
 // same way real traffic arrives (so the request is routed and, if needed, the
-// actor is resumed). It port-forwards the router Service, mirroring the
-// approach in internal/ateclient.
+// actor is resumed). It port-forwards the router Service.
 type RouterClient struct {
 	baseURL string
 	http    *http.Client
 	stop    func()
 
-	// config/clientset are retained to lazily open a second port-forward, to
-	// routerConnectServicePort, only if Connect is ever called -- most callers
-	// never CONNECT, so the plain HTTP one from NewRouterClient covers them.
+	// config/clientset are retained to open the CONNECT port-forward lazily on
+	// first Connect.
 	config    *rest.Config
 	clientset kubernetes.Interface
 
@@ -79,7 +74,7 @@ func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, 80)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, atenetconsts.NamespaceATESystem, atenetconsts.RouterService, 80)
 	if err != nil {
 		return nil, err
 	}
@@ -131,14 +126,9 @@ func (c *RouterClient) request(ctx context.Context, method string, actorRef reso
 	return c.http.Do(req)
 }
 
-// Connect opens a CONNECT tunnel through the router to port on actorRef,
-// exercising atenet-router's arbitrary-port ingress support: the target port
-// travels in the CONNECT authority (e.g. "my-actor.team-a...:9090"), the same
-// way a real client reaches a port other than an actor's primary one. On a
-// non-2xx response the returned error carries the status and body, mirroring
-// atunnel.Client.DialContext's handling of the same failure mode on the
-// egress side. The caller owns the returned connection and must Close it;
-// the underlying port-forward is torn down by RouterClient.Close.
+// Connect opens a CONNECT tunnel through the router to port on actorRef; the
+// target port travels in the CONNECT authority. The caller owns the returned
+// connection; RouterClient.Close tears down the underlying port-forward.
 func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef, port int) (net.Conn, error) {
 	if err := c.ensureConnectPortForward(ctx); err != nil {
 		return nil, err
@@ -188,7 +178,7 @@ func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef,
 // in one test don't each pay for a fresh port-forward.
 func (c *RouterClient) ensureConnectPortForward(ctx context.Context) error {
 	c.connectOnce.Do(func() {
-		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, routerNamespace, routerService, routerConnectServicePort)
+		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, atenetconsts.NamespaceATESystem, atenetconsts.RouterService, routerConnectServicePort)
 		if err != nil {
 			c.connectErr = fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
 			return
@@ -200,8 +190,7 @@ func (c *RouterClient) ensureConnectPortForward(ctx context.Context) error {
 }
 
 // bufferedConn recovers bytes http.ReadResponse buffered past the header
-// boundary, mirroring internal/atunnel/client.go's identical need on the
-// egress CONNECT client.
+// boundary.
 type bufferedConn struct {
 	net.Conn
 	reader *bufio.Reader
