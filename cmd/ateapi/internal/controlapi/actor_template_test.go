@@ -519,6 +519,47 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
 	}, {
+		name: "deeply nested mount path is rejected",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data"},
+				{Name: "deep", MountPath: "/data/a/b/c"},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "nesting is rejected regardless of listing order",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "deep", MountPath: "/data/a/b/c"},
+				{Name: "data", MountPath: "/data"},
+			}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "sibling subpaths under an unmounted ancestor are allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data/a"},
+				{Name: "other", MountPath: "/data/b"},
+			}
+		},
+	}, {
+		name: "shared segment prefix below the root is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
+				{Name: "data", MountPath: "/data/a"},
+				{Name: "other", MountPath: "/data/ab"},
+			}
+		},
+	}, {
+		name: "the same path in different containers is allowed",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = append(tmpl.Containers, &ateapipb.Container{Name: "sidecar", Image: "example.com/side:v1"})
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+			tmpl.Containers[1].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+		},
+	}, {
 		name: "shared path prefix without nesting is allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
