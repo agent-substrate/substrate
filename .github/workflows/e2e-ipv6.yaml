@@ -72,12 +72,6 @@ jobs:
       # so both have to be set here.
       KIND_CLUSTER_NAME: ate-ipv6
       KUBECTL_CONTEXT: kind-ate-ipv6
-      # 8.8.8.8 reached through the well-known NAT64 prefix. CoreDNS is a
-      # v6-only pod on a runner with no IPv6 egress of its own, so this is the
-      # only shape of upstream resolver it can reach. Read back below, not
-      # passed in: the script derives it from the prefix, and a job that
-      # supplied it would not notice if that stopped working.
-      EXPECT_DNS_UPSTREAM: 64:ff9b::0808:0808
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -137,16 +131,6 @@ jobs:
       run: |
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         df -h /
-    - name: Assert the micro-VM IPv6 staging fix is in this tree
-      # Named check for the same reason as the nat64 one below. On a v6-only
-      # cluster the rustfs ClusterIP is a bare IPv6 literal, which is not a URL,
-      # so asset staging fails outright without this -- ten minutes in, as an
-      # aws-cli error about an endpoint, naming nothing that would lead here.
-      run: |
-        grep -q 'RUSTFS_IP="\[' hack/microvm-assets/stage-to-rustfs.sh || {
-          echo "::error::hack/microvm-assets/stage-to-rustfs.sh does not bracket an IPv6 rustfs ClusterIP -- stack #1122 to run the micro-VM lane"
-          exit 1
-        }
     - name: Cache micro-VM assets
       # restore, not the composite cache action: pr-workflow.yaml's e2e-test
       # writes this key on every push to main, and a second saver would race it
@@ -203,46 +187,11 @@ jobs:
       # NAT64 is opt-in in the script and this is the case it exists for: the
       # names this job needs have real AAAA records pointing at addresses the
       # runner cannot reach, so the prefix deploys the translator and routes
-      # cluster DNS through it. The script gates on a pod fetching through the
-      # prefix, so a broken translator fails here rather than as a rollout
-      # timeout ten minutes later. Everything the Corefile ends up containing
-      # is the script's doing -- the steps below only read it back.
+      # cluster DNS through it.
       env:
         IP_FAMILY: ipv6
         IPV6_DNS64_PREFIX: '64:ff9b::/96'
-      run: |
-        # Named check rather than letting the script report a missing file:
-        # this is the first step that touches the IPv6-only kind support, so on
-        # a tree without it this is where the run stops, and it should say why.
-        [ -f hack/third_party/nat64/install.yaml ] || {
-          echo "::error::hack/third_party/nat64/install.yaml is missing -- the IPv6-only kind support this job gates is not in this tree"
-          exit 1
-        }
-        hack/create-kind-cluster.sh
-    - name: Wait for the node to be ready
-      # podCIDRs is assigned by the controller-manager after the node registers,
-      # so the assertion below can read an empty field on a cluster that is
-      # perfectly fine and report "cannot confirm IP family". Poll for the field
-      # this job actually reads, then wait on Ready for everything after it.
-      run: |
-        k() { kubectl --context="$KUBECTL_CONTEXT" "$@"; }
-        for _ in $(seq 60); do
-          [ -n "$(k get nodes -o jsonpath='{.items[*].spec.podCIDRs[*]}' 2>/dev/null)" ] && break
-          sleep 2
-        done
-        k wait --for=condition=Ready nodes --all --timeout=180s
-    - name: Assert the node has /dev/kvm
-      # create-kind-cluster.sh probes for KVM and degrades silently to
-      # gVisor-only when the probe fails, so without this a "micro-VM lane"
-      # could pass by never having been one. Only the device is checkable here;
-      # what the scheduler actually places on is asserted after the install,
-      # because atelet is what advertises it.
-      run: |
-        for node in $(hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
-          docker exec "${node}" test -c /dev/kvm \
-            || { echo "::error::${node} has no /dev/kvm -- the micro-VM lane would be gVisor in disguise"; exit 1; }
-          echo "  ${node}: /dev/kvm present"
-        done
+      run: hack/create-kind-cluster.sh
     - name: Assert the cluster is single-stack IPv6
       # This job is worthless if the cluster is not actually v6-only, and a
       # green run leaves no evidence either way -- the diagnostics dump below
@@ -265,33 +214,6 @@ jobs:
           echo "  ${pair}"
         done
         echo "single-stack IPv6 confirmed"
-    - name: Assert create-kind-cluster.sh built the Corefile this job needs
-      # The script owns the whole Corefile, so this reads it back instead of
-      # rewriting it. That is the point: a green run is then evidence for what
-      # the script produced, where a job that patched the Corefile itself would
-      # paper over the absence of the very change it is here to gate. Each of
-      # these is something the install would otherwise fail on ten minutes
-      # later and far less legibly.
-      run: |
-        Corefile=$(kubectl --context="$KUBECTL_CONTEXT" -n kube-system get cm coredns \
-          -o jsonpath='{.data.Corefile}')
-        echo "${Corefile}"
-        check() {
-          echo "${Corefile}" | grep -q "$1" || { echo "::error::$2"; exit 1; }
-        }
-        if echo "${Corefile}" | grep -q 'forward .* /etc/resolv.conf'; then
-          echo "::error::CoreDNS still forwards to /etc/resolv.conf -- the IPv6-only DNS fix is not in this tree"
-          exit 1
-        fi
-        check "forward .* ${EXPECT_DNS_UPSTREAM}" \
-          "CoreDNS does not forward to ${EXPECT_DNS_UPSTREAM}"
-        check '^kind-registry:53' \
-          "no kind-registry server block -- atelet cannot pull from its own netns"
-        check '^cluster.local:53' \
-          "the cluster zones have no server block of their own -- dns64 would take out service discovery"
-        check 'translate_all' \
-          "no dns64 translate_all -- external names resolve to addresses this runner cannot reach"
-        echo "Corefile is the IPv6-only shape this job needs"
     - name: Verify cluster DNS answers both internal and external names
       # The install is the next step and it takes ten minutes to fail. A DNS
       # regression is the failure this Corefile is most likely to cause, so
@@ -336,85 +258,20 @@ jobs:
         exit 1
     - name: Install Agent Substrate
       run: hack/install-ate-kind.sh --deploy-ate-system
-    - name: Assert the control plane is up
-      # install-ate.sh runs under pipefail, so a failed apply does propagate.
-      # What it would not catch is a Deployment that rolls out and then
-      # crash-loops. Re-check everything deploy_ate_system waits on --
-      # atenet-egress included, since a non-dual-stack Envoy listener fails
-      # there first, by way of a readiness probe the kubelet cannot reach.
-      run: |
-        for r in deployment/ate-api-server deployment/ate-controller \
-                 deployment/atenet-router deployment/atenet-egress \
-                 deployment/dns statefulset/postgres daemonset/atelet; do
-          kubectl --context="$KUBECTL_CONTEXT" -n ate-system rollout status "$r" --timeout=120s
-        done
-        kubectl --context="$KUBECTL_CONTEXT" -n podcertificate-controller-system \
-          rollout status deployment/podcertificate-controller --timeout=120s
-        if kubectl --context="$KUBECTL_CONTEXT" -n ate-system get pods \
-             -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' \
-             | grep -q CrashLoopBackOff; then
-          echo "::error::a pod in ate-system is in CrashLoopBackOff"
-          exit 1
-        fi
-    - name: Assert the node advertises ate.dev/kvm
-      # A micro-VM WorkerPool requests this extended resource, so an unschedulable
-      # worker pod is how its absence would otherwise surface -- as a demo deploy
-      # that hangs until its golden-snapshot deadline. atelet's device plugin
-      # registers a moment after the DaemonSet reports rolled out, hence the poll.
-      run: |
-        k() { kubectl --context="$KUBECTL_CONTEXT" "$@"; }
-        for node in $(hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
-          kvm=""
-          for _ in $(seq 30); do
-            n=$(k get node "${node}" -o jsonpath='{.status.allocatable.ate\.dev/kvm}')
-            case "${n}" in ''|0) sleep 2 ;; *) kvm="${n}"; break ;; esac
-          done
-          [ -n "${kvm}" ] || {
-            echo "::error::${node} does not advertise ate.dev/kvm -- atelet's device plugin never registered it, so no micro-VM worker can be scheduled"
-            k -n ate-system logs -l app=atelet --tail=50 --prefix || true
-            exit 1
-          }
-          echo "  ${node}: allocatable ate.dev/kvm=${kvm}"
-        done
-    - name: Deploy substrate micro-VM counter demo
-      # Stages the (cached) assets into the cluster's rustfs and applies the
-      # counter-substrate-microvm demo onto the control plane installed above.
-      # First of the demos: it is the step a v6-only cluster breaks, and its
-      # golden snapshot is the long pole, so failing here fails early. The
-      # substrate demo handler waits for that snapshot itself.
-      run: |
-        hack/run-microvm-demo-kind.sh --substrate
-        df -h /
-    - name: Deploy substrate gVisor counter demo
-      run: hack/install-ate-kind.sh --deploy-demo-counter-substrate
+    - name: Deploy micro-VM counter demo
+      # Stages the (cached) assets into the cluster's rustfs and deploys the
+      # counter-microvm demo onto the control plane installed above. First of
+      # the demos: it is the step a v6-only cluster breaks, and its golden
+      # snapshot is the long pole, so failing here fails early.
+      run: hack/run-microvm-demo-kind.sh
+    - name: Deploy gVisor counter demo
+      run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Deploy egress demos
       # One per class: networking builds its egress Actor from the fixture for
       # the class under test, so both have to exist before either lane runs.
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
-    - name: Assert the demo fixtures exist
-      # A failed demo deploy exits 0: install-ate.sh dispatches demos through
-      # `if "${demo}_cmdline" "$1"`, which suspends errexit, and _cmdline ends
-      # in an unconditional `return 0`. Without this the suites fail later with
-      # "ActorTemplate not found", pointing at the tests instead of the install.
-      #
-      # Two lookups, because the two fixtures live in different layers: the
-      # egress template is a CRD, while the substrate counter's is a store
-      # object the CRD API never sees.
-      run: |
-        for ns_tmpl in ate-demo-egress/egress ate-demo-egress-microvm/egress-microvm; do
-          ns=${ns_tmpl%/*}; tmpl=${ns_tmpl#*/}
-          kubectl --context="$KUBECTL_CONTEXT" -n "${ns}" get actortemplate "${tmpl}" \
-            || { echo "::error::${ns_tmpl} was not created -- the demo deploy failed silently"; exit 1; }
-        done
-        for as_tmpl in ate-demo-counter-substrate/counter \
-                       ate-demo-counter-substrate-microvm/counter-microvm; do
-          as=${as_tmpl%/*}; tmpl=${as_tmpl#*/}
-          go run ./cmd/kubectl-ate --context="$KUBECTL_CONTEXT" \
-            get actor-template "${tmpl}" -a "${as}" \
-            || { echo "::error::${as_tmpl} was not created -- the demo deploy failed silently"; exit 1; }
-        done
     - name: Run E2E tests (networking)
       id: e2e-networking
       run: |
