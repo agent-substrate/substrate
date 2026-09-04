@@ -1436,13 +1436,31 @@ message DeleteActorEgressPolicyRequest {
 }
 
 message GetActorSnapshotTagRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_snapshot_tag = 1;
 }
 
 message ListActorSnapshotTagsRequest {
+  // The atespace to list tags from. Empty lists across all atespaces.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-short-name
   string atespace = 1;
+
+  // Requested page size; the server may return fewer, or occasionally
+  // slightly more. If unspecified, defaults to a server-chosen value;
+  // values above 1000 are coerced to 1000.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
   int32 page_size = 2;
+
+  // Pagination token from a previous ListActorSnapshotTags response.
+  // Omit or leave empty for the first request.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=256
   string page_token = 3;
 }
 
@@ -1463,9 +1481,11 @@ message ListActorSnapshotTagsResponse {
 // being suspended again or deleted.
 // To retry a create that failed or timed out, delete the tag first,
 // which collects whatever that attempt stranded, and create it again.
+//
+// +k8s:customValidation # metadata.atespace must match source_actor.atespace
 message CreateActorSnapshotTagRequest {
-  // The tag to create. metadata.name, scope and source_actor are honored;
-  // metadata.atespace must be empty or match source_actor's, and status is
+  // The tag to create. metadata.atespace, metadata.name, scope and source_actor
+  // are honored; metadata.atespace must match source_actor's, and status is
   // ignored on write.
   //
   // +k8s:required
@@ -1482,11 +1502,15 @@ message UpdateActorSnapshotTagRequest {
   // are required preconditions
   //
   // +k8s:required
+  // +k8s:opaqueType # updates are handled in 2 steps, do not descend
+  // +k8s:subfield(metadata)=+k8s:required
+  // +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
   ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
 message DeleteActorSnapshotTagRequest {
-  // +k8s:opaqueType
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_snapshot_tag = 1;
 }
 

@@ -4902,7 +4902,8 @@ func (x *DeleteActorEgressPolicyRequest) GetActor() *ObjectRef {
 
 type GetActorSnapshotTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:opaqueType
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
 	ActorSnapshotTag *ObjectRef `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -4946,10 +4947,25 @@ func (x *GetActorSnapshotTagRequest) GetActorSnapshotTag() *ObjectRef {
 }
 
 type ListActorSnapshotTagsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Atespace      string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The atespace to list tags from. Empty lists across all atespaces.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-short-name
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// Requested page size; the server may return fewer, or occasionally
+	// slightly more. If unspecified, defaults to a server-chosen value;
+	// values above 1000 are coerced to 1000.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Pagination token from a previous ListActorSnapshotTags response.
+	// Omit or leave empty for the first request.
+	//
+	// +k8s:optional
+	// +k8s:maxLength=256
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5069,10 +5085,12 @@ func (x *ListActorSnapshotTagsResponse) GetNextPageToken() string {
 // being suspended again or deleted.
 // To retry a create that failed or timed out, delete the tag first,
 // which collects whatever that attempt stranded, and create it again.
+//
+// +k8s:customValidation # metadata.atespace must match source_actor.atespace
 type CreateActorSnapshotTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The tag to create. metadata.name, scope and source_actor are honored;
-	// metadata.atespace must be empty or match source_actor's, and status is
+	// The tag to create. metadata.atespace, metadata.name, scope and source_actor
+	// are honored; metadata.atespace must match source_actor's, and status is
 	// ignored on write.
 	//
 	// +k8s:required
@@ -5129,6 +5147,9 @@ type UpdateActorSnapshotTagRequest struct {
 	// are required preconditions
 	//
 	// +k8s:required
+	// +k8s:opaqueType # updates are handled in 2 steps, do not descend
+	// +k8s:subfield(metadata)=+k8s:required
+	// +k8s:customValidation # TODO: when we get nested subfields, require metadata.atespace
 	ActorSnapshotTag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -5173,7 +5194,8 @@ func (x *UpdateActorSnapshotTagRequest) GetActorSnapshotTag() *ActorSnapshotTag 
 
 type DeleteActorSnapshotTagRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// +k8s:opaqueType
+	// +k8s:required
+	// +k8s:subfield(atespace)=+k8s:required
 	ActorSnapshotTag *ObjectRef `protobuf:"bytes,1,opt,name=actor_snapshot_tag,json=actorSnapshotTag,proto3" json:"actor_snapshot_tag,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

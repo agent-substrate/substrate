@@ -227,7 +227,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	}
 	// No preconditions
 	_, err := update(&ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.InvalidArgument, "[actor_snapshot_tag.metadata.uid: Required value, actor_snapshot_tag.metadata.version: Required value]")
+	assertGrpcError(t, err, codes.InvalidArgument, fmt.Sprintf("while updating actor snapshot tag %s/%s: persistence: precondition required: uid", testAtespace, tagName))
 
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves and the version it

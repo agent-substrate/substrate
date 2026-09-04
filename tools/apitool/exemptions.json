@@ -251,21 +251,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotTagsRequest.atespace",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotTagsRequest.page_size",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.ListActorSnapshotTagsRequest.page_token",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.ListActorSnapshotTagsResponse",
     "message": "message has no doc comment"
   },

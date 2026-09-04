@@ -1369,11 +1369,12 @@ func TestValidateActorSnapshotTagUpdate(t *testing.T) {
 }
 
 // TestValidateActorSnapshotTagRequestPayloads covers the generated rules on the
-// tag write requests. Both RPCs validate by hand today (see
-// validateCreateActorSnapshotTagRequest), so these guard the schema itself
-// against drift rather than the wire behavior.
+// tag requests. The RPCs call these directly (see
+// validateCreateActorSnapshotTagRequest), so these guard the schema against
+// drift; actor_snapshot_tag_test.go covers what the handlers make of it.
 func TestValidateActorSnapshotTagRequestPayloads(t *testing.T) {
 	validTag := validActorSnapshotTag
+	validRef := func() *ateapipb.ObjectRef { return &ateapipb.ObjectRef{Atespace: "as", Name: "nm"} }
 	tagPath := field.NewPath("actor_snapshot_tag")
 
 	tests := []struct {
@@ -1423,6 +1424,106 @@ func TestValidateActorSnapshotTagRequestPayloads(t *testing.T) {
 				return Validate_UpdateActorSnapshotTagRequest(ctx, op, nil, req, nil)
 			},
 			want: field.ErrorList{field.Required(tagPath, "")},
+		},
+		{
+			// The tag body is opaque to the request: an update is validated
+			// again as a whole object, against the tag it replaces.
+			name: "update: nested snapshot is not descended into",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				tag := validTag()
+				tag.Status.Snapshot = badExternalSnapshot()
+				req := &ateapipb.UpdateActorSnapshotTagRequest{ActorSnapshotTag: tag}
+				return Validate_UpdateActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+		},
+		{
+			name: "get: valid",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: validRef()}
+				return Validate_GetActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+		},
+		{
+			name: "get: missing actor_snapshot_tag",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.GetActorSnapshotTagRequest{}
+				return Validate_GetActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.Required(tagPath, "")},
+		},
+		{
+			// A tag is addressed through the atespace that owns it, so a ref
+			// naming only a name does not name a tag.
+			name: "get: missing actor_snapshot_tag.atespace",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: &ateapipb.ObjectRef{Name: "nm"}}
+				return Validate_GetActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.Required(tagPath.Child("atespace"), "")},
+		},
+		{
+			name: "get: invalid actor_snapshot_tag.name",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.GetActorSnapshotTagRequest{ActorSnapshotTag: &ateapipb.ObjectRef{Atespace: "as", Name: "NM"}}
+				return Validate_GetActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.Invalid(tagPath.Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+		},
+		{
+			name: "delete: valid",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: validRef()}
+				return Validate_DeleteActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+		},
+		{
+			name: "delete: missing actor_snapshot_tag",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.DeleteActorSnapshotTagRequest{}
+				return Validate_DeleteActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.Required(tagPath, "")},
+		},
+		{
+			name: "delete: missing actor_snapshot_tag.atespace",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.DeleteActorSnapshotTagRequest{ActorSnapshotTag: &ateapipb.ObjectRef{Name: "nm"}}
+				return Validate_DeleteActorSnapshotTagRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.Required(tagPath.Child("atespace"), "")},
+		},
+		{
+			// Listing is the one read that may leave the atespace out: that is
+			// how a client asks for every atespace at once.
+			name: "list: empty request",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.ListActorSnapshotTagsRequest{}
+				return Validate_ListActorSnapshotTagsRequest(ctx, op, nil, req, nil)
+			},
+		},
+		{
+			name: "list: invalid atespace",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.ListActorSnapshotTagsRequest{Atespace: "AS"}
+				return Validate_ListActorSnapshotTagsRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.Invalid(field.NewPath("atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+		},
+		{
+			name: "list: negative page_size",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.ListActorSnapshotTagsRequest{PageSize: -1}
+				return Validate_ListActorSnapshotTagsRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.Invalid(field.NewPath("page_size"), nil, "").WithOrigin("minimum")},
+		},
+		{
+			name: "list: over-long page_token",
+			validate: func(ctx context.Context, op operation.Operation) field.ErrorList {
+				req := &ateapipb.ListActorSnapshotTagsRequest{PageToken: strings.Repeat("t", 257)}
+				return Validate_ListActorSnapshotTagsRequest(ctx, op, nil, req, nil)
+			},
+			want: field.ErrorList{field.TooLong(field.NewPath("page_token"), nil, 256).WithOrigin("maxLength")},
 		},
 	}
 	for _, tt := range tests {

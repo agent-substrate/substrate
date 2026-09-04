@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/objectstore"
@@ -28,32 +26,24 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
-
-// actorSnapshotTagScopes lists the scopes a client may set on an ActorSnapshotTag.
-// ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED is deliberately absent: scope is required
-// on the wire, not defaulted. See validateActorSnapshotTagScope.
-var actorSnapshotTagScopes = []ateapipb.ActorSnapshotTagScope{
-	ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-	ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-}
-
-// actorSnapshotTagScopeNames names actorSnapshotTagScopes for error messages.
-var actorSnapshotTagScopeNames = func() []string {
-	names := make([]string, len(actorSnapshotTagScopes))
-	for i, scope := range actorSnapshotTagScopes {
-		names[i] = scope.String()
-	}
-	return names
-}()
 
 // CreateActorSnapshotTag tags the external snapshot a suspended Actor holds,
 // giving the tag its own copy of that snapshot so the Actor being suspended
 // again or deleted cannot collect it. The work is a workflow because it spans
 // two transactions around an object copy; see TagActorSnapshot.
 func (s *RPCService) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
-	if errs := validateCreateActorSnapshotTagRequest(req); len(errs) > 0 {
+	// First scrub any fields that users are not allowed to set.
+	inTag := req.ActorSnapshotTag
+	if inTag != nil { // otherwise validation will flag it
+		scrubResourceMetadataForCreate(inTag.Metadata)
+		inTag.Status = nil
+	}
+
+	if errs := validateCreateActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActorSnapshotTag().GetSourceActor())
@@ -74,46 +64,28 @@ func (s *ServiceImpl) CreateActorSnapshotTag(ctx context.Context, tag *ateapipb.
 	return s.store.CreateActorSnapshotTag(ctx, tag)
 }
 
-func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
+func validateCreateActorSnapshotTagRequest(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_CreateActorSnapshotTagRequest(ctx, op, nil, req, nil)
+}
 
-	// TODO: replace all validations with DV tags
-
+func ValidateCustom_CreateActorSnapshotTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateActorSnapshotTagRequest) field.ErrorList {
 	tag := req.GetActorSnapshotTag()
-	tagPath := fldPath.Child("actor_snapshot_tag")
-	if tag == nil {
-		return field.ErrorList{field.Required(tagPath, "")}
+	sourceActorAtespace := tag.GetSourceActor().GetAtespace()
+	tagAtespace := tag.GetMetadata().GetAtespace()
+	if sourceActorAtespace == "" || tagAtespace == "" {
+		return nil // regular DV will handle it
 	}
-
-	sourceActorPath := tagPath.Child("source_actor")
-	sourceActorErrs := resources.ValidateObjectRef(tag.GetSourceActor(), sourceActorPath)
-	if tag.GetSourceActor() == nil {
-		sourceActorErrs = append(sourceActorErrs, field.Required(sourceActorPath, ""))
+	if tagAtespace != sourceActorAtespace {
+		return field.ErrorList{
+			field.Invalid(p.Child("actor_snapshot_tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"),
+		}
 	}
-	errs = append(errs, sourceActorErrs...)
-
-	metadataPath := tagPath.Child("metadata")
-	if val, fldPath := tag.GetMetadata().GetName(), metadataPath.Child("name"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateResourceName(val, fldPath)...)
-	}
-	// The tag is created in the source Actor's Atespace; naming another one
-	// would put the tag somewhere its source cannot be found. Only worth
-	// comparing against a source that is well-formed: against a broken one this
-	// would report metadata.atespace, which is not the field at fault.
-	if val, fldPath := tag.GetMetadata().GetAtespace(), metadataPath.Child("atespace"); len(sourceActorErrs) == 0 && val != "" && val != tag.GetSourceActor().GetAtespace() {
-		errs = append(errs, field.Invalid(fldPath, val, "must be empty or match the source Actor's atespace"))
-	}
-
-	errs = append(errs, validateActorSnapshotTagScope(tag.GetScope(), tagPath.Child("scope"))...)
-
-	return errs
+	return nil
 }
 
 func (s *RPCService) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
-	if errs := validateGetActorSnapshotTagRequest(req); len(errs) > 0 {
+	if errs := validateGetActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	tag, err := s.impl.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag()))
@@ -131,22 +103,13 @@ func (s *ServiceImpl) GetActorSnapshotTag(ctx context.Context, tagRef resources.
 	return s.store.GetActorSnapshotTag(ctx, tagRef)
 }
 
-func validateGetActorSnapshotTagRequest(req *ateapipb.GetActorSnapshotTagRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	// TODO: replace all validations with DV tags
-	if val, fldPath := req.ActorSnapshotTag, fldPath.Child("actor_snapshot_tag"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
+func validateGetActorSnapshotTagRequest(ctx context.Context, req *ateapipb.GetActorSnapshotTagRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_GetActorSnapshotTagRequest(ctx, op, nil, req, nil)
 }
 
 func (s *RPCService) ListActorSnapshotTags(ctx context.Context, req *ateapipb.ListActorSnapshotTagsRequest) (*ateapipb.ListActorSnapshotTagsResponse, error) {
-	if errs := validateListActorSnapshotTagsRequest(req); len(errs) > 0 {
+	if errs := validateListActorSnapshotTagsRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	page, err := s.impl.ListActorSnapshotTags(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -161,22 +124,9 @@ func (s *ServiceImpl) ListActorSnapshotTags(ctx context.Context, atespace string
 	return s.store.ListActorSnapshotTags(ctx, atespace, opts)
 }
 
-func validateListActorSnapshotTagsRequest(req *ateapipb.ListActorSnapshotTagsRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	// TODO: replace all validations with DV tags
-
-	// An empty atespace is allowed here and means "all atespaces".
-	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val != "" {
-		errs = append(errs, resources.ValidateResourceName(val, fldPath)...)
-	}
-
-	if val, fldPath := req.PageSize, fldPath.Child("page_size"); val < 0 {
-		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
-	}
-
-	return errs
+func validateListActorSnapshotTagsRequest(ctx context.Context, req *ateapipb.ListActorSnapshotTagsRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_ListActorSnapshotTagsRequest(ctx, op, nil, req, nil)
 }
 
 // errTagPending is what the update's mutate closure returns when the stored
@@ -184,12 +134,15 @@ func validateListActorSnapshotTagsRequest(req *ateapipb.ListActorSnapshotTagsReq
 // failure and answer FAILED_PRECONDITION.
 var errTagPending = errors.New("ActorSnapshotTag is still being created")
 
-// errTagSourceActorChanged is what the update's mutate closure returns when the
-// request names a different source Actor than the stored tag records.
-var errTagSourceActorChanged = errors.New("source_actor is immutable")
-
 func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
-	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
+	// First scrub any fields that users are not allowed to set.
+	inTag := req.ActorSnapshotTag
+	if inTag != nil { // otherwise validation will flag it
+		scrubResourceMetadataForUpdate(inTag.Metadata)
+		inTag.Status = nil
+	}
+
+	if errs := validateUpdateActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	in := req.GetActorSnapshotTag()
@@ -202,16 +155,14 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 		if toUpdate.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
 			return errTagPending
 		}
-		// A tag never moves between snapshots, so it never moves between
-		// sources either. The client has to echo the source it read back.
-		if !proto.Equal(in.GetSourceActor(), toUpdate.GetSourceActor()) {
-			return errTagSourceActorChanged
-		}
 		// Metadata and status are server-owned fields.
 		metadata, tagStatus := toUpdate.GetMetadata(), toUpdate.GetStatus()
 		// Whole-object replace: clear first, so a field the client left unset is
 		// cleared rather than kept from the stored tag. Merge cannot smuggle in
-		// unknown fields because validation already rejected them.
+		// unknown fields because validation already rejected them, and a source
+		// the client did not echo back is caught by the immutability check the
+		// impl runs on the merged tag: a tag never moves between snapshots, so
+		// it never moves between sources either.
 		proto.Reset(toUpdate)
 		proto.Merge(toUpdate, in)
 		// Restore the server-owned fields, discarding whatever the request
@@ -222,9 +173,6 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 	if err != nil {
 		if errors.Is(err, errTagPending) {
 			return nil, status.Errorf(codes.FailedPrecondition, "ActorSnapshotTag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
-		}
-		if errors.Is(err, errTagSourceActorChanged) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating actor snapshot tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
 		}
 		if errors.Is(err, store.ErrImmutableField) {
 			return nil, status.Errorf(codes.InvalidArgument, "while updating actor snapshot tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
@@ -247,33 +195,50 @@ func (s *RPCService) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.U
 }
 
 func (s *ServiceImpl) UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
-	// TODO: implement this
-	return s.store.UpdateActorSnapshotTag(ctx, tagRef, precondition, mutate)
+	return s.store.UpdateActorSnapshotTag(ctx, tagRef, precondition, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+		// Apply the mutation function to the stored value.
+		oldVal := proto.CloneOf(toUpdate)
+		if err := mutate(toUpdate); err != nil {
+			return err
+		}
+
+		// Validate the merged tag against the one it replaces. This is where
+		// the rules the request could not be checked against land: scope, and
+		// the immutability of metadata and source_actor.
+		if errs := validateActorSnapshotTagUpdate(ctx, field.NewPath("actor_snapshot_tag"), toUpdate, oldVal); len(errs) > 0 {
+			return toGRPCStatusError(errs)
+		}
+		return nil
+	})
 }
 
-func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
+func validateUpdateActorSnapshotTagRequest(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
+	// We model this as a create rather than an update because updates assume
+	// the existence of a "current" value, which we do not have yet.  This is
+	// validating the request itself. The result will be validated later, after
+	// we have a current value to compare against.
+	op := operation.Operation{Type: operation.Create}
+	return Validate_UpdateActorSnapshotTagRequest(ctx, op, nil, req, nil)
+}
 
-	// TODO: replace all validations with DV tags
+func validateActorSnapshotTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorSnapshotTag) field.ErrorList {
+	op := operation.Operation{Type: operation.Update}
+	return Validate_ActorSnapshotTag(ctx, op, fldPath, newVal, oldVal)
+}
 
-	tag := req.GetActorSnapshotTag()
-	tagPath := fldPath.Child("actor_snapshot_tag")
-	if tag == nil {
-		return field.ErrorList{field.Required(tagPath, "")}
+// This exists only because nested subfield tags are not supported yet.
+func ValidateCustom_UpdateActorSnapshotTagRequest_ActorSnapshotTag(ctx context.Context, op operation.Operation, fldPath *field.Path, tag, _ *ateapipb.ActorSnapshotTag) field.ErrorList {
+	if tag == nil || tag.Metadata == nil {
+		return nil // handled by DV
 	}
 
-	errs = append(errs, resources.ValidateUpdateMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
-
-	sourceActorPath := tagPath.Child("source_actor")
-	if tag.GetSourceActor() == nil {
-		errs = append(errs, field.Required(sourceActorPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(tag.GetSourceActor(), sourceActorPath)...)
-	}
-
-	errs = append(errs, validateActorSnapshotTagScope(tag.GetScope(), tagPath.Child("scope"))...)
-
+	// Updates are validated in 2 steps: first the update request and then the
+	// resource itself. DV for the request doesn't descend into the resource
+	// metadata.  Once DV supports nested subfield tags, this can be changed to
+	// something like:
+	//   +k8s:subfield(metadata)=+k8s:subfield(atespace)=+k8s:required
+	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), tag.Metadata, nil)
+	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &tag.Metadata.Atespace, nil)...)
 	return errs
 }
 
@@ -292,7 +257,7 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 // delete a tag while clones of it exist.
 func (s *RPCService) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.DeleteActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	// TODO: mode delete orchestration to a workflow.
-	if errs := validateDeleteActorSnapshotTagRequest(req); len(errs) > 0 {
+	if errs := validateDeleteActorSnapshotTagRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	tagRef := resources.ActorSnapshotTagRefFromObjectRef(req.GetActorSnapshotTag())
@@ -357,28 +322,7 @@ func (s *ServiceImpl) DeleteActorSnapshotTag(ctx context.Context, tagRef resourc
 	return s.store.DeleteActorSnapshotTag(ctx, tagRef)
 }
 
-func validateDeleteActorSnapshotTagRequest(req *ateapipb.DeleteActorSnapshotTagRequest) field.ErrorList {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	// TODO: replace all validations with DV tags
-
-	if val, fldPath := req.ActorSnapshotTag, fldPath.Child("actor_snapshot_tag"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	return errs
-}
-
-// validateActorSnapshotTagScope checks that scope is one a client may set.
-func validateActorSnapshotTagScope(scope ateapipb.ActorSnapshotTagScope, p *field.Path) field.ErrorList {
-	switch {
-	case scope == ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED:
-		return field.ErrorList{field.Required(p, "must be one of: "+strings.Join(actorSnapshotTagScopeNames, ", "))}
-	case !slices.Contains(actorSnapshotTagScopes, scope):
-		return field.ErrorList{field.NotSupported(p, scope.String(), actorSnapshotTagScopeNames)}
-	}
-	return nil
+func validateDeleteActorSnapshotTagRequest(ctx context.Context, req *ateapipb.DeleteActorSnapshotTagRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_DeleteActorSnapshotTagRequest(ctx, op, nil, req, nil)
 }
