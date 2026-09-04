@@ -43,6 +43,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -185,12 +186,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	))
 	ateapipb.RegisterControlServer(grpcServer, service)
 
-	lis, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		cancel()
-		cleanupStore()
-		t.Fatalf("failed to listen: %v", err)
-	}
+	lis := bufconn.Listen(8192)
 
 	go func() {
 		if err := grpcServer.Serve(lis); err != nil {
@@ -198,7 +194,13 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		}
 	}()
 
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(
+		"passthrough://bufnet",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
+			return lis.Dial()
+		}),
+	)
 	if err != nil {
 		grpcServer.Stop()
 		cancel()
