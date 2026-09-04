@@ -170,6 +170,10 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 
 > [`docs/metrics/registry/metrics.yaml`](metrics/registry/metrics.yaml) defines each instrument. Read it when you need all the labels, the bucket limits, or the permitted values of a label. The table below does not have each instrument. The request-parking instruments and the actor resource-usage instruments are in the registry only. Refer to [The metric registry](#the-metric-registry).
 
+> To go from a symptom to a component, read the
+> [troubleshooting guides](troubleshooting/README.md). They use the instruments
+> below, step by step.
+
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |

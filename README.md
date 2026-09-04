@@ -222,6 +222,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Glossary](docs/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
 * [Integration Repositories](docs/integration-repos.md): Where integrations live, how their repositories are named, and how fixes flow back to core.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
+* [Troubleshooting Guides](docs/troubleshooting/README.md): Symptom-first guides that go from a slow request or a 503 to the component that caused it.
 * [Authentication Guide](docs/authentication.md): Configure trusted JWT providers and human credentials.
 * [Enabling man-in-the-middle (MITM) interception for Actor Egress policy](docs/egress-trust-bundle.md): Egress policies such as header injection depend on MITM interception of Actor traffic. This guide explains how an Actor should be configured to enable interception.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
