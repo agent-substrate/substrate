@@ -899,6 +899,7 @@ message OnResumeConfig {
 message Container {
   // +k8s:required
   // +k8s:format=k8s-short-name
+  // +k8s:customValidation # name must not be "pause" as we have it for every actor
   string name = 1;
 
   // +k8s:required

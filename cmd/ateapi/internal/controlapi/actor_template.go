@@ -196,6 +196,17 @@ func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation,
 	return nil
 }
 
+// pauseContainerName is the container the ateom creates for each actor,
+// an application container using the same will would collide with it.
+const pauseContainerName = "pause"
+
+func ValidateCustom_Container_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if *value == pauseContainerName {
+		return field.ErrorList{field.Invalid(fldPath, *value, "is reserved for the sandbox's pause container")}
+	}
+	return nil
+}
+
 // mountPathBadSegmentRE matches '.' or '..' path segments.
 var mountPathBadSegmentRE = regexp.MustCompile(`(^|/)[.][.]?(/|$)`)
 

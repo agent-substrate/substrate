@@ -119,6 +119,12 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("name"), "Main_1", "").WithOrigin("format=k8s-short-name")},
 	}, {
+		"container named pause",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].Name = "pause"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("name"), "pause", "")},
+	}, {
 		"container missing image",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Image = ""
