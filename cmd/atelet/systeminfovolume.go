@@ -45,8 +45,7 @@ type systemInfoVolume struct {
 	Spec *ateletpb.SystemInfoVolume
 
 	// appliedHashes maps each projected bundle name to the trustBundleHash
-	// last written into this volume. In memory only: after an atelet restart
-	// the next Run/Restore rewrites the volume from current cluster state.
+	// last written into this volume.
 	appliedHashes map[string]string
 }
 
@@ -55,8 +54,6 @@ type registeredActor struct {
 	ref resources.ActorRef
 
 	// mu covers the volumes' file writes, appliedHashes, and stale.
-	// Deregister and replacement set stale under mu, fencing refreshers
-	// that snapshotted this entry from writing into retired directories.
 	mu      sync.Mutex
 	stale   bool
 	volumes []*systemInfoVolume
@@ -75,8 +72,7 @@ type systemInfoVolumeRefresher struct {
 	// queue carries bundle names from informer events to the run loop.
 	queue workqueue.TypedRateLimitingInterface[string]
 
-	// mu covers actors and nothing else: it is never held across I/O or
-	// another lock acquisition. Writes serialize per actor on its own mu.
+	// mu covers actors
 	mu sync.Mutex
 	// TODO(#1372): in-memory only, so an atelet restart drops the registry
 	// and refresh pauses until each actor's next Run/Restore re-registers it.
@@ -336,7 +332,7 @@ func (r *systemInfoVolumeRefresher) processNextWorkItem(ctx context.Context) boo
 // refreshBundle rewrites every registered volume that projects bundleName
 // and has not applied its current contents, keeping last-good files on any
 // failure: resolution errors wait for the next event, write errors requeue.
-// A bundle no registered actor projects is not even resolved.
+// A bundle no registered actor projects is not resolved.
 func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleName string) error {
 	targets := r.projecting(bundleName)
 	if len(targets) == 0 {
