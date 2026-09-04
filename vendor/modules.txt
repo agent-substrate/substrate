@@ -859,10 +859,12 @@ github.com/spiffe/go-spiffe/v2/internal/pemutil
 github.com/spiffe/go-spiffe/v2/internal/x509util
 github.com/spiffe/go-spiffe/v2/spiffeid
 github.com/spiffe/go-spiffe/v2/svid/x509svid
-# github.com/stretchr/testify v1.11.1
+# github.com/stretchr/testify v1.12.1
 ## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/assert/yaml
+github.com/stretchr/testify/internal/difflib
+github.com/stretchr/testify/internal/spew
 github.com/stretchr/testify/require
 # github.com/testcontainers/testcontainers-go v0.44.0
 ## explicit; go 1.25.0
@@ -1020,7 +1022,7 @@ go.uber.org/multierr
 # go.yaml.in/yaml/v2 v2.4.4
 ## explicit; go 1.15
 go.yaml.in/yaml/v2
-# go.yaml.in/yaml/v3 v3.0.4
+# go.yaml.in/yaml/v3 v3.0.5
 ## explicit; go 1.16
 go.yaml.in/yaml/v3
 # golang.org/x/crypto v0.56.0
@@ -1309,7 +1311,7 @@ google.golang.org/grpc/xds
 google.golang.org/grpc/xds/bootstrap
 google.golang.org/grpc/xds/csds
 google.golang.org/grpc/xds/googledirectpath
-# google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
+# google.golang.org/protobuf v1.36.12
 ## explicit; go 1.23
 google.golang.org/protobuf/encoding/protodelim
 google.golang.org/protobuf/encoding/protojson
@@ -1366,10 +1368,7 @@ gopkg.in/evanphx/json-patch.v4
 # gopkg.in/inf.v0 v0.9.1
 ## explicit
 gopkg.in/inf.v0
-# gopkg.in/yaml.v3 v3.0.1
-## explicit
-gopkg.in/yaml.v3
-# k8s.io/api v0.37.0-rc.0
+# k8s.io/api v0.37.0
 ## explicit; go 1.26.0
 k8s.io/api/admission/v1
 k8s.io/api/admission/v1beta1
@@ -1441,7 +1440,7 @@ k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset
 k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/scheme
 k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1
 k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1beta1
-# k8s.io/apimachinery v0.37.0-rc.0 => ./third_party/k8s.io/apimachinery
+# k8s.io/apimachinery v0.37.0 => k8s.io/apimachinery v0.36.0-alpha.2.0.20260904094813-f8600edbddc8
 ## explicit; go 1.26.0
 k8s.io/apimachinery/pkg/api/equality
 k8s.io/apimachinery/pkg/api/errors
@@ -1507,7 +1506,7 @@ k8s.io/apimachinery/pkg/version
 k8s.io/apimachinery/pkg/watch
 k8s.io/apimachinery/third_party/forked/golang/json
 k8s.io/apimachinery/third_party/forked/golang/reflect
-# k8s.io/client-go v0.37.0-rc.0
+# k8s.io/client-go v0.37.0
 ## explicit; go 1.26.0
 k8s.io/client-go/applyconfigurations
 k8s.io/client-go/applyconfigurations/admissionregistration/v1
@@ -1882,7 +1881,7 @@ k8s.io/kube-openapi/pkg/spec3
 k8s.io/kube-openapi/pkg/util
 k8s.io/kube-openapi/pkg/util/proto
 k8s.io/kube-openapi/pkg/validation/spec
-# k8s.io/kubelet v0.37.0-rc.0
+# k8s.io/kubelet v0.37.0
 ## explicit; go 1.26.0
 k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1
 # k8s.io/metrics v0.36.1
@@ -1894,7 +1893,7 @@ k8s.io/metrics/pkg/client/clientset/versioned
 k8s.io/metrics/pkg/client/clientset/versioned/scheme
 k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1alpha1
 k8s.io/metrics/pkg/client/clientset/versioned/typed/metrics/v1beta1
-# k8s.io/streaming v0.37.0-rc.0
+# k8s.io/streaming v0.37.0
 ## explicit; go 1.26.0
 k8s.io/streaming/pkg/httpstream
 k8s.io/streaming/pkg/httpstream/spdy
@@ -2063,4 +2062,4 @@ sigs.k8s.io/structured-merge-diff/v6/value
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# k8s.io/apimachinery => ./third_party/k8s.io/apimachinery
+# k8s.io/apimachinery => k8s.io/apimachinery v0.36.0-alpha.2.0.20260904094813-f8600edbddc8
