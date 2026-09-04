@@ -17,6 +17,7 @@ package identity
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -61,10 +62,11 @@ type whoamiResponse struct {
 // state (the probe's startup-held fd, plus every inode the pre-suspend whoami
 // indexed) must re-bind to the regenerated files at the same paths. The
 // micro-VM lane enforces that the hardest: virtiofsd's find-paths migration
-// re-opens recorded paths on restore and its default --migration-on-error=abort
-// fails the resume outright if any path moved — a write scheme that relocates
-// real files (e.g. a timestamped-directory symlink swap) would make any actor
-// that ever touched a system-info file unable to resume.
+// re-opens recorded paths on restore, and a path that moved leaves the guest
+// reference faulty (EIO under --migration-on-error=guest-error), which the
+// held-fd assertion below catches — a write scheme that relocates real files
+// (e.g. a timestamped-directory symlink swap) would break every held fd of
+// any actor that ever touched a system-info file.
 func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
@@ -116,7 +118,8 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		// The fd held open since before the golden snapshot must survive the
 		// restore and read the restored actor's OWN id: system-info files are
 		// regenerated at stable paths precisely so suspend-time guest handles
-		// re-bind (a moved or deleted path would fail the restore or the read).
+		// re-bind (a moved or deleted path would leave the handle faulty and
+		// fail this read).
 		if got.Held != id {
 			t.Errorf("actor %q: id via startup-held fd = %q, want %q (probe read error: %q)", id, got.Held, id, got.Error)
 		}
@@ -149,17 +152,27 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		seenUIDs[got.UID] = id
 	}
 
+	// Live refresh: rotate the pool while both actors RUN — no suspend, no
+	// resume — and wait until each observes the new sanitized contents at
+	// the same path. atelet's informer rewrites the projected file (temp +
+	// rename at the stable path) for every running actor that projects the
+	// bundle, and both runtimes must surface the host-side rename on their
+	// next read (gVisor revalidating the bind mount through the gofer, the
+	// micro-VM through virtio-fs).
+	liveTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-live")
+	for _, id := range ids {
+		waitForTrust(t, ctx, rc, id, liveTrust)
+	}
+
 	// Full suspend/resume cycle of one actor (see the doc comment): the whoami
 	// calls above deliberately seeded the guest state a suspend records — the
 	// held fd from probe startup plus the freshly indexed file inodes — and the
 	// resume regenerates every file underneath that state.
 	//
-	// The trust bundle is rotated first, so the same cycle also proves the
-	// "bundle contents refresh on every Run/Restore" semantic end to end: the
-	// resumed actor must observe the NEW sanitized contents at the same path.
-	// (Live propagation to running actors, without a resume, is #932 PR 2;
-	// until then a running actor's file is the bundle as of its last
-	// Run/Restore.)
+	// The trust bundle is rotated first, and the suspend deliberately does
+	// NOT wait for the rotation to propagate live: whichever side of the
+	// suspend the live rewrite lands on, the resumed actor must observe the
+	// rotated sanitized contents at the same path.
 	rotatedTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
@@ -188,6 +201,28 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	if got.Trust != rotatedTrust {
 		t.Errorf("after suspend/resume: /run/ate/trust-bundle.pem = %q, want the rotated sanitized bundle %q (probe read error: %q)", got.Trust, rotatedTrust, got.Error)
 	}
+
+	// The other actor never cycled: the second rotation must reach it live,
+	// undisturbed by a sibling of the same bundle suspending and resuming.
+	waitForTrust(t, ctx, rc, ids[1], rotatedTrust)
+}
+
+// waitForTrust polls the probe until its projected trust bundle equals want:
+// the live-refresh chain (reconciler -> ClusterTrustBundle -> atelet informer
+// -> host rewrite -> guest revalidation) exposes no completion signal to wait
+// on.
+func waitForTrust(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	var got whoamiResponse
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if got, lastErr = tryWhoami(ctx, rc, id); lastErr == nil && got.Trust == want {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("actor %q: timed out waiting for the live-refreshed trust bundle: /run/ate/trust-bundle.pem = %q, want %q (probe read error: %q, poll error: %v)", id, got.Trust, want, got.Error, lastErr)
 }
 
 // seenUIDFor returns the UID recorded for actor id in the first phase of the
@@ -252,18 +287,28 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 
 func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) whoamiResponse {
 	t.Helper()
+	out, err := tryWhoami(ctx, rc, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// tryWhoami is whoami without the fatality, for polls that must ride out a
+// transient router or port-forward hiccup.
+func tryWhoami(ctx context.Context, rc *e2e.RouterClient, id string) (whoamiResponse, error) {
+	var out whoamiResponse
 	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, "/whoami")
 	if err != nil {
-		t.Fatalf("GET /whoami for %q: %v", id, err)
+		return out, fmt.Errorf("GET /whoami for %q: %w", id, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /whoami for %q: status %d, body %q", id, resp.StatusCode, body)
+		return out, fmt.Errorf("GET /whoami for %q: status %d, body %q", id, resp.StatusCode, body)
 	}
-	var out whoamiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding /whoami for %q: %v", id, err)
+		return out, fmt.Errorf("decoding /whoami for %q: %w", id, err)
 	}
-	return out
+	return out, nil
 }

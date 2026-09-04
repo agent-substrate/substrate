@@ -111,6 +111,11 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		"--thread-pool-size=1",
 		"--announce-submounts",
 		"--migration-mode", "find-paths",
+		// Not the default abort, which makes a snapshot unrestorable when
+		// the guest still references an inode with no findable path (a
+		// live-rewritten trust bundle, an unlinked temp file). guest-error
+		// degrades such references to EIO on access instead, share-wide.
+		"--migration-on-error", "guest-error",
 	}
 }
 

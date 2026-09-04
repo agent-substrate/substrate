@@ -15,11 +15,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/pemutil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
 )
@@ -30,9 +31,12 @@ import (
 const EgressTrustBundleName = "egress-mitm.ate.dev"
 
 // supportedTrustBundles maps the bundle names the trustBundle data source
-// may reference to their backing ClusterTrustBundle objects. Enforced here
-// rather than in the CRD schema so a configurable backend registry (#932)
-// can widen it without a template API change.
+// may reference to their backing ClusterTrustBundles. Enforced here so a
+// configurable backend registry (#932) can widen it without an API change.
+//
+// TODO(#932): select bundles by signer name + label selector (merging the
+// matches) instead of one direct object, so a new root can be trialed on a
+// fraction of workloads before it reaches all of them.
 var supportedTrustBundles = map[string]string{
 	EgressTrustBundleName: "egress-mitm.ate.dev:mitm:primary-bundle",
 }
@@ -47,28 +51,39 @@ func supportedTrustBundleNames() string {
 	return strings.Join(names, ", ")
 }
 
-// resolveTrustBundle returns the sanitized PEM of the named trust bundle,
-// resolving the name against the allowlist and reading the backing
-// ClusterTrustBundle through atelet's informer-backed lister. Every error
-// fails the actor start: an actor that declared a trust bundle must not
-// start without one.
-func resolveTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) ([]byte, error) {
+// bundleNamesFor returns the allowlisted bundle names backed by the
+// ClusterTrustBundle objectName.
+func bundleNamesFor(objectName string) []string {
+	var names []string
+	for name, object := range supportedTrustBundles {
+		if object == objectName {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// rawTrustBundle returns the unsanitized contents of the named trust
+// bundle's backing ClusterTrustBundle, resolving the name against the
+// allowlist and reading through atelet's informer-backed lister.
+func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (objectName, raw string, err error) {
 	objectName, supported := supportedTrustBundles[name]
 	if !supported {
-		return nil, fmt.Errorf("trust bundle %q is not supported by this deployment (supported: %s)", name, supportedTrustBundleNames())
-	}
-	if lister == nil {
-		return nil, fmt.Errorf("trust bundle %q: no ClusterTrustBundle lister configured", name)
+		return "", "", fmt.Errorf("trust bundle %q is not supported by this deployment (supported: %s)", name, supportedTrustBundleNames())
 	}
 	bundle, err := lister.Get(objectName)
 	if apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("trust bundle %q: ClusterTrustBundle %q not found", name, objectName)
+		return "", "", fmt.Errorf("trust bundle %q: ClusterTrustBundle %q not found", name, objectName)
 	} else if err != nil {
-		return nil, fmt.Errorf("trust bundle %q: while reading ClusterTrustBundle %q: %w", name, objectName, err)
+		return "", "", fmt.Errorf("trust bundle %q: while reading ClusterTrustBundle %q: %w", name, objectName, err)
 	}
-	pemBundle, err := pemutil.SanitizeCertificateBundle([]byte(bundle.Spec.TrustBundle))
-	if err != nil {
-		return nil, fmt.Errorf("trust bundle %q: unusable ClusterTrustBundle %q: %w", name, objectName, err)
-	}
-	return pemBundle, nil
+	return objectName, bundle.Spec.TrustBundle, nil
+}
+
+// trustBundleHash fingerprints raw backing contents. Refreshes compare this,
+// never the projected bytes: sanitization shuffles the anchors, so two
+// projections of identical contents differ byte-wise.
+func trustBundleHash(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
 }
