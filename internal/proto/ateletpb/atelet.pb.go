@@ -289,14 +289,17 @@ func (*SetWorkerCapacityResponse) Descriptor() ([]byte, []int) {
 
 type MintActorCertificateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The actor for which the certificate should be issued.
+	ActorAtespace string `protobuf:"bytes,3,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
+	ActorName     string `protobuf:"bytes,4,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	// The UID of the actor --- used to guard against deletion and recreation of
+	// an actor with the same name.
+	ActorUid string `protobuf:"bytes,5,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// DER-encoded PKCS #10 certificate signing request. Atunnel retains the
 	// corresponding private key.
 	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
-	// Actor incarnation this activation expects. Ateapi resolves the actor from
-	// the authenticated worker and rejects the request if its UID differs.
-	ExpectedActorUid string `protobuf:"bytes,2,opt,name=expected_actor_uid,json=expectedActorUid,proto3" json:"expected_actor_uid,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *MintActorCertificateRequest) Reset() {
@@ -329,18 +332,32 @@ func (*MintActorCertificateRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{2}
 }
 
+func (x *MintActorCertificateRequest) GetActorAtespace() string {
+	if x != nil {
+		return x.ActorAtespace
+	}
+	return ""
+}
+
+func (x *MintActorCertificateRequest) GetActorName() string {
+	if x != nil {
+		return x.ActorName
+	}
+	return ""
+}
+
+func (x *MintActorCertificateRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
 func (x *MintActorCertificateRequest) GetCertificateSigningRequest() []byte {
 	if x != nil {
 		return x.CertificateSigningRequest
 	}
 	return nil
-}
-
-func (x *MintActorCertificateRequest) GetExpectedActorUid() string {
-	if x != nil {
-		return x.ExpectedActorUid
-	}
-	return ""
 }
 
 type MintActorCertificateResponse struct {
@@ -2664,10 +2681,13 @@ const file_atelet_proto_rawDesc = "" +
 	"\fatelet.proto\x12\x06atelet\x1a\x1fpkg/proto/ateapipb/ateapi.proto\"O\n" +
 	"\x18SetWorkerCapacityRequest\x123\n" +
 	"\bcapacity\x18\x01 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\"\x1b\n" +
-	"\x19SetWorkerCapacityResponse\"\x8b\x01\n" +
-	"\x1bMintActorCertificateRequest\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\x12,\n" +
-	"\x12expected_actor_uid\x18\x02 \x01(\tR\x10expectedActorUid\"M\n" +
+	"\x19SetWorkerCapacityResponse\"\xc0\x01\n" +
+	"\x1bMintActorCertificateRequest\x12%\n" +
+	"\x0eactor_atespace\x18\x03 \x01(\tR\ractorAtespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x04 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
+	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa6\x02\n" +
 	"\x10TerminateRequest\x12(\n" +
@@ -2853,10 +2873,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_DATA\x10\x02\x12!\n" +
-	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x032w\n" +
-	"\x10CredentialBroker\x12c\n" +
-	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x002l\n" +
-	"\x0eWorkerCapacity\x12Z\n" +
+	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x032\xcf\x01\n" +
+	"\fAteomSupport\x12c\n" +
+	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Z\n" +
 	"\x11SetWorkerCapacity\x12 .atelet.SetWorkerCapacityRequest\x1a!.atelet.SetWorkerCapacityResponse\"\x002\xf3\x02\n" +
 	"\vAteomHerder\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
@@ -2968,15 +2987,15 @@ var file_atelet_proto_depIdxs = []int32{
 	10, // 37: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
 	11, // 38: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
 	12, // 39: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	5,  // 40: atelet.CredentialBroker.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 41: atelet.WorkerCapacity.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
+	5,  // 40: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 41: atelet.AteomSupport.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
 	9,  // 42: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
 	35, // 43: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
 	39, // 44: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
 	37, // 45: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
 	7,  // 46: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	6,  // 47: atelet.CredentialBroker.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	4,  // 48: atelet.WorkerCapacity.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
+	6,  // 47: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	4,  // 48: atelet.AteomSupport.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
 	32, // 49: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
 	36, // 50: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
 	40, // 51: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
@@ -3021,7 +3040,7 @@ func file_atelet_proto_init() {
 			NumEnums:      3,
 			NumMessages:   41,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   2,
 		},
 		GoTypes:           file_atelet_proto_goTypes,
 		DependencyIndexes: file_atelet_proto_depIdxs,

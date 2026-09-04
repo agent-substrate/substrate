@@ -35,7 +35,7 @@ type egressDialer interface {
 }
 
 type actorCertificateSource interface {
-	Mint(context.Context) (time.Time, error)
+	MintAteomCertificate(context.Context) (time.Time, error)
 }
 
 // OriginalDestination returns the address that a transparently intercepted
@@ -142,7 +142,7 @@ func (e *Egress) renew(active *egressActivation, expiresAt time.Time) {
 				slog.Time("expiredAt", expiresAt))
 			expired = true
 		}
-		nextExpiry, err := active.certificateSource.Mint(active.ctx)
+		nextExpiry, err := active.certificateSource.MintAteomCertificate(active.ctx)
 		if err != nil {
 			code := status.Code(err)
 			if code == codes.FailedPrecondition || code == codes.PermissionDenied {

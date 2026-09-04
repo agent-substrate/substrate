@@ -20,6 +20,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -48,6 +50,10 @@ type RPCService struct {
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
 	objectStore           objectstore.Store
+
+	actorIdentityJWTIssuer string
+	actorIDJWTPool         localjwtauthority.Pool
+	actorIDCAPool          localca.Pool
 }
 
 var _ ateapipb.ControlServer = (*RPCService)(nil)
@@ -76,18 +82,24 @@ func NewRPCService(
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
 	objectStore objectstore.Store,
+	actorIdentityJWTIssuer string,
+	actorIDJWTPool localjwtauthority.Pool,
+	actorIDCAPool localca.Pool,
 ) *RPCService {
 	impl := newServiceImpl(persistence, storageClassLister)
 	s := &RPCService{
-		impl:                  impl,
-		persistence:           persistence,
-		workerCache:           workerCache,
-		sandboxConfigLister:   sandboxConfigLister,
-		csiDriverConfigLister: csiDriverConfigLister,
-		dialer:                dialer,
-		instruments:           instruments,
-		volumePlugins:         volumePlugins,
-		objectStore:           objectStore,
+		impl:                   impl,
+		persistence:            persistence,
+		workerCache:            workerCache,
+		sandboxConfigLister:    sandboxConfigLister,
+		csiDriverConfigLister:  csiDriverConfigLister,
+		dialer:                 dialer,
+		instruments:            instruments,
+		volumePlugins:          volumePlugins,
+		objectStore:            objectStore,
+		actorIdentityJWTIssuer: actorIdentityJWTIssuer,
+		actorIDJWTPool:         actorIDJWTPool,
+		actorIDCAPool:          actorIDCAPool,
 	}
 	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
 	s.workerWorkflow = NewWorkerWorkflow(impl)

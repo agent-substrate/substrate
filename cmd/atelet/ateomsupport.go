@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -28,26 +29,29 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type credentialBroker struct {
-	ateletpb.UnimplementedCredentialBrokerServer
-	// actorIdentityClient resolves the authenticated worker's current assignment
-	// and signs its actor certificate.
-	actorIdentityClient ateapipb.ActorIdentityClient
+type ateomSupportServer struct {
+	ateletpb.UnimplementedAteomSupportServer
+	controlClient ateapipb.ControlClient
+	workers       ateapipb.WorkerServiceClient
 }
 
-func (b *credentialBroker) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
-	// TODO: Before release, require the egress PEP to reject actor certificates
-	// whose ActorIdentity purpose is not atunnel.
-	// Worker identity comes only from the mTLS certificate. The expected actor
-	// UID is a stale-activation guard; ateapi derives the actor authoritatively.
-	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
+	// Check which ateom is calling.
+	_, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := b.actorIdentityClient.MintCert(ctx, &ateapipb.MintCertRequest{
-		// Workers are global-scoped and named by their pod UID.
-		Worker:                    &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
-		ExpectedActorUid:          req.GetExpectedActorUid(),
+
+	// TODO(identity): Check that we believe that this ateom is running the
+	// requested actor?  ate-api-server will further check that we (the atelet)
+	// are allowed to request a certificate for the actor.
+
+	resp, err := b.controlClient.MintActorCertificate(ctx, &ateapipb.MintActorCertificateRequest{
+		Actor: &ateapipb.ObjectRef{
+			Atespace: req.GetActorAtespace(),
+			Name:     req.GetActorName(),
+		},
+		ActorUid:                  req.GetActorUid(),
 		CertificateSigningRequest: req.GetCertificateSigningRequest(),
 		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 	})
@@ -89,4 +93,31 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 		}
 		return nil
 	}
+}
+
+// SetWorkerCapacity records what the calling worker says it has.
+//
+// It returns the control plane's error unwrapped so the caller retries: a
+// worker reports once, so an accepted call is the only thing that puts
+// capacity on the Worker, and a Worker record the syncer has not created yet
+// is the ordinary reason for a first attempt to fail.
+func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) (*ateletpb.SetWorkerCapacityResponse, error) {
+	// Identity comes only from the mTLS certificate, never from the request:
+	// a worker can report its own capacity and no one else's.
+	workerIdentity, err := authenticatedWorkerIdentity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Forwarded as reported: the worker speaks the vocabulary the control plane
+	// records, so there is nothing to translate.
+	if _, err := s.workers.SetWorkerCapacity(ctx, &ateapipb.SetWorkerCapacityRequest{
+		// Workers are global-scoped and named by their pod UID.
+		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
+		Capacity: req.GetCapacity(),
+	}); err != nil {
+		return nil, err
+	}
+	slog.InfoContext(ctx, "Recorded worker capacity",
+		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()))
+	return &ateletpb.SetWorkerCapacityResponse{}, nil
 }

@@ -44,6 +44,8 @@ const (
 	Control_CreateActorEgressPolicy_FullMethodName    = "/ateapi.Control/CreateActorEgressPolicy"
 	Control_UpdateActorEgressPolicy_FullMethodName    = "/ateapi.Control/UpdateActorEgressPolicy"
 	Control_DeleteActorEgressPolicy_FullMethodName    = "/ateapi.Control/DeleteActorEgressPolicy"
+	Control_MintActorJWT_FullMethodName               = "/ateapi.Control/MintActorJWT"
+	Control_MintActorCertificate_FullMethodName       = "/ateapi.Control/MintActorCertificate"
 	Control_CreateTag_FullMethodName                  = "/ateapi.Control/CreateTag"
 	Control_GetTag_FullMethodName                     = "/ateapi.Control/GetTag"
 	Control_ListTags_FullMethodName                   = "/ateapi.Control/ListTags"
@@ -97,6 +99,18 @@ type ControlClient interface {
 	UpdateActorEgressPolicy(ctx context.Context, in *UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
 	// Delete the egress policy resource nested under an Actor.
 	DeleteActorEgressPolicy(ctx context.Context, in *DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*EgressPolicy, error)
+	// Create a Substrate-issued JWT asserting the actor identity.
+	//
+	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
+	MintActorJWT(ctx context.Context, in *MintActorJWTRequest, opts ...grpc.CallOption) (*MintActorJWTResponse, error)
+	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
+	//
+	// * Called by atelet to provision an atunnel with a certificate for
+	//   communication with the egress gateway.  TODO(ahmedtd): Migrate this use
+	//   case to a distinct certificate to prevent actor/atunnel confusion.
+	// * Called by the egress gateway when actor client certificate injection is
+	//   configured for outbound requests.
+	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it.
@@ -259,6 +273,26 @@ func (c *controlClient) DeleteActorEgressPolicy(ctx context.Context, in *DeleteA
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EgressPolicy)
 	err := c.cc.Invoke(ctx, Control_DeleteActorEgressPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) MintActorJWT(ctx context.Context, in *MintActorJWTRequest, opts ...grpc.CallOption) (*MintActorJWTResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintActorJWTResponse)
+	err := c.cc.Invoke(ctx, Control_MintActorJWT_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintActorCertificateResponse)
+	err := c.cc.Invoke(ctx, Control_MintActorCertificate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -505,6 +539,18 @@ type ControlServer interface {
 	UpdateActorEgressPolicy(context.Context, *UpdateActorEgressPolicyRequest) (*EgressPolicy, error)
 	// Delete the egress policy resource nested under an Actor.
 	DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error)
+	// Create a Substrate-issued JWT asserting the actor identity.
+	//
+	// * Called by the egress gateway when actor JWT injection is configured for outbound requests.
+	MintActorJWT(context.Context, *MintActorJWTRequest) (*MintActorJWTResponse, error)
+	// Create a Substrate-issued SPIFFE certificate asserting the actor identity.
+	//
+	// * Called by atelet to provision an atunnel with a certificate for
+	//   communication with the egress gateway.  TODO(ahmedtd): Migrate this use
+	//   case to a distinct certificate to prevent actor/atunnel confusion.
+	// * Called by the egress gateway when actor client certificate injection is
+	//   configured for outbound requests.
+	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
 	// Tag the external snapshot a suspended Actor holds. The tag gets its own
 	// copy of that snapshot, so suspending or deleting the Actor afterwards
 	// cannot collect it.
@@ -595,6 +641,12 @@ func (UnimplementedControlServer) UpdateActorEgressPolicy(context.Context, *Upda
 }
 func (UnimplementedControlServer) DeleteActorEgressPolicy(context.Context, *DeleteActorEgressPolicyRequest) (*EgressPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActorEgressPolicy not implemented")
+}
+func (UnimplementedControlServer) MintActorJWT(context.Context, *MintActorJWTRequest) (*MintActorJWTResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintActorJWT not implemented")
+}
+func (UnimplementedControlServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintActorCertificate not implemented")
 }
 func (UnimplementedControlServer) CreateTag(context.Context, *CreateTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateTag not implemented")
@@ -874,6 +926,42 @@ func _Control_DeleteActorEgressPolicy_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).DeleteActorEgressPolicy(ctx, req.(*DeleteActorEgressPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_MintActorJWT_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintActorJWTRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).MintActorJWT(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_MintActorJWT_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).MintActorJWT(ctx, req.(*MintActorJWTRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_MintActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintActorCertificateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).MintActorCertificate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_MintActorCertificate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).MintActorCertificate(ctx, req.(*MintActorCertificateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1308,6 +1396,14 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_DeleteActorEgressPolicy_Handler,
 		},
 		{
+			MethodName: "MintActorJWT",
+			Handler:    _Control_MintActorJWT_Handler,
+		},
+		{
+			MethodName: "MintActorCertificate",
+			Handler:    _Control_MintActorCertificate_Handler,
+		},
+		{
 			MethodName: "CreateTag",
 			Handler:    _Control_CreateTag_Handler,
 		},
@@ -1390,190 +1486,6 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteActorTemplate",
 			Handler:    _Control_DeleteActorTemplate_Handler,
-		},
-	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "ateapi.proto",
-}
-
-const (
-	ActorIdentity_MintJWT_FullMethodName  = "/ateapi.ActorIdentity/MintJWT"
-	ActorIdentity_MintCert_FullMethodName = "/ateapi.ActorIdentity/MintCert"
-)
-
-// ActorIdentityClient is the client API for ActorIdentity service.
-//
-// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// ActorIdentity allows substrate workloads to exchange their
-// infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate actor-level credential. A given substrate actor might migrate
-// between many different physical workers over the course of its lifecycle,
-// whereas the actor credential's identity will be stable for the life of the
-// actor.
-type ActorIdentityClient interface {
-	// Request an Actor Identity JWT.
-	//
-	// To call this RPC, you must be authenticated as the Kubernetes Pod that is
-	// currently running the requested actor.
-	MintJWT(ctx context.Context, in *MintJWTRequest, opts ...grpc.CallOption) (*MintJWTResponse, error)
-	// Request an Actor Identity Certificate for an actor.
-	//
-	// Actors do not call this RPC themselves. The atelet hosting the actor calls
-	// it on the actor's behalf, authenticating with its own client certificate
-	// rather than a bearer token.
-	//
-	// Authorization is decided on that client certificate and the worker
-	// identity attested by atelet. Ateapi verifies that the worker is assigned to
-	// the actor and that the actor points back to that exact worker before signing.
-	//
-	// The certificate in the response is the actor's identity, not the atelet's.
-	MintCert(ctx context.Context, in *MintCertRequest, opts ...grpc.CallOption) (*MintCertResponse, error)
-}
-
-type actorIdentityClient struct {
-	cc grpc.ClientConnInterface
-}
-
-func NewActorIdentityClient(cc grpc.ClientConnInterface) ActorIdentityClient {
-	return &actorIdentityClient{cc}
-}
-
-func (c *actorIdentityClient) MintJWT(ctx context.Context, in *MintJWTRequest, opts ...grpc.CallOption) (*MintJWTResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MintJWTResponse)
-	err := c.cc.Invoke(ctx, ActorIdentity_MintJWT_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *actorIdentityClient) MintCert(ctx context.Context, in *MintCertRequest, opts ...grpc.CallOption) (*MintCertResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MintCertResponse)
-	err := c.cc.Invoke(ctx, ActorIdentity_MintCert_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// ActorIdentityServer is the server API for ActorIdentity service.
-// All implementations must embed UnimplementedActorIdentityServer
-// for forward compatibility.
-//
-// ActorIdentity allows substrate workloads to exchange their
-// infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate actor-level credential. A given substrate actor might migrate
-// between many different physical workers over the course of its lifecycle,
-// whereas the actor credential's identity will be stable for the life of the
-// actor.
-type ActorIdentityServer interface {
-	// Request an Actor Identity JWT.
-	//
-	// To call this RPC, you must be authenticated as the Kubernetes Pod that is
-	// currently running the requested actor.
-	MintJWT(context.Context, *MintJWTRequest) (*MintJWTResponse, error)
-	// Request an Actor Identity Certificate for an actor.
-	//
-	// Actors do not call this RPC themselves. The atelet hosting the actor calls
-	// it on the actor's behalf, authenticating with its own client certificate
-	// rather than a bearer token.
-	//
-	// Authorization is decided on that client certificate and the worker
-	// identity attested by atelet. Ateapi verifies that the worker is assigned to
-	// the actor and that the actor points back to that exact worker before signing.
-	//
-	// The certificate in the response is the actor's identity, not the atelet's.
-	MintCert(context.Context, *MintCertRequest) (*MintCertResponse, error)
-	mustEmbedUnimplementedActorIdentityServer()
-}
-
-// UnimplementedActorIdentityServer must be embedded to have
-// forward compatible implementations.
-//
-// NOTE: this should be embedded by value instead of pointer to avoid a nil
-// pointer dereference when methods are called.
-type UnimplementedActorIdentityServer struct{}
-
-func (UnimplementedActorIdentityServer) MintJWT(context.Context, *MintJWTRequest) (*MintJWTResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MintJWT not implemented")
-}
-func (UnimplementedActorIdentityServer) MintCert(context.Context, *MintCertRequest) (*MintCertResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method MintCert not implemented")
-}
-func (UnimplementedActorIdentityServer) mustEmbedUnimplementedActorIdentityServer() {}
-func (UnimplementedActorIdentityServer) testEmbeddedByValue()                       {}
-
-// UnsafeActorIdentityServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to ActorIdentityServer will
-// result in compilation errors.
-type UnsafeActorIdentityServer interface {
-	mustEmbedUnimplementedActorIdentityServer()
-}
-
-func RegisterActorIdentityServer(s grpc.ServiceRegistrar, srv ActorIdentityServer) {
-	// If the following call panics, it indicates UnimplementedActorIdentityServer was
-	// embedded by pointer and is nil.  This will cause panics if an
-	// unimplemented method is ever invoked, so we test this at initialization
-	// time to prevent it from happening at runtime later due to I/O.
-	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
-		t.testEmbeddedByValue()
-	}
-	s.RegisterService(&ActorIdentity_ServiceDesc, srv)
-}
-
-func _ActorIdentity_MintJWT_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MintJWTRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ActorIdentityServer).MintJWT(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ActorIdentity_MintJWT_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ActorIdentityServer).MintJWT(ctx, req.(*MintJWTRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _ActorIdentity_MintCert_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MintCertRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ActorIdentityServer).MintCert(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: ActorIdentity_MintCert_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ActorIdentityServer).MintCert(ctx, req.(*MintCertRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-// ActorIdentity_ServiceDesc is the grpc.ServiceDesc for ActorIdentity service.
-// It's only intended for direct use with grpc.RegisterService,
-// and not to be introspected or modified (even as a copy)
-var ActorIdentity_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "ateapi.ActorIdentity",
-	HandlerType: (*ActorIdentityServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "MintJWT",
-			Handler:    _ActorIdentity_MintJWT_Handler,
-		},
-		{
-			MethodName: "MintCert",
-			Handler:    _ActorIdentity_MintCert_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

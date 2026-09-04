@@ -353,7 +353,7 @@ type fakeActorCertificateSource struct {
 	release   <-chan struct{}
 }
 
-func (s fakeActorCertificateSource) Mint(context.Context) (time.Time, error) {
+func (s fakeActorCertificateSource) MintAteomCertificate(context.Context) (time.Time, error) {
 	if s.calls != nil {
 		s.calls.Add(1)
 	}

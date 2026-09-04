@@ -16,17 +16,27 @@ package controlapi
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/url"
+	"path"
 	"slices"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -536,4 +546,159 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
 	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &actor.Metadata.Atespace, nil)...)
 	return errs
+}
+
+func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
+	// TODO(authz): Authorization layer needs to check whether the caller has
+	// the mintActorJWT permission/relation with this actor.  This could be an
+	// atelet (via the relationship of the atelet running the actor), or the
+	// egress gateway (via a cluster-level grant?)
+
+	// Verify that this actor exists in the store.  It doesn't need to be
+	// running, since we may need to issue JWTs during actor boot / resume.
+	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "actor not found")
+	} else if err != nil {
+		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	}
+	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
+		return nil, status.Error(codes.Aborted, "conflict; actor has been deleted and recreated")
+	}
+
+	// We only issue tokens with audience bindings.
+	if len(req.GetAudience()) == 0 {
+		return nil, fmt.Errorf("at least one audience must be requested")
+	}
+
+	actorClaims := &actoridjwt.Claims{
+		// TODO(identity): This needs to be configurable per-install.  The user
+		// needs to make sure that the OIDC discovery docs are accessible at
+		// this URL, so that relying parties can verify the JWTs.
+		Issuer: "https://api.ate-system.svc",
+		// TODO(identity): this format is very likely going to change.
+		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Audiences:  req.GetAudience(),
+		Expiration: time.Now().Add(15 * time.Minute),
+		NotBefore:  time.Now().Add(-5 * time.Minute),
+		IssuedAt:   time.Now(),
+		JTI:        rand.Text(),
+
+		Substrate: actoridjwt.SubstrateClaims{
+			Atespace:  dbActor.GetMetadata().GetAtespace(),
+			ActorName: dbActor.GetMetadata().GetName(),
+			ActorUID:  dbActor.GetMetadata().GetUid(),
+		},
+	}
+
+	actorJWT, err := s.actorIDJWTPool.SignJWT(actorClaims)
+	if err != nil {
+		return nil, fmt.Errorf("while signing actor JWT: %w", err)
+	}
+
+	return &ateapipb.MintActorJWTResponse{
+		ActorJwt: actorJWT,
+	}, nil
+}
+
+func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {
+	// TODO(authz): Authorization layer needs to check whether the caller has
+	// the mintActorCertificate permission/relation with this actor.    This
+	// could be an atelet (via the relationship of the atelet running the
+	// actor), or the egress gateway (via a cluster-level grant?)
+
+	// Check that the caller authenticated with a client certificate --- we
+	// should not allow bootstrapping a proof-of-possession credential from a
+	// bearer credential.  Note, we don't care that it was a certificate issued
+	// by Substrate, or something else.
+	//
+	// TODO(authz): Perhaps this can be handled with an OpenFGA condition.
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return nil, status.Errorf(codes.Unauthenticated, "no peer transport information found")
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, status.Errorf(codes.Unauthenticated, "unexpected peer transport credentials")
+	}
+	if len(tlsInfo.State.PeerCertificates) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, "could not verify peer certificate")
+	}
+
+	// Verify that this actor exists in the store.  It doesn't need to be
+	// running, since we may need to issue certificates during actor boot / resume.
+	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "actor not found")
+	} else if err != nil {
+		return nil, fmt.Errorf("while retrieving actor: %w", err)
+	}
+	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
+		return nil, status.Error(codes.Aborted, "conflict; actor has been deleted and recreated")
+	}
+
+	// Parse the CSR
+	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
+	if err != nil {
+		return nil, fmt.Errorf("while parsing CSR: %w", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		slog.ErrorContext(ctx, "Failed to verify CSR signature", slog.Any("err", err))
+		return nil, status.Errorf(codes.InvalidArgument, "Failed to verify CSR signature")
+	}
+
+	// TODO(identity): Atunnel certificates should probably have a separate RPC,
+	// since different callers will be authorized to get atunnel certificates vs
+	// actor self-identity certificates.
+	var template *x509.Certificate
+	switch req.GetPurpose() {
+	case ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL:
+		template = &x509.Certificate{
+			URIs: []*url.URL{
+				{
+					Scheme: "spiffe",
+					// TODO(identity): Must be configurable per-install, so that each install can set it to a unique value.
+					Host: "substrate-actor.local",
+					// TODO(identity): Prefix with "atunnel" to prevent
+					// confusion between atunnel and an actor pretending to be
+					// an atunnel.
+					Path: path.Join("atespace", dbActor.GetMetadata().GetAtespace(), "actor", dbActor.GetMetadata().GetName()),
+				},
+			},
+			NotBefore:             time.Now().Add(-5 * time.Minute),
+			NotAfter:              time.Now().Add(time.Hour),
+			KeyUsage:              x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+			BasicConstraintsValid: true,
+			IsCA:                  false,
+			Issuer: pkix.Name{
+				CommonName: "api.ate-system.svc.cluster.local",
+			},
+		}
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "certificate purpose must be specified")
+	}
+
+	err = substratex509.AddActorIdentityToCertificate(
+		&substratex509.ActorIdentity{
+			Atespace:  dbActor.GetMetadata().GetAtespace(),
+			ActorName: dbActor.GetMetadata().GetName(),
+			ActorUid:  dbActor.GetMetadata().GetUid(),
+			Purpose:   substratex509.ActorIdentityPurposeAtunnel,
+		},
+		template,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("while adding Substrate extension: %w", err)
+	}
+
+	// Sign and return the actor cert.
+	chain, err := s.actorIDCAPool.CreateCertificate(template, csr.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("while signing certificate: %w", err)
+	}
+
+	return &ateapipb.MintActorCertificateResponse{
+		ActorCertificates: chain,
+	}, nil
 }

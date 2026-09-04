@@ -347,28 +347,29 @@ func main() {
 	if ateletIdentity == nil {
 		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
 	}
-	brokerTLS := tlsCfg.Clone()
-	brokerTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
-	if err := os.Remove(ateompath.CredentialBrokerSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
+
+	ateomFacingTLS := tlsCfg.Clone()
+	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
+	if err := os.Remove(ateompath.AteomSupportSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
 	}
-	brokerLis, err := net.Listen("unix", ateompath.CredentialBrokerSocket)
+	ateomFacingLis, err := net.Listen("unix", ateompath.AteomSupportSocket)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen for credential broker", err)
 	}
-	defer brokerLis.Close()
-	if err := os.Chmod(ateompath.CredentialBrokerSocket, 0o600); err != nil {
+	defer ateomFacingLis.Close()
+	if err := os.Chmod(ateompath.AteomSupportSocket, 0o600); err != nil {
 		serverboot.Fatal(ctx, "Failed to restrict credential broker socket", err)
 	}
-	brokerServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(brokerTLS)))
-	ateletpb.RegisterCredentialBrokerServer(brokerServer, &credentialBroker{
-		actorIdentityClient: ateapipb.NewActorIdentityClient(ateapiConn),
-	})
-	ateletpb.RegisterWorkerCapacityServer(brokerServer, &workerCapacityService{
-		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+
+	ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
+
+	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
+		controlClient: ateapipb.NewControlClient(ateapiConn),
+		workers:       ateapipb.NewWorkerServiceClient(ateapiConn),
 	})
 	go func() {
-		if err := brokerServer.Serve(brokerLis); err != nil {
+		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {
 			serverboot.Fatal(ctx, "Failed to serve credential broker", err)
 		}
 	}()

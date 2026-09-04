@@ -294,7 +294,7 @@ func do(ctx context.Context) error {
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
-			SocketPath:           ateompath.CredentialBrokerSocket,
+			SocketPath:           ateompath.AteomSupportSocket,
 			CredentialBundlePath: *workerCredentialBundle,
 			TrustBundlePath:      *podIdentityTrustBundle,
 		})
@@ -533,17 +533,18 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, 
 		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
 	}
 	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
-		SocketPath:           ateompath.CredentialBrokerSocket,
+		SocketPath:           ateompath.AteomSupportSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
-		ExpectedActorUID:     actorUID,
+
+		ActorUID: actorUID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)
 	}
 	// Mint before starting the workload so configured tunneled egress fails
 	// closed. The source retains the private key for mTLS and renewal.
-	expiresAt, err := certificateSource.Mint(ctx)
+	expiresAt, err := certificateSource.MintAteomCertificate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("while obtaining actor certificate: %w", err)
 	}
