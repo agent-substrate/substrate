@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -60,6 +61,15 @@ type fakeControl struct {
 	// listPageSize overrides the requested page size when positive, so a
 	// handful of workers can be made to span several pages.
 	listPageSize int
+	// recycled records every RecycleWorker the syncer sent, in order, so a test
+	// can assert what it reported as well as that it called at all.
+	recycled []*ateapipb.RecycleWorkerRequest
+	// recycleHook, when set, decides RecycleWorker's outcome.
+	recycleHook func(*ateapipb.RecycleWorkerRequest) error
+	// recycleSpans records the span context each RecycleWorker was called
+	// under, so a test can check the call inherited the syncer's span rather
+	// than starting a detached trace of its own.
+	recycleSpans []trace.SpanContext
 }
 
 func newFakeControl() *fakeControl {
@@ -281,4 +291,50 @@ func (f *fakeControl) ListWorkers(_ context.Context, in *ateapipb.ListWorkersReq
 		resp.NextPageToken = strconv.Itoa(end)
 	}
 	return resp, nil
+}
+
+// RecycleWorker records the request and applies what the server would: the
+// container id lands on the record and the worker stays registered.
+func (f *fakeControl) RecycleWorker(ctx context.Context, in *ateapipb.RecycleWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.recycled = append(f.recycled, proto.Clone(in).(*ateapipb.RecycleWorkerRequest))
+	f.recycleSpans = append(f.recycleSpans, trace.SpanContextFromContext(ctx))
+	if f.recycleHook != nil {
+		if err := f.recycleHook(in); err != nil {
+			return nil, err
+		}
+	}
+	name := in.GetWorker().GetName()
+	stored, ok := f.workers[name]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+	}
+	if stored.Status == nil {
+		stored.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
+	}
+	stored.Status.AteomContainerId = in.GetAteomContainerId()
+	stored.Metadata.Version++
+	return proto.Clone(stored).(*ateapipb.Worker), nil
+}
+
+// recycleRequests returns the RecycleWorker calls the syncer made, in order.
+func (f *fakeControl) recycleRequests() []*ateapipb.RecycleWorkerRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.recycled)
+}
+
+// recycleSpanContexts returns the span context each RecycleWorker ran under.
+func (f *fakeControl) recycleSpanContexts() []trace.SpanContext {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.recycleSpans)
+}
+
+func (f *fakeControl) setRecycleHook(hook func(*ateapipb.RecycleWorkerRequest) error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recycleHook = hook
 }

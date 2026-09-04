@@ -56,6 +56,19 @@ const (
 	ActorVersionKey       = attribute.Key("ate.actor.version")
 )
 
+// Worker identity, for a record whose subject is a Worker rather than an actor.
+// Workers are global-scoped, so the name alone addresses one. No ate.worker.uid:
+// the name already is the pod UID, and spelling that equivalence into telemetry
+// invites a consumer to depend on it.
+//
+// WorkerPodNameKey is not k8s.pod.name, for the reason ActorContainerNameKey is
+// not k8s.container.name: a k8s.* identity key names the entity the record's
+// Resource describes, and the component reporting on a worker pod is never it.
+const (
+	WorkerNameKey    = attribute.Key("ate.worker.name")
+	WorkerPodNameKey = attribute.Key("ate.worker.pod.name")
+)
+
 // ReservedNamespace is substrate's. A producer that merges untrusted fields into a
 // record drops everything under it, so nothing a workload sets can read as
 // platform-issued attribution downstream.
@@ -186,6 +199,7 @@ const (
 	ReasonCorruptedAssignment = string(ateerrors.ReasonCorruptedAssignment)
 	ReasonWorkerReassigned    = string(ateerrors.ReasonWorkerReassigned)
 	ReasonWorkerPodGone       = string(ateerrors.ReasonWorkerPodGone)
+	ReasonWorkerSandboxGone   = string(ateerrors.ReasonWorkerSandboxGone)
 	ReasonUnknown             = string(ateerrors.ReasonUnknown)
 )
 
@@ -214,6 +228,18 @@ const (
 // ate.*): failures are reported on the same instrument via this key, its absence
 // meaning success, never as a parallel _failures counter.
 const ErrorTypeKey = attribute.Key("error.type")
+
+// The kubelet's verdict on a worker pod's ateom container, reused verbatim.
+// Only these two: they describe the termination rather than name the container,
+// so the record's subject settles what they refer to, while k8s.container.name
+// and k8s.pod.name would claim something about the reporting component's own
+// Resource. NormalizeContainerTerminationReason bounds the reason before it is
+// emitted, because it reaches ate.actor.crashes as a label.
+const (
+	ContainerLastTerminatedReasonKey = attribute.Key("k8s.container.status.last_terminated_reason")
+	ContainerStatusReasonKey         = attribute.Key("k8s.container.status.reason")
+	ContainerRestartCountKey         = attribute.Key("k8s.container.restart_count")
+)
 
 // Values for WorkerStateKey. Only idle and assigned are representable today;
 // starting and unhealthy workers are not modeled in the cache.
@@ -343,6 +369,33 @@ func NormalizeSandboxClass(class string) string {
 	}
 }
 
+// ContainerTerminationReasonOther is the NormalizeContainerTerminationReason
+// fallback, following the registry's _OTHER pattern.
+const ContainerTerminationReasonOther = "_OTHER"
+
+// containerTerminationReasons is the kubelet's own vocabulary for a terminated
+// container, which is the value space of k8s.container.status.reason upstream.
+var containerTerminationReasons = []string{
+	"OOMKilled",
+	"Error",
+	"Completed",
+	"ContainerCannotRun",
+	"DeadlineExceeded",
+	"Evicted",
+}
+
+// NormalizeContainerTerminationReason bounds the label. The value is the
+// kubelet's, so substrate neither owns the vocabulary nor can enumerate what a
+// future kubelet will report: anything unlisted becomes _OTHER rather than a new
+// series. Empty normalizes too, so a restart the kubelet gave no reason for is
+// still distinguishable from no termination at all.
+func NormalizeContainerTerminationReason(reason string) string {
+	if slices.Contains(containerTerminationReasons, reason) {
+		return reason
+	}
+	return ContainerTerminationReasonOther
+}
+
 // WorkerPoolAttributes returns the namespaced identity of a WorkerPool. A
 // WorkerPool is namespaced, so half the pair identifies no pool: either key
 // missing drops both, rather than emit an empty-string series that merges
@@ -358,6 +411,35 @@ func WorkerPoolAttributes(namespace, name string) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		WorkerPoolNamespaceKey.String(namespace),
 		WorkerPoolNameKey.String(name),
+	}
+}
+
+// WorkerPoolLogAttrs is WorkerPoolAttributes for a slog record, and drops the
+// pair on the same rule.
+func WorkerPoolLogAttrs(namespace, name string) []slog.Attr {
+	if name == "" || namespace == "" {
+		return nil
+	}
+	return []slog.Attr{
+		slog.String(string(WorkerPoolNamespaceKey), namespace),
+		slog.String(string(WorkerPoolNameKey), name),
+	}
+}
+
+// WorkerAttributes identifies a Worker on a span: the registry name it is
+// addressed by, and the pod an operator reaches for kubectl with.
+func WorkerAttributes(workerName, podName string) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		WorkerNameKey.String(workerName),
+		WorkerPodNameKey.String(podName),
+	}
+}
+
+// WorkerLogAttrs is WorkerAttributes for a slog record.
+func WorkerLogAttrs(workerName, podName string) []slog.Attr {
+	return []slog.Attr{
+		slog.String(string(WorkerNameKey), workerName),
+		slog.String(string(WorkerPodNameKey), podName),
 	}
 }
 

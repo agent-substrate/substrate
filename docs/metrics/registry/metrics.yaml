@@ -308,6 +308,19 @@ groups:
               stability: development
               value: WORKER_POD_GONE
               brief: Control plane. The worker pod no longer exists.
+            - id: worker_sandbox_gone
+              stability: development
+              value: WORKER_SANDBOX_GONE
+              brief: >
+                Control plane. The worker pod outlived the ateom container that
+                held its sandbox: the kubelet replaced the container in place,
+                so the pod stayed and everything the sandbox held went. Read
+                k8s.container.status.last_terminated_reason for the word of the
+                kubelet on why. This value stays in the infrastructure domain
+                even for an OOM: the limit of the container belongs to the
+                operator and its cgroup covers the sandbox runtime and each
+                actor on the worker, thus no one actor is shown to have caused
+                the kill.
             - id: unknown
               stability: development
               value: UNKNOWN
@@ -591,6 +604,18 @@ groups:
         type: string
         brief: The name of one image in a snapshot.
         examples: [pages.img]
+      - id: k8s.container.status.last_terminated_reason
+        stability: development
+        type: string
+        brief: >
+          The word of the kubelet on how the previous ateom container of a
+          worker ended. The value space belongs to the kubelet and not to
+          Substrate, thus a value outside the set that the control plane knows
+          (OOMKilled, Error, Completed, ContainerCannotRun, DeadlineExceeded,
+          Evicted) is recorded as _OTHER, and so is a termination that the
+          kubelet gave no reason for. Substrate names the fault of its own layer
+          in ate.failure.reason and does not translate this value into it.
+        examples: ["OOMKilled", "Error", "_OTHER"]
       - id: rpc.method
         stability: stable
         type: string
@@ -633,6 +658,9 @@ groups:
         requirement_level: required
       - ref: ate.failure.domain
         requirement_level: required
+      - ref: k8s.container.status.last_terminated_reason
+        requirement_level:
+          conditionally_required: ate.failure.reason is WORKER_SANDBOX_GONE. No other reason observes a container of the kubelet.
       - ref: ate.template.atespace
         requirement_level: required
       - ref: ate.template.name

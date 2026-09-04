@@ -116,11 +116,11 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 // logActorCrashed carries the identity ate.actor.crashes cannot: actor identity
 // is barred from metric labels, so this record is the only way to attribute a
 // crash to one agent. Call it beside recordActorCrash, under the same guard.
-func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName, reason string) {
+func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName, reason string, extra ...slog.Attr) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
 	attrs = append(attrs, slog.String(string(ateattr.ActorOperationNameKey), opName))
 	attrs = append(attrs, ateattr.FailureLogAttrs(reason)...)
-	slog.LogAttrs(ctx, slog.LevelError, "Actor crashed", attrs...)
+	slog.LogAttrs(ctx, slog.LevelError, "Actor crashed", append(attrs, extra...)...)
 }
 
 // crashActorStore encapsulates the subset of store operations needed to crash

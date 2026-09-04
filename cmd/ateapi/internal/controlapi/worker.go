@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -277,6 +278,21 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorke
 
 func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, pre store.DeletePreconditions) (*ateapipb.Worker, error) {
 	return s.store.DeleteWorker(ctx, name, pre)
+}
+
+func (s *RPCService) RecycleWorker(ctx context.Context, req *ateapipb.RecycleWorkerRequest) (*ateapipb.Worker, error) {
+	if errs := validateRecycleWorkerRequest(ctx, req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
+	// The reason reaches ate.actor.crashes as a label, so it is bounded here as
+	// well as at the caller: a client is not what decides the label's values.
+	return s.workerWorkflow.RecycleWorker(ctx, req.GetWorker().GetName(), req.GetAteomContainerId(),
+		ateattr.NormalizeContainerTerminationReason(req.GetSandboxTerminatedReason()))
+}
+
+func validateRecycleWorkerRequest(ctx context.Context, req *ateapipb.RecycleWorkerRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_RecycleWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func validateDeleteWorkerRequest(ctx context.Context, req *ateapipb.DeleteWorkerRequest) field.ErrorList {
