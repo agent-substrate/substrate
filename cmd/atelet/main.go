@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -1315,15 +1316,60 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 		}
 		src := filepath.Join(srcDir, snapshotName, fileName)
 		dst := filepath.Join(dstDir, fileName)
-		if _, err := copyFile(src, dst); err != nil {
-			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
+		if err := stageLocalCheckpointFile(fileName, src, dst); err != nil {
+			return fmt.Errorf("failed to stage %s to %s: %w", src, dst, err)
 		}
 	}
 
 	return nil
 }
 
+// stageLocalCheckpointFile puts a local checkpoint's file at dst for the restore
+// to read, sharing the inode where the restore will only read it and copying
+// where the restore may write it.
+//
+// The durable-dir data is by far the largest thing a checkpoint holds — it is
+// the actor's own files — and nothing downstream writes it: ateom extracts the
+// tar into the durable-dir mount and re-archives from that mount at the next
+// checkpoint, into a different directory. Copying it therefore spends a second
+// full write of the actor's data on every restore, and leaves that many dirty
+// pages behind for the guest's first flush to queue against.
+//
+// Everything else is copied, because of the guest memory image: it is the one
+// staged file a restore can write through, and a shared inode would carry that
+// write back into the local checkpoint — the source of truth for every restore
+// after this one, so the damage is not one bad restore but all of them. The
+// test is an allow-list for that reason: a snapshot file nobody has classified
+// yet gets the safe treatment.
+func stageLocalCheckpointFile(fileName, src, dst string) error {
+	if shareableSnapshotFile(fileName) {
+		// Link refuses an existing destination where a copy would truncate one.
+		if err := os.Remove(dst); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		if err := linkFile(src, dst); err == nil {
+			return nil
+		}
+		// Most likely EXDEV, the local checkpoints and the restore state
+		// sitting on different filesystems. That is a node's layout rather
+		// than a fault, and a copy is always correct, so fall through.
+	}
+	_, err := copyFile(src, dst)
+	return err
+}
+
+// shareableSnapshotFile reports whether a snapshot file may be linked out of a
+// local checkpoint instead of copied: the stages after staging read it and
+// never write it.
+func shareableSnapshotFile(fileName string) bool {
+	return fileName == ateompath.DurableDirTarFile
+}
+
 var createDestFile = func(name string) (io.WriteCloser, error) { return os.Create(name) }
+
+// linkFile is os.Link, replaced in tests to exercise the copy fallback without
+// a second filesystem to link across.
+var linkFile = os.Link
 
 // sparseDest is the part of *os.File a hole-preserving copy needs. Destinations that
 // do not implement it are copied densely instead.

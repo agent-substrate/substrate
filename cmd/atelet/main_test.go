@@ -398,6 +398,157 @@ func TestCopyFile_CloseError(t *testing.T) {
 	}
 }
 
+// seedFile writes content at dir/name and returns the path.
+func seedFile(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("seeding %s: %v", path, err)
+	}
+	return path
+}
+
+// sameInode reports whether two paths name the same file.
+func sameInode(t *testing.T, a, b string) bool {
+	t.Helper()
+	fa, err := os.Stat(a)
+	if err != nil {
+		t.Fatalf("stat %s: %v", a, err)
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		t.Fatalf("stat %s: %v", b, err)
+	}
+	return os.SameFile(fa, fb)
+}
+
+func TestStageLocalCheckpointFile(t *testing.T) {
+	t.Run("durable dir tar is linked", func(t *testing.T) {
+		dir := t.TempDir()
+		src := seedFile(t, dir, "src", "durable bytes")
+		dst := filepath.Join(dir, ateompath.DurableDirTarFile)
+		if err := stageLocalCheckpointFile(ateompath.DurableDirTarFile, src, dst); err != nil {
+			t.Fatalf("stageLocalCheckpointFile: %v", err)
+		}
+		if !sameInode(t, src, dst) {
+			t.Error("durable-dir tar was copied, want a shared inode")
+		}
+	})
+
+	t.Run("other snapshot files are copied", func(t *testing.T) {
+		for _, name := range []string{"config.json", "memory-ranges"} {
+			dir := t.TempDir()
+			src := seedFile(t, dir, "src", "guest pages")
+			dst := filepath.Join(dir, name)
+			if err := stageLocalCheckpointFile(name, src, dst); err != nil {
+				t.Fatalf("stageLocalCheckpointFile(%s): %v", name, err)
+			}
+			if sameInode(t, src, dst) {
+				t.Errorf("%s shares an inode with the checkpoint, want a copy", name)
+			}
+			got, err := os.ReadFile(dst)
+			if err != nil {
+				t.Fatalf("reading %s: %v", dst, err)
+			}
+			if string(got) != "guest pages" {
+				t.Errorf("%s content = %q, want %q", name, got, "guest pages")
+			}
+		}
+	})
+
+	t.Run("stale destination is replaced", func(t *testing.T) {
+		dir := t.TempDir()
+		src := seedFile(t, dir, "src", "this restore")
+		dst := seedFile(t, dir, ateompath.DurableDirTarFile, "a previous attempt")
+		if err := stageLocalCheckpointFile(ateompath.DurableDirTarFile, src, dst); err != nil {
+			t.Fatalf("stageLocalCheckpointFile: %v", err)
+		}
+		if !sameInode(t, src, dst) {
+			t.Error("stale destination survived, want it replaced by a link")
+		}
+	})
+
+	t.Run("link failure falls back to a copy", func(t *testing.T) {
+		orig := linkFile
+		linkFile = func(string, string) error { return syscall.EXDEV }
+		t.Cleanup(func() { linkFile = orig })
+
+		dir := t.TempDir()
+		src := seedFile(t, dir, "src", "durable bytes")
+		dst := filepath.Join(dir, ateompath.DurableDirTarFile)
+		if err := stageLocalCheckpointFile(ateompath.DurableDirTarFile, src, dst); err != nil {
+			t.Fatalf("stageLocalCheckpointFile: %v", err)
+		}
+		if sameInode(t, src, dst) {
+			t.Error("shared inode after a failed link, want a copy")
+		}
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatalf("reading dst: %v", err)
+		}
+		if string(got) != "durable bytes" {
+			t.Errorf("dst content = %q, want %q", got, "durable bytes")
+		}
+	})
+}
+
+func TestCopyLocalCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "local-checkpoint")
+	snapDir := filepath.Join(srcDir, "pause-snap-1")
+	dstDir := filepath.Join(dir, "restore-state")
+	for _, d := range []string{snapDir, dstDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("creating %s: %v", d, err)
+		}
+	}
+	files := []string{"config.json", "memory-ranges", ateompath.DurableDirTarFile}
+	for _, name := range files {
+		seedFile(t, snapDir, name, "contents of "+name)
+	}
+
+	s := &AteomHerder{}
+	if err := s.copyLocalCheckpoint(context.Background(), "pause-snap-1", srcDir, dstDir, files); err != nil {
+		t.Fatalf("copyLocalCheckpoint: %v", err)
+	}
+	for _, name := range files {
+		src, dst := filepath.Join(snapDir, name), filepath.Join(dstDir, name)
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			t.Fatalf("reading %s: %v", dst, err)
+		}
+		if want := "contents of " + name; string(got) != want {
+			t.Errorf("%s content = %q, want %q", name, got, want)
+		}
+		if want := name == ateompath.DurableDirTarFile; sameInode(t, src, dst) != want {
+			t.Errorf("%s shares an inode = %v, want %v", name, !want, want)
+		}
+	}
+
+	// The reason the memory image is copied: a restore writes through it, and
+	// that write must not reach the checkpoint it restored from.
+	if err := os.WriteFile(filepath.Join(dstDir, "memory-ranges"), []byte("dirtied by the guest"), 0o600); err != nil {
+		t.Fatalf("writing the staged memory image: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(snapDir, "memory-ranges"))
+	if err != nil {
+		t.Fatalf("reading the checkpoint's memory image: %v", err)
+	}
+	if want := "contents of memory-ranges"; string(got) != want {
+		t.Errorf("the restore corrupted its own checkpoint: %q, want %q", got, want)
+	}
+}
+
+func TestCopyLocalCheckpointCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &AteomHerder{}
+	err := s.copyLocalCheckpoint(ctx, "pause-snap-1", t.TempDir(), t.TempDir(), []string{"config.json"})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("copyLocalCheckpoint on a cancelled context = %v, want context.Canceled", err)
+	}
+}
+
 // validRunRequest, validCheckpointRequest, and validRestoreRequest build
 // requests whose every field passes validation; the per-request tests below
 // break one field per case.
