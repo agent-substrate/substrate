@@ -209,6 +209,31 @@ wait_for_pool_rollout_fatal() {
   fi
 }
 
+# kubectl_delete_tolerant runs `kubectl delete "$@"` and swallows the "no
+# matches for kind ..." error class — teardown often runs against a cluster
+# where an earlier upgrade already removed a CRD that manifests/ate-install
+# still references (e.g. SandboxConfig), and errexit would otherwise abort
+# the rest of the sweep. Real errors (any `error:`/`Error` line whose
+# message is NOT the missing-kind one) still fail.
+kubectl_delete_tolerant() {
+  local err_tmp status
+  err_tmp=$(mktemp)
+  status=0
+  run_kubectl delete "$@" 2>"${err_tmp}" || status=$?
+  cat "${err_tmp}" >&2
+  if (( status == 0 )); then
+    rm -f "${err_tmp}"
+    return 0
+  fi
+  local other
+  other=$(grep -E '^(error|Error)' "${err_tmp}" | grep -v 'no matches for kind' || true)
+  rm -f "${err_tmp}"
+  if [[ -n "${other}" ]]; then
+    return "${status}"
+  fi
+  return 0
+}
+
 run_kubectl_ate() {
   local _start_ns
   _start_ns=$(date +%s%N)
@@ -1450,11 +1475,15 @@ delete_substrate_demo() {
 
 delete_ate_system() {
   log_step "delete_ate_system"
+  # kubectl_delete_tolerant instead of `run_kubectl delete` because
+  # manifests/ate-install references CRDs (e.g. SandboxConfig) that a prior
+  # upgrade may have removed from the cluster; --ignore-not-found doesn't
+  # cover the "no matches for kind" error class.
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone \
-      | run_kubectl delete --ignore-not-found -f -
+      | kubectl_delete_tolerant --ignore-not-found -f -
   else
-    run_kubectl delete --ignore-not-found -f manifests/ate-install
+    kubectl_delete_tolerant --ignore-not-found -f manifests/ate-install
   fi
 
   run_kubectl delete --ignore-not-found -n ate-system daemonset -l app=atelet
