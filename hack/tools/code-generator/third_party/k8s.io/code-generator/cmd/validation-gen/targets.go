@@ -54,8 +54,15 @@ const (
 	// (e.g. in tests), or set to "nil" to disable scheme registration for this
 	// package.
 	schemeRegistryTagName = "k8s:validation-gen-scheme-registry"
-	// Defines the deep-equal function used for equivalence and ratcheting checks.
-	// Defaults to "k8s.io/apimachinery/pkg/api/equality.Semantic.DeepEqual".
+	// Defines the deep-equal function used wherever generated code needs
+	// value equality.  The value names a function which must be generic
+	// over a single type parameter, e.g:
+	//     func Equal[T any](a, b T) bool
+	// T is instantiated with whatever a call site compares, commonly a
+	// pointer to a struct, slice, or map, so the function must handle any T.
+	// Directly comparable types are compared with == and never reach it.
+	// An unqualified name refers to the package being generated into.
+	// Defaults to "k8s.io/apimachinery/pkg/api/validate.SemanticDeepEqual".
 	deepEqualFuncTagName = "k8s:validation-gen-deep-equal-func"
 	// If set, generate go test files for test fixtures.  Supported values: "validateFalse".
 	testFixtureTagName = "k8s:validation-gen-test-fixture"
@@ -74,7 +81,7 @@ const (
 var (
 	runtimePkg           = "k8s.io/apimachinery/pkg/runtime"
 	schemeType           = types.Name{Package: runtimePkg, Name: "Scheme"}
-	defaultDeepEqualFunc = types.Name{Package: "k8s.io/apimachinery/pkg/api/equality", Name: "Semantic.DeepEqual"}
+	defaultDeepEqualFunc = types.Name{Package: "k8s.io/apimachinery/pkg/api/validate", Name: "SemanticDeepEqual"}
 	metav1Pkg            = "k8s.io/apimachinery/pkg/apis/meta/v1"
 	listMetaType         = types.Name{Package: metav1Pkg, Name: "ListMeta"}
 )
@@ -178,29 +185,7 @@ func deepEqualFuncTag(pkg *types.Package) types.Name {
 	if val == "" {
 		return defaultDeepEqualFunc
 	}
-	return parseDeepEqualFunc(val)
-}
-
-func parseDeepEqualFunc(val string) types.Name {
-	lastSlash := strings.LastIndex(val, "/")
-	if lastSlash == -1 {
-		dot := strings.Index(val, ".")
-		if dot == -1 {
-			return types.Name{Name: val}
-		}
-		return types.Name{
-			Package: val[:dot],
-			Name:    val[dot+1:],
-		}
-	}
-	dot := lastSlash + strings.Index(val[lastSlash:], ".")
-	if dot == lastSlash {
-		return types.Name{Package: val}
-	}
-	return types.Name{
-		Package: val[:dot],
-		Name:    val[dot+1:],
-	}
+	return types.ParseFullyQualifiedName(val)
 }
 
 func isSubresourceTag(t *types.Type) (string, bool) {
@@ -587,12 +572,12 @@ func GetTargets(context *generator.Context, args *Args) []generator.Target {
 	targetList = append(targetList, testTargets(args.TestOutputRoot, args.TestOutputFilePrefix, groupKindReports, allowlist, boilerplate)...)
 
 	if len(linter.lintErrors) > 0 {
-		buf := strings.Builder{}
+		buf := &strings.Builder{}
 
 		for t, errs := range linter.lintErrors {
-			buf.WriteString(fmt.Sprintf("  type %v:\n", t))
+			fmt.Fprintf(buf, "  type %v:\n", t)
 			for _, err := range errs {
-				buf.WriteString(fmt.Sprintf("    %s\n", err.Error()))
+				fmt.Fprintf(buf, "    %s\n", err.Error())
 			}
 		}
 		klog.Fatalf("lint failed:\n%s", buf.String())

@@ -289,7 +289,7 @@ func Validate_ActorMetadataDataSource(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.ActorMetadataItem, b *ateapipb.ActorMetadataItem) bool { return a.Field == b.Field }, deepEqualImpl_, Validate_ActorMetadataItem); len(e) != 0 {
+				func(a *ateapipb.ActorMetadataItem, b *ateapipb.ActorMetadataItem) bool { return a.Field == b.Field }, ateDeepEqual, Validate_ActorMetadataItem); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -716,7 +716,7 @@ func Validate_ActorStatus(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.ExternalVolume, b *ateapipb.ExternalVolume) bool { return a.VolumeName == b.VolumeName }, deepEqualImpl_, Validate_ExternalVolume); len(e) != 0 {
+				func(a *ateapipb.ExternalVolume, b *ateapipb.ExternalVolume) bool { return a.VolumeName == b.VolumeName }, ateDeepEqual, Validate_ExternalVolume); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -975,7 +975,7 @@ func Validate_ActorTemplate(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.Container, b *ateapipb.Container) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_Container); len(e) != 0 {
+				func(a *ateapipb.Container, b *ateapipb.Container) bool { return a.Name == b.Name }, ateDeepEqual, Validate_Container); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1021,7 +1021,7 @@ func Validate_ActorTemplate(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.Volume, b *ateapipb.Volume) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_Volume); len(e) != 0 {
+				func(a *ateapipb.Volume, b *ateapipb.Volume) bool { return a.Name == b.Name }, ateDeepEqual, Validate_Volume); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1492,7 +1492,7 @@ func Validate_Container(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.EnvVar, b *ateapipb.EnvVar) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_EnvVar); len(e) != 0 {
+				func(a *ateapipb.EnvVar, b *ateapipb.EnvVar) bool { return a.Name == b.Name }, ateDeepEqual, Validate_EnvVar); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1568,7 +1568,7 @@ func Validate_Container(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_VolumeMount); len(e) != 0 {
+				func(a *ateapipb.VolumeMount, b *ateapipb.VolumeMount) bool { return a.Name == b.Name }, ateDeepEqual, Validate_VolumeMount); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -2817,7 +2817,7 @@ func Validate_EgressRuleEffects(
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
 				func(a *ateapipb.CredentialHeaderInjection, b *ateapipb.CredentialHeaderInjection) bool {
 					return a.Header == b.Header
-				}, deepEqualImpl_, Validate_CredentialHeaderInjection); len(e) != 0 {
+				}, ateDeepEqual, Validate_CredentialHeaderInjection); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -5115,7 +5115,7 @@ func Validate_Resources(
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.Limits, b *ateapipb.Limits) bool { return a.Name == b.Name }, deepEqualImpl_, Validate_Limits); len(e) != 0 {
+				func(a *ateapipb.Limits, b *ateapipb.Limits) bool { return a.Name == b.Name }, ateDeepEqual, Validate_Limits); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -6013,7 +6013,7 @@ func Validate_UpdateActorRequest(
 			func() { // cohort = "metadata"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
-					func(o *ateapipb.Actor) *ateapipb.ResourceMetadata { return o.Metadata }, deepEqualImpl_, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					func(o *ateapipb.Actor) *ateapipb.ResourceMetadata { return o.Metadata }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
 					earlyReturn = true
 				}
@@ -6066,7 +6066,7 @@ func Validate_UpdateWorkerRequest(
 			func() { // cohort = "metadata"
 				earlyReturn := false
 				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "metadata",
-					func(o *ateapipb.Worker) *ateapipb.ResourceMetadata { return o.Metadata }, deepEqualImpl_, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
+					func(o *ateapipb.Worker) *ateapipb.ResourceMetadata { return o.Metadata }, ateDeepEqual, validate.RequiredPointer).MarkShortCircuit(); len(e) != 0 {
 					errs = append(errs, e...)
 					earlyReturn = true
 				}
@@ -7162,9 +7162,4 @@ func Validate_WorkerStatus(
 	}
 
 	return errs
-}
-
-// deepEqualImpl_ is a validate.MatchFunc which allows the implementation of deep-equality to be defined at codegen time.
-func deepEqualImpl_[T any](a, b T) bool {
-	return ateDeepEqual(a, b)
 }

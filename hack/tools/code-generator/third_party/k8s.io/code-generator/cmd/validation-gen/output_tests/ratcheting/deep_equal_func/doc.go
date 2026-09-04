@@ -16,7 +16,7 @@ limitations under the License.
 
 // +k8s:validation-gen=TypesWithField=TypeMeta
 // +k8s:validation-gen-scheme-registry=k8s.io/code-generator/cmd/validation-gen/testscheme.Scheme
-// +k8s:validation-gen-deep-equal-func=k8s.io/code-generator/cmd/validation-gen/output_tests/ratcheting/deep_equal_func.CustomDeepEqual
+// +k8s:validation-gen-deep-equal-func=CustomDeepEqual
 
 // This is a test package.
 // +k8s:validation-gen-nolint
@@ -32,8 +32,18 @@ var localSchemeBuilder = testscheme.New()
 
 var CustomDeepEqualCalls int
 
-func CustomDeepEqual(a, b any) bool {
+// CustomDeepEqual deliberately disagrees with semantic deep-equal: for
+// NonComparableStruct it compares only whether Ptr is set.  Tests use that
+// difference to prove generated code honors this function's verdict.
+func CustomDeepEqual[T any](a, b T) bool {
 	CustomDeepEqualCalls++
+	if x, ok := any(a).(*NonComparableStruct); ok {
+		y := any(b).(*NonComparableStruct)
+		if x == nil || y == nil {
+			return x == y
+		}
+		return (x.Ptr == nil) == (y.Ptr == nil)
+	}
 	return reflect.DeepEqual(a, b)
 }
 
@@ -45,6 +55,10 @@ type Struct struct {
 
 	// +k8s:eachVal=+k8s:validateFalse="field Struct.MapField[*]"
 	MapField map[string]NonComparableStruct `json:"mapField"`
+
+	// +k8s:listType=set
+	// +k8s:eachVal=+k8s:validateFalse="field Struct.SetField[*]"
+	SetField []NonComparableStruct `json:"setField"`
 }
 
 // +k8s:validateFalse="type NonComparableStruct"
