@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log/slog"
 	"sync"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 )
 
 // eventSample is the fully-populated sample the event tests emit; distinct
@@ -71,9 +71,15 @@ func (b *syncBuffer) Len() int {
 
 func (b *syncBuffer) String() string { return string(b.Bytes()) }
 
-// newBufferEmitter returns an emitter writing JSON records into buf.
+// newBufferEmitter returns an emitter writing JSON records into buf. The
+// labels-key closure stands in for defaultLabelsKey, whose metadata-server
+// probe has no place in a unit test.
 func newBufferEmitter(buf *syncBuffer, isOnGCE bool) *statsEventEmitter {
-	return newStatsEventEmitter(slog.New(slog.NewJSONHandler(buf, nil)), isOnGCE)
+	key := "labels"
+	if isOnGCE {
+		key = "logging.googleapis.com/labels"
+	}
+	return newStatsEventEmitter(buf, func() string { return key })
 }
 
 func TestStatsEventEmitterEmit(t *testing.T) {
@@ -173,6 +179,27 @@ func TestStatsEventEmitterGCELabelsKey(t *testing.T) {
 	}
 	if _, ok := rec["logging.googleapis.com/labels"]; !ok {
 		t.Errorf("GCE emitter did not use the promoted labels key; record keys: %v", buf.String())
+	}
+}
+
+// TestStatsEventEmitterIgnoresLogLevel pins the emitter's independence from
+// the serverboot verbosity knob: usage events are a data feed, and quieting
+// the node with --log-level=warn (or error) must not silently sever them.
+func TestStatsEventEmitterIgnoresLogLevel(t *testing.T) {
+	if err := serverboot.SetLogLevel("error"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := serverboot.SetLogLevel("info"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	var buf syncBuffer
+	newBufferEmitter(&buf, false).emit(context.Background(), eventKindPeriodic, eventSample(), workerPoolRef{})
+
+	if buf.Len() == 0 {
+		t.Error("raising the serverboot log level suppressed a usage event")
 	}
 }
 

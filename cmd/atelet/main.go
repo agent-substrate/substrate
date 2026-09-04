@@ -35,8 +35,6 @@ import (
 
 	"sync"
 
-	"cloud.google.com/go/compute/metadata"
-
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -259,7 +257,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient, metadata.OnGCE())
+			startStatsPoller(ctx, interval, statsInst, k8sClient)
 		}
 	}
 

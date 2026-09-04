@@ -519,7 +519,7 @@ func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*tem
 // The poller dials its own short-lived connection per probe (see
 // dialAteomStats) and takes no AteomDialer: the isolation from the lifecycle
 // RPCs' connection cache is structural, not just behavioral.
-func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface, isOnGCE bool) {
+func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface) {
 	poller := &statsPoller{
 		interval:  interval,
 		ateomsDir: ateompath.AteomsDir(),
@@ -531,7 +531,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 			return ateompb.NewAteomClient(conn), closer, nil
 		},
 		inst:         inst,
-		eventEmitter: newStatsEventEmitter(slog.Default(), isOnGCE),
+		eventEmitter: newStatsEventEmitter(os.Stdout, defaultLabelsKey),
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.

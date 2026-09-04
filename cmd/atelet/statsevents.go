@@ -16,9 +16,14 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"sync"
+
+	"cloud.google.com/go/compute/metadata"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -38,22 +43,39 @@ const usageSampleMsg = "Actor usage sample"
 // can join without reshaping the record.
 const eventKindPeriodic = "periodic"
 
+// defaultLabelsKey resolves the actor-identity label group's spelling:
+// actorlog's GCE / plain split, so usage events and lifecycle events promote
+// into Cloud Logging labels the same way. Resolved once, at first use --
+// metadata.OnGCE probes the metadata server (seconds of timeout off GCE),
+// which must not bill atelet's boot path; the first emit pays it once, on
+// the poller's sweep goroutine, which nobody waits on.
+var defaultLabelsKey = sync.OnceValue(func() string {
+	if metadata.OnGCE() {
+		return "logging.googleapis.com/labels"
+	}
+	return "labels"
+})
+
 // statsEventEmitter writes per-actor usage events to the process log stream.
 // A nil emitter is a valid no-op, so call sites need no guard.
 type statsEventEmitter struct {
-	log *slog.Logger
-	// labelsKey is the actor-identity label group's spelling: actorlog's GCE /
-	// plain split, so usage events and lifecycle events promote into Cloud
-	// Logging labels the same way.
-	labelsKey string
+	log       *slog.Logger
+	labelsKey func() string
 }
 
-func newStatsEventEmitter(log *slog.Logger, isOnGCE bool) *statsEventEmitter {
-	labelsKey := "labels"
-	if isOnGCE {
-		labelsKey = "logging.googleapis.com/labels"
+// newStatsEventEmitter builds an emitter over its own fixed-level handler on
+// w rather than the serverboot logger: these records are a data feed, not
+// leveled diagnostics, and quieting the node with --log-level=warn must not
+// silently sever them -- the subsystem's one off-switch is
+// --actor-stats-poll-interval=0. The records still carry level INFO on the
+// wire, so nothing downstream changes; sharing atelet's stdout is safe
+// because a JSON handler writes each record in a single Write and the
+// records are small.
+func newStatsEventEmitter(w io.Writer, labelsKey func() string) *statsEventEmitter {
+	return &statsEventEmitter{
+		log:       slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))),
+		labelsKey: labelsKey,
 	}
-	return &statsEventEmitter{log: log, labelsKey: labelsKey}
 }
 
 // emit writes one usage event. The identity comes solely from the sample's
@@ -78,7 +100,7 @@ func (e *statsEventEmitter) emit(ctx context.Context, kind string, s *ateompb.Wo
 		labels[string(ateattr.WorkerPoolNameKey)] = pool.name
 	}
 	e.log.LogAttrs(ctx, slog.LevelInfo, usageSampleMsg,
-		slog.Any(e.labelsKey, labels),
+		slog.Any(e.labelsKey(), labels),
 		slog.String("kind", kind),
 		slog.String("sandbox_class", sandboxClassLabel(s.GetSandboxClass())),
 		slog.String("source", statsSourceLabel(s.GetSource())),
