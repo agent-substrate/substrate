@@ -520,6 +520,10 @@ func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*tem
 // dialAteomStats) and takes no AteomDialer: the isolation from the lifecycle
 // RPCs' connection cache is structural, not just behavioral.
 func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface) {
+	// Warm the labels-key resolution so the first emit does not pay the
+	// metadata probe either; see defaultLabelsKey.
+	go defaultLabelsKey()
+
 	poller := &statsPoller{
 		interval:  interval,
 		ateomsDir: ateompath.AteomsDir(),

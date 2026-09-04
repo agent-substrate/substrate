@@ -21,6 +21,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
@@ -75,11 +76,7 @@ func (b *syncBuffer) String() string { return string(b.Bytes()) }
 // labels-key closure stands in for defaultLabelsKey, whose metadata-server
 // probe has no place in a unit test.
 func newBufferEmitter(buf *syncBuffer, isOnGCE bool) *statsEventEmitter {
-	key := "labels"
-	if isOnGCE {
-		key = "logging.googleapis.com/labels"
-	}
-	return newStatsEventEmitter(buf, func() string { return key })
+	return newStatsEventEmitter(buf, func() string { return actorlog.LabelsKey(isOnGCE) })
 }
 
 func TestStatsEventEmitterEmit(t *testing.T) {

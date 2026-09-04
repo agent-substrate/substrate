@@ -22,6 +22,7 @@ import (
 
 	"cloud.google.com/go/compute/metadata"
 
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -43,17 +44,14 @@ const usageSampleMsg = "Actor usage sample"
 // can join without reshaping the record.
 const eventKindPeriodic = "periodic"
 
-// defaultLabelsKey resolves the actor-identity label group's spelling:
-// actorlog's GCE / plain split, so usage events and lifecycle events promote
-// into Cloud Logging labels the same way. Resolved once, at first use --
-// metadata.OnGCE probes the metadata server (seconds of timeout off GCE),
-// which must not bill atelet's boot path; the first emit pays it once, on
-// the poller's sweep goroutine, which nobody waits on.
+// defaultLabelsKey resolves the actor-identity label group's spelling --
+// actorlog's, so usage events and lifecycle events promote into Cloud
+// Logging labels the same way. Resolved once, off atelet's boot path:
+// metadata.OnGCE probes the metadata server (seconds of timeout off GCE), so
+// startStatsPoller warms this on a throwaway goroutine and sync.OnceValue
+// makes any emit that arrives first simply wait for the in-flight probe.
 var defaultLabelsKey = sync.OnceValue(func() string {
-	if metadata.OnGCE() {
-		return "logging.googleapis.com/labels"
-	}
-	return "labels"
+	return actorlog.LabelsKey(metadata.OnGCE())
 })
 
 // statsEventEmitter writes per-actor usage events to the process log stream.
