@@ -22,11 +22,11 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
-	// CSIDriverConfigs returns a CSIDriverConfigInformer.
+	// CSIDriverConfigs returns a TypedCSIDriverConfigInformer.
 	CSIDriverConfigs() TypedCSIDriverConfigInformer
-	// SandboxConfigs returns a SandboxConfigInformer.
+	// SandboxConfigs returns a TypedSandboxConfigInformer.
 	SandboxConfigs() TypedSandboxConfigInformer
-	// WorkerPools returns a WorkerPoolInformer.
+	// WorkerPools returns a TypedWorkerPoolInformer.
 	WorkerPools() TypedWorkerPoolInformer
 }
 
