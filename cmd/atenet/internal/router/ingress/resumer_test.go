@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -146,8 +147,87 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		if got := status.Code(err); got != codes.NotFound {
 			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
 		}
-		if outcome != ResumeOutcomeNone {
-			t.Errorf("expected outcome %q on error, got %q", ResumeOutcomeNone, outcome)
+		if outcome != ResumeOutcomeUnattempted {
+			t.Errorf("expected outcome %q on definitive error for leader attempt, got %q", ResumeOutcomeUnattempted, outcome)
+		}
+	})
+
+	t.Run("ContextCanceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				return &ateapipb.ResumeActorResponse{Resumed: true}, nil
+			},
+		}
+
+		resumer := NewActorResumer(mock)
+		_, outcome, err := resumer.ResumeActor(ctx, testActorRef)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+		if outcome != ResumeOutcomeUnattempted {
+			t.Errorf("expected outcome %q on context cancellation, got %q", ResumeOutcomeUnattempted, outcome)
+		}
+	})
+
+	t.Run("SingleflightDeduplication_ErrorDisambiguation", func(t *testing.T) {
+		var resumeCalled int
+		var mu sync.Mutex
+		const concurrentRequests = 10
+		var callersStarted atomic.Int32
+
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				resumeCalled++
+				mu.Unlock()
+				// Barrier: wait until all concurrent goroutines have launched ResumeActor
+				for callersStarted.Load() < concurrentRequests {
+					time.Sleep(time.Millisecond)
+				}
+				time.Sleep(10 * time.Millisecond)
+				return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+			},
+		}
+
+		resumer := NewActorResumer(mock)
+
+		var wg sync.WaitGroup
+		outcomes := make([]ResumeOutcome, concurrentRequests)
+		errs := make([]error, concurrentRequests)
+
+		wg.Add(concurrentRequests)
+		for i := 0; i < concurrentRequests; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				callersStarted.Add(1)
+				_, outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
+			}(i)
+		}
+		wg.Wait()
+
+		var triggeredCount, joinedCount int
+		for i := 0; i < concurrentRequests; i++ {
+			if got := status.Code(errs[i]); got != codes.ResourceExhausted {
+				t.Fatalf("request %d expected ResourceExhausted, got %v", i, errs[i])
+			}
+			switch outcomes[i] {
+			case ResumeOutcomeTriggered:
+				triggeredCount++
+			case ResumeOutcomeJoined:
+				joinedCount++
+			default:
+				t.Errorf("unexpected outcome for request %d: %q", i, outcomes[i])
+			}
+		}
+
+		if triggeredCount != 1 {
+			t.Errorf("expected exactly 1 request to have outcome 'triggered', got %d", triggeredCount)
+		}
+		if joinedCount != concurrentRequests-1 {
+			t.Errorf("expected %d requests to have outcome 'joined', got %d", concurrentRequests-1, joinedCount)
 		}
 	})
 

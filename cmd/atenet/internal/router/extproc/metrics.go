@@ -64,6 +64,8 @@ func (s *Server) recordRouteDuration(ctx context.Context, d time.Duration, tmplN
 	if s.routeDuration == nil {
 		return
 	}
+	tmplNs = ateattr.NormalizeTemplateDimension(tmplNs)
+	tmplName = ateattr.NormalizeTemplateDimension(tmplName)
 	s.routeDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
 		ateattr.TemplateAtespaceKey.String(tmplNs),
 		ateattr.TemplateNameKey.String(tmplName),

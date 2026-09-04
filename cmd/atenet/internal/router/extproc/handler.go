@@ -60,8 +60,8 @@ type Result struct {
 	TemplateName     string
 
 	// Resume is the actor-resume outcome, as one of the ateattr.RouterResume*
-	// values. Empty means "none" — the direction never resumes an actor, or the
-	// request never got that far.
+	// values. Empty means "unattempted" — the direction never resumes an actor,
+	// or the request never got that far.
 	Resume string
 
 	// DynamicMetadata is attached to the ProcessingResponse alongside Response,
@@ -72,10 +72,10 @@ type Result struct {
 }
 
 // resume returns the resume label for the route-duration metric, defaulting an
-// unset outcome to "none".
+// unset outcome to "unattempted".
 func (r Result) resume() string {
 	if r.Resume == "" {
-		return ateattr.RouterResumeNone
+		return ateattr.RouterResumeUnattempted
 	}
 	return r.Resume
 }

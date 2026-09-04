@@ -140,3 +140,59 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordRouteDuration_NormalizesEmptyTemplateDimensions(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	h, err := mp.Meter("atenet-router").Float64Histogram(routeDurationMetricName)
+	if err != nil {
+		t.Fatalf("failed to create histogram: %v", err)
+	}
+
+	s := NewServer(50051, h, nil)
+	s.recordRouteDuration(context.Background(), 5*time.Millisecond, "", "", classifyOutcome(errors.New("fail")), ateattr.RouterResumeUnattempted)
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	dp := rm.ScopeMetrics[0].Metrics[0].Data.(metricdata.Histogram[float64]).DataPoints[0]
+	wantAttrs := map[string]string{
+		"ate.template.atespace": "unknown",
+		"ate.template.name":     "unknown",
+		"ate.router.outcome":    "resume_error",
+		"ate.router.resume":     "unattempted",
+	}
+
+	for k, want := range wantAttrs {
+		val, exists := dp.Attributes.Value(attribute.Key(k))
+		if !exists {
+			t.Errorf("missing metric attribute %q", k)
+		} else if val.AsString() != want {
+			t.Errorf("attribute %q = %q, want %q", k, val.AsString(), want)
+		}
+	}
+}
+
+func TestResultResume_DefaultsToUnattempted(t *testing.T) {
+	tests := []struct {
+		name   string
+		resume string
+		want   string
+	}{
+		{name: "empty defaults to unattempted", resume: "", want: ateattr.RouterResumeUnattempted},
+		{name: "none preserved", resume: ateattr.RouterResumeNone, want: ateattr.RouterResumeNone},
+		{name: "triggered preserved", resume: ateattr.RouterResumeTriggered, want: ateattr.RouterResumeTriggered},
+		{name: "joined preserved", resume: ateattr.RouterResumeJoined, want: ateattr.RouterResumeJoined},
+		{name: "unattempted preserved", resume: ateattr.RouterResumeUnattempted, want: ateattr.RouterResumeUnattempted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := Result{Resume: tt.resume}
+			if got := r.resume(); got != tt.want {
+				t.Errorf("Result.resume() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -69,19 +69,24 @@ groups:
     type: attribute_group
     brief: >
       The identity of an ActorTemplate. The values are not limited to a list.
-      But an operator makes each template. No value comes from a request. Thus
-      the number of values stays small.
+      An operator makes each template (or "unknown" when the direction has no
+      template or the request failed before resolving one). No value comes from
+      a request. Thus the number of values stays small.
     attributes:
       - id: ate.template.atespace
         stability: development
         type: string
-        brief: The atespace of the ActorTemplate of the actor.
-        examples: [ate-demo-counter]
+        brief: >
+          The atespace of the ActorTemplate of the actor, or "unknown" when the
+          direction has no template (or the request failed before resolving one).
+        examples: [ate-demo-counter, unknown]
       - id: ate.template.name
         stability: development
         type: string
-        brief: The name of the ActorTemplate of the actor.
-        examples: [counter]
+        brief: >
+          The name of the ActorTemplate of the actor, or "unknown" when the
+          direction has no template (or the request failed before resolving one).
+        examples: [counter, unknown]
 
   - id: registry.ate.workerpool
     type: attribute_group
@@ -422,6 +427,13 @@ groups:
                 A resume was already in operation. This request waited for it.
                 This value is separate because it is not a correct sample. One
                 cold start with 50 requests is one slow activation and not 51.
+            - id: unattempted
+              stability: development
+              value: unattempted
+              brief: >
+                No cold activation was in flight. The request was invalid, the
+                actor did not exist, the direction does not resume, or the
+                request canceled before activation was attempted.
       - id: ate.router.outcome
         stability: development
         brief: The result of the route attempt.

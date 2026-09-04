@@ -150,7 +150,8 @@ cardinality_rules:
   - id: bounded-or-catalog-scoped
     brief: >
       Each ate.* metric label has a list of permitted values, or it names an
-      object that an operator made. The names of the templates and the pools
+      object that an operator made (or "unknown" when a template cannot be
+      resolved or is not applicable). The names of the templates and the pools
       never come from a request.
     enforced: false
     could_be_enforced_by: >
