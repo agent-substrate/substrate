@@ -21,6 +21,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestGetFileCopyToMissThenHit(t *testing.T) {
@@ -115,6 +116,44 @@ func TestGetFileCopyToConcurrentSingleFlight(t *testing.T) {
 	}
 	if n := calls.Load(); n != 1 {
 		t.Errorf("%d concurrent copiers fetched %d times, want 1", copiers, n)
+	}
+}
+
+func TestGetFileCopyToEvictedEntryRefetches(t *testing.T) {
+	s := newTestStore(t, WithMinAge(time.Millisecond))
+	key := URIKey("golden", "memory")
+	fetch, calls := countingFetcher("golden memory")
+	ctx := context.Background()
+
+	first := dstPath(t, s, "first")
+	if err := s.GetFileCopyTo(ctx, key, first, fetch); err != nil {
+		t.Fatal(err)
+	}
+
+	// A copied-out entry carries no consumer links, so eviction is free to
+	// take it once past min age.
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(s.entryDir(key), old, old); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := s.EvictUnused(ctx, evictAll, false)
+	if err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if stats.Retired != 1 || stats.PendingBytes != 0 {
+		t.Errorf("evicting a copied-out entry: retired=%d pending=%d, want 1/0", stats.Retired, stats.PendingBytes)
+	}
+
+	// The earlier copy is untouched, and the next copy refetches.
+	if got, err := os.ReadFile(first); err != nil || string(got) != "golden memory" {
+		t.Errorf("existing copy after eviction = %q, %v", got, err)
+	}
+	second := dstPath(t, s, "second")
+	if err := s.GetFileCopyTo(ctx, key, second, fetch); err != nil {
+		t.Fatal(err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("fetches = %d, want 2 (miss after eviction)", n)
 	}
 }
 
