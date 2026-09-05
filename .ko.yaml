@@ -12,15 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaultBaseImage: gcr.io/distroless/static-debian13
+# Every base image is pinned by digest so that two builds of the same commit
+# produce the same images regardless of when or where they run. The tag is
+# kept next to the digest for readability and so a bump can re-resolve it:
+# the digest is what ko uses. hack/verify/ko-base-images.sh fails a ref
+# without a digest. Bump by re-resolving each tag (`crane digest <ref:tag>`)
+# and replacing the digest; a change of tag (a new major) is a deliberate
+# edit, not a bump.
+
+defaultBaseImage: gcr.io/distroless/static-debian13:latest@sha256:f2ea2709ac8db56323cbd7d014277f32cb572d9ea124b0076f7aafe5980678fe
 
 defaultPlatforms:
   - linux/amd64
   - linux/arm64
 
 baseImageOverrides:
-  github.com/agent-substrate/substrate/demos/sandbox: alpine
+  github.com/agent-substrate/substrate/demos/sandbox: alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
   # ateom-microvm needs glibc (for the fetched cloud-hypervisor binary) and mount/umount
-  # (to bind the image into the virtiofsd shared dir) — both in debian:stable-slim but
-  # not in the distroless static default.
-  github.com/agent-substrate/substrate/cmd/ateom-microvm: debian:stable-slim
+  # (to bind the image into the virtiofsd shared dir) — both in debian slim but
+  # not in the distroless static default. Pinned to an explicit Debian major
+  # rather than stable-slim, which silently moves when Debian's stable does.
+  github.com/agent-substrate/substrate/cmd/ateom-microvm: debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
