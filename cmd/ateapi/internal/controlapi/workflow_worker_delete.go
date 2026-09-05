@@ -156,9 +156,9 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 // still running when the pod disappeared is moved to ACTOR_STATE_CRASHED and its
 // pod pointers are cleared.
 //
-// Nothing to release is the common case and reports success: a superseded
-// assignment and an Actor that has since moved elsewhere both leave no Actor
-// pointing at this Worker, which is the state this is driving towards.
+// A superseded assignment or an Actor placed elsewhere needs no release. A
+// claim with no Actor backlink yet must invalidate the pending resume write
+// before deletion can remove the Worker.
 //
 // A concurrent SuspendActor or ResumeActor wins the optimistic version check;
 // this attempt fails as ABORTED so the caller retries against the newer state.
@@ -181,14 +181,14 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		markSkipped(ctx, "assignment names a superseded actor incarnation")
 		return nil
 	}
-	// Skip if a concurrent SuspendActor already cleared the pointer, or if the
-	// actor has since been placed on a different worker.
-	if actor.GetStatus().GetWorkerAssignment().GetWorker().GetName() != name {
+	// An actor placed on a different worker is not ours to release.
+	actorWorker := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
+	if actorWorker != "" && actorWorker != name {
 		markSkipped(ctx, "actor no longer points at this worker")
 		return nil
 	}
 	// If the actor is suspended, it's already been released.
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+	if actorWorker != "" && actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		markSkipped(ctx, "actor suspended cleanly before the pod went away")
 		return nil
 	}
@@ -211,6 +211,13 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
 			slog.String("worker", name))...)
 	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		if actorWorker == "" {
+			// A worker claim commits before resume writes the Actor backlink.
+			// Bump only the version so that pending write fails its CAS while
+			// preserving the Actor's resumable state and snapshots. Draining
+			// prevents a retry from binding to this Worker again.
+			return nil
+		}
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		toUpdate.Status.WorkerAssignment = nil
 		// Both in-progress checkpoints die with the worker: the durable one was
@@ -230,7 +237,7 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		return fmt.Errorf("while releasing actor from worker %s: %w", name, err)
 	}
 
-	if !wasAlreadyCrashed {
+	if actorWorker != "" && !wasAlreadyCrashed {
 		logActorCrashed(ctx, actor, opName, ateattr.ReasonWorkerPodGone)
 		recordActorCrash(ctx, crashAttrs)
 	}

@@ -172,6 +172,48 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 	}
 }
 
+func TestEnsurePausedFinalized_WorkerDeleteDuringReleasePreservesCrash(t *testing.T) {
+	ctx := context.Background()
+	st := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	workerName := testWorkerUID("worker-pod-1")
+	actor := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_PAUSING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:       &ateapipb.ObjectRef{Name: workerName},
+				WorkerPodUid: workerName,
+			},
+			InProgressLocalSnapshotName: "local-snapshot-1",
+		},
+	})
+	if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:     &ateapipb.ResourceMetadata{Name: workerName},
+		SandboxClass: "gvisor",
+		NodeName:     "node-1",
+	}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+	seedAssignment(t, st, workerName, &ateapipb.ActorAssignment{
+		Actor:    actorRef.ToObjectRef(),
+		ActorUid: actor.GetMetadata().GetUid(),
+	})
+
+	w := &ActorWorkflow{store: &crashAfterWorkerReleaseStore{Interface: st}}
+	_, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ensurePausedFinalized error = %v, want FailedPrecondition", err)
+	}
+	got, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+}
+
 // TestPauseActorWorkflow_RejectedAndIdempotentPaths covers the two
 // short-circuit paths of the pause workflow: rejection of the pause edge for
 // a non-RUNNING actor and the idempotent fast-forward for a PAUSED one.

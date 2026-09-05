@@ -344,9 +344,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records the in-progress snapshot as the actor's
 // external snapshot, and commits SUSPENDED with the assignment cleared in a
-// single update. It re-reads the actor first so an out-of-band transition
-// (e.g. the syncer crashing the actor after its worker died) is not
-// overwritten: with no assignment left there is nothing to finalize.
+// single update. It only finalizes SUSPENDING before and after releasing the
+// worker, so an out-of-band transition (e.g. worker deletion crashing the
+// actor) is not overwritten.
 func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
@@ -374,6 +374,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if err != nil {
 		return nil, err
 	}
+	if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+		return nil, status.Errorf(codes.FailedPrecondition, "FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
+	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
@@ -390,6 +393,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		dRefetchActor = time.Since(t)
 		if err != nil {
 			return nil, err
+		}
+		if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDING {
+			return nil, status.Errorf(codes.FailedPrecondition, "FinalizeSuspended prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_SUSPENDING)
 		}
 	}
 
