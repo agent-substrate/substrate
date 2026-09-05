@@ -130,7 +130,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Capture the snapshot's pieces CONCURRENTLY: the CH snapshot, the
-	// durable-dir tar, and the rootfs upper tar read independent data from a
+	// durable-dir capture, and the rootfs upper tar read independent data from a
 	// quiesced guest and write distinct files into checkpointDir, so the paused
 	// window costs the slowest of them rather than their sum (the tars scale
 	// with the actor's data; suspend latency is the metric that matters).
@@ -140,8 +140,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//     since nothing will reattach to the frozen virtio-fs lower: at restore
 	//     the actor cold-boots from the OCI image (or, under an OnGolden data
 	//     resume policy, is combined with the golden snapshot's guest state).
-	//   - Durable-dir tar (any scope, when declared): host-backed, so pausing
-	//     the write-through share makes the tar coherent.
+	//   - Durable-dir capture (any scope, when declared): host-backed, so
+	//     pausing the write-through share makes it coherent.
 	//   - Rootfs upper tar (Full only): host-backed like the durable volumes —
 	//     the memory snapshot does not carry rootfs writes. Under Data the
 	//     workload cold-starts on restore, discarding rootfs state.
@@ -157,7 +157,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if durable {
 		g.Go(func() error {
 			t := time.Now()
-			if err := tarDurableVolumes(gctx, ateompath.DurableDirVolumeMountsDir(actorUID), checkpointDir); err != nil {
+			if err := captureDurableVolumes(gctx, ateompath.DurableDirVolumeMountsDir(actorUID), checkpointDir); err != nil {
 				return err
 			}
 			dDurable = time.Since(t)
@@ -180,7 +180,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Report exactly the files we wrote so atelet ships precisely this snapshot: for
 	// Full, the CH snapshot (config.json + state.json + memory-ranges + base-id) plus
-	// any durable-dir tar; for Data, that tar alone.
+	// any durable-dir files; for Data, those alone.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
@@ -201,9 +201,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	slog.InfoContext(ctx, "Actor checkpointed", slog.String("id", actorUID), slog.Any("snapshot_files", snapshotFiles),
 		slog.String("scope", scope.String()), slog.Duration("pause", dPause),
 		slog.Duration("snapshot", dSnapshot),
-		// The tars run while the guest is paused, CONCURRENTLY with the CH
+		// The captures run while the guest is paused, CONCURRENTLY with the CH
 		// snapshot: the paused window costs max(snapshot, durable_dir,
-		// rootfs_upper), and the tar durations scale with the actor's data.
+		// rootfs_upper). rootfs_upper scales with the actor's data, and so does
+		// durable_dir unless the split arrangement is on, where it scales with
+		// the file count instead.
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
