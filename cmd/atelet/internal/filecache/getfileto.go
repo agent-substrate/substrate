@@ -53,6 +53,13 @@ const linkRetries = 3
 // the others; there is no negative caching, so after a failed fetch the
 // next call starts fresh.
 func (s *Store) GetFileTo(ctx context.Context, key Key, dst string, fetch FileFetcher) error {
+	return s.getTo(ctx, key, dst, fetch, s.linkOut)
+}
+
+// getTo is the read-through loop shared by GetFileTo and GetFileCopyTo:
+// serve a hit via out (link or copy), else run the singleflight fetch and
+// retry.
+func (s *Store) getTo(ctx context.Context, key Key, dst string, fetch FileFetcher, out func(Key, string) (bool, error)) error {
 	if key.isZero() {
 		return errors.New("filecache: zero Key (use a Key constructor)")
 	}
@@ -63,11 +70,11 @@ func (s *Store) GetFileTo(ctx context.Context, key Key, dst string, fetch FileFe
 		return errors.New("filecache: nil FileFetcher")
 	}
 	for attempt := 0; ; attempt++ {
-		linked, err := s.linkOut(key, dst)
+		served, err := out(key, dst)
 		if err != nil {
 			return err
 		}
-		if linked {
+		if served {
 			return nil
 		}
 		if attempt >= linkRetries {
