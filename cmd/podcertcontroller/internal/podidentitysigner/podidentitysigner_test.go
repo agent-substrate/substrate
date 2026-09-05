@@ -46,11 +46,11 @@ type fixedClock struct {
 func (c fixedClock) Now() time.Time                  { return c.now }
 func (c fixedClock) Since(t time.Time) time.Duration { return c.now.Sub(t) }
 
-// testNow is a whole-second instant so times survive the x509 encoding
-// round-trip (certificates carry 1s precision) and compare exactly. It must
-// stay near wall-clock time because GenerateED25519CA stamps CA validity
-// from time.Now().
-var testNow = time.Now().UTC().Truncate(time.Second)
+// clockAfter derives the test's "now" from the CA rather than time.Now(): an
+// instant sampled before the CA exists can land before its NotBefore.
+func clockAfter(ca *localca.CA) time.Time {
+	return ca.RootCertificate.NotBefore.UTC().Add(time.Minute)
+}
 
 // makePodAndPCR returns a pod and a matching PodCertificateRequest with no
 // key material set; callers fill in StubPKCS10Request.
@@ -213,6 +213,7 @@ func TestMakeCert(t *testing.T) {
 				t.Fatalf("while generating CA: %v", err)
 			}
 			caPool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
+			now := clockAfter(ca)
 
 			subjectPub, subjectPriv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
@@ -224,7 +225,7 @@ func TestMakeCert(t *testing.T) {
 			pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
 
 			kc := fake.NewSimpleClientset(pod, pcr)
-			impl := NewImpl(kc, caPool, fixedClock{now: testNow})
+			impl := NewImpl(kc, caPool, fixedClock{now: now})
 
 			if err := impl.MakeCert(context.Background(), pcr); err != nil {
 				t.Fatalf("MakeCert: %v", err)
@@ -254,7 +255,7 @@ func TestMakeCert(t *testing.T) {
 			roots.AddCert(ca.RootCertificate)
 			if _, err := leaf.Verify(x509.VerifyOptions{
 				Roots:       roots,
-				CurrentTime: testNow,
+				CurrentTime: now,
 				KeyUsages:   tc.wantEKUs,
 			}); err != nil {
 				t.Errorf("leaf does not verify against CA root: %v", err)
@@ -265,7 +266,7 @@ func TestMakeCert(t *testing.T) {
 				t.Errorf("leaf public key %v is not the subject key %v", leaf.PublicKey, subjectPub)
 			}
 
-			wantNotBefore := testNow.Add(-2 * time.Minute)
+			wantNotBefore := now.Add(-2 * time.Minute)
 			wantNotAfter := wantNotBefore.Add(tc.wantLifetime)
 			wantBeginRefreshAt := wantNotAfter.Add(-30 * time.Minute)
 			if !leaf.NotBefore.Equal(wantNotBefore) {
@@ -341,6 +342,7 @@ func TestMakeCertErrors(t *testing.T) {
 				t.Fatalf("while generating CA: %v", err)
 			}
 			caPool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
+			now := clockAfter(ca)
 
 			pod, pcr := makePodAndPCR("ate-system", "atelet-abcde", "atelet", 86400)
 			pod.ObjectMeta.UID = tc.podUID
@@ -362,7 +364,7 @@ func TestMakeCertErrors(t *testing.T) {
 					return true, nil, errors.New("injected update failure")
 				})
 			}
-			impl := NewImpl(kc, caPool, fixedClock{now: testNow})
+			impl := NewImpl(kc, caPool, fixedClock{now: now})
 
 			if err := impl.MakeCert(context.Background(), pcr); err == nil {
 				t.Fatalf("MakeCert: got nil error, want error")
@@ -389,7 +391,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		t.Fatalf("while generating CA 2: %v", err)
 	}
 	caPool := &localca.ConcretePool{CAs: []*localca.CA{ca1, ca2}}
-	impl := NewImpl(nil, caPool, fixedClock{now: testNow})
+	impl := NewImpl(nil, caPool, fixedClock{now: clockAfter(ca1)})
 
 	ctbs, err := impl.DesiredClusterTrustBundles()
 	if err != nil {
