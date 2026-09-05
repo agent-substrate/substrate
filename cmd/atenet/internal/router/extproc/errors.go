@@ -57,25 +57,34 @@ func WrapReqError(code envoy_type.StatusCode, cause error, format string, args .
 // ImmediateResponse tells the dataplane to answer the request itself, without
 // going upstream.
 func ImmediateResponse(statusCode envoy_type.StatusCode, message string) *extprocv3.ProcessingResponse {
+	headers := []*corev3.HeaderValueOption{
+		{
+			// Using RawValues instead of Value: newer versions of Envoy
+			// drop Value and use RawValue
+			Header: &corev3.HeaderValue{
+				Key:      "content-type",
+				RawValue: []byte("text/plain"),
+			},
+		},
+	}
+	if statusCode == envoy_type.StatusCode_ServiceUnavailable {
+		// 503s here are worth a quick retry (atelet churn, park budget spent)
+		// rather than a back-off.
+		headers = append(headers, &corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{
+				Key:      "retry-after",
+				RawValue: []byte("1"),
+			},
+		})
+	}
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ImmediateResponse{
 			ImmediateResponse: &extprocv3.ImmediateResponse{
 				Status: &envoy_type.HttpStatus{
 					Code: statusCode,
 				},
-				Body: []byte(message),
-				Headers: &extprocv3.HeaderMutation{
-					SetHeaders: []*corev3.HeaderValueOption{
-						{
-							// Using RawValues instead of Value: newer versions of Envoy
-							// drop Value and use RawValue
-							Header: &corev3.HeaderValue{
-								Key:      "content-type",
-								RawValue: []byte("text/plain"),
-							},
-						},
-					},
-				},
+				Body:    []byte(message),
+				Headers: &extprocv3.HeaderMutation{SetHeaders: headers},
 			},
 		},
 	}
