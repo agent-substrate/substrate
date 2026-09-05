@@ -942,6 +942,19 @@ func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 	}
 }
 
+// narrowRestoreSetToData rewrites rec so it contributes only durable data to
+// a DATA_ON_GOLDEN restore set. Unlike narrowFullCaptureToData, an absent
+// durable-dir tar is not an error: an actor that holds no durable data rides
+// the golden snapshot alone.
+func narrowRestoreSetToData(rec *sandboxAssetsRecord) {
+	if slices.Contains(rec.SnapshotFiles, ateompath.DurableDirTarFile) {
+		rec.SnapshotFiles = []string{ateompath.DurableDirTarFile}
+	} else {
+		rec.SnapshotFiles = nil
+	}
+	rec.Scope = ateattr.SnapshotScopeData
+}
+
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
 	if err := validateRestoreRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -1078,6 +1091,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if goldenRec.SandboxClass != sandboxRec.SandboxClass {
 			return nil, status.Errorf(codes.FailedPrecondition, "golden snapshot sandbox class %q does not match actor snapshot sandbox class %q", goldenRec.SandboxClass, sandboxRec.SandboxClass)
 		}
+		// The actor's half of a combined restore contributes only its durable
+		// data, but its snapshot may be a FULL capture (a repointed actor
+		// restores its commit snapshot on the new template's golden): its
+		// guest files would shadow the golden's in the combined set below, so
+		// narrow the actor's files to the durable data first.
+		narrowRestoreSetToData(sandboxRec)
 	}
 	dManifest = time.Since(tManifest)
 	manifestDone = true

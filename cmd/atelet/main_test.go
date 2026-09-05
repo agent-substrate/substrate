@@ -1114,6 +1114,50 @@ func TestGoldenOnlyFiles(t *testing.T) {
 	}
 }
 
+// TestNarrowRestoreSetToData verifies the actor half of a DataOnGolden
+// restore is reduced to its durable data: a FULL capture (a repointed actor's
+// commit snapshot) lists guest files that would otherwise shadow the golden's
+// in the combined set, and an actor with no durable data contributes nothing.
+func TestNarrowRestoreSetToData(t *testing.T) {
+	tests := []struct {
+		name      string
+		files     []string
+		scope     string
+		wantFiles []string
+	}{
+		{
+			name:      "full capture keeps only the durable tar",
+			files:     []string{"config.json", "state.json", "memory-ranges", ateompath.DurableDirTarFile},
+			scope:     ateattr.SnapshotScopeFull,
+			wantFiles: []string{ateompath.DurableDirTarFile},
+		},
+		{
+			name:      "data capture is unchanged",
+			files:     []string{ateompath.DurableDirTarFile},
+			scope:     ateattr.SnapshotScopeData,
+			wantFiles: []string{ateompath.DurableDirTarFile},
+		},
+		{
+			name:      "capture without durable data contributes nothing",
+			files:     []string{"config.json", "state.json", "memory-ranges"},
+			scope:     ateattr.SnapshotScopeFull,
+			wantFiles: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &sandboxAssetsRecord{SnapshotFiles: tc.files, Scope: tc.scope}
+			narrowRestoreSetToData(rec)
+			if diff := cmp.Diff(tc.wantFiles, rec.SnapshotFiles); diff != "" {
+				t.Errorf("SnapshotFiles diff (-want +got):\n%s", diff)
+			}
+			if rec.Scope != ateattr.SnapshotScopeData {
+				t.Errorf("Scope = %q, want %q", rec.Scope, ateattr.SnapshotScopeData)
+			}
+		})
+	}
+}
+
 func TestWrapFileSystemErrAttachesTerminalReason(t *testing.T) {
 	tests := []struct {
 		name         string
