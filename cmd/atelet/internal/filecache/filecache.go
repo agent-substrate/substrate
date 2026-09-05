@@ -34,6 +34,32 @@
 // dirs (an eviction that renamed but never removed); SweepDebris reaps both
 // and runs once at startup, before the store serves requests. Everything
 // under entries/ is a complete, published entry.
+//
+// # Contracts
+//
+// Consumers are protected from eviction by construction, never by luck:
+//
+//   - GetFileTo hard-links the cached file to the consumer's path in the
+//     same locked step that resolves the hit, so once it returns, the
+//     consumer's file is valid forever — evicting the entry later only
+//     removes the cache's own link. Eviction can cost the next caller a
+//     refetch, never break a served one.
+//   - GetFileCopyTo hands the consumer a private copy instead: the cached
+//     inode is never shared, so the consumer may mutate the result, and a
+//     copy in flight reads a held-open handle whose bytes outlive any
+//     concurrent eviction.
+//   - The store's min age (WithMinAge) vetoes eviction of entries younger
+//     than the worst-case window between publication and a consumer's use
+//     becoming visible; size it for the slowest consumer.
+//
+// Cached bytes are shared through links: entries are published read-only
+// (0444) so a consumer that tries to write through its hard link fails with
+// EACCES instead of corrupting the copy every later caller receives.
+// Callers that must mutate an artifact in place use GetFileCopyTo.
+//
+// Keys are identities, not addresses. The store never invalidates: a key
+// must name content that is immutable at its source (see URIKey), and a
+// changed artifact must arrive under a new key.
 package filecache
 
 import (
