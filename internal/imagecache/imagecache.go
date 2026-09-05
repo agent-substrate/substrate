@@ -95,6 +95,20 @@ const (
 	// layer size.
 	layerPullConcurrency = 4
 
+	// maxEnsureLayerFlights bounds how many layer flights one ensureLayer
+	// call enters; joining a retirement, or a pull cancelled by its own
+	// caller, sends it around again. Two flights cover a layer retired once
+	// under us: after the rename the dir is absent, retireLayer's pre-flight
+	// check turns later retirements away before they take the flight, and
+	// the next flight is ours to unpack in. The third covers a retirement
+	// whose rename failed — the dir stays with its old mtime, the kept
+	// record's refcounts are restored, and a later candidate image sharing
+	// the layer legitimately leads a second retire flight in the same
+	// eviction pass. Beyond that the call gives up rather than loop:
+	// singleflight has no fairness, so "retry until we lead" has no bound of
+	// its own.
+	maxEnsureLayerFlights = 3
+
 	// defaultPullTimeout is the default per-pull bound (see WithPullTimeout).
 	// Generous enough for multi-GiB images on a busy node.
 	defaultPullTimeout = 10 * time.Minute
@@ -517,7 +531,11 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 			return nil, fmt.Errorf("invalid diffID %q in image record for %s: %w", d, digest, err)
 		}
 		dir := s.layerDir(diffID)
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+		present, err := layerFSPresent(dir)
+		if err != nil {
+			return nil, fmt.Errorf("while checking layer %s of %s: %w", d, digest, err)
+		}
+		if !present {
 			return nil, nil
 		}
 		layerDirs[i] = dir
@@ -635,8 +653,12 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 	// naming a missing lowerdir. Ordered after the rewrite so even this
 	// failure path leaves the surviving layers referenced.
 	for _, dir := range layerDirs {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
-			return nil, fmt.Errorf("layer dir vanished during pull (evicted?): %w", err)
+		present, err := layerFSPresent(dir)
+		if err != nil {
+			return nil, fmt.Errorf("while re-verifying layer dirs after pull: %w", err)
+		}
+		if !present {
+			return nil, fmt.Errorf("layer dir %s vanished during pull (evicted?)", dir)
 		}
 	}
 
@@ -648,28 +670,98 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 	return &Image{Digest: digest, Config: cfgFile.Config, LayerDirs: layerDirs}, nil
 }
 
+// layerFSPresent reports whether a layer's unpacked tree is in the pool. A
+// stat error other than "not there" is returned rather than read as absence:
+// treating a transient EIO as a missing layer sends the caller down the
+// unpack path, which then fails at the commit rename when the healthy dir
+// turns out to still be there. retireLayer draws the same distinction.
+func layerFSPresent(dir string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // ensureLayer makes the unpacked tree for diffID present in the pool,
 // collapsing concurrent requests for the same layer across images.
+//
+// The layer singleflight is shared with retireLayer (the retire/reuse
+// interlock), so a Do here can join either kind of flight; the returned
+// flightOp says which. A joined ensure is the collapse working as designed —
+// one download shared by every waiter, success and failure alike, as it was
+// before eviction existed. Two joins settle nothing and send the call around
+// to lead a flight of its own: a retirement (whether it renamed the dir
+// away, vetoed, or failed, it did no ensure-work at all), and an ensure
+// whose leader was cancelled by its own caller — that private lifecycle says
+// nothing about the layer or the registry, unlike a real pull failure.
+//
+// Re-entry cannot livelock against eviction: retireLayer vetoes on the
+// symmetric join (see its !ran guard), so the two never trade the flight
+// indefinitely.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
-			// Refresh the dir mtime inside the flight: retireLayer re-checks
-			// the mtime in this same flight, so a layer reused here can
-			// never be renamed away between this stat and the image record
-			// that will re-reference it.
-			now := time.Now()
-			if err := os.Chtimes(dir, now, now); err != nil {
-				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+	// The error of the last cancelled leader joined; nil when the last
+	// unsettled join was a retirement.
+	var joinedCancel error
+	for i := 0; i < maxEnsureLayerFlights; i++ {
+		if i > 0 {
+			// Going around means leading another flight and possibly another
+			// unpack, which for a multi-GiB layer is worth refusing outright
+			// once the caller has given up.
+			if err := ctx.Err(); err != nil {
+				return "", err
 			}
-			return nil, nil
+			msg := "Layer flight joined an eviction retirement; retrying"
+			if joinedCancel != nil {
+				msg = "Layer flight joined a cancelled pull; retrying"
+			}
+			slog.InfoContext(ctx, msg, slog.String("diffid", diffID.String()))
 		}
-		return nil, s.unpackLayerToPool(ctx, diffID, layer)
-	})
-	if err != nil {
-		return "", err
+		ran := false
+		v, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
+			ran = true
+			present, err := layerFSPresent(dir)
+			if err != nil {
+				return opEnsure, err
+			}
+			if present {
+				// Refresh the dir mtime inside the flight: retireLayer re-checks
+				// the mtime in this same flight, so a layer reused here can
+				// never be renamed away between this stat and the image record
+				// that will re-reference it.
+				now := time.Now()
+				if err := os.Chtimes(dir, now, now); err != nil {
+					slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+				}
+				return opEnsure, nil
+			}
+			return opEnsure, s.unpackLayerToPool(ctx, diffID, layer)
+		})
+		// ran implies v == opEnsure (our closure returns nothing else); both
+		// are spelled out so a led flight is decided by err alone, never by
+		// the closure's return value.
+		if ran || v == opEnsure {
+			if err == nil {
+				return dir, nil
+			}
+			if !ran && ctx.Err() == nil &&
+				(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				joinedCancel = err
+				continue
+			}
+			return "", err
+		}
+		joinedCancel = nil
 	}
-	return dir, nil
+	if joinedCancel != nil {
+		// %v, not %w: wrapping the leader's context error would make this
+		// call itself look cancelled to a caller checking errors.Is.
+		return "", fmt.Errorf("layer %s: %d consecutive layer flights joined retirements or cancelled pulls (last: %v); giving up", diffID, maxEnsureLayerFlights, joinedCancel)
+	}
+	return "", fmt.Errorf("layer %s: joined an eviction retirement in %d consecutive layer flights; giving up", diffID, maxEnsureLayerFlights)
 }
 
 // unpackLayerToPool streams the layer (download → decompress → untar) into a
@@ -730,8 +822,9 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 
 	if err := os.Rename(tmp, s.layerDir(diffID)); err != nil {
 		// A concurrent unpack (another process sharing the pool) may have won;
-		// its layer is as good as ours.
-		if _, statErr := os.Stat(filepath.Join(s.layerDir(diffID), layerFSDirName)); statErr == nil {
+		// its layer is as good as ours. The rename error stays the one
+		// reported, so an inconclusive presence check falls through to it.
+		if present, _ := layerFSPresent(s.layerDir(diffID)); present {
 			return nil
 		}
 		return fmt.Errorf("while moving layer into pool: %w", err)
