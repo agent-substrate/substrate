@@ -22,8 +22,10 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -707,8 +709,9 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 
 			resumer := NewActorResumer(mock, withParking(cfg), withParkingLot(lot))
 			_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
-			if !errors.Is(err, errParkingLotFull) {
-				t.Fatalf("expected errParkingLotFull, got %v", err)
+			var reqErr *extproc.ReqError
+			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+				t.Fatalf("expected a 503 router-at-capacity denial, got %v", err)
 			}
 			if outcome != ResumeOutcomeNone {
 				t.Errorf("shed caller outcome = %q, want %q", outcome, ResumeOutcomeNone)
@@ -771,8 +774,9 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 			// A joiner attaching to the already-parked flight must take its own
 			// slot; the lot is full, so it is shed while the leader keeps waiting.
 			_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
-			if !errors.Is(err, errParkingLotFull) {
-				t.Fatalf("joiner: expected errParkingLotFull, got %v", err)
+			var reqErr *extproc.ReqError
+			if !errors.As(err, &reqErr) || reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+				t.Fatalf("joiner: expected a 503 router-at-capacity denial, got %v", err)
 			}
 			if outcome != ResumeOutcomeNone {
 				t.Errorf("joiner outcome = %q, want %q", outcome, ResumeOutcomeNone)

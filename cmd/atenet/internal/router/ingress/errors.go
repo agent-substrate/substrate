@@ -51,16 +51,10 @@ func statusDescription(err error) string {
 	return status.Convert(err).Message()
 }
 
-// errParkingLotFull is returned by ActorResumer.ResumeActor when a request
-// reached its park transition but the lot had no free slot. mapResumeError
-// turns it into the client-facing 503 "router at capacity" denial.
-var errParkingLotFull = errors.New("parking lot full")
-
 // parkingFullErr returns a 503 denial signaling that the router's parking lot
-// is at capacity, so the request was shed rather than parked. Clients should
-// retry. The cause is preserved for log inspection via Unwrap.
-func parkingFullErr(actorID string, cause error) error {
-	return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, cause,
+// is at capacity, so the request was shed without waiting. Clients should retry.
+func parkingFullErr(actorID string) error {
+	return extproc.NewReqError(envoy_type.StatusCode_ServiceUnavailable,
 		"actor %q unavailable: router at capacity", actorID)
 }
 
@@ -76,10 +70,9 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 		return nil
 	}
 
-	// A caller shed at its park transition because the lot was full: the
-	// resume itself did not fail, the router declined to hold the request.
-	if errors.Is(err, errParkingLotFull) {
-		return parkingFullErr(actorRef.String(), err)
+	var reqErr *extproc.ReqError
+	if errors.As(err, &reqErr) {
+		return err
 	}
 
 	re := &extproc.ReqError{Cause: err}

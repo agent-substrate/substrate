@@ -96,12 +96,10 @@ type ActorResumer struct {
 	// flights deduplicates concurrent resumes per actor, singleflight-style:
 	// the first caller creates the flight and later callers attach to it. An
 	// entry is removed the moment its flight completes.
-	flights map[string]*resumeFlight
+	flights map[string]*resumeActorFlight
 
-	// lot bounds how many callers may wait on parked flights at once. A slot
-	// is taken only at a flight's park transition — never for the fast path —
-	// so a saturated lot cannot starve requests to already-running actors
-	// (issue #1081). A nil lot admits everyone.
+	// lot bounds parked callers; a slot is taken at the park transition,
+	// never on the fast path (#1081). A nil lot admits everyone.
 	lot *parkingLot
 
 	// parkEnabled makes transient worker-pool saturation (FailedPrecondition)
@@ -139,7 +137,7 @@ func withParking(cfg ParkedRequestConfig) resumerOption {
 
 // withParkingLot bounds concurrent parked callers with lot. A caller acquires
 // a slot only at its flight's park transition; when the lot is full at that
-// moment the caller is shed with errParkingLotFull instead of waiting.
+// moment the caller is shed with a 503 instead of waiting.
 func withParkingLot(lot *parkingLot) resumerOption {
 	return func(r *ActorResumer) { r.lot = lot }
 }
@@ -147,7 +145,7 @@ func withParkingLot(lot *parkingLot) resumerOption {
 func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *ActorResumer {
 	r := &ActorResumer{
 		apiClient: apiClient,
-		flights:   make(map[string]*resumeFlight),
+		flights:   make(map[string]*resumeActorFlight),
 		budget:    failFastResumeBudget,
 		backoff: resumeBackoff(DefaultParkedRequestRetryInterval,
 			DefaultParkedRequestRetryFactor, DefaultParkedRequestRetryJitter),
@@ -180,11 +178,8 @@ func (r *ActorResumer) retryable(err error) bool {
 	}
 }
 
-// ResumeActor ensures the requested actor is running. It deduplicates concurrent
-// requests within the process and, when parking is enabled, holds the request
-// while retrying transient failures until the budget elapses. A caller occupies
-// a parking-lot slot only while its flight is actually parked; a resume that
-// resolves on the first attempt never touches the lot.
+// ResumeActor ensures the actor is running.
+// This method will block until the actor is resumed or error.
 func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, ResumeOutcome, error) {
 	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
@@ -204,39 +199,23 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 	r.mu.Lock()
 	f, ok := r.flights[key]
 	if !ok {
-		f = newResumeFlight()
+		f = newResumeActorFlight()
 		r.flights[key] = f
 		go r.runFlight(f, key, actorRef, reqID, callerSpanCtx)
 	}
 	r.mu.Unlock()
 
-	return r.awaitFlight(ctx, f, reqID)
+	return r.awaitFlight(ctx, f, actorRef, reqID)
 }
 
-// runFlight executes one shared resume for actorRef and publishes the outcome
-// to every caller attached to f. reqID identifies the caller that created the
-// flight (the cold-activation leader).
-func (r *ActorResumer) runFlight(f *resumeFlight, key string, actorRef resources.ActorRef, reqID uint64, callerSpanCtx trace.SpanContext) {
-	// We detach the context from the first caller using a fixed background budget.
-	// This guarantees that if Caller 1 disconnects or times out, the underlying
-	// resume operation continues running for Caller 2 and Caller 3 without failing.
-	// Only cancellation is detached; callerSpanCtx keeps the trace identity.
-	//
-	// The budget is therefore per-FLIGHT, not per-caller: its clock starts with
-	// the first caller, and later callers de-duplicated onto this flight share
-	// its remaining budget and outcome. A late joiner can see budget_exhausted
-	// after waiting far less than a full budget itself — the accepted cost of
-	// one control-plane RPC per hot actor (see docs/request-parking.md).
+// runFlight runs one shared resume for actorRef and publishes its outcome to
+// every attached caller. reqID identifies the caller that created the flight.
+func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef resources.ActorRef, reqID uint64, callerSpanCtx trace.SpanContext) {
+	// The budget is per flight, not per caller: it starts with the first caller
+	// and later joiners share what remains, so no caller's disconnect can abort
+	// the shared resume. Only cancellation is detached; the trace context is kept.
 	bgCtx, bgCancel := context.WithTimeout(trace.ContextWithSpanContext(context.Background(), callerSpanCtx), r.budget)
 	defer bgCancel()
-	// The budget bounds the RETRY LOOP only — it never cancels an
-	// in-flight ResumeActor. ateapi durably claims the worker and marks
-	// the actor RESUMING before the expensive snapshot restore begins,
-	// rolls back neither on cancellation, and nothing reclaims a RESUMING
-	// actor whose worker pod is alive — a budget cancel therefore throws
-	// the restore away and strands the worker (#675). An attempt still
-	// running when the budget elapses is waited for and its real result
-	// classified below; ateapi's own server-side RPC deadline bounds it.
 	attemptCtx := context.WithoutCancel(bgCtx)
 
 	backoff := r.backoff
@@ -254,7 +233,7 @@ func (r *ActorResumer) runFlight(f *resumeFlight, key string, actorRef resources
 		}
 
 		if r.retryable(err) {
-			f.park()
+			f.signalRetrying()
 			lastRetryErr = err // remember it in case the budget elapses
 			return false, nil  // park: retry until the budget elapses
 		}
@@ -273,20 +252,9 @@ func flightResult(bgCtx context.Context, resumeResp *ateapipb.ResumeActorRespons
 	case err == nil:
 		result.actor = resumeResp.GetActor()
 		result.resumed = resumeResp.GetResumed()
-	// If the budget elapsed while we were still blocked on a retryable
-	// condition, surface that underlying error rather than the generic
-	// wait/deadline error so the HTTP boundary maps it faithfully
-	// (e.g. 503 "no free workers available") instead of a misleading
-	// timeout. The wrapper marks the exhaustion explicitly for the
-	// parking wait-duration metric.
-	//
-	// wait.Interrupted covers the budget landing between retries; the
-	// bgCtx check covers an attempt that came back with a retryable
-	// error only after the budget had already elapsed (the loop then
-	// exits with the context error). The RPC itself is never canceled,
-	// so the loop cannot end before its first attempt has completed —
-	// lastRetryErr is always the attempt's real answer here, and a
-	// definitive error (NotFound, ...) still passes through untouched.
+	// Budget elapsed while still retryable (between retries, or a late retryable
+	// answer): surface the underlying error, marked as exhaustion for the metric,
+	// so the client sees the capacity 503 rather than a timeout.
 	case lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)):
 		result.err = &budgetExhaustedError{lastErr: lastRetryErr}
 	default:
@@ -297,23 +265,25 @@ func flightResult(bgCtx context.Context, resumeResp *ateapipb.ResumeActorRespons
 
 // awaitFlight waits for f's outcome on behalf of one caller. The wait is
 // two-phase: while the flight is resolving the caller holds nothing; once the
-// flight parks (or if it already has), the caller must hold a parking-lot slot
-// to keep waiting and is shed with errParkingLotFull when the lot is full.
-func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeFlight, reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
+// flight is retrying (or already was), the caller must hold a parking-lot slot
+// to keep waiting and is shed with a 503 when the lot is full.
+func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, actorRef resources.ActorRef, reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
 	select {
 	case <-ctx.Done():
 		// The caller's request context was canceled before the shared resume
 		// completed. Return early with ResumeOutcomeNone ("none").
 		return nil, ResumeOutcomeNone, ctx.Err()
 	case <-f.done:
-		// Fast path: the flight resolved without ever parking (or finished
-		// before this caller reacted to parking) — the lot is never touched.
+		// Fast path: the flight finished without ever retrying, or before this
+		// caller saw retrying. The lot is never touched.
 		return f.callerResult(reqID)
-	case <-f.parked:
+	case <-f.retrying:
+		// A closed channel is always ready, so a caller attaching after the
+		// flight began retrying lands here immediately.
 	}
 
-	// The flight parked. If its result raced in anyway, serve it without
-	// charging the lot.
+	// select picks randomly among ready cases, so retrying may have won even
+	// though done was ready too: serve a published result without charging the lot.
 	select {
 	case <-f.done:
 		return f.callerResult(reqID)
@@ -322,7 +292,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeFlight, reqID u
 
 	release, ok := r.enterLot(ctx)
 	if !ok {
-		return nil, ResumeOutcomeNone, errParkingLotFull
+		return nil, ResumeOutcomeNone, parkingFullErr(actorRef.String())
 	}
 	var finalErr error
 	defer func() { release(parkOutcomeFor(finalErr)) }()

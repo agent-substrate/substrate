@@ -20,48 +20,40 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// resumeFlight is one in-flight, per-actor resume that concurrent requests
-// share. It replaces a singleflight.Group entry so callers can observe the
-// flight mid-run: parked exposes the park transition, which singleflight's
-// result-only channel cannot. Its lifecycle is park (at most once, flight
-// goroutine only) followed by ActorResumer.publish (exactly once).
-type resumeFlight struct {
-	// parked is closed at most once, by park, at the flight's first retryable
-	// error — the moment the flight stops resolving and starts waiting. A
-	// caller woken by it (or attaching after it) must hold a parking-lot slot
-	// to keep waiting. Never closed on the fast path.
-	parked chan struct{}
-	// parkedSignaled guards the parked close. Only the flight goroutine calls
-	// park, so a plain bool suffices.
-	parkedSignaled bool
-	// done is closed exactly once, by publish, after result is written and the
-	// flight is deleted from the registry. The write-result-then-close order
-	// is what lets every caller read result without further synchronization;
-	// the delete-then-close order is what keeps a completed flight unjoinable
-	// (the next request for the actor starts a fresh flight).
-	done chan struct{}
-	// result is the shared outcome, written exactly once before done closes.
-	result *resumeCallResult
+// resumeActorFlight encapsulates a single per-actor resume that aggregates
+// multiple requests to avoid initiating separate RPCs in parallel for the
+// same Actor.
+//
+// There are two signals for the flight that callers can `select` on:
+//
+//   - retrying: closed when the flight is retrying. A caller should attempt to
+//     enter the parking lot in this state.
+//   - done: closed when the flight is finished and result is set.
+type resumeActorFlight struct {
+	retrying chan struct{}
+	// retryingSignaled guards the single close of retrying; only the flight
+	// goroutine touches it.
+	retryingSignaled bool
+	done             chan struct{}
+	result           *resumeCallResult
 }
 
-func newResumeFlight() *resumeFlight {
-	return &resumeFlight{parked: make(chan struct{}), done: make(chan struct{})}
+func newResumeActorFlight() *resumeActorFlight {
+	return &resumeActorFlight{retrying: make(chan struct{}), done: make(chan struct{})}
 }
 
-// park signals the flight's park transition: it stopped resolving and started
-// waiting, so from here on callers must hold parking-lot slots to keep
-// waiting. Idempotent; only the flight goroutine may call it.
-func (f *resumeFlight) park() {
-	if f.parkedSignaled {
+// signalRetrying is idempotent; only the flight goroutine calls it.
+func (f *resumeActorFlight) signalRetrying() {
+	if f.retryingSignaled {
 		return
 	}
-	f.parkedSignaled = true
-	close(f.parked)
+	f.retryingSignaled = true
+	close(f.retrying)
 }
 
 // callerResult classifies f's completed outcome for one caller. It must only
 // be called after f.done is closed.
-func (f *resumeFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
+func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
 	res := f.result
 	if res == nil {
 		return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
@@ -89,12 +81,10 @@ func (f *resumeFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeOutcom
 	return res.actor, outcome, nil
 }
 
-// publish completes f with result and makes it unjoinable. The order is
-// load-bearing: result before done (the channel close is what makes the write
-// visible to callers), and registry delete before done (so no caller can
-// attach to a completed flight — the next request for the actor starts a
-// fresh one, preserving forget-on-completion semantics).
-func (r *ActorResumer) publish(f *resumeFlight, key string, result *resumeCallResult) {
+// publish completes f. The order matters: result is written before done closes
+// so callers can read it without a lock, and the registry entry is deleted
+// before done closes so no caller can attach to a finished flight.
+func (r *ActorResumer) publish(f *resumeActorFlight, key string, result *resumeCallResult) {
 	f.result = result
 	r.mu.Lock()
 	delete(r.flights, key)

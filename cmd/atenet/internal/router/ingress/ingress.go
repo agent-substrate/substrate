@@ -65,8 +65,6 @@ type Handler struct {
 }
 
 func New(apiClient ateapipb.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
-	// The lot is shared: the resumer charges it at each caller's park
-	// transition; the handler keeps a reference only for the status page.
 	lot := newParkingLot(parkCfg, parkMetrics)
 	return &Handler{
 		resumer: NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot)),
@@ -112,11 +110,6 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		}
 	}
 
-	// The resumer parks the request if the actor's worker pool is momentarily
-	// saturated, retrying rather than failing fast. Parking-lot admission
-	// happens inside, at the park transition: a request resolved on the first
-	// attempt never occupies a slot, so a full lot sheds only requests that
-	// would actually wait — never traffic to already-running actors.
 	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
 	actor, resumeOutcome, err := h.resumer.ResumeActor(ctx, actorRef)
 	if err != nil {
