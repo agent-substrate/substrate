@@ -292,6 +292,80 @@ func TestWriteSystemInfoVolume_TrustBundle(t *testing.T) {
 	})
 }
 
+func TestSnapshotManifestCannotEscapeRestoreDir(t *testing.T) {
+	parent := t.TempDir()
+	restoreDir := filepath.Join(parent, "restore-state")
+	if err := os.Mkdir(restoreDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside")
+	if err := os.WriteFile(outside, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := json.Marshal(sandboxAssetsRecord{
+		SandboxClass:  "gvisor",
+		PauseImage:    testPauseImage,
+		SnapshotFiles: []string{"../outside"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := unmarshalSandboxRecord(manifest)
+	if err == nil {
+		// This is the next file-handling step in an external Restore. Before the
+		// manifest boundary rejected non-local paths, it truncated outside even
+		// when fetching the corresponding object subsequently failed.
+		s := &AteomHerder{gcsClient: fakeObjectStorage{err: errors.New("object not found")}}
+		_ = s.downloadExternalCheckpoint(context.Background(), "gs://bucket/root/snapshots/ate-demo/snap-1", restoreDir, rec.SnapshotFiles)
+	}
+	if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
+		t.Fatalf("unmarshalSandboxRecord() error = %v, want ReasonInvalidSandboxAsset", err)
+	}
+	if got, readErr := os.ReadFile(outside); readErr != nil || string(got) != "keep me" {
+		t.Fatalf("file outside restore dir = %q, %v; want unchanged", got, readErr)
+	}
+}
+
+func TestCheckpointResponseCannotEscapeCheckpointDir(t *testing.T) {
+	parent := t.TempDir()
+	checkpointDir := filepath.Join(parent, "checkpoint-state")
+	if err := os.Mkdir(checkpointDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "outside"), []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	files, validationErr := checkpointSnapshotFiles(&ateompb.CheckpointWorkloadResponse{
+		SnapshotFiles: []string{"../outside"},
+	}, true)
+	store := &recordingObjectStorage{}
+	if validationErr == nil {
+		uri, err := resources.ParseSnapshotURI("gs://bucket/root/snapshots/ate-demo/snap-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &AteomHerder{gcsClient: store}
+		if err := s.uploadSnapshot(context.Background(), uri, checkpointDir, &sandboxAssetsRecord{SnapshotFiles: files}, "test", "test"); err != nil {
+			t.Fatalf("uploadSnapshot() error = %v", err)
+		}
+	}
+	if validationErr == nil {
+		t.Fatal("checkpointSnapshotFiles() accepted a path outside the checkpoint directory")
+	}
+	if got := store.keys(); len(got) != 0 {
+		t.Fatalf("uploaded objects = %v, want none", got)
+	}
+}
+
+func TestCheckpointSnapshotFilesAllowsOptionalEmptyResult(t *testing.T) {
+	files, err := checkpointSnapshotFiles(&ateompb.CheckpointWorkloadResponse{}, false)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("checkpointSnapshotFiles() = %v, %v; want empty result", files, err)
+	}
+}
+
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "actor-id")

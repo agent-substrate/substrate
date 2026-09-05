@@ -654,9 +654,9 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
-	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
-	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
-		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), errors.New("ateom reported no snapshot files for checkpoint"))
+	sandboxRec.SnapshotFiles, err = checkpointSnapshotFiles(resp, shouldHaveSnapshots(req))
+	if err != nil {
+		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), err)
 	}
 	sandboxRec.Atespace = req.GetAtespace()
 	sandboxRec.ActorName = req.GetActorName()
@@ -708,6 +708,17 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func checkpointSnapshotFiles(resp *ateompb.CheckpointWorkloadResponse, required bool) ([]string, error) {
+	files := resp.GetSnapshotFiles()
+	if len(files) == 0 && required {
+		return nil, errors.New("ateom reported no snapshot files for checkpoint")
+	}
+	if err := validateSnapshotFiles(files); err != nil {
+		return nil, fmt.Errorf("ateom reported invalid snapshot files: %w", err)
+	}
+	return files, nil
 }
 
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
