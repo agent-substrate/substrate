@@ -1,7 +1,7 @@
 ---
 name: detect-flaky-tests
 description: >
-  Detects flaky Go tests by analyzing GitHub Actions workflow runs across the last 7 days
+  Detects flaky Go tests by analyzing GitHub Actions workflow runs across the last 14 days
   and all PRs — covering both the run-tests job (unit/integration) and the e2e-test job
   (gVisor and microVM lanes). For each newly-detected flaky test or infra issue, opens a
   GitHub issue with full evidence and a draft fix PR. Does not touch BigQuery, dashboards,
@@ -11,36 +11,53 @@ description: >
 # Detect Flaky Tests
 
 A test is **flaky** when it produces both PASS and FAIL outcomes across multiple independent
-CI runs in the last 7 days, with no code change to that test's package explaining the
+CI runs in the last 14 days, with no code change to that test's package explaining the
 inconsistency. Cross-PR analysis provides the strongest signal: if the same test fails on
 PR-A but passes on PR-B, that inconsistency is almost certainly non-determinism, not a
 legitimate regression.
 
 ## Flakiness threshold (keeps false-positive rate low)
 
-A test is flagged only when **all three** conditions hold in the 7-day window:
+A test is flagged only when **all three** conditions hold in the 14-day window:
 
 | Condition | Rationale |
 |---|---|
 | `fail_count >= 2` | One failure could be infra noise |
 | `pass_count >= 2` | One pass could be a pre-fix lucky run |
-| `0.05 < fail_rate < 0.95` | Outside this band it is either reliably broken or reliably passing |
+| `fail_rate < 0.95` | Above this the test is reliably broken, not flaky |
+
+Check when the test was added before computing a rate: the denominator is the runs in which
+the test could have failed, not every run in the window.
 
 ---
 
-## Step 1 — Collect workflow run IDs (last 7 days)
+## Step 1 — Collect workflow run IDs (last 14 days)
+
+Query one day at a time and merge. A filtered `runs` search returns at most 1000 results no
+matter how you paginate, and a fortnight here holds ~1280 — a single `created=>=` query
+silently drops the overflow.
 
 ```bash
-SINCE=$(date -u -v-7d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
-gh api --paginate \
-  "repos/agent-substrate/substrate/actions/workflows/pr-workflow.yaml/runs?status=completed&per_page=100&created=>=$SINCE" \
-  --jq '.workflow_runs[] | {id: .id, conclusion: .conclusion, head_sha: .head_sha, created_at: .created_at}'
+for d in $(seq 0 13); do
+  DAY=$(date -u -v-${d}d +%Y-%m-%d 2>/dev/null || date -u -d "$d days ago" +%Y-%m-%d)
+  gh api --paginate \
+    "repos/agent-substrate/substrate/actions/workflows/pr-workflow.yaml/runs?status=completed&per_page=100&created=$DAY" \
+    --jq '.workflow_runs[] | {id, conclusion, head_sha, created_at, run_attempt}'
+done
 ```
 
-`--paginate` is required: a typical week has several hundred completed runs (600+ as of
-August 2026), far more than one page of 100.
+Deduplicate by run id. Process both successful and failed runs — both contain test output.
 
-Collect all run IDs. Process both successful and failed runs — both contain test output.
+**Walk earlier attempts too.** A flake passes on re-run by definition, so its failing attempt
+sits inside a run whose final conclusion is `success`. `jobs?filter=all` returns the jobs of
+every attempt in one call; group them by `run_attempt`:
+
+```bash
+gh api "repos/agent-substrate/substrate/actions/runs/<RUN_ID>/jobs?filter=all&per_page=100" \
+  --jq '.jobs[] | {id: .id, name: .name, conclusion: .conclusion, attempt: .run_attempt}'
+```
+
+`actions/jobs/<JOB_ID>/logs` serves a superseded attempt's log.
 
 ---
 
@@ -72,12 +89,24 @@ no microVM results for that run rather than counting them as failures.
 
 Parse `go test -v` output from each log:
 ```bash
-grep -E '^--- (PASS|FAIL): ' /tmp/job_<JOB_ID>.log \
-  | awk '{print $2, $3}' | sed 's/://'
+sed 's/^[^ ]* //' /tmp/job_<JOB_ID>.log \
+  | grep -aE '^--- (PASS|FAIL): ' | awk '{print $2, $3}' | sed 's/://'
+```
+
+Strip the timestamp before anchoring: `actions/jobs/<ID>/logs` prefixes every line with one,
+so `^---` on the raw log matches nothing, while an unanchored match also counts the indented
+`    --- FAIL: TestFoo/sub` subtest lines and double-counts a failure. `-a` covers locally
+captured `go test` output, which carries bytes `grep` reads as binary and then refuses to print.
+
+```
+2026-08-24T12:57:04.6046796Z --- FAIL: TestImageVolume (33.47s)
 ```
 
 Track results per (test_name, job_type) where job_type is one of:
 `unit`, `e2e-gvisor`, `e2e-microvm`.
+
+Record how many PASS/FAIL lines each lane yielded. A lane that parsed zero — suite never ran,
+or parse broke — is indistinguishable from a lane with no failures unless that count travels.
 
 ---
 
@@ -101,6 +130,11 @@ A job log is an **infra failure** (not a test failure) when it contains ANY of:
 | Network/DNS failure in setup | `dial tcp: lookup`, `connection refused` during setup steps (not inside a test) |
 | No test output at all | Log ends before any `--- PASS` or `--- FAIL` line appears |
 | Setup step non-zero exit | A step before the `go test` or `hack/run-e2e-kind.sh` command fails |
+
+Match these patterns from the start of the job up to the first root-cause failure, and stop
+there: an e2e job dumps every pod's diagnostics afterwards, and errors from that dump outvote
+the real one — this is why `ci-failure-analysis.py` reads run `31727330652` as
+`no_free_workers` when its first error was a MintCert `PermissionDenied`.
 
 **Critical rule:** If a job log contains `--- FAIL: TestFoo` AND infra error patterns, you
 must determine which came first chronologically. If the infra error appears before the first
@@ -127,6 +161,12 @@ Collect infra failures separately:
 
 An infra pattern that appears in ≥2 runs warrants a GitHub issue (Step 5b).
 
+**A run can be an environment incident without matching any pattern above.** Suspect one when
+failures span packages that share no fixture — but a change to shared production code does
+that too, so require corroboration before excluding the run: a re-run at the same SHA that
+goes green, or a system-level error in the job. In `32417243258`, 21 tests failed together
+across a package backed by in-memory fakes and one backed by a real apiserver.
+
 ---
 
 ## Step 4 — Aggregate test flakiness across runs
@@ -139,7 +179,12 @@ Using only the runs NOT classified as infra failures, build a per-test table:
 **Treat each lane independently.** A test that is flaky only in `e2e-gvisor` is still
 flagged — it does not need to be flaky in `e2e-microvm` too.
 
-Apply the threshold: `fail_count >= 2 AND pass_count >= 2 AND 0.05 < fail_rate < 0.95`.
+Apply the threshold: `fail_count >= 2 AND pass_count >= 2 AND fail_rate < 0.95`.
+
+**Then sub-group by failure signature** — the first failing assertion, or the first erroring
+RPC and its status. One test name is not one defect: 26 failures of one test here split into
+three unrelated causes, and a fix for the largest group left the other two failing. Carry the
+breakdown into the issue so a fix can say which group it closes.
 
 ---
 
@@ -169,7 +214,7 @@ gh issue create \
 **Test:** `<TEST_NAME>`
 **Job:** `<e2e-gvisor | e2e-microvm | unit>`
 
-### Evidence (last 7 days)
+### Evidence (last 14 days)
 
 | Metric | Value |
 |---|---|
@@ -178,6 +223,13 @@ gh issue create \
 | Passes | <PASS_COUNT> |
 | Flake rate | <FLAKE_RATE>% |
 | Infra-failure runs excluded | <INFRA_EXCLUDED> |
+
+### Failure signatures
+
+| Signature (first failing assertion or erroring RPC) | Count |
+|---|---|
+| <SIGNATURE_1> | <N> |
+| <SIGNATURE_2> | <N> |
 
 ### Failing run examples
 <links to 2-3 failing runs>
@@ -225,7 +277,7 @@ gh issue create \
 
 | Metric | Value |
 |---|---|
-| Occurrences in last 7 days | <COUNT> |
+| Occurrences in last 14 days | <COUNT> |
 | Example runs | <links> |
 
 ### Impact
@@ -246,8 +298,17 @@ BODY
 
 ## Step 6 — Open a draft fix PR for each new flaky test
 
+Not every flake has an in-repo fix. When the root cause sits in a dependency, record the
+upstream issue on the flaky-test issue and open no PR: two flake clusters here resolve to
+[gvisor#14147](https://github.com/google/gvisor/pull/14147) and
+[kind#4215](https://github.com/kubernetes-sigs/kind/issues/4215).
+
 Read the test source file. Diagnose the likely cause using the patterns below (unit tests
-and e2e tests share most root causes, but e2e has additional patterns):
+and e2e tests share most root causes, but e2e has additional patterns).
+
+Read the code that produces the failure message before treating the message as evidence: a
+test that closes a response body inside its retry loop and reads it after reports an empty
+body on every failure, which says nothing about what the server actually returned.
 
 ### Common Go flakiness patterns and fixes
 
@@ -263,12 +324,14 @@ and e2e tests share most root causes, but e2e has additional patterns):
 | **E2E: actor/pod not ready** | Test proceeds before actor reaches Running state | Poll with `require.Eventually` on status, increase timeout with justification |
 | **E2E: resource cleanup race** | Prior test's namespace/actor not fully deleted before next test | Add explicit `WaitForDeletion` in `t.Cleanup` |
 | **E2E: network policy timing** | Policy applied but not yet enforced at assertion time | Retry the connectivity check, not just the policy application |
+| **E2E: cluster-scoped object deleted by one test** | A suite passes while a *concurrent* one fails on a missing shared object ([#1158](https://github.com/agent-substrate/substrate/issues/1158)) | `t.Cleanup` is scoped to one test, the object is not. Remove the sharing rather than extending the object's lifetime |
 
 Steps for the fix PR:
 
 1. Create a branch: `fix/flaky-<test-name-kebab>` from `main`
 2. Apply the fix
-3. Commit: `fix(tests): resolve flakiness in <TestName>\n\nFixes #<issue_number>`
+3. Commit: `fix(tests): resolve flakiness in <TestName>`, body saying what was
+   non-deterministic. **No `#<issue>` in the commit message** — `AGENTS.md` forbids it
 4. Open a **draft** PR:
 
 ```bash
@@ -277,6 +340,8 @@ gh pr create \
   --title "fix(tests): resolve flakiness in <TestName>" \
   --draft \
   --body "$(cat <<'BODY'
+Fixes #<issue_number>
+
 ## Summary
 
 Fixes the flaky test `<TestName>` in `<package>` (`<job_type>` lane).
@@ -284,11 +349,9 @@ Fixes the flaky test `<TestName>` in `<package>` (`<job_type>` lane).
 **Root cause:** <one sentence>
 **Fix:** <one sentence>
 
-Closes #<issue_number>
-
 ## Evidence
 
-Flake rate over last 7 days: <FLAKE_RATE>% (<FAIL_COUNT> fail / <PASS_COUNT> pass)
+Flake rate over last 14 days: <FLAKE_RATE>% (<FAIL_COUNT> fail / <PASS_COUNT> pass)
 Infra-failure runs excluded from count: <INFRA_EXCLUDED>
 
 Failing runs: <links>
@@ -296,8 +359,16 @@ Passing runs: <links>
 
 ## Test plan
 
-- [ ] Run `go test -race -count=10 ./path/to/package/...` locally for unit tests
-- [ ] For e2e: re-run the affected suite 3+ times against a kind cluster
+- [ ] `go test -race -count=10 ./path/to/package/...` for unit tests
+- [ ] For e2e, run the suites the way CI does (`go test ./...`, packages concurrent) — a
+      cross-suite flake cannot reproduce in a single package. Refresh an idle cluster first
+- [ ] Mutation check: revert the fix, confirm the test fails, restore it
+- [ ] Repetition count justified against the measured rate: `(1-p)^n`
+
+---
+
+- [ ] Tests pass
+- [ ] Appropriate changes to documentation are included in the PR
 BODY
 )"
 ```
