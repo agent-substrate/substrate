@@ -155,12 +155,15 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if got := tagToUpdate.GetStatus().GetInProgressSnapshotUri(); got != "" {
 		t.Fatalf("Tag %s in-progress snapshot uri = %q, want it cleared", tagRef.GetName(), got)
 	}
-	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
-	if err != nil {
-		t.Fatalf("failed to list Tags: %v", err)
-	}
+	tags := listAllPages(t, func(token string) ([]*ateapipb.Tag, string) {
+		resp, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace, PageToken: token})
+		if err != nil {
+			t.Fatalf("failed to list Tags: %v", err)
+		}
+		return resp.GetTags(), resp.GetNextPageToken()
+	})
 	found := false
-	for _, candidate := range listed.GetTags() {
+	for _, candidate := range tags {
 		if candidate.GetMetadata().GetName() == tagRef.GetName() {
 			found = true
 			break
@@ -725,13 +728,16 @@ func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 		})
 	}()
 
-	listResp, err := clients.SubstrateAPI.ListActors(ctx, &ateapipb.ListActorsRequest{Atespace: demoAtespace})
-	if err != nil {
-		t.Fatalf("ListActors RPC failed: %v", err)
-	}
+	actors := listAllPages(t, func(token string) ([]*ateapipb.Actor, string) {
+		resp, err := clients.SubstrateAPI.ListActors(ctx, &ateapipb.ListActorsRequest{Atespace: demoAtespace, PageToken: token})
+		if err != nil {
+			t.Fatalf("ListActors RPC failed: %v", err)
+		}
+		return resp.GetActors(), resp.GetNextPageToken()
+	})
 
 	var myActors []*ateapipb.Actor
-	for _, actor := range listResp.GetActors() {
+	for _, actor := range actors {
 		if actor.GetActorTemplate().GetName() == at.GetMetadata().GetName() && actor.GetMetadata().GetName() == actorName {
 			myActors = append(myActors, actor)
 		}
@@ -754,7 +760,7 @@ func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 	}
 
 	t.Logf("Successfully queried Substrate API. Found %d active actors total, %d from our template %s.",
-		len(listResp.GetActors()), len(myActors), at.GetMetadata().GetName())
+		len(actors), len(myActors), at.GetMetadata().GetName())
 
 	return nil
 }
@@ -1169,6 +1175,21 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {
 	_, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, name, metav1.GetOptions{})
 	return err == nil
+}
+
+// listAllPages drains every page: results are ordered by name, so a
+// just-created resource can land on any page.
+func listAllPages[T any](t *testing.T, page func(token string) ([]T, string)) []T {
+	t.Helper()
+	var all []T
+	for token := ""; ; {
+		items, next := page(token)
+		all = append(all, items...)
+		if next == "" {
+			return all
+		}
+		token = next
+	}
 }
 
 func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState) {
