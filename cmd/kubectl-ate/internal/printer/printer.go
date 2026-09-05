@@ -74,7 +74,7 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 		return printProto(out, &ateapipb.ListActorsResponse{Actors: actors}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATE\tATEOM POD\tATEOM IP\tVERSION\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATE\tWORKER POD\tWORKER IP\tVERSION\tAGE")
 		for _, actor := range actors {
 			atespace := actor.GetMetadata().GetAtespace()
 			name := actor.GetMetadata().GetName()

@@ -110,8 +110,8 @@ kubectl ate get workers -l <label-selector>
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
 | `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
-| `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
-| `ATEOM IP` | The pod IP of that worker. Empty while suspended. |
+| `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
+| `WORKER IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
 | `AGE` | Time elapsed since the actor was created. |
 
