@@ -634,9 +634,6 @@ message WorkerAssignment {
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
 message TagStatus {
-  reserved 3;
-  reserved "in_progress_snapshot_uri";
-
   // snapshot is the external snapshot this tag points at. Unset while the tag
   // is still being created, and immutable once set: a tag never moves between
   // snapshots. A tag is usable only once this is set.
@@ -648,15 +645,15 @@ message TagStatus {
   // seeded from a tag under the same template.
   string actor_template_uid = 2;
 
-  // source_actor_uid is the UID of the Actor this tag's snapshot was copied
-  // from.
-  string source_actor_uid = 4;
-
   // Immutable base storage location captured when the tag is reserved. Its
   // snapshot lives at <storage_location>/atespaces/<atespace>/tags/<tag_uid>.
   // Retained independently of the source actor and template so deleting an
   // unfinished tag can collect any partial copy after those resources are gone.
-  string storage_location = 5;
+  string storage_location = 3;
+
+  // source_actor_uid is the UID of the Actor this tag's snapshot was copied
+  // from.
+  string source_actor_uid = 4;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
