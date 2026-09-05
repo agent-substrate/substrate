@@ -95,6 +95,10 @@ type Store struct {
 	// re-check and retire rename, so an entry can never vanish between a
 	// hit's stat and its link. Uncontended except during an eviction pass.
 	hitMu sync.RWMutex
+
+	// evictMu serializes EvictUnused passes (concurrent passes would fight
+	// over the same candidates for no benefit).
+	evictMu sync.Mutex
 }
 
 // Option configures a Store.
