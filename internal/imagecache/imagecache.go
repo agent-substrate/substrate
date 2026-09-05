@@ -96,14 +96,17 @@ const (
 	layerPullConcurrency = 4
 
 	// maxEnsureLayerFlights bounds how many layer flights one ensureLayer
-	// call enters; only joining a retirement sends it around again. Two
-	// flights cover a layer retired once under us: after the rename the dir
-	// is absent, further retirements short-circuit before taking the flight,
-	// and the next flight is ours to unpack in. The third absorbs an
-	// overlapped eviction pass that pre-checked the dir before that rename
-	// landed and so still leads a (no-op) retire flight of its own. Beyond
-	// that the call gives up rather than loop: singleflight has no fairness,
-	// so "retry until we lead" has no bound of its own.
+	// call enters; joining a retirement, or a pull cancelled by its own
+	// caller, sends it around again. Two flights cover a layer retired once
+	// under us: after the rename the dir is absent, retireLayer's pre-flight
+	// check turns later retirements away before they take the flight, and
+	// the next flight is ours to unpack in. The third covers a retirement
+	// whose rename failed — the dir stays with its old mtime, the kept
+	// record's refcounts are restored, and a later candidate image sharing
+	// the layer legitimately leads a second retire flight in the same
+	// eviction pass. Beyond that the call gives up rather than loop:
+	// singleflight has no fairness, so "retry until we lead" has no bound of
+	// its own.
 	maxEnsureLayerFlights = 3
 
 	// defaultPullTimeout is the default per-pull bound (see WithPullTimeout).
@@ -689,18 +692,20 @@ func layerFSPresent(dir string) (bool, error) {
 // interlock), so a Do here can join either kind of flight; the returned
 // flightOp says which. A joined ensure is the collapse working as designed —
 // one download shared by every waiter, success and failure alike, as it was
-// before eviction existed. A joined retirement did no ensure-work at all:
-// whether it renamed the dir away, vetoed, or failed, nothing it reports
-// settles anything for a caller that wants the layer present, so the call
-// goes around and leads a flight of its own, which reuses the layer
-// (refreshing its mtime inside the flight) or unpacks it as the pool
-// dictates.
+// before eviction existed. Two joins settle nothing and send the call around
+// to lead a flight of its own: a retirement (whether it renamed the dir
+// away, vetoed, or failed, it did no ensure-work at all), and an ensure
+// whose leader was cancelled by its own caller — that private lifecycle says
+// nothing about the layer or the registry, unlike a real pull failure.
 //
 // Re-entry cannot livelock against eviction: retireLayer vetoes on the
 // symmetric join (see its !ran guard), so the two never trade the flight
 // indefinitely.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
+	// The error of the last cancelled leader joined; nil when the last
+	// unsettled join was a retirement.
+	var joinedCancel error
 	for i := 0; i < maxEnsureLayerFlights; i++ {
 		if i > 0 {
 			// Going around means leading another flight and possibly another
@@ -709,8 +714,11 @@ func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer)
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
-			slog.InfoContext(ctx, "Layer flight joined an eviction retirement; retrying",
-				slog.String("diffid", diffID.String()))
+			msg := "Layer flight joined an eviction retirement; retrying"
+			if joinedCancel != nil {
+				msg = "Layer flight joined a cancelled pull; retrying"
+			}
+			slog.InfoContext(ctx, msg, slog.String("diffid", diffID.String()))
 		}
 		ran := false
 		v, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
@@ -732,12 +740,26 @@ func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer)
 			}
 			return opEnsure, s.unpackLayerToPool(ctx, diffID, layer)
 		})
+		// ran implies v == opEnsure (our closure returns nothing else); both
+		// are spelled out so a led flight is decided by err alone, never by
+		// the closure's return value.
 		if ran || v == opEnsure {
-			if err != nil {
-				return "", err
+			if err == nil {
+				return dir, nil
 			}
-			return dir, nil
+			if !ran && ctx.Err() == nil &&
+				(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				joinedCancel = err
+				continue
+			}
+			return "", err
 		}
+		joinedCancel = nil
+	}
+	if joinedCancel != nil {
+		// %v, not %w: wrapping the leader's context error would make this
+		// call itself look cancelled to a caller checking errors.Is.
+		return "", fmt.Errorf("layer %s: %d consecutive layer flights joined retirements or cancelled pulls (last: %v); giving up", diffID, maxEnsureLayerFlights, joinedCancel)
 	}
 	return "", fmt.Errorf("layer %s: joined an eviction retirement in %d consecutive layer flights; giving up", diffID, maxEnsureLayerFlights)
 }

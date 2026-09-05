@@ -104,8 +104,10 @@ func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus,
 	// Pre-flight, outside the singleflight: a missing dir or a fresh mtime
 	// means nothing to do, and no reason to enter the flight and block
 	// behind an in-progress download. Both checks are re-run inside the
-	// flight before the rename, so this is a fast path, not the
-	// correctness path.
+	// flight before the rename, so retirement stays correct without this —
+	// but the absent-dir return is load-bearing for maxEnsureLayerFlights,
+	// which counts on retired layers producing no further retire flights
+	// for a re-entering ensureLayer to join.
 	fi, err := os.Stat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", retireGone, nil

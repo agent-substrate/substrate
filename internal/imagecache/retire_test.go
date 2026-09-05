@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -336,6 +337,32 @@ func TestEnsureLayerJoiningFailedEnsureSharesError(t *testing.T) {
 	_, err := ensureLayerWhileHeld(t, store, diffID, layer, release)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ensureLayer = %v, want the joined ensure flight's error %v", err, wantErr)
+	}
+}
+
+// A cancelled leader is the exception to shared ensure failure: its private
+// lifecycle says nothing about the layer or the registry, so a joiner with
+// a live context of its own must lead a fresh flight rather than fail its
+// whole image with someone else's cancellation.
+func TestEnsureLayerJoiningCancelledEnsureRetries(t *testing.T) {
+	_, host := newTestRegistry(t)
+	store := newTestStore(t)
+	// The dir vanishing with the leader's context error models a pull whose
+	// caller gave up mid-download.
+	layer, diffID, _, release := joinLayerFlight(t, store, host+"/test/join-cancelled:latest", opEnsure,
+		func(dir string) error {
+			if err := os.RemoveAll(dir); err != nil {
+				return err
+			}
+			return fmt.Errorf("while unpacking layer: %w", context.Canceled)
+		})
+
+	got, err := ensureLayerWhileHeld(t, store, diffID, layer, release)
+	if err != nil {
+		t.Fatalf("ensureLayer inherited the leader's cancellation: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(got, layerFSDirName)); err != nil {
+		t.Fatalf("retried flight left no layer tree: %v", err)
 	}
 }
 
