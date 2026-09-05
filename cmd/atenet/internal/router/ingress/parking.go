@@ -135,13 +135,10 @@ func DefaultParkedRequestConfig() ParkedRequestConfig {
 	}
 }
 
-// parkingLot is a bounded, non-blocking admission gate for parked requests.
-// A caller enters at its resume flight's park transition — the first
-// retryable failure — and holds the slot for the rest of its wait; requests
-// resolved on the flight's first attempt never enter, so a saturated lot
-// cannot starve traffic to already-running actors (issue #1081). When the lot
-// is full, callers reaching their park transition are shed immediately so the
-// router applies backpressure instead of accumulating waiters without bound.
+// parkingLot is a bounded, non-blocking admission gate for resume-gated
+// requests. A parked request holds a slot until its wait ends; when the lot is
+// full further requests are shed immediately so the router applies
+// backpressure instead of accumulating waiters without bound.
 //
 // With parking disabled (Max <= 0) enter always admits and performs no
 // accounting, applying the router's fail-fast behavior.
@@ -157,12 +154,12 @@ func newParkingLot(cfg ParkedRequestConfig, m *ParkingMetrics) *parkingLot {
 	return &parkingLot{cfg: cfg, metrics: m}
 }
 
-// enter reserves a parking slot for a caller whose resume flight just parked.
-// On success it returns a release func and ok=true; the caller MUST invoke
-// release exactly once (passing the request outcome, e.g. parkOutcomeServed)
-// when its wait ends. ok=false means the lot is full and the request should
-// be shed without waiting further. When parking is disabled every request is
-// admitted and no slot accounting or metrics are recorded.
+// enter attempts to reserve a parking slot. On success it returns a release
+// func and ok=true; the caller MUST invoke release exactly once (passing the
+// request outcome, e.g. parkOutcomeServed) when the resume attempt completes.
+// ok=false means the lot is full and the request should be shed without
+// waiting. When parking is disabled every request is admitted and no slot
+// accounting or metrics are recorded.
 func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcome), ok bool) {
 	if !l.cfg.Enabled() {
 		return func(parkOutcome) {}, true
