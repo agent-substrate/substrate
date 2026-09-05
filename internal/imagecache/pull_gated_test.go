@@ -265,10 +265,10 @@ func TestProgressTouchKeepsSlowPullRecordFresh(t *testing.T) {
 	}
 }
 
-// A layer dir yanked mid-pull despite everything must fail the pull
-// cleanly — a retryable error — rather than returning LayerDirs that point
-// at nothing.
-func TestPullReverifyFailsCleanlyOnYankedLayer(t *testing.T) {
+// A layer dir yanked mid-pull despite everything must never surface as
+// LayerDirs that point at nothing: the re-verify catches the hole and the
+// pull unpacks the missing layer again before returning.
+func TestPullReverifyRepullsYankedLayer(t *testing.T) {
 	reg := newGatedRegistry(t)
 	free, gatedLayer, _ := gatedTestLayers(t)
 	ref := reg.host + "/test/yank:latest"
@@ -278,8 +278,10 @@ func TestPullReverifyFailsCleanlyOnYankedLayer(t *testing.T) {
 	release := reg.gate(t, gatedLayer)
 
 	done := make(chan error, 1)
+	var img *Image
 	go func() {
-		_, err := store.EnsureImage(context.Background(), ref)
+		var err error
+		img, err = store.EnsureImage(context.Background(), ref)
 		done <- err
 	}()
 
@@ -295,12 +297,18 @@ func TestPullReverifyFailsCleanlyOnYankedLayer(t *testing.T) {
 	}
 
 	release()
-	err := <-done
-	if err == nil {
-		t.Fatal("EnsureImage returned success with a yanked layer dir")
+	if err := <-done; err != nil {
+		t.Fatalf("EnsureImage did not recover from the yanked layer: %v", err)
 	}
-	if !strings.Contains(err.Error(), "vanished during pull") {
-		t.Errorf("expected the re-verify error, got: %v", err)
+	// Success must mean the yanked layer was actually unpacked again — every
+	// returned dir is live, including the one removed mid-pull.
+	if _, err := os.Stat(filepath.Join(freeDir, layerFSDirName)); err != nil {
+		t.Errorf("yanked layer not re-unpacked: %v", err)
+	}
+	for _, dir := range img.LayerDirs {
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+			t.Errorf("returned layer dir not on disk: %v", err)
+		}
 	}
 }
 

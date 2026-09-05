@@ -586,58 +586,78 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 		}
 	}
 
+	// An eviction pass can legitimately win the window between ensureLayer's
+	// mtime refresh and the record rewrite below: its cutoff may postdate the
+	// refresh, letting retireLayer rename a just-reused dir before the rewrite
+	// re-references it. When the re-verify catches that, loop back and unpack
+	// the missing layers again. One extra attempt suffices — the pass that
+	// won listed its candidates before this rewrite, so it cannot retire the
+	// re-unpacked dirs, and any later pass sees them referenced.
+	const maxUnpackAttempts = 2
 	layerDirs := make([]string, len(layers))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(layerPullConcurrency)
-	for i, layer := range layers {
-		g.Go(func() error {
-			diffID, err := layer.DiffID()
-			if err != nil {
-				return fmt.Errorf("while reading layer diffID: %w", err)
-			}
-			if diffID.String() != diffIDs[i] {
-				// The record must reference exactly what lands on disk.
-				return fmt.Errorf("layer %d diffID %s does not match config rootfs diffID %s", i, diffID, diffIDs[i])
-			}
-			dir, err := s.ensureLayer(gctx, diffID, layer)
-			if err != nil {
-				return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
-			}
-			layerDirs[i] = dir
-			// Each completed layer refreshes the record's mtime: a pull
-			// making progress stays fresh indefinitely; a wedged one ages
-			// into ordinary LRU eviction. The twin is not touched — the
-			// primary keeps the layers referenced, and the final rewrite
-			// recreates the twin if it ages out mid-pull.
-			s.touchRecord(digest)
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	// Rewrite the record: eviction may legitimately remove it mid-pull
-	// (no progress for min-age reads as wedged), and success must never
-	// leave the just-unpacked layers unreferenced.
-	if err := s.writeRecord(digest, rec); err != nil {
-		return nil, fmt.Errorf("while rewriting image record after unpack: %w", err)
-	}
-	if actualDigest != nil {
-		if err := s.writeRecord(*actualDigest, rec); err != nil {
-			slog.WarnContext(ctx, "Failed to rewrite platform manifest record after unpack",
-				slog.String("digest", actualDigest.String()), slog.Any("err", err))
+	for attempt := 1; ; attempt++ {
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(layerPullConcurrency)
+		for i, layer := range layers {
+			g.Go(func() error {
+				diffID, err := layer.DiffID()
+				if err != nil {
+					return fmt.Errorf("while reading layer diffID: %w", err)
+				}
+				if diffID.String() != diffIDs[i] {
+					// The record must reference exactly what lands on disk.
+					return fmt.Errorf("layer %d diffID %s does not match config rootfs diffID %s", i, diffID, diffIDs[i])
+				}
+				dir, err := s.ensureLayer(gctx, diffID, layer)
+				if err != nil {
+					return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
+				}
+				layerDirs[i] = dir
+				// Each completed layer refreshes the record's mtime: a pull
+				// making progress stays fresh indefinitely; a wedged one ages
+				// into ordinary LRU eviction. The twin is not touched — the
+				// primary keeps the layers referenced, and the final rewrite
+				// recreates the twin if it ages out mid-pull.
+				s.touchRecord(digest)
+				return nil
+			})
 		}
-	}
-
-	// Never return LayerDirs that are not on disk right now: a vanished
-	// dir fails the pull into a clean RPC retry instead of a bundle spec
-	// naming a missing lowerdir. Ordered after the rewrite so even this
-	// failure path leaves the surviving layers referenced.
-	for _, dir := range layerDirs {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
-			return nil, fmt.Errorf("layer dir vanished during pull (evicted?): %w", err)
+		if err := g.Wait(); err != nil {
+			return nil, err
 		}
+
+		// Rewrite the record: eviction may legitimately remove it mid-pull
+		// (no progress for min-age reads as wedged), and success must never
+		// leave the just-unpacked layers unreferenced.
+		if err := s.writeRecord(digest, rec); err != nil {
+			return nil, fmt.Errorf("while rewriting image record after unpack: %w", err)
+		}
+		if actualDigest != nil {
+			if err := s.writeRecord(*actualDigest, rec); err != nil {
+				slog.WarnContext(ctx, "Failed to rewrite platform manifest record after unpack",
+					slog.String("digest", actualDigest.String()), slog.Any("err", err))
+			}
+		}
+
+		// Never return LayerDirs that are not on disk right now: a bundle
+		// spec must not name a missing lowerdir. Ordered after the rewrite so
+		// even the failure path leaves the surviving layers referenced.
+		var vanishedErr error
+		for _, dir := range layerDirs {
+			if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+				vanishedErr = err
+				break
+			}
+		}
+		if vanishedErr == nil {
+			break
+		}
+		if attempt == maxUnpackAttempts {
+			// Attempts exhausted: fail the pull into a clean RPC retry.
+			return nil, fmt.Errorf("layer dir vanished during pull (evicted?): %w", vanishedErr)
+		}
+		slog.InfoContext(ctx, "Layer dir evicted mid-pull; unpacking again",
+			slog.String("digest", digest.String()), slog.Any("err", vanishedErr))
 	}
 
 	slog.InfoContext(ctx, "Image pulled into layer cache",
