@@ -568,7 +568,16 @@ func recordSnapshotSize(ctx context.Context, file, path, templateAtespace, templ
 			slog.String("file", file), slog.String("path", path), slog.Any("err", err))
 		return
 	}
-	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
+	emitSnapshotSize(ctx, file, fi.Size(), templateAtespace, templateName)
+}
+
+// emitSnapshotSize is recordSnapshotSize for an image whose size is already
+// known — one generated straight into its upload, with no file to stat.
+func emitSnapshotSize(ctx context.Context, file string, size int64, templateAtespace, templateName string) {
+	if snapshotSizeBytes == nil {
+		return
+	}
+	snapshotSizeBytes.Record(ctx, size, metric.WithAttributes(
 		semconv.FileNameKey.String(file),
 		ateattr.TemplateAtespaceKey.String(templateAtespace),
 		ateattr.TemplateNameKey.String(templateName),
@@ -634,6 +643,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
 	}
 
+	// Decided before the call, because it changes what ateom writes.
+	streamDurableFrom := ""
+	if canStreamDurableDirTar(req, spec, sandboxRec) {
+		streamDurableFrom = ateompath.DurableDirVolumeMountsDir(actorUID)
+	}
+
 	tAteom := time.Now()
 	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
 		Atespace:              actorRef.Atespace,
@@ -645,6 +660,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              actorUID,
+		SkipDurableDirTar:     streamDurableFrom != "",
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
@@ -655,6 +671,15 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
+	if streamDurableFrom != "" {
+		// ateom lists what it wrote, and it deliberately did not write this one.
+		// The manifest still has to name it: it is an object of this snapshot
+		// like any other, and restore looks it up by name. Sorted because
+		// ateom's own list comes from a directory read, so this keeps the
+		// manifest identical to the one the staged path writes.
+		sandboxRec.SnapshotFiles = append(sandboxRec.SnapshotFiles, ateompath.DurableDirTarFile)
+		slices.Sort(sandboxRec.SnapshotFiles)
+	}
 	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), errors.New("ateom reported no snapshot files for checkpoint"))
 	}
@@ -682,7 +707,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec, streamDurableFrom); err != nil {
 			dPersist = time.Since(tPersist)
 			op.failedPhase = ateattr.SnapshotPhasePersist
 			return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), fmt.Errorf("%w: while uploading external snapshot: %w", ateerrors.ReasonFaileSaveSnapshot, err))
@@ -765,12 +790,49 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 	return false
 }
 
-func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
+// canStreamDurableDirTar reports whether this checkpoint may archive the
+// durable-dir volumes here, streaming straight into object storage, instead of
+// having ateom stage the archive on disk for us to read back.
+//
+// The staged path writes the whole archive, fsyncs it, and reads it again
+// before a single byte is uploaded, which at half a gibibyte costs more than
+// the upload itself. Streaming overlaps the two and touches no disk.
+//
+// The conditions are what make the two archives interchangeable:
+//
+//   - External checkpoints only. A local checkpoint's files stay on the node,
+//     so there is no upload to overlap the archive with, and moveLocalCheckpoint
+//     would find the file missing.
+//   - Micro-VM only. gVisor's archive drops the .gvisor.* files its runtime
+//     leaves in the durable dir, a rule that lives in ateom-gvisor; the
+//     archive written here would keep them.
+//   - A container must mount a durable-dir volume. This is deliberately the
+//     spec ateom is about to receive and deliberately the same predicate ateom
+//     applies to it (hasDurableVolumes), because the two decisions have to
+//     agree: disagreeing either loses the archive or invents one for a
+//     directory ateom would have left alone.
+func canStreamDurableDirTar(req *ateletpb.CheckpointRequest, spec *ateompb.WorkloadSpec, rec *sandboxAssetsRecord) bool {
+	return streamDurableTarEnabled() &&
+		req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL &&
+		atev1alpha1.SandboxClass(rec.SandboxClass) == atev1alpha1.SandboxClassMicroVM &&
+		hasDurableDirMounts(spec)
+}
+
+func hasDurableDirMounts(spec *ateompb.WorkloadSpec) bool {
+	for _, c := range spec.GetContainers() {
+		if len(c.GetDurableDirVolumeMounts()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord, streamDurableFrom string) error {
 	uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri())
 	if err != nil {
 		return err
 	}
-	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName(), streamDurableFrom)
 }
 
 // uploadSnapshot uploads rec's snapshot files from srcDir to uri (each
@@ -779,13 +841,35 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 // assume every file it lists is already present. A crash mid-upload thus
 // leaves only orphaned files, never a manifest pointing at files that never
 // landed; retries overwrite the deterministic object names.
-func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string) error {
+//
+// A non-empty streamDurableFrom names the durable-dir mounts directory to
+// archive on the fly in place of reading DurableDirTarFile out of srcDir, where
+// it was never written; see canStreamDurableDirTar.
+func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName, streamDurableFrom string) error {
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range rec.SnapshotFiles {
+		objectName := fileName + ".zstd"
+		if streamDurableFrom != "" && fileName == ateompath.DurableDirTarFile {
+			g.Go(func() error {
+				objectURI, err := uri.ObjectURI(objectName)
+				if err != nil {
+					return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
+				}
+				size, err := streamDurableDirTar(gCtx, streamDurableFrom, func(r io.Reader) error {
+					return ategcs.SendReaderToGCSWithZstd(gCtx, s.gcsClient, objectURI, r)
+				})
+				if err != nil {
+					return fmt.Errorf("while archiving %s to GCS: %w", fileName, err)
+				}
+				emitSnapshotSize(ctx, fileName, size, templateAtespace, templateName)
+				return nil
+			})
+			continue
+		}
 		local := filepath.Join(srcDir, fileName)
 		recordSnapshotSize(ctx, fileName, local, templateAtespace, templateName)
 		g.Go(func() error {
-			objectURI, err := uri.ObjectURI(fileName + ".zstd")
+			objectURI, err := uri.ObjectURI(objectName)
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
@@ -917,7 +1001,9 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		}
 	}
 
-	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+	// Never streamed: this uploads a checkpoint already staged on disk by an
+	// earlier pause, so there is nothing left to overlap.
+	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName(), "")
 }
 
 // narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA

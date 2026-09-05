@@ -18,6 +18,7 @@ package tarutil
 
 import (
 	"archive/tar"
+	"bytes"
 	"errors"
 	"net"
 	"os"
@@ -315,6 +316,64 @@ func TestCreateFilteredSkipsSubtree(t *testing.T) {
 		t.Errorf("skipped subtree app/work survived (stat err = %v), want absent", err)
 	}
 }
+
+// TestCreateToMatchesCreate pins the two entry points on one archive: callers
+// that stream the tar somewhere instead of staging it on disk must produce the
+// same bytes, or a snapshot taken one way would not restore like the other.
+func TestCreateToMatchesCreate(t *testing.T) {
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "vol", "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Larger than the pooled stream buffer, so the flush CreateTo owes its
+	// caller actually has something left to flush.
+	if err := os.WriteFile(filepath.Join(src, "vol", "big"), []byte(strings.Repeat("substrate", 1<<14)), 0o644); err != nil {
+		t.Fatalf("writing big: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "vol", "nested", "small"), []byte("hello"), 0o600); err != nil {
+		t.Fatalf("writing small: %v", err)
+	}
+	if err := os.Symlink("big", filepath.Join(src, "vol", "link")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	tarPath := filepath.Join(t.TempDir(), "staged.tar")
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	want, err := os.ReadFile(tarPath)
+	if err != nil {
+		t.Fatalf("reading staged tar: %v", err)
+	}
+
+	var got bytes.Buffer
+	if err := CreateTo(t.Context(), &got, src, nil); err != nil {
+		t.Fatalf("CreateTo: %v", err)
+	}
+	if !bytes.Equal(got.Bytes(), want) {
+		t.Errorf("CreateTo wrote %d bytes, Create wrote %d; archives differ", got.Len(), len(want))
+	}
+}
+
+// TestCreateToReportsWriterErrors checks a destination that stops accepting
+// bytes fails the archive rather than silently truncating it.
+func TestCreateToReportsWriterErrors(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte(strings.Repeat("x", 1<<20)), 0o644); err != nil {
+		t.Fatalf("writing f: %v", err)
+	}
+
+	sentinel := errors.New("destination closed")
+	err := CreateTo(t.Context(), errWriter{err: sentinel}, src, nil)
+	if !errors.Is(err, sentinel) {
+		t.Errorf("CreateTo err = %v, want it to carry %v", err, sentinel)
+	}
+}
+
+// errWriter fails every write, standing in for an upload that died mid-archive.
+type errWriter struct{ err error }
+
+func (w errWriter) Write([]byte) (int, error) { return 0, w.err }
 
 // TestRoundTripSpecialModeBits pins setuid/setgid/sticky across a round trip.
 // FileMode.Perm() silently drops them, so without this the archive would record

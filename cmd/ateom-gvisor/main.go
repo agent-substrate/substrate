@@ -735,6 +735,15 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // Allow checkpointing even if the pod is shutting down. This will allow actors
 // (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+	// Rejected rather than ignored, and before the sandbox is touched: honoring
+	// it means atelet archives the durable dir instead, and atelet does not know
+	// to drop the .gvisor.* files this runtime leaves there (see
+	// tarDurableVolumes). Silently archiving them anyway would restore one
+	// sandbox's internals into the next.
+	if req.GetSkipDurableDirTar() {
+		return nil, status.Error(codes.InvalidArgument, "skip_durable_dir_tar is not supported by the gVisor runtime")
+	}
+
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
