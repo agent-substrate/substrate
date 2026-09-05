@@ -17,6 +17,9 @@ on:
   pull_request:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   schedule:
     # Weekly run on the default branch keeps the micro-VM asset cache warm (GitHub
     # evicts caches idle for 7 days). The push-to-main run populates the cache that
