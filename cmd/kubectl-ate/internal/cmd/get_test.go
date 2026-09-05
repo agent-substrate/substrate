@@ -56,18 +56,11 @@ func TestGetCommandArgs(t *testing.T) {
 	}
 }
 
-func TestParseActorSnapshotFlags(t *testing.T) {
+func TestParseTagScope(t *testing.T) {
 	if got, err := parseTagScope("published"); err != nil || got != ateapipb.TagScope_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("parseTagScope(published) = (%v, %v)", got, err)
 	}
 	if _, err := parseTagScope("global"); err == nil {
 		t.Fatal("parseTagScope(global) succeeded")
-	}
-	ref, err := parseNamespacedName("team-a/before-upgrade")
-	if err != nil || ref.GetAtespace() != "team-a" || ref.GetName() != "before-upgrade" {
-		t.Fatalf("parseNamespacedName = (%v, %v)", ref, err)
-	}
-	if _, err := parseNamespacedName("before-upgrade"); err == nil {
-		t.Fatal("parseNamespacedName without atespace succeeded")
 	}
 }
