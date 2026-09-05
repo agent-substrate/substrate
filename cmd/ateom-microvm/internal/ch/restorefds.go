@@ -28,6 +28,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// memRestoreCopy is vm.restore's eager guest-RAM mode: read the snapshot's
+// populated extents up front, registering no userfaultfd. See RestoreWithNetFDs
+// for why it is the only mode we use.
+const memRestoreCopy = "Copy"
+
 // RestoredNet identifies one fd-backed network device in a snapshot and the
 // fresh tap FDs to back it with on restore. kata boots CH virtio-net devices
 // from tap FDs, so the snapshot's config requires net_fds on restore
@@ -85,26 +90,31 @@ func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*exec.Cmd, *Client, err
 // (the only way CH accepts net FDs on restore; mirrors ch-remote's
 // send_with_fds). The VM comes back paused; call Resume after.
 //
-// memMode selects guest-RAM restore: "" / "Copy" = eager copy (CH default), or
-// "OnDemand" = userfaultfd demand-paging. OnDemand keeps the (memfd-backed) guest
-// memory SPARSE — it only faults in the pages the guest touches, instead of eager
-// copy densifying the whole memfd — so a subsequent snapshot writes just the
-// working set (fast) instead of full RAM. Confirmed on CH v52: the REST
-// RestoreConfig accepts memory_restore_mode (enum Copy|OnDemand) alongside the
-// SCM_RIGHTS net_fds, so ondemand + fd-backed net DO compose over REST (an earlier
-// note claimed memory_restore_mode was CLI-only; that was a pre-v52 limitation).
-// NOTE: with OnDemand, CH demand-pages from the snapshot's memory file for the
-// VM's whole lifetime, so sourceDir must stay present until the actor is torn down.
-func (c *Client) RestoreWithNetFDs(ctx context.Context, sourceDir string, nets []RestoredNet, memMode string) error {
+// Guest RAM comes back by eager copy: every populated extent is read here, so
+// nothing pages from sourceDir afterwards and the snapshot the VM writes later
+// stands on its own.
+//
+// The alternative, memory_restore_mode=OnDemand, kept guest memory sparse (a tenth
+// of the idle footprint) but is unusable from CH v53: its userfaultfd handler
+// background-prefaults every registered page with no opt-out
+// (cloud-hypervisor#8150) and refuses vm.snapshot while that runs
+// (cloud-hypervisor#8556, fixing cloud-hypervisor#8525). The prefault storm starves
+// the guest past its readiness probe, so the actor never comes up.
+//
+// Copy is CH's default for an unset memory_restore_mode, but send it explicitly:
+// the default is a serde attribute on RestoreConfig, and CH has already changed
+// OnDemand's semantics under us once. A silent flip to OnDemand would take actors
+// down, so pin the wire value rather than inherit it.
+func (c *Client) RestoreWithNetFDs(ctx context.Context, sourceDir string, nets []RestoredNet) error {
 	type restoredNetConfig struct {
 		ID     string `json:"id"`
 		NumFDs int    `json:"num_fds"`
 	}
 	cfg := struct {
 		SourceURL         string              `json:"source_url"`
-		MemoryRestoreMode string              `json:"memory_restore_mode,omitempty"`
+		MemoryRestoreMode string              `json:"memory_restore_mode"`
 		NetFDs            []restoredNetConfig `json:"net_fds,omitempty"`
-	}{SourceURL: SnapshotURL(sourceDir), MemoryRestoreMode: memMode}
+	}{SourceURL: SnapshotURL(sourceDir), MemoryRestoreMode: memRestoreCopy}
 	var fds []int
 	for _, n := range nets {
 		cfg.NetFDs = append(cfg.NetFDs, restoredNetConfig{ID: n.ID, NumFDs: len(n.FDs)})
