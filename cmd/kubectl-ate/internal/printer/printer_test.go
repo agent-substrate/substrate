@@ -489,7 +489,7 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
-				InProgressSnapshotUri: "gs://private/atespaces/team-a/tags/9f1c",
+				StorageLocation: "gs://private",
 			},
 		},
 	}

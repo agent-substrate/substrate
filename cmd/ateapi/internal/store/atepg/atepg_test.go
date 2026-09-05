@@ -676,8 +676,8 @@ func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 	_, err := s.CreateTag(ctx, &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "latest"},
 		Status: &ateapipb.TagStatus{
-			InProgressSnapshotUri: "gs://bucket/atespaces/gone/tags/latest",
-			SourceActorUid:        actor.GetMetadata().GetUid(),
+			StorageLocation: "gs://bucket",
+			SourceActorUid:  actor.GetMetadata().GetUid(),
 		},
 	})
 	if !errors.Is(err, store.ErrFailedPrecondition) {

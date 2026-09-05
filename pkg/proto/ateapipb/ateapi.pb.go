@@ -1755,16 +1755,16 @@ type TagStatus struct {
 	// UID of the ActorTemplate the snapshot was taken under. Actors can only be
 	// seeded from a tag under the same template.
 	ActorTemplateUid string `protobuf:"bytes,2,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
-	// in_progress_snapshot_uri is where CreateTag is copying the tag's own
-	// snapshot to. It is minted before a single object is written and cleared
-	// once snapshot is set, so a tag left with it set names exactly the objects
-	// its unfinished create stranded, and deleting the tag collects them.
-	InProgressSnapshotUri string `protobuf:"bytes,3,opt,name=in_progress_snapshot_uri,json=inProgressSnapshotUri,proto3" json:"in_progress_snapshot_uri,omitempty"`
 	// source_actor_uid is the UID of the Actor this tag's snapshot was copied
 	// from.
 	SourceActorUid string `protobuf:"bytes,4,opt,name=source_actor_uid,json=sourceActorUid,proto3" json:"source_actor_uid,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Immutable base storage location captured when the tag is reserved. Its
+	// snapshot lives at <storage_location>/atespaces/<atespace>/tags/<tag_uid>.
+	// Retained independently of the source actor and template so deleting an
+	// unfinished tag can collect any partial copy after those resources are gone.
+	StorageLocation string `protobuf:"bytes,5,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *TagStatus) Reset() {
@@ -1811,16 +1811,16 @@ func (x *TagStatus) GetActorTemplateUid() string {
 	return ""
 }
 
-func (x *TagStatus) GetInProgressSnapshotUri() string {
+func (x *TagStatus) GetSourceActorUid() string {
 	if x != nil {
-		return x.InProgressSnapshotUri
+		return x.SourceActorUid
 	}
 	return ""
 }
 
-func (x *TagStatus) GetSourceActorUid() string {
+func (x *TagStatus) GetStorageLocation() string {
 	if x != nil {
-		return x.SourceActorUid
+		return x.StorageLocation
 	}
 	return ""
 }
@@ -6841,12 +6841,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
-	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xd2\x01\n" +
+	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xe4\x01\n" +
 	"\tTagStatus\x124\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x18.ateapi.ExternalSnapshotR\bsnapshot\x12,\n" +
-	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\x127\n" +
-	"\x18in_progress_snapshot_uri\x18\x03 \x01(\tR\x15inProgressSnapshotUri\x12(\n" +
-	"\x10source_actor_uid\x18\x04 \x01(\tR\x0esourceActorUid\"\xc4\x01\n" +
+	"\x12actor_template_uid\x18\x02 \x01(\tR\x10actorTemplateUid\x12(\n" +
+	"\x10source_actor_uid\x18\x04 \x01(\tR\x0esourceActorUid\x12)\n" +
+	"\x10storage_location\x18\x05 \x01(\tR\x0fstorageLocationJ\x04\b\x03\x10\x04R\x18in_progress_snapshot_uri\"\xc4\x01\n" +
 	"\x03Tag\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12)\n" +
 	"\x06status\x18\x02 \x01(\v2\x11.ateapi.TagStatusR\x06status\x12&\n" +

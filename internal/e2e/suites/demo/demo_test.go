@@ -152,8 +152,12 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got == "" || got == snapshotURI {
 		t.Fatalf("Tag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
 	}
-	if got := tagToUpdate.GetStatus().GetInProgressSnapshotUri(); got != "" {
-		t.Fatalf("Tag %s in-progress snapshot uri = %q, want it cleared", tagRef.GetName(), got)
+	wantTagURI, err := resources.NewTagSnapshotURI(tagToUpdate.GetStatus().GetStorageLocation(), tagToUpdate.GetMetadata().GetAtespace(), tagToUpdate.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
+	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got != wantTagURI.String() {
+		t.Errorf("tag snapshot URI = %q, want UID-based URI %q", got, wantTagURI)
 	}
 	listed, err := clients.SubstrateAPI.ListTags(ctx, &ateapipb.ListTagsRequest{Atespace: demoAtespace})
 	if err != nil {
