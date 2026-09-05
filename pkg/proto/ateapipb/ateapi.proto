@@ -860,8 +860,8 @@ message SnapshotsConfig {
   // this version are stored under. Required.
   //
   // +k8s:required
-  // +k8s:maxLength=1024 # bound only; object-storage URI formats vary
-  // TODO: validate that this is a well-formed object-storage URI
+  // +k8s:maxLength=1024
+  // +k8s:customValidation # Validate URI
   string storage_location = 4;
 }
 

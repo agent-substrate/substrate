@@ -150,6 +150,18 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "snapshots_config", "storage_location"), "")},
 	}, {
+		"storage_location without a bucket",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.StorageLocation = "my-bucket/snapshots"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshots_config", "storage_location"), "my-bucket/snapshots", "")},
+	}, {
+		"storage_location with a query",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotsConfig.StorageLocation = "gs://my-bucket/snapshots?versions=true"
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshots_config", "storage_location"), "gs://my-bucket/snapshots?versions=true", "")},
+	}, {
 		"on_commit broader than on_pause",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotsConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA

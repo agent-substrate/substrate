@@ -2468,8 +2468,8 @@ type SnapshotsConfig struct {
 	// this version are stored under. Required.
 	//
 	// +k8s:required
-	// +k8s:maxLength=1024 # bound only; object-storage URI formats vary
-	// TODO: validate that this is a well-formed object-storage URI
+	// +k8s:maxLength=1024
+	// +k8s:customValidation # Validate URI
 	StorageLocation string `protobuf:"bytes,4,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
