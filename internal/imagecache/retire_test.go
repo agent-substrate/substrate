@@ -205,9 +205,10 @@ func TestRetireLayerVsEnsureImageRace(t *testing.T) {
 }
 
 // joinLayerFlight seeds a layer, then holds its singleflight open running
-// body, so that an ensureLayer called while it is held has to join rather
-// than lead. Returns the layer, its diffID, its dir, and a release func.
-func joinLayerFlight(t *testing.T, store *Store, ref string, body func(dir string) error) (v1.Layer, v1.Hash, string, func()) {
+// body and reporting op, so that an ensureLayer called while it is held has
+// to join rather than lead. Returns the layer, its diffID, its dir, and a
+// release func.
+func joinLayerFlight(t *testing.T, store *Store, ref string, op flightOp, body func(dir string) error) (v1.Layer, v1.Hash, string, func()) {
 	t.Helper()
 	layer := layerFromEntries(t, []tarEntry{
 		{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("j", 512)},
@@ -228,7 +229,7 @@ func joinLayerFlight(t *testing.T, store *Store, ref string, body func(dir strin
 			err := body(dir)
 			close(held)
 			<-release
-			return nil, err
+			return op, err
 		})
 	}()
 	<-held
@@ -243,20 +244,26 @@ func joinLayerFlight(t *testing.T, store *Store, ref string, body func(dir strin
 // makes these tests deterministic: releasing on a timer instead would let a
 // loaded machine close the flight early, so ensureLayer would lead its own
 // and the join path would go untested while the test still passed.
+//
+// The match hard-codes singleflight's internal blocking frame: a joiner
+// parks in sync.(*WaitGroup).Wait under singleflight.(*Group).Do. An x/sync
+// upgrade that changes it turns this into a timeout, never a false pass.
 func waitForFlightJoiner(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
 	buf := make([]byte, 1<<20)
-	for time.Now().Before(deadline) {
-		dump := string(buf[:runtime.Stack(buf, true)])
-		for _, g := range strings.Split(dump, "\n\ngoroutine ") {
+	waitFor(t, "a goroutine joining the layer flight", func() bool {
+		n := runtime.Stack(buf, true)
+		for n == len(buf) { // truncated: runtime.Stack cuts silently at cap
+			buf = make([]byte, 2*len(buf))
+			n = runtime.Stack(buf, true)
+		}
+		for _, g := range strings.Split(string(buf[:n]), "\n\ngoroutine ") {
 			if strings.Contains(g, "ensureLayer") && strings.Contains(g, "sync.(*WaitGroup).Wait") {
-				return
+				return true
 			}
 		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("no goroutine ever joined the layer flight")
+		return false
+	})
 }
 
 // ensureLayer must never hand back a dir that a retirement renamed away.
@@ -270,7 +277,7 @@ func TestEnsureLayerJoiningRetireFlightRepacksLayer(t *testing.T) {
 	_, host := newTestRegistry(t)
 	store := newTestStore(t)
 	// Rename the layer aside inside the flight, exactly as retireLayer does.
-	layer, diffID, _, release := joinLayerFlight(t, store, host+"/test/join-retire:latest",
+	layer, diffID, _, release := joinLayerFlight(t, store, host+"/test/join-retire:latest", opRetire,
 		func(dir string) error { return os.Rename(dir, dir+"-retired") })
 
 	got, err := ensureLayerWhileHeld(t, store, diffID, layer, release)
@@ -282,15 +289,16 @@ func TestEnsureLayerJoiningRetireFlightRepacksLayer(t *testing.T) {
 	}
 }
 
-// A joined flight's error is not this caller's error. retireLayer reports a
-// failed rename through the shared flight, but that leaves the layer on disk
-// and usable, so a joiner must return it rather than fail the pull.
+// A joined retirement's error is not this caller's error. retireLayer
+// reports a failed rename through the shared flight, but that leaves the
+// layer on disk and usable, so a joiner must lead its own flight and return
+// the layer rather than fail the pull.
 func TestEnsureLayerJoiningFailedFlightKeepsLiveLayer(t *testing.T) {
 	_, host := newTestRegistry(t)
 	store := newTestStore(t)
 	// Leave the dir intact and fail the flight, as a retirement whose rename
 	// fails does.
-	layer, diffID, dir, release := joinLayerFlight(t, store, host+"/test/join-failed:latest",
+	layer, diffID, dir, release := joinLayerFlight(t, store, host+"/test/join-failed:latest", opRetire,
 		func(string) error { return errors.New("while retiring layer: rename failed") })
 
 	got, err := ensureLayerWhileHeld(t, store, diffID, layer, release)
@@ -302,6 +310,32 @@ func TestEnsureLayerJoiningFailedFlightKeepsLiveLayer(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(got, layerFSDirName)); err != nil {
 		t.Errorf("returned dir is not the live layer: %v", err)
+	}
+}
+
+// A joined ensure flight is the collapse working as designed: one download
+// shared by every waiter, failure included. The joiner must propagate the
+// leader's error — even though its own fresh attempt might succeed — rather
+// than lead download attempts of its own, which under a persistent failure
+// (registry down, corrupt blob) would multiply full-size download attempts
+// by the number of waiters.
+func TestEnsureLayerJoiningFailedEnsureSharesError(t *testing.T) {
+	_, host := newTestRegistry(t)
+	store := newTestStore(t)
+	wantErr := errors.New("while unpacking layer: connection refused")
+	// The dir vanishing with an ensure error models a failed unpack: the
+	// temp-dir commit never happened, so no tree landed.
+	layer, diffID, _, release := joinLayerFlight(t, store, host+"/test/join-pullfail:latest", opEnsure,
+		func(dir string) error {
+			if err := os.RemoveAll(dir); err != nil {
+				return err
+			}
+			return wantErr
+		})
+
+	_, err := ensureLayerWhileHeld(t, store, diffID, layer, release)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ensureLayer = %v, want the joined ensure flight's error %v", err, wantErr)
 	}
 }
 

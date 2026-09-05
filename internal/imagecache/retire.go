@@ -60,6 +60,18 @@ const (
 // retireLayer; the retire/reuse interlock depends on both using it.
 func layerFlightKey(hex string) string { return "sha256:" + hex }
 
+// flightOp is the value every layer-flight closure returns through the
+// shared singleflight, naming the operation that led the flight. A caller
+// whose Do joined instead of led decides from it: a joined ensure settled
+// the layer either way (its result is shared by all waiters, error
+// included), while a joined retirement did no ensure-work at all.
+type flightOp int
+
+const (
+	opEnsure flightOp = iota
+	opRetire
+)
+
 // isLayerDirName reports whether name is a well-formed sha256 layer
 // directory name. Callers enumerate directories and read hexes out of
 // records, so they can encounter anything an operator (or a corrupt
@@ -113,26 +125,26 @@ func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus,
 		fi, err := os.Stat(dir)
 		if errors.Is(err, os.ErrNotExist) {
 			status = retireGone
-			return nil, nil
+			return opRetire, nil
 		} else if err != nil {
 			status = retireVetoed
-			return nil, err
+			return opRetire, err
 		}
 		// A concurrent ensureLayer touched the dir if it reused this layer
 		// since the pre-flight stat.
 		if fi.ModTime().After(cutoff) {
 			slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", fi.ModTime()))
 			status = retireVetoed
-			return nil, nil
+			return opRetire, nil
 		}
 		dst := filepath.Join(s.layersDir(), fmt.Sprintf("%s%s-%d", retiredPrefix, hex[:12], time.Now().UnixNano()))
 		if err := os.Rename(dir, dst); err != nil {
 			status = retireVetoed
-			return nil, fmt.Errorf("while retiring layer %s: %w", hex, err)
+			return opRetire, fmt.Errorf("while retiring layer %s: %w", hex, err)
 		}
 		retired = dst
 		status = retireRetired
-		return nil, nil
+		return opRetire, nil
 	})
 	if !ran {
 		// Our closure never executed: Do joined a flight already in progress
