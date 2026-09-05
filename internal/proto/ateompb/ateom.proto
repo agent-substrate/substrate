@@ -285,6 +285,18 @@ message CheckpointWorkloadRequest {
 
   // What content to include in the checkpoint.
   SnapshotScope scope = 10;
+
+  // skip_durable_dir_tar tells ateom not to archive the actor's durable-dir
+  // volumes, and to leave the directory in place for atelet to archive itself.
+  // atelet sets this when it will stream the archive straight into object
+  // storage instead of staging it on disk, which is only safe because ateom
+  // terminates the workload before returning: nothing writes the directory
+  // afterwards, so an archive taken later is as coherent as one taken inside
+  // the paused window.
+  //
+  // Every other snapshot file is unaffected; ateom still reports the set it
+  // wrote and atelet appends the durable-dir tar to it.
+  bool skip_durable_dir_tar = 11;
 }
 
 message CheckpointWorkloadResponse {
