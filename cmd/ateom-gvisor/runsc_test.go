@@ -17,8 +17,12 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
@@ -101,5 +105,32 @@ func TestResumeArgs(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("resumeArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestCtxErrorSuffix(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+	killed := errors.New("signal: killed")
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want string
+	}{
+		{"active", context.Background(), killed, ""},
+		{"canceled", canceled, killed, " (context: context canceled)"},
+		{"deadline exceeded", expired, killed, " (context: context deadline exceeded)"},
+		{"err already carries it", canceled, context.Canceled, ""},
+		{"err wraps it", expired, fmt.Errorf("run: %w", context.DeadlineExceeded), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ctxErrorSuffix(tc.ctx, tc.err); got != tc.want {
+				t.Errorf("ctxErrorSuffix() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

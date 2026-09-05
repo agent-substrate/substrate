@@ -55,6 +55,16 @@ func durableVolumeNames(spec *ateompb.WorkloadSpec) []string {
 	return slices.Compact(names)
 }
 
+// `signal: killed` looks the same for an OOM kill, an outside SIGKILL and
+// exec.CommandContext acting on a done context, so name the context state --
+// unless err already carries it, as Run returns if the context died first.
+func ctxErrorSuffix(ctx context.Context, err error) string {
+	if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+		return fmt.Sprintf(" (context: %v)", cerr)
+	}
+	return ""
+}
+
 // shapeSpec loads, shapes for gVisor, and saves the container's OCI spec.
 func (r *runsc) shapeSpec(containerName string) error {
 	bundle := ateompath.OCIBundlePath(r.actorUID, containerName)
@@ -110,7 +120,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 
 	err := reaper.RunCommand(cmd)
 	if err != nil {
-		return fmt.Errorf("while running `runsc create`: %w", err)
+		return fmt.Errorf("while running `runsc create`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 
 	return nil
@@ -137,7 +147,7 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 
 	err := reaper.RunCommand(cmd)
 	if err != nil {
-		return fmt.Errorf("while running `runsc start`: %w", err)
+		return fmt.Errorf("while running `runsc start`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 
 	return nil
@@ -165,7 +175,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	cmd.Stderr = os.Stderr
 	err := reaper.RunCommand(cmd)
 	if err != nil {
-		return fmt.Errorf("while running `runsc checkpoint`: %w", err)
+		return fmt.Errorf("while running `runsc checkpoint`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }
@@ -202,7 +212,7 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	cmd.Stderr = os.Stderr
 	err := reaper.RunCommand(cmd)
 	if err != nil {
-		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
+		return fmt.Errorf("while running `runsc fscheckpoint`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }
@@ -227,7 +237,7 @@ func (r *runsc) cmdPause(ctx context.Context, containerName string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc pause`: %w", err)
+		return fmt.Errorf("while running `runsc pause`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }
@@ -252,7 +262,7 @@ func (r *runsc) cmdResume(ctx context.Context, containerName string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc resume`: %w", err)
+		return fmt.Errorf("while running `runsc resume`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }
@@ -292,7 +302,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc restore`: %w", err)
+		return fmt.Errorf("while running `runsc restore`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }
@@ -317,7 +327,7 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 
 	err := reaper.RunCommand(cmd)
 	if err != nil {
-		return fmt.Errorf("while running `runsc delete`: %w", err)
+		return fmt.Errorf("while running `runsc delete`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 
 	return nil
@@ -336,7 +346,7 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc state`: %w", err)
+		return fmt.Errorf("while running `runsc state`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }
@@ -363,7 +373,7 @@ func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc kill`: %w", err)
+		return fmt.Errorf("while running `runsc kill`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }
@@ -402,7 +412,7 @@ func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 			slog.DebugContext(ctx, "runsc wait was collected by the child reaper", slog.String("container", containerName))
 			return nil
 		}
-		return fmt.Errorf("while running `runsc wait`: %w", err)
+		return fmt.Errorf("while running `runsc wait`: %w%s", err, ctxErrorSuffix(ctx, err))
 	}
 	return nil
 }

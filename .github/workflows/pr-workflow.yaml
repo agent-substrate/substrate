@@ -162,19 +162,4 @@ jobs:
       run: hack/run-e2e-kind.sh ./internal/e2e/suites/networking -run '^TestActorEgress' -v -args --no-color
     - name: Dump diagnostics on failure
       if: failure()
-      run: |
-        kubectl --context kind-kind get workerpool,pods -A -o wide || true
-        dump() {
-          echo "=== logs: $1/$2 ==="
-          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
-        }
-        for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
-          dump ate-system "$p"
-        done
-        # Every worker pod in any namespace: the demo pools plus the e2e suites'
-        # randomly-named per-test namespaces, which the suites keep on failure.
-        # The failing actor runs in one of these, so this is where its ateom logs
-        # (and, for a micro-VM worker, the guest console tail) live.
-        kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
-          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
-          | while read -r ns name; do dump "$ns" "$name"; done
+      run: hack/dump-e2e-kind-diagnostics.sh
