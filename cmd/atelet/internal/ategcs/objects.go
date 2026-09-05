@@ -93,6 +93,27 @@ func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, con
 	return nil
 }
 
+// SendReaderToGCSWithZstd is SendLocalFileToGCSWithZstd for content that was
+// never written to a file — an archive generated on the fly, say. Whether the
+// content really streams depends on the backend: GCS pipes it straight into the
+// PUT, while S3/rustfs still stages the compressed bytes in a temp file because
+// its SDK needs a seekable body (see sendZstd).
+//
+// A file source is worth strictly more than a stream here, so this is the wrong
+// entry point for content that already sits on disk: sendZstd hands a file to
+// PutSparseFile, which compresses and uploads its ranges in parallel and skips
+// its holes, and a non-seekable reader can have neither. Reach for this only
+// where producing that file is itself the cost being avoided.
+func SendReaderToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, content io.Reader) error {
+	ctx, span := tracer.Start(ctx, "sendReaderToGCSWithZstd")
+	defer span.End()
+
+	if err := sendZstd(ctx, client, gsURL, content); err != nil {
+		return fmt.Errorf("in sendZstd: %w", err)
+	}
+	return nil
+}
+
 func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {
 	ctx, span := tracer.Start(ctx, "sendLocalFileToGCSWithZstd")
 	defer span.End()
