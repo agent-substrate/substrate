@@ -56,7 +56,7 @@ func validateGoldenCacheFlags() error {
 		return fmt.Errorf("--golden-cache-min-age %v must be >= 0", *goldenCacheMinAge)
 	}
 	if *goldenCacheDir != "" && !ateompath.UnderBasePath(*goldenCacheDir) {
-		slog.Warn("Golden cache dir is outside the ateom base path; hits cannot be hard-linked into restore dirs across mounts, so every restore will fall back to downloading",
+		slog.Warn("Golden cache dir is outside the ateom base path; hits cannot be hard-linked into restore dirs across mounts, so every hit degrades to a copy",
 			slog.String("golden_cache_dir", *goldenCacheDir),
 			slog.String("actors_dir", ateompath.ActorsDir))
 	}
@@ -113,40 +113,57 @@ const (
 	// cacheModeLink hard-links the cached copy: zero-cost hits, but the
 	// consumer must treat the staged file as read-only.
 	cacheModeLink
+	// cacheModeCopy stages a private, hole-preserving copy: costlier per hit
+	// than a link, but the consumer owns the inode and may mutate it in
+	// place, and a copy can cross mounts.
+	cacheModeCopy
 )
 
 // goldenCacheModeFor returns how this sandbox class's restores may use the
 // golden cache. ateom-gvisor consumes restore-state strictly read-only, so
 // it gets hard links. ateom-microvm rewrites config.json in place at restore
 // and merges checkpoint deltas into memory-ranges' inode at suspend — either
-// would corrupt a shared inode — so its class stays off the cache until a
-// private-copy mode serves it.
+// would corrupt a shared inode — so it gets private copies: still one
+// download per golden per node, and its mutations stay its own.
 func goldenCacheModeFor(sandboxClass string) goldenCacheMode {
-	if atev1alpha1.SandboxClass(sandboxClass) == atev1alpha1.SandboxClassGvisor {
+	switch atev1alpha1.SandboxClass(sandboxClass) {
+	case atev1alpha1.SandboxClassGvisor:
 		return cacheModeLink
+	case atev1alpha1.SandboxClassMicroVM:
+		return cacheModeCopy
+	default:
+		return cacheModeOff
 	}
-	return cacheModeOff
 }
 
 // fetchSnapshotObject stages one snapshot object at local — through the
 // golden cache per mode when the cache is enabled, directly from object
 // storage otherwise. A cacheModeLink hit is a hard link, so local stays
-// valid regardless of later eviction; fetch errors pass through the cache
-// wrapped, keeping ateerrors classification intact.
+// valid regardless of later eviction; a cacheModeCopy hit is a private
+// copy. Fetch errors pass through the cache wrapped, keeping ateerrors
+// classification intact.
 func (s *AteomHerder) fetchSnapshotObject(ctx context.Context, objectURI, local string, mode goldenCacheMode) error {
 	if mode == cacheModeOff || s.goldenCache == nil {
 		return ategcs.FetchLocalFileFromGCSWithZstd(ctx, s.gcsClient, objectURI, local)
 	}
-	err := s.goldenCache.GetFileTo(ctx, filecache.URIKey("gcs-zstd", objectURI), local, func(ctx context.Context, dst string) error {
+	key := filecache.URIKey("gcs-zstd", objectURI)
+	fetch := func(ctx context.Context, dst string) error {
 		return ategcs.FetchLocalFileFromGCSWithZstd(ctx, s.gcsClient, objectURI, dst)
-	})
+	}
+	if mode == cacheModeCopy {
+		return s.goldenCache.GetFileCopyTo(ctx, key, local, fetch)
+	}
+	err := s.goldenCache.GetFileTo(ctx, key, local, fetch)
 	if err == nil || !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
 	// The cache sits on a different mount than the restore dir, so link-out
-	// cannot work. Downloading fresh keeps restores correct; the warning
-	// points at the misconfiguration (see --golden-cache-dir).
-	slog.WarnContext(ctx, "Golden cache is on a different filesystem than the restore dir; downloading without the cache",
+	// cannot work — but a copy can, and the failed link's flight already
+	// published the entry, so this is a local read rather than a second
+	// download. The warning points at the misconfiguration (a cache under
+	// --golden-cache-dir off the base-path mount serves every hit the slow
+	// way).
+	slog.WarnContext(ctx, "Golden cache is on a different filesystem than the restore dir; serving a copy instead of a hard link",
 		slog.String("object", objectURI))
-	return ategcs.FetchLocalFileFromGCSWithZstd(ctx, s.gcsClient, objectURI, local)
+	return s.goldenCache.GetFileCopyTo(ctx, key, local, fetch)
 }

@@ -105,9 +105,10 @@ func TestGoldenCacheModeFor(t *testing.T) {
 		t.Errorf("gVisor consumes restore-state read-only; want cacheModeLink, got %v", got)
 	}
 	// ateom-microvm rewrites config.json and memory-ranges in place; linking
-	// its restore files from the cache would corrupt shared copies.
-	if got := goldenCacheModeFor(string(atev1alpha1.SandboxClassMicroVM)); got != cacheModeOff {
-		t.Errorf("micro-VM mutates restore-state files in place; want cacheModeOff, got %v", got)
+	// its restore files from the cache would corrupt shared copies, so it
+	// gets private ones.
+	if got := goldenCacheModeFor(string(atev1alpha1.SandboxClassMicroVM)); got != cacheModeCopy {
+		t.Errorf("micro-VM mutates restore-state files in place; want cacheModeCopy, got %v", got)
 	}
 	if got := goldenCacheModeFor(""); got != cacheModeOff {
 		t.Errorf("unknown sandbox class: want cacheModeOff, got %v", got)
@@ -181,6 +182,94 @@ func TestFetchSnapshotObjectServesFromGoldenCache(t *testing.T) {
 	}
 	if fi3, err := os.Stat(direct); err != nil || os.SameFile(fi1, fi3) {
 		t.Errorf("direct destination shares the cache inode (%v)", err)
+	}
+}
+
+// TestFetchSnapshotObjectCopyMode pins the micro-VM serving mode: one
+// download per golden object, every destination a private writable inode,
+// and a consumer's in-place mutation never reaches the next consumer.
+func TestFetchSnapshotObjectCopyMode(t *testing.T) {
+	s, gcs, objectURI, dstDir := newGoldenCacheHerder(t, "golden memory")
+	ctx := context.Background()
+
+	first := filepath.Join(dstDir, "first")
+	second := filepath.Join(dstDir, "second")
+	for _, dst := range []string{first, second} {
+		if err := s.fetchSnapshotObject(ctx, objectURI, dst, cacheModeCopy); err != nil {
+			t.Fatalf("fetchSnapshotObject(%s): %v", dst, err)
+		}
+	}
+	if n := gcs.gets.Load(); n != 1 {
+		t.Errorf("two copy-mode fetches performed %d downloads, want 1", n)
+	}
+	fi1, err1 := os.Stat(first)
+	fi2, err2 := os.Stat(second)
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	if os.SameFile(fi1, fi2) {
+		t.Error("copy-mode destinations share an inode; each consumer must own its own")
+	}
+
+	// The consumer may rewrite its staged file (ateom-microvm does, to
+	// config.json) without poisoning what the next restore receives.
+	if err := os.WriteFile(first, []byte("rewritten by ateom"), 0o600); err != nil {
+		t.Fatalf("consumer write to its copy: %v", err)
+	}
+	third := filepath.Join(dstDir, "third")
+	if err := s.fetchSnapshotObject(ctx, objectURI, third, cacheModeCopy); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(third); err != nil || string(got) != "golden memory" {
+		t.Errorf("copy after consumer mutation = %q, %v; the cached bytes were poisoned", got, err)
+	}
+	if n := gcs.gets.Load(); n != 1 {
+		t.Errorf("gets=%d, want 1 (mutation must not invalidate the cache)", n)
+	}
+}
+
+// TestFetchSnapshotObjectLinkFallsBackToCopyAcrossMounts needs two real
+// filesystems, so it runs where one is available (/dev/shm on Linux) and
+// skips elsewhere: a link-mode fetch whose destination is on a different
+// mount than the cache must degrade to a private copy, not to a download.
+func TestFetchSnapshotObjectLinkFallsBackToCopyAcrossMounts(t *testing.T) {
+	s, gcs, objectURI, dstDir := newGoldenCacheHerder(t, "golden memory")
+	ctx := context.Background()
+
+	otherFS, err := os.MkdirTemp("/dev/shm", "golden-cache-test-")
+	if err != nil {
+		t.Skipf("no second filesystem available for a cross-mount test: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(otherFS) })
+	// Prove the two dirs really are different mounts; same-mount tmpdirs
+	// (some CI images) would silently test the plain link path.
+	probe := filepath.Join(dstDir, "probe")
+	if err := os.WriteFile(probe, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(probe, filepath.Join(otherFS, "probe")); err == nil {
+		t.Skip("test dirs share a filesystem; cannot exercise EXDEV")
+	}
+
+	dst := filepath.Join(otherFS, "staged")
+	if err := s.fetchSnapshotObject(ctx, objectURI, dst, cacheModeLink); err != nil {
+		t.Fatalf("cross-mount link-mode fetch: %v", err)
+	}
+	if got, err := os.ReadFile(dst); err != nil || string(got) != "golden memory" {
+		t.Fatalf("staged %q, %v", got, err)
+	}
+	if n := gcs.gets.Load(); n != 1 {
+		t.Errorf("cross-mount fallback performed %d downloads, want 1 (the copy must reuse the published entry)", n)
+	}
+
+	// And the fallback stays cache-served: a second cross-mount fetch is a
+	// local copy, not a download.
+	dst2 := filepath.Join(otherFS, "staged-2")
+	if err := s.fetchSnapshotObject(ctx, objectURI, dst2, cacheModeLink); err != nil {
+		t.Fatal(err)
+	}
+	if n := gcs.gets.Load(); n != 1 {
+		t.Errorf("second cross-mount fetch downloaded again (gets=%d, want 1)", n)
 	}
 }
 
