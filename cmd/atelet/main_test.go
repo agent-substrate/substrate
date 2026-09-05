@@ -989,27 +989,29 @@ func (m mapObjectStorage) GetObject(_ context.Context, bucket, object string) (i
 
 func (mapObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
 
+// zstdBytes compresses s the way snapshot objects are stored, so download
+// paths can be tested against mapObjectStorage.
+func zstdBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	if _, err := zw.Write([]byte(s)); err != nil {
+		t.Fatalf("zstd write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+	return buf.Bytes()
+}
+
 // TestDownloadCombinedCheckpoint verifies a DataOnGolden restore stages one
 // folder holding the actor snapshot's durable-dir tar and the golden
 // snapshot's remaining files — and that the golden's own durable-dir tar is
 // the one that loses the name collision.
 func TestDownloadCombinedCheckpoint(t *testing.T) {
-	zstdBytes := func(t *testing.T, s string) []byte {
-		t.Helper()
-		var buf bytes.Buffer
-		zw, err := zstd.NewWriter(&buf)
-		if err != nil {
-			t.Fatalf("zstd.NewWriter: %v", err)
-		}
-		if _, err := zw.Write([]byte(s)); err != nil {
-			t.Fatalf("zstd write: %v", err)
-		}
-		if err := zw.Close(); err != nil {
-			t.Fatalf("zstd close: %v", err)
-		}
-		return buf.Bytes()
-	}
-
 	store := mapObjectStorage{objects: map[string][]byte{
 		testSnapshotPath + "/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
 		goldenSnapshotPath + "/config.json.zstd":     zstdBytes(t, "golden config"),
@@ -1024,7 +1026,8 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 		goldenSnapshotURI,
 		dstDir,
 		[]string{"durable-dir.tar"},
-		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
+		[]string{"config.json", "memory-ranges", "durable-dir.tar"},
+		cacheModeOff)
 	if err != nil {
 		t.Fatalf("downloadCombinedCheckpoint: %v", err)
 	}
