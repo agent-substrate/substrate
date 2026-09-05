@@ -19,13 +19,7 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-# Find clang-format in the PATH, and exit if not found.
-tool="clang-format"
-clangfmt="$(which "$tool" 2>/dev/null || true)"
-if [[ ! -x "${clangfmt}" ]]; then
-  echo "Failed to find ${tool}: please make sure it is in your PATH" >&2
-  exit 1
-fi
+clangfmt="${ROOT}/hack/clang-format.sh"
 
 # Find all top-level directories containing proto files, and run clangfmt on them.
 # shellcheck disable=SC2207 # reading array
