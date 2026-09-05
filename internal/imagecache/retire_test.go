@@ -17,8 +17,10 @@ package imagecache
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -202,22 +204,15 @@ func TestRetireLayerVsEnsureImageRace(t *testing.T) {
 	}
 }
 
-// ensureLayer must never hand back a dir that a retirement renamed away.
-// Joining a flight runs no closure, so the reuse/retire interlock says
-// nothing about the dir in that case — the layer has to be unpacked again.
-//
-// Deterministic on purpose: the natural window is a few microseconds wide,
-// so a timing-dependent test would only catch this under load (it surfaced
-// as a rare "layer dir vanished during pull" in CI). Occupying the flight
-// exactly as retireLayer does closes it every run.
-func TestEnsureLayerJoiningRetireFlightRepacksLayer(t *testing.T) {
-	_, host := newTestRegistry(t)
-	ref := host + "/test/join-retire:latest"
+// joinLayerFlight seeds a layer, then holds its singleflight open running
+// body, so that an ensureLayer called while it is held has to join rather
+// than lead. Returns the layer, its diffID, its dir, and a release func.
+func joinLayerFlight(t *testing.T, store *Store, ref string, body func(dir string) error) (v1.Layer, v1.Hash, string, func()) {
+	t.Helper()
 	layer := layerFromEntries(t, []tarEntry{
 		{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("j", 512)},
 	})
 	pushImage(t, ref, v1.Config{}, layer)
-	store := newTestStore(t)
 	if _, err := store.EnsureImage(context.Background(), ref); err != nil {
 		t.Fatalf("EnsureImage: %v", err)
 	}
@@ -225,32 +220,106 @@ func TestEnsureLayerJoiningRetireFlightRepacksLayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("layer diffID: %v", err)
 	}
-	dir := store.layerDir(diffID)
+	dir := layerDirOf(t, store, layer)
 
-	// Hold the layer's flight open across a rename, the way a retirement
-	// caught mid-pass does, so the ensureLayer below is forced to join it.
-	retired, release := make(chan struct{}), make(chan struct{})
+	held, release := make(chan struct{}), make(chan struct{})
 	go func() {
 		_, _, _ = store.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-			if err := os.Rename(dir, dir+"-retired"); err != nil {
-				t.Errorf("renaming layer aside: %v", err)
-			}
-			close(retired)
+			err := body(dir)
+			close(held)
 			<-release
-			return nil, nil
+			return nil, err
 		})
 	}()
-	<-retired
-	go func() {
-		time.Sleep(20 * time.Millisecond) // outlive the join
-		close(release)
-	}()
+	<-held
+	var once sync.Once
+	releaseOnce := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(releaseOnce) // never leave the flight held at test exit
+	return layer, diffID, dir, releaseOnce
+}
 
-	got, err := store.ensureLayer(context.Background(), diffID, layer)
+// waitForFlightJoiner blocks until some goroutine is parked inside
+// ensureLayer waiting on a singleflight it joined. Observing the join is what
+// makes these tests deterministic: releasing on a timer instead would let a
+// loaded machine close the flight early, so ensureLayer would lead its own
+// and the join path would go untested while the test still passed.
+func waitForFlightJoiner(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	buf := make([]byte, 1<<20)
+	for time.Now().Before(deadline) {
+		dump := string(buf[:runtime.Stack(buf, true)])
+		for _, g := range strings.Split(dump, "\n\ngoroutine ") {
+			if strings.Contains(g, "ensureLayer") && strings.Contains(g, "sync.(*WaitGroup).Wait") {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("no goroutine ever joined the layer flight")
+}
+
+// ensureLayer must never hand back a dir that a retirement renamed away.
+// Joining a flight runs no closure, so the reuse/retire interlock says
+// nothing about the dir in that case — the layer has to be unpacked again.
+//
+// Deterministic on purpose: the natural window is a few microseconds wide, so
+// a timing-dependent test would only catch this under load (it surfaced as a
+// rare "layer dir vanished during pull" in CI).
+func TestEnsureLayerJoiningRetireFlightRepacksLayer(t *testing.T) {
+	_, host := newTestRegistry(t)
+	store := newTestStore(t)
+	// Rename the layer aside inside the flight, exactly as retireLayer does.
+	layer, diffID, _, release := joinLayerFlight(t, store, host+"/test/join-retire:latest",
+		func(dir string) error { return os.Rename(dir, dir+"-retired") })
+
+	got, err := ensureLayerWhileHeld(t, store, diffID, layer, release)
 	if err != nil {
 		t.Fatalf("ensureLayer: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(got, layerFSDirName)); err != nil {
 		t.Fatalf("ensureLayer returned a retired dir: %v", err)
 	}
+}
+
+// A joined flight's error is not this caller's error. retireLayer reports a
+// failed rename through the shared flight, but that leaves the layer on disk
+// and usable, so a joiner must return it rather than fail the pull.
+func TestEnsureLayerJoiningFailedFlightKeepsLiveLayer(t *testing.T) {
+	_, host := newTestRegistry(t)
+	store := newTestStore(t)
+	// Leave the dir intact and fail the flight, as a retirement whose rename
+	// fails does.
+	layer, diffID, dir, release := joinLayerFlight(t, store, host+"/test/join-failed:latest",
+		func(string) error { return errors.New("while retiring layer: rename failed") })
+
+	got, err := ensureLayerWhileHeld(t, store, diffID, layer, release)
+	if err != nil {
+		t.Fatalf("ensureLayer failed on a joined flight's error: %v", err)
+	}
+	if got != dir {
+		t.Errorf("ensureLayer = %q, want the live layer dir %q", got, dir)
+	}
+	if _, err := os.Stat(filepath.Join(got, layerFSDirName)); err != nil {
+		t.Errorf("returned dir is not the live layer: %v", err)
+	}
+}
+
+// ensureLayerWhileHeld runs ensureLayer against a held flight, releasing the
+// flight only once the call is observably blocked joining it.
+func ensureLayerWhileHeld(t *testing.T, store *Store, diffID v1.Hash, layer v1.Layer, release func()) (string, error) {
+	t.Helper()
+	type result struct {
+		dir string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		dir, err := store.ensureLayer(context.Background(), diffID, layer)
+		done <- result{dir, err}
+	}()
+	waitForFlightJoiner(t)
+	release()
+	res := <-done
+	return res.dir, res.err
 }
