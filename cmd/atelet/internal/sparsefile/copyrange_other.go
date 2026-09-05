@@ -14,7 +14,7 @@
 
 //go:build !linux
 
-package main
+package sparsefile
 
 // kernelCopyRange has no implementation off Linux (atelet runs on Linux; this keeps
 // the package building for local development on other platforms), so callers copy
