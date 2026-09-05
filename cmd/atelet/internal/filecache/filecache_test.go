@@ -50,6 +50,26 @@ func allocatedBytes(t *testing.T, path string) int64 {
 	return st.Blocks * 512
 }
 
+// sparseTestFetcher returns a FileFetcher producing a mostly-hole file:
+// size logical bytes with one 4 KiB data extent. Tests that depend on the
+// result being genuinely sparse must skip when the filesystem materialized
+// it (see allocatedBytes).
+func sparseTestFetcher(size int64) FileFetcher {
+	return func(ctx context.Context, dstPath string) error {
+		f, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := f.Truncate(size); err != nil {
+			return err
+		}
+		if _, err := f.WriteAt(make([]byte, 4<<10), size/2); err != nil {
+			return err
+		}
+		return f.Close()
+	}
+}
+
 func newTestStore(t *testing.T, opts ...Option) *Store {
 	t.Helper()
 	s, err := New(filepath.Join(t.TempDir(), "cache"), opts...)
@@ -241,5 +261,29 @@ func TestTotalBytes(t *testing.T) {
 	}
 	if total != want {
 		t.Errorf("TotalBytes = %d, want %d (allocated bytes of the published files)", total, want)
+	}
+}
+
+// TestTotalBytesCountsAllocatedNotLogical pins the accounting unit against
+// the cache's most important artifact shape: a sparse guest memory image.
+// Counting logical length would report a near-empty cache as huge, driving
+// eviction that frees nothing.
+func TestTotalBytesCountsAllocatedNotLogical(t *testing.T) {
+	s := newTestStore(t)
+	const logical = 64 << 20
+	key := URIKey("test://sparse")
+	if err := s.GetFileTo(context.Background(), key, dstPath(t, s, "sparse"), sparseTestFetcher(logical)); err != nil {
+		t.Fatal(err)
+	}
+	if alloc := allocatedBytes(t, s.dataPath(key)); alloc >= logical/2 {
+		t.Skipf("cached file did not end up sparse (%d of %d bytes allocated); this filesystem cannot report holes", alloc, int64(logical))
+	}
+
+	total, err := s.TotalBytes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total >= logical/2 {
+		t.Errorf("TotalBytes = %d for a sparse entry with %d allocated bytes; logical sizes are being counted", total, allocatedBytes(t, s.dataPath(key)))
 	}
 }

@@ -72,3 +72,6 @@ func newKey(canonical string) Key {
 
 // String returns the canonical form, for logs and meta.json.
 func (k Key) String() string { return k.canonical }
+
+// isZero reports whether k was not built by a constructor.
+func (k Key) isZero() bool { return k.dir == "" }
