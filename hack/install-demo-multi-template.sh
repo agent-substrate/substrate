@@ -23,10 +23,9 @@ demo-multi-template_cmdline() {
     --deploy-demo-multi-template) demo-multi-template_deploy ;;
     --delete-demo-multi-template) demo-multi-template_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 # The demo's two templates live in two different atespaces to show that pool
