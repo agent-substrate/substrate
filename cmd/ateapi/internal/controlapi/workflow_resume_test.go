@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -152,6 +153,62 @@ func TestAssignWorkerAttempt_MissingSelectedWorkerIsRetried(t *testing.T) {
 	}
 	if len(workers) != 0 {
 		t.Errorf("cached workers after missing claim = %d, want 0", len(workers))
+	}
+}
+
+func TestAssignWorkerAttempt_WorkerDeletedBeforeActorUpdate(t *testing.T) {
+	for _, state := range []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED} {
+		t.Run(state.String(), func(t *testing.T) {
+			ctx := t.Context()
+			reader := sdkmetric.NewManualReader()
+			if err := RegisterActorCrashes(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("ateapi")); err != nil {
+				t.Fatal(err)
+			}
+			persistence := newTestPersistence(t)
+			actor, wc := seedAssignFixture(t, ctx, persistence)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			actor, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(a *ateapipb.Actor) error {
+				a.Status.State = state
+				a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://snapshots/committed"}
+				if state == ateapipb.ActorState_ACTOR_STATE_PAUSED {
+					a.Status.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "pause-1"}
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			workerName := testWorkerUID("pod-1")
+			st := &conflictInjectingStore{Interface: persistence, inject: func() {
+				// The worker claim has committed, but the actor still has no backlink.
+				if _, err := NewWorkerWorkflow(persistence).DeleteWorker(ctx, workerName, store.DeletePreconditions{}); err != nil {
+					t.Fatalf("concurrent DeleteWorker: %v", err)
+				}
+			}}
+			w := &ActorWorkflow{store: st, workerCache: wc, scheduler: scheduling.New(wc)}
+			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
+			refreshed, _, err := w.assignWorkerAttempt(ctx, actorRef, actor, tmpl)
+			if !errors.Is(err, store.ErrVersionConflict) {
+				t.Fatalf("assignWorkerAttempt: %v, want retryable actor conflict", err)
+			}
+			if !proto.Equal(refreshed.GetStatus(), actor.GetStatus()) {
+				t.Errorf("actor status = %v, want unchanged %v", refreshed.GetStatus(), actor.GetStatus())
+			}
+			stored, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(stored, refreshed) {
+				t.Errorf("stored actor = %v, want refreshed actor %v", stored, refreshed)
+			}
+			if _, err := persistence.GetWorker(ctx, workerName); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetWorker: %v, want worker deleted", err)
+			}
+			if _, err := persistence.FindWorkerHostingActor(ctx, actor.GetMetadata().GetUid()); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("FindWorkerHostingActor: %v, want pending claim removed", err)
+			}
+			assertNoCrashMetricDatapoint(t, reader)
+		})
 	}
 }
 

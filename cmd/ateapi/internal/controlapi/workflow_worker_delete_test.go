@@ -102,6 +102,47 @@ func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	}
 }
 
+func TestDeleteWorkerWorkflow_PendingAssignmentWinsVersionCheck(t *testing.T) {
+	ctx := t.Context()
+	_, persistence := newWorkerDeleteWorkflow(t)
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, func(a *ateapipb.Actor) {
+		a.Status.WorkerAssignment = nil
+	})
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+	st := &conflictInjectingStore{Interface: persistence, inject: func() {
+		// Resume writes its backlink after deletion reads the unassigned actor.
+		if _, err := persistence.UpdateActor(ctx, apiActorRef, store.PreconditionFrom(actor), func(a *ateapipb.Actor) error {
+			a.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
+			a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{Worker: workerRef(apiWorkerName)}
+			return nil
+		}); err != nil {
+			t.Fatalf("concurrent actor assignment: %v", err)
+		}
+	}}
+	wf := NewWorkerWorkflow(st)
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); status.Code(err) != codes.Aborted {
+		t.Fatalf("DeleteWorker: %v, want Aborted", err)
+	}
+	worker, err := persistence.GetWorker(ctx, apiWorkerName)
+	if err != nil {
+		t.Fatalf("GetWorker after conflict: %v", err)
+	}
+	if worker.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING", worker.GetStatus().GetState())
+	}
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("retry DeleteWorker: %v", err)
+	}
+	got, err := persistence.GetActor(ctx, apiActorRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED || got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("actor status after delete retry = %v, want CRASHED with no worker", got.GetStatus())
+	}
+}
+
 func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	ctx := context.Background()
 	wf, persistence := newWorkerDeleteWorkflow(t)
