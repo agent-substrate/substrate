@@ -14,7 +14,7 @@
 
 //go:build linux
 
-package main
+package sparsefile
 
 import (
 	"bytes"
