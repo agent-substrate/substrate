@@ -45,7 +45,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -81,6 +84,17 @@ type Store struct {
 	// of the callers waiting on them, so this is the only bound on how long
 	// one can run.
 	fetchTimeout time.Duration
+
+	// sf collapses concurrent fetches of the same key into one flight.
+	// Eviction will retire entries inside the same flight, so a retire can
+	// never race a fetch of the key it is removing.
+	sf singleflight.Group
+
+	// hitMu closes the hit-vs-evict window: held shared by the link-out path
+	// (stat, link, and last-use touch), exclusive by eviction's final
+	// re-check and retire rename, so an entry can never vanish between a
+	// hit's stat and its link. Uncontended except during an eviction pass.
+	hitMu sync.RWMutex
 }
 
 // Option configures a Store.
