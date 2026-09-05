@@ -43,7 +43,7 @@ set -uo pipefail
 
 DURATION=30
 ROUTER="http://localhost:8000"
-# The template name, resolved in the actors' atespace (--template-ref).
+# The template name, resolved in the actors' atespace (--template).
 TEMPLATE="parking"
 ATESPACE="ate-demo-parking"
 SUFFIX="actors.resources.substrate.ate.dev"
@@ -97,7 +97,7 @@ echo
 echo "==> ensuring atespace ${ATESPACE} and actors exist (template ${TEMPLATE})"
 kubectl ate create atespace "${ATESPACE}" >/dev/null 2>&1 || true
 for a in "${ACTORS[@]}"; do
-  kubectl ate create actor "${a}" --atespace "${ATESPACE}" --template-ref "${TEMPLATE}" >/dev/null 2>&1 || true
+  kubectl ate create actor "${a}" --atespace "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 done
 
 # One worker per actor: hammer it with request->suspend until the deadline.

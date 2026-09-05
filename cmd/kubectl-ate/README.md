@@ -196,7 +196,7 @@ Manage the execution state of your workloads.
 # Create a new actor deriving from an ActorTemplate. The template name is
 # resolved in the actor's atespace. -a/--atespace is required and the
 # atespace must already exist (kubectl ate create atespace <atespace>).
-kubectl ate create actor my-actor --template-ref=<template-name> -a <atespace>
+kubectl ate create actor my-actor --template=<template-name> -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor -a <atespace>
@@ -230,7 +230,7 @@ kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 
 # Create an actor from a tag and remove the tag when it is no longer needed.
-kubectl ate create actor <actor-name> -a <atespace> --template-ref <template-name> --tag <tag-atespace/tag-name>
+kubectl ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-atespace/tag-name>
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
 

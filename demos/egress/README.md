@@ -132,9 +132,9 @@ kubectl -n egress-target create deployment whoami --image=traefik/whoami
 kubectl -n egress-target expose deployment whoami --port=80
 TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterIP}')
 
-# 2. Create and resume an Actor in the demo's atespace: --template-ref
+# 2. Create and resume an Actor in the demo's atespace: --template
 #    resolves the template by name within the actor's own atespace.
-kubectl ate create actor egress-demo -a ate-demo-egress --template-ref egress
+kubectl ate create actor egress-demo -a ate-demo-egress --template egress
 kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
 
 # 3. Drive the Actor's egress through the ingress gateway.

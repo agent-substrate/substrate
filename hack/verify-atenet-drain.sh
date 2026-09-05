@@ -116,8 +116,8 @@ run_kubectl patch workerpool -n "${DEMO_NS}" "${DEMO_POOL}" --type merge -p '{"s
 run_kubectl rollout status "deploy/${DEMO_POOL}" -n "${DEMO_NS}" --timeout=180s >/dev/null
 
 log_step "creating actors ${ACTOR_BUSY} + ${ACTOR_PARKED} in atespace ${ATESPACE}"
-run_kubectl_ate create actor "${ACTOR_BUSY}" -a "${ATESPACE}" --template-ref "${DEMO_POOL}" >/dev/null
-run_kubectl_ate create actor "${ACTOR_PARKED}" -a "${ATESPACE}" --template-ref "${DEMO_POOL}" >/dev/null
+run_kubectl_ate create actor "${ACTOR_BUSY}" -a "${ATESPACE}" --template "${DEMO_POOL}" >/dev/null
+run_kubectl_ate create actor "${ACTOR_PARKED}" -a "${ATESPACE}" --template "${DEMO_POOL}" >/dev/null
 
 log_step "occupying the only worker with ${ACTOR_BUSY}"
 for i in $(seq 1 20); do

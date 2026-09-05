@@ -23,7 +23,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var templateRefFlag string
+var templateFlag string
 var atespaceFlag string
 var sourceTagFlag string
 
@@ -32,7 +32,7 @@ var createActorCmd = &cobra.Command{
 	Short: "Create an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateRefFlag, sourceTagFlag)
+		request, err := buildCreateActorRequest(args[0], atespaceFlag, templateFlag, sourceTagFlag)
 		if err != nil {
 			return err
 		}
@@ -78,9 +78,8 @@ func buildCreateActorRequest(actorName, atespace, templateName, tag string) (*at
 }
 
 func init() {
-	// TODO: rename "template-ref" to "template" now that the legacy CRD flag is gone.
-	createActorCmd.Flags().StringVar(&templateRefFlag, "template-ref", "", "Name of the substrate ActorTemplate resource to derive the actor from, resolved in the actor's atespace (--atespace)")
-	_ = createActorCmd.MarkFlagRequired("template-ref")
+	createActorCmd.Flags().StringVar(&templateFlag, "template", "", "Name of the substrate ActorTemplate resource to derive the actor from, resolved in the actor's atespace (--atespace)")
+	_ = createActorCmd.MarkFlagRequired("template")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
 	createActorCmd.Flags().StringVar(&sourceTagFlag, "tag", "", "Initialize from a Tag in <atespace>/<name> format")
