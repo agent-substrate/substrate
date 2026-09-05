@@ -69,6 +69,41 @@ func TestAteletOTLPSocketPath(t *testing.T) {
 	}
 }
 
+func TestUnderBasePath(t *testing.T) {
+	cases := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"inside", BasePath + "/image-cache", true},
+		{"inside with doubled separator", BasePath + "//image-cache", true},
+		{"inside via dot-dot", BasePath + "/x/../image-cache", true},
+		{"base path itself is not under", BasePath, false},
+		{"sibling with the base path as name prefix", BasePath + "-other/image-cache", false},
+		{"outside", "/var/lib/elsewhere/image-cache", false},
+		{"dot-dot escaping the base path", BasePath + "/../elsewhere/image-cache", false},
+		{"relative resolves against the cwd, not the base path", "image-cache", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := UnderBasePath(tc.dir); got != tc.want {
+				t.Errorf("UnderBasePath(%q) = %v, want %v", tc.dir, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGoldenCacheDirSharesActorsMount(t *testing.T) {
+	// The golden cache serves hits as hard links into per-actor restore dirs,
+	// and link(2) requires one filesystem, so both must sit under BasePath
+	// (one mount in the atelet pod).
+	for name, dir := range map[string]string{"GoldenCacheDir": GoldenCacheDir, "ActorsDir": ActorsDir} {
+		if !strings.HasPrefix(dir, BasePath+"/") {
+			t.Errorf("%s = %q, want it under %q so golden cache hard links can reach restore dirs", name, dir, BasePath)
+		}
+	}
+}
+
 func TestAteomPathUniqueness(t *testing.T) {
 	uid1 := "123e4567-e89b-12d3-a456-426614174000"
 	uid2 := "987f6543-e21b-32d1-b654-246614174111"

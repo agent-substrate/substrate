@@ -34,6 +34,7 @@ import (
 	"sync"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/filecache"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -217,6 +218,14 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
+	if err := validateGoldenCacheFlags(); err != nil {
+		serverboot.Fatal(ctx, "Invalid golden cache flags", err)
+	}
+	goldenCache, err := openGoldenCache(ctx, *goldenCacheDir, *goldenCacheMinAge)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to open golden snapshot cache", err)
+	}
+
 	wrappedAnonGCS, err := ategcs.NewGCSClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
@@ -291,6 +300,7 @@ func main() {
 		wrappedAnonGCS,
 		wrappedGCS,
 		imageCache,
+		goldenCache,
 		instruments,
 		volPlugins,
 		csiDriverConfigLister,
@@ -431,8 +441,12 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer           *AteomDialer
-	imageCache            *imagecache.Store
+	ateomDialer *AteomDialer
+	imageCache  *imagecache.Store
+	// goldenCache dedupes and retains golden snapshot files across restores.
+	// nil means caching is disabled (--golden-cache-dir=""): every restore
+	// downloads its golden files directly.
+	goldenCache           *filecache.Store
 	anonGCSClient         ategcs.ObjectStorage
 	gcsClient             ategcs.ObjectStorage
 	instruments           *Instruments
@@ -451,6 +465,7 @@ func NewService(
 	anonGCSClient ategcs.ObjectStorage,
 	gcsClient ategcs.ObjectStorage,
 	imageCache *imagecache.Store,
+	goldenCache *filecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
@@ -459,6 +474,7 @@ func NewService(
 	wms := &AteomHerder{
 		ateomDialer:           ateomDialer,
 		imageCache:            imageCache,
+		goldenCache:           goldenCache,
 		anonGCSClient:         anonGCSClient,
 		gcsClient:             gcsClient,
 		instruments:           instruments,
