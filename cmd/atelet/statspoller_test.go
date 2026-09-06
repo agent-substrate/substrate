@@ -15,7 +15,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -356,6 +358,43 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(templateAggregate{}, templateKey{}, workerPoolRef{})); diff != "" {
 		t.Errorf("collect() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestStatsPollerPeriodicEvents pins the events channel: one event per
+// executing sample per sweep, none for idle or mid-boot ateoms, identity
+// taken from the echo, pool labels from the sweep's own resolution.
+func TestStatsPollerPeriodicEvents(t *testing.T) {
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+		"uid-2": {resp: noSampleResponse(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+	var buf syncBuffer
+	p.eventEmitter = newBufferEmitter(&buf, false)
+	p.workerPools = func(context.Context) map[string]workerPoolRef {
+		return map[string]workerPoolRef{"uid-1": {namespace: "pool-ns", name: "pool-a"}}
+	}
+
+	p.collect(context.Background())
+
+	lines := bytes.Count(bytes.TrimSpace(buf.Bytes()), []byte("\n")) + 1
+	if buf.Len() == 0 {
+		t.Fatal("no periodic event emitted for the executing ateom")
+	}
+	if lines != 1 {
+		t.Fatalf("emitted %d events, want 1 (idle ateoms emit nothing): %q", lines, buf.String())
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := rec["kind"]; got != "periodic" {
+		t.Errorf("kind = %v, want periodic", got)
+	}
+	labels, _ := rec["labels"].(map[string]any)
+	if got := labels["ate.workerpool.name"]; got != "pool-a" {
+		t.Errorf("labels[ate.workerpool.name] = %v, want pool-a", got)
 	}
 }
 

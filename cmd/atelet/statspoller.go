@@ -130,6 +130,11 @@ type statsPoller struct {
 
 	inst *statsInstruments
 
+	// eventEmitter receives one periodic usage event per sample per sweep -- the
+	// per-actor channel the aggregates deliberately erase identity from. Nil
+	// disables emission (the emitter is also nil-safe).
+	eventEmitter *statsEventEmitter
+
 	// lastCPU is the previous sweep's cpu_usage_usec per actor uid, the
 	// baseline the next sweep's deltas are computed against. Only the sweep
 	// loop touches it (under collect's mutex), and entries for actors a sweep
@@ -286,6 +291,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				// add.
 				return nil
 			}
+			p.eventEmitter.emit(ctx, eventKindPeriodic, sample, pools[podUID])
 
 			key := templateKey{
 				templateNamespace: sample.GetActorTemplateAtespace(),
@@ -524,28 +530,30 @@ func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*tem
 	}
 }
 
-// startStatsPoller assembles the poller and starts it. Split from main's boot
-// sequence so the sampling subsystem has one obvious entry point.
+// startStatsPoller assembles the sampling subsystem -- the metrics poller and
+// the periodic events channel -- and starts the poller. Split from main's
+// boot sequence so the subsystem has one obvious entry point.
 //
-// The poller dials its own per-probe connections (see statsPoller.dial) and
-// takes no AteomDialer: the isolation from the lifecycle RPCs' connection
-// cache is structural, not just behavioral.
+// The poller dials its own short-lived connection per probe (see
+// dialAteomStats) and takes no AteomDialer: the isolation from the lifecycle
+// RPCs' connection cache is structural, not just behavioral.
 func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsInstruments, k8sClient kubernetes.Interface) {
+	// Warm the labels-key resolution so the first emit does not pay the
+	// metadata probe either; see defaultLabelsKey.
+	go defaultLabelsKey()
+
 	poller := &statsPoller{
 		interval:  interval,
 		ateomsDir: ateompath.AteomsDir(),
 		dial: func(_ context.Context, podUID string) (activeStatsClient, io.Closer, error) {
-			conn, err := grpc.NewClient(
-				"unix://"+ateompath.AteomSocketPath(podUID),
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
-				grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-			)
+			conn, closer, err := dialAteomStats(podUID)
 			if err != nil {
 				return nil, nil, err
 			}
-			return ateompb.NewAteomClient(conn), conn, nil
+			return ateompb.NewAteomClient(conn), closer, nil
 		},
-		inst: inst,
+		inst:         inst,
+		eventEmitter: newStatsEventEmitter(os.Stdout, defaultLabelsKey),
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
@@ -555,4 +563,20 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 		slog.WarnContext(ctx, "NODE_NAME not set; actor stats will carry no worker pool labels")
 	}
 	go poller.run(ctx)
+}
+
+// dialAteomStats opens the short-lived connection both telemetry paths use:
+// one connection per read, closed by the caller, never the lifecycle RPCs'
+// cached AteomDialer. grpc.NewClient is lazy, so this cannot block; the
+// caller's deadline bounds the actual connect inside the RPC.
+func dialAteomStats(podUID string) (*grpc.ClientConn, io.Closer, error) {
+	conn, err := grpc.NewClient(
+		"unix://"+ateompath.AteomSocketPath(podUID),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, conn, nil
 }

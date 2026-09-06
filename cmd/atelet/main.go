@@ -294,6 +294,7 @@ func main() {
 		csiDriverConfigLister,
 		clusterTrustBundleLister,
 	)
+
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
 	// on-demand fetch in ensureSandboxAssets still covers correctness.
