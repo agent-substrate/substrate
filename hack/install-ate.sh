@@ -79,7 +79,9 @@ function usage() {
   echo ""
   echo "Experiments:"
   echo ""
-  echo "  --experimental-use-sdsmint             Deploy the egress gateway with per-SNI certificate minting (experimental)"
+  echo "  --experimental-use-sdsmint             Deploy the egress gateway with per-SNI certificate minting, and run"
+  echo "                                         ate-api-server (when this invocation deploys it) with"
+  echo "                                         --inject-egress-trust-bundle (experimental)"
   echo "  --experimental-additional-egress-extproc-service NS/SVC:PORT"
   echo "                                         Run an additional ext_proc authorization filter, served by that Service."
   echo "                                         Requires --experimental-use-sdsmint. (experimental)"
@@ -347,6 +349,60 @@ atenet_egress_manifest() {
     echo "manifests/ate-install/atenet-egress-with-sdsmint.yaml"
   else
     echo "manifests/ate-install/atenet-egress.yaml"
+  fi
+}
+
+# patch_ate_api_server_manifest adds --inject-egress-trust-bundle under
+# --experimental-use-sdsmint, guarded like ensure_egress_mitm_ca_pool_secret.
+# Spliced into the args because kustomize strips comment markers.
+patch_ate_api_server_manifest() {
+  if [[ "$(atenet_router)" == "agentgateway" || "${ATE_EXPERIMENTAL_USE_SDSMINT:-false}" != "true" ]]; then
+    cat
+    return
+  fi
+  # index() rather than a regex class: the runner's awk is mawk, whose
+  # POSIX-class support is unreliable, and a non-matching pattern degrades
+  # to a silent passthrough.
+  awk '{
+    print
+    i = index($0, "- --egress-gateway-address=")
+    if (i > 0 && substr($0, 1, i - 1) ~ /^ *$/) {
+      print substr($0, 1, i - 1) "- --inject-egress-trust-bundle"
+    }
+  }'
+}
+
+# wait_for_ate_api_server_drain waits for replaced ate-api-server pods to
+# exit. rollout status returns once they are marked deleted, but
+# --drain-delay keeps them serving new RPCs after SIGTERM — work sequenced
+# right after could still get specs built under the previous flags.
+wait_for_ate_api_server_drain() {
+  for _ in $(seq 1 30); do
+    run_kubectl -n ate-system get pods -l app=ate-api-server \
+        -o jsonpath='{.items[*].metadata.deletionTimestamp}' | grep -q . || return 0
+    sleep 2
+  done
+  echo "Error: timed out waiting for replaced ate-api-server pods to exit" >&2
+  return 1
+}
+
+# verify_ate_api_server_injection fails the install when the live egress
+# gateway is the sdsmint variant but ate-api-server lacks injection. Checks
+# cluster state, not invocation flags: a plain redeploy must not strip it.
+verify_ate_api_server_injection() {
+  local egress_containers=""
+  egress_containers="$(run_kubectl -n ate-system get deployment atenet-egress \
+    -o jsonpath='{.spec.template.spec.initContainers[*].name} {.spec.template.spec.containers[*].name}' 2>/dev/null || true)"
+  local api_args=""
+  api_args="$(run_kubectl -n ate-system get deployment ate-api-server \
+    -o jsonpath='{.spec.template.spec.containers[0].args}')"
+  if [[ "${egress_containers}" == *sdsmint* && "${api_args}" != *inject-egress-trust-bundle* ]]; then
+    echo "Error: the sdsmint (MITM) egress gateway is deployed but ate-api-server lacks --inject-egress-trust-bundle;" >&2
+    echo "redeploy ate-api-server with --experimental-use-sdsmint so actors keep receiving the egress trust bundle." >&2
+    return 1
+  fi
+  if [[ "${egress_containers}" != *sdsmint* && "${api_args}" == *inject-egress-trust-bundle* ]]; then
+    echo "Warning: ate-api-server runs --inject-egress-trust-bundle but the deployed egress gateway is not the sdsmint variant." >&2
   fi
 }
 
@@ -949,7 +1005,7 @@ deploy_ate_system() {
   fi
 
   local manifests=""
-  manifests="$(render_ate_system_manifests)"
+  manifests="$(render_ate_system_manifests | patch_ate_api_server_manifest)"
   echo "${manifests}" | run_kubectl apply -f -
 
   reconcile_cloudsql_proxy_sidecar
@@ -965,6 +1021,8 @@ deploy_ate_system() {
     run_kubectl rollout status statefulset/postgres -n ate-system --timeout="$(rollout_timeout)"
   fi
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
+  wait_for_ate_api_server_drain
+  verify_ate_api_server_injection
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
@@ -1005,9 +1063,11 @@ deploy_ate_apiserver() {
   apply_otel_config
   apply_otel_endpoint_override
 
-  run_ko apply -f manifests/ate-install/ate-api-server.yaml
+  run_ko resolve -f manifests/ate-install/ate-api-server.yaml | patch_ate_api_server_manifest | run_kubectl apply -f -
   reconcile_cloudsql_proxy_sidecar
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout="$(rollout_timeout)"
+  wait_for_ate_api_server_drain
+  verify_ate_api_server_injection
 }
 
 # Reconciles the Cloud SQL Auth Proxy sidecar and Workload Identity

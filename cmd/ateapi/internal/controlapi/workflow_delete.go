@@ -163,7 +163,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 
 	var workloadSpec *ateletpb.WorkloadSpec
 	if actorTemplate != nil {
-		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+		spec, err := w.workloadSpec(ctx, actorTemplate, actor)
 		if err != nil {
 			return err
 		}
