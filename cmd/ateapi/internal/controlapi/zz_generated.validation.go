@@ -6251,7 +6251,7 @@ func Validate_TagStatus(
 	}
 
 	// field ateapipb.TagStatus.ActorTemplateUid has no validation
-	// field ateapipb.TagStatus.InProgressSnapshotUri has no validation
+	// field ateapipb.TagStatus.StorageLocation has no validation
 	// field ateapipb.TagStatus.SourceActorUid has no validation
 	return errs
 }

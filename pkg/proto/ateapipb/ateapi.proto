@@ -645,11 +645,11 @@ message TagStatus {
   // seeded from a tag under the same template.
   string actor_template_uid = 2;
 
-  // in_progress_snapshot_uri is where CreateTag is copying the tag's own
-  // snapshot to. It is minted before a single object is written and cleared
-  // once snapshot is set, so a tag left with it set names exactly the objects
-  // its unfinished create stranded, and deleting the tag collects them.
-  string in_progress_snapshot_uri = 3;
+  // Immutable base storage location captured when the tag is reserved. Its
+  // snapshot lives at <storage_location>/atespaces/<atespace>/tags/<tag_uid>.
+  // Retained independently of the source actor and template so deleting an
+  // unfinished tag can collect any partial copy after those resources are gone.
+  string storage_location = 3;
 
   // source_actor_uid is the UID of the Actor this tag's snapshot was copied
   // from.

@@ -327,16 +327,16 @@ snapshotsConfig:
 
 ```
 <location>/atespaces/<atespace>/actors/<actor uid>/snapshots/<snapshot name>
-<location>/atespaces/<atespace>/tags/<snapshot name>
+<location>/atespaces/<atespace>/tags/<tag uid>
 ```
 
 The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden actor lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/actors/<uid>/snapshots/<name>`.
 
-An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. The actor level is keyed on the UID rather than the name, so an actor recreated under a name that was used before never inherits its predecessor's objects.
+An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an actor or tag under the same name never inherits its predecessor's objects. A pending tag records its base location in `status.storageLocation`; together with its atespace and UID, this identifies any partial copy to collect if creation fails.
 
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot`, a `Tag` in `status.snapshot`, and an `ActorTemplate` its golden one in `status.goldenSnapshotStatus.goldenSnapshot` — each an `ExternalSnapshot` carrying `snapshotUri` and the `contentScope` it captured. The URI is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. All three are server-owned: do not send them on input, and parse a URI only against the scheme above.
+An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot`, a `Tag` in `status.snapshot`, and an `ActorTemplate` its golden one in `status.goldenSnapshotStatus.goldenSnapshot` — each an `ExternalSnapshot` carrying `snapshotUri` and the `contentScope` it captured. The URI is recorded when the snapshot is written. All three are server-owned: do not send them on input, and parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 

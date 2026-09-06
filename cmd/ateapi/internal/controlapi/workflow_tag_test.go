@@ -91,8 +91,8 @@ func TestTagActorSnapshot(t *testing.T) {
 	if tagSnapshot == "" || tagSnapshot == actorSnapshot.String() {
 		t.Fatalf("tag snapshot uri = %q, want a copy of its own rather than the actor's %q", tagSnapshot, actorSnapshot)
 	}
-	if got := tag.GetStatus().GetInProgressSnapshotUri(); got != "" {
-		t.Errorf("in-progress snapshot uri = %q, want cleared once the tag is finished", got)
+	if want := mustReservedTagSnapshotURI(t, tag).String(); tagSnapshot != want {
+		t.Errorf("tag snapshot uri = %q, want UID-based URI %q", tagSnapshot, want)
 	}
 	if got, want := tag.GetStatus().GetSourceActorUid(), actor.GetMetadata().GetUid(); got != want {
 		t.Errorf("source actor uid = %q, want %q", got, want)
@@ -251,11 +251,8 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if got := pending.GetStatus().GetSnapshot().GetSnapshotUri(); got != "" {
 		t.Errorf("snapshot uri after the failure = %q, want unset: the copy never finished", got)
 	}
-	stranded := pending.GetStatus().GetInProgressSnapshotUri()
-	if stranded == "" {
-		t.Fatal("in-progress snapshot uri after the failure is empty, want the prefix the copy stranded")
-	}
-	strandedURI := mustParseSnapshotURI(t, stranded)
+	strandedURI := mustReservedTagSnapshotURI(t, pending)
+	stranded := strandedURI.String()
 	if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, strandedURI)); diff != "" {
 		t.Errorf("the stranded partial copy mismatch (-want +got):\n%s", diff)
 	}
@@ -270,7 +267,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTag after the refused create: %v", err)
 	}
-	if got := stillPending.GetStatus().GetInProgressSnapshotUri(); got != stranded {
+	if got := mustReservedTagSnapshotURI(t, stillPending).String(); got != stranded {
 		t.Errorf("in-progress snapshot uri after the refused create = %q, want the prefix the row already named, %q", got, stranded)
 	}
 	if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, strandedURI)); diff != "" {
@@ -294,8 +291,8 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if recreated == "" || recreated == stranded {
 		t.Fatalf("snapshot uri after the delete = %q, want a fresh prefix rather than the stranded %q", recreated, stranded)
 	}
-	if got := tag.GetStatus().GetInProgressSnapshotUri(); got != "" {
-		t.Errorf("in-progress snapshot uri after the delete = %q, want cleared", got)
+	if want := mustReservedTagSnapshotURI(t, tag).String(); recreated != want {
+		t.Errorf("recreated tag snapshot uri = %q, want UID-based URI %q", recreated, want)
 	}
 	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, recreated))); diff != "" {
 		t.Errorf("the tag's external snapshot after the delete mismatch (-want +got):\n%s", diff)
@@ -333,7 +330,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 				t.Errorf("GetTag during the copy: %v", err)
 				return
 			}
-			pendingURI = reserved.GetStatus().GetInProgressSnapshotUri()
+			pendingURI = mustReservedTagSnapshotURI(t, reserved).String()
 			_, deleteErr = svc.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: tagRef.ToObjectRef()})
 		})
 		return nil
@@ -393,7 +390,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTag: %v", err)
 	}
-	strandedURI := mustParseSnapshotURI(t, pending.GetStatus().GetInProgressSnapshotUri())
+	strandedURI := mustReservedTagSnapshotURI(t, pending)
 
 	// The second actor asks for the same name, with object storage healthy: it
 	// must not inherit the first actor's prefix.
@@ -416,4 +413,13 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	if diff := cmp.Diff([]string{"other.json"}, objects.Snapshot(t, secondSnapshot)); diff != "" {
 		t.Errorf("the second actor's external snapshot mismatch (-want +got):\n%s", diff)
 	}
+}
+
+func mustReservedTagSnapshotURI(t *testing.T, tag *ateapipb.Tag) resources.SnapshotURI {
+	t.Helper()
+	uri, err := resources.NewTagSnapshotURI(tag.GetStatus().GetStorageLocation(), tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
+	return uri
 }

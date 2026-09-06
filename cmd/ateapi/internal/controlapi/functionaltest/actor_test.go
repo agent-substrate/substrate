@@ -356,7 +356,7 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	// Simulates a tag creation that failed in while writing the snapshot to
 	// external storage.
 	pending := seedTag(t, tc, "pending-source", "pending", func(tag *ateapipb.Tag) {
-		tag.Status.InProgressSnapshotUri = tag.GetStatus().GetSnapshot().GetSnapshotUri()
+		tag.Status.StorageLocation = testStorageLocation
 		tag.Status.Snapshot = nil
 		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
 	})
@@ -371,15 +371,17 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	assertGrpcError(t, err, codes.FailedPrecondition, "source Tag is still being created or failed creation")
 
 	// Finishing the tag creation, so now the tag is qualified to be a tag source.
-	snapshotURI := pending.GetStatus().GetInProgressSnapshotUri()
+	snapshotURI, err := resources.NewTagSnapshotURI(pending.GetStatus().GetStorageLocation(), pending.GetMetadata().GetAtespace(), pending.GetMetadata().GetUid())
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI: %v", err)
+	}
 	if _, err := tc.persistence.UpdateTag(ctx,
 		resources.TagRefFromTag(pending), store.PreconditionFrom(pending),
 		func(toUpdate *ateapipb.Tag) error {
 			toUpdate.Status.Snapshot = &ateapipb.ExternalSnapshot{
-				SnapshotUri:  snapshotURI,
+				SnapshotUri:  snapshotURI.String(),
 				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			}
-			toUpdate.Status.InProgressSnapshotUri = ""
 			return nil
 		}); err != nil {
 		t.Fatalf("finalizing the tag: %v", err)
@@ -396,7 +398,7 @@ func TestCreateActor_PendingTag(t *testing.T) {
 	}
 	// The clone points at the tag's snapshot, under the tag's own prefix: the
 	// tag still owns those objects.
-	if got := clone.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
+	if got := clone.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI.String() {
 		t.Errorf("clone external snapshot = %q, want the tag's %q", got, snapshotURI)
 	}
 }
@@ -1375,7 +1377,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		},
 	}
 	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	// 1. CreateActor
 	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -1423,6 +1425,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	}
 
 	// 4. ResumeActor from paused
+	waitForWorkerAvailable(t, tc, workerName)
 	resumeResp2, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
 	})
@@ -2213,6 +2216,7 @@ func TestSuspendActor(t *testing.T) {
 			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			SourceActorUid:   sourceActor.GetMetadata().GetUid(),
+			StorageLocation:  tmpl.GetSnapshotsConfig().GetStorageLocation(),
 		},
 	}
 	stored, err := tc.client.GetTag(context.Background(), &ateapipb.GetTagRequest{Tag: tagRef})

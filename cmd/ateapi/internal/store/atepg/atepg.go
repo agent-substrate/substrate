@@ -1157,8 +1157,8 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); stored != nil && !proto.Equal(stored, mutated) {
 		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
 	}
-	if stored, mutated := storedTag.GetStatus().GetInProgressSnapshotUri(), mutatedTag.GetStatus().GetInProgressSnapshotUri(); stored != mutated && mutated != "" {
-		return fmt.Errorf("status.in_progress_snapshot_uri may only be cleared: mutation changed it from %q to %q", stored, mutated)
+	if stored, mutated := storedTag.GetStatus().GetStorageLocation(), mutatedTag.GetStatus().GetStorageLocation(); stored != mutated {
+		return fmt.Errorf("status.storage_location is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
 	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
 		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)

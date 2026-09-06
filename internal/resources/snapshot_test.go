@@ -164,7 +164,7 @@ func TestNewTagSnapshotURI(t *testing.T) {
 		name     string
 		location string
 		atespace string
-		snapshot string
+		tagUID   string
 		want     string
 		wantErr  bool
 	}{
@@ -172,66 +172,66 @@ func TestNewTagSnapshotURI(t *testing.T) {
 			name:     "no trailing slash",
 			location: "gs://bucket/root",
 			atespace: "team-a",
-			snapshot: "snap-1",
-			want:     "gs://bucket/root/atespaces/team-a/tags/snap-1",
+			tagUID:   "tag-uid-1",
+			want:     "gs://bucket/root/atespaces/team-a/tags/tag-uid-1",
 		},
 		{
 			name:     "trailing slash",
 			location: "gs://bucket/root/",
 			atespace: "team-a",
-			snapshot: "snap-1",
-			want:     "gs://bucket/root/atespaces/team-a/tags/snap-1",
+			tagUID:   "tag-uid-1",
+			want:     "gs://bucket/root/atespaces/team-a/tags/tag-uid-1",
 		},
 		{
 			name:     "bucket only",
 			location: "gs://bucket",
 			atespace: "team-a",
-			snapshot: "snap-1",
-			want:     "gs://bucket/atespaces/team-a/tags/snap-1",
+			tagUID:   "tag-uid-1",
+			want:     "gs://bucket/atespaces/team-a/tags/tag-uid-1",
 		},
 		{
 			name:     "empty location",
 			location: "",
 			atespace: "team-a",
-			snapshot: "snap-1",
+			tagUID:   "tag-uid-1",
 			wantErr:  true,
 		},
 		{
 			name:     "invalid atespace",
 			location: "gs://bucket/root",
 			atespace: "Team_A",
-			snapshot: "snap-1",
+			tagUID:   "tag-uid-1",
 			wantErr:  true,
 		},
 		{
-			name:     "invalid snapshot name",
+			name:     "invalid tag UID",
 			location: "gs://bucket/root",
 			atespace: "team-a",
-			snapshot: "2026-08-05T10:04:05Z",
+			tagUID:   "2026-08-05T10:04:05Z",
 			wantErr:  true,
 		},
 		{
-			name:     "empty snapshot name",
+			name:     "empty tag UID",
 			location: "gs://bucket/root",
 			atespace: "team-a",
-			snapshot: "",
+			tagUID:   "",
 			wantErr:  true,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := NewTagSnapshotURI(tc.location, tc.atespace, tc.snapshot)
+			got, err := NewTagSnapshotURI(tc.location, tc.atespace, tc.tagUID)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("NewTagSnapshotURI(%q, %q, %q) error = %v, wantErr %t", tc.location, tc.atespace, tc.snapshot, err, tc.wantErr)
+				t.Fatalf("NewTagSnapshotURI(%q, %q, %q) error = %v, wantErr %t", tc.location, tc.atespace, tc.tagUID, err, tc.wantErr)
 			}
 			if got.String() != tc.want {
-				t.Errorf("NewTagSnapshotURI(%q, %q, %q) = %q, want %q", tc.location, tc.atespace, tc.snapshot, got, tc.want)
+				t.Errorf("NewTagSnapshotURI(%q, %q, %q) = %q, want %q", tc.location, tc.atespace, tc.tagUID, got, tc.want)
 			}
 			if got.OwnerPrefix().String() != got.String() {
-				t.Errorf("NewTagSnapshotURI(%q, %q, %q).OwnerPrefix() = %q, want the snapshot's own prefix %q", tc.location, tc.atespace, tc.snapshot, got.OwnerPrefix(), got)
+				t.Errorf("NewTagSnapshotURI(%q, %q, %q).OwnerPrefix() = %q, want the snapshot's own prefix %q", tc.location, tc.atespace, tc.tagUID, got.OwnerPrefix(), got)
 			}
 			if tc.wantErr && !got.IsZero() {
-				t.Errorf("NewTagSnapshotURI(%q, %q, %q) returned %q alongside an error, want the zero value", tc.location, tc.atespace, tc.snapshot, got)
+				t.Errorf("NewTagSnapshotURI(%q, %q, %q) returned %q alongside an error, want the zero value", tc.location, tc.atespace, tc.tagUID, got)
 			}
 		})
 	}
