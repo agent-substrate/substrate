@@ -84,6 +84,8 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
+	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, "Interval between actor template resyncs. Must be positive.")
+
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 )
@@ -98,6 +100,9 @@ func main() {
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if *templateResyncInterval <= 0 {
+		serverboot.Fatal(ctx, "Invalid --template-resync-interval", errors.New("must be positive"))
 	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
@@ -201,7 +206,7 @@ func main() {
 	controlSrv := controlapi.NewRPCService(persistence, workerCache, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins, objectStore)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
