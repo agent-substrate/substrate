@@ -229,8 +229,8 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	// rules in an ateom-owned table makes cleanup simple and avoids mutating
 	// Kubernetes or CNI-managed chains directly.
 	//
-	// TODO: Add IPv6 veth addressing, forwarding, and nftables rules once actor
-	// networking supports dual-stack pods. The current actor network is IPv4-only.
+	// TODO(#246): Add the IPv6 veth addressing and forwarding. The actor
+	// network itself is still IPv4-only.
 	//
 	// The rules do three things:
 	//
@@ -247,8 +247,10 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	}
 
 	c := &nftables.Conn{}
+	// The inet family lets one table carry both address families once the
+	// actor veth is dual-stack.
 	table := &nftables.Table{
-		Family: nftables.TableFamilyIPv4,
+		Family: nftables.TableFamilyINet,
 		Name:   ActorNftTableName,
 	}
 	c.AddTable(table)
@@ -274,7 +276,7 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	c.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: postrouting,
-		Exprs: append(IPSourceEqual(ActorVethIP), &expr.Masq{}),
+		Exprs: append(ipv4SourceEqual(ActorVethIP), &expr.Masq{}),
 	})
 
 	acceptPolicy := nftables.ChainPolicyAccept
@@ -295,7 +297,7 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	})
 
 	if err := c.Flush(); err != nil {
-		return fmt.Errorf("while installing actor nftables rules: %w", err)
+		return fmt.Errorf("while installing actor nftables rules (inet nat needs Linux 5.2 or later): %w", err)
 	}
 	return nil
 }
@@ -305,10 +307,23 @@ func RemoveActorNftablesRules() error {
 	// Delete the whole ateom nftables table if it exists. The table is
 	// per-worker and currently per-active-actor because this worker path runs at
 	// most one actor at a time. Missing tables are treated as already clean.
+	//
+	// A table name is unique per family, so both families are swept: an ateom
+	// from before the inet move can have left an ip table in this netns.
+	// TODO(ypgao): Drop the ip sweep once no live pod can predate this change.
+	return errors.Join(
+		removeActorNftablesTable("inet", nftables.TableFamilyINet),
+		removeActorNftablesTable("ip", nftables.TableFamilyIPv4),
+	)
+}
+
+// removeActorNftablesTable deletes the actor table in one family. A missing
+// table is treated as already clean.
+func removeActorNftablesTable(name string, family nftables.TableFamily) error {
 	c := &nftables.Conn{}
-	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	tables, err := c.ListTablesOfFamily(family)
 	if err != nil {
-		return fmt.Errorf("while listing nftables tables: %w", err)
+		return fmt.Errorf("while listing %s nftables tables: %w", name, err)
 	}
 	for _, table := range tables {
 		if table.Name != ActorNftTableName {
@@ -316,19 +331,27 @@ func RemoveActorNftablesRules() error {
 		}
 		c.DelTable(table)
 		if err := c.Flush(); err != nil {
-			return fmt.Errorf("while deleting actor nftables table: %w", err)
+			return fmt.Errorf("while deleting the %s actor nftables table: %w", name, err)
 		}
 		return nil
 	}
 	return nil
 }
 
-func IPSourceEqual(ip string) []expr.Any {
-	return IPPayloadEqual(12, ip)
+func ipv4SourceEqual(ip string) []expr.Any {
+	return ipv4PayloadEqual(12, ip)
 }
 
-func IPPayloadEqual(offset uint32, ip string) []expr.Any {
+// ipv4PayloadEqual matches a 4-byte IPv4 network-header field, guarded by an
+// nfproto comparison so it is safe in the inet table.
+func ipv4PayloadEqual(offset uint32, ip string) []expr.Any {
 	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.NFPROTO_IPV4},
+		},
 		&expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseNetworkHeader,
@@ -361,7 +384,7 @@ func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port 
 	if port == 0 {
 		return nil
 	}
-	exprs := append(IPSourceEqual(ActorVethIP), TCPProtocol()...)
+	exprs := append(ipv4SourceEqual(ActorVethIP), TCPProtocol()...)
 	exprs = append(exprs,
 		&expr.Immediate{
 			Register: 1,
