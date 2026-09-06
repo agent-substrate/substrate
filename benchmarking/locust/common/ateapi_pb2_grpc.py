@@ -441,7 +441,7 @@ class ControlServicer:
 
     def DeleteActorTemplate(self, request, context):
         """Delete an ActorTemplate together with its golden actor and golden
-        snapshot in the ActorTemplate's namespace.
+        tag in the reserved ate-golden atespace.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

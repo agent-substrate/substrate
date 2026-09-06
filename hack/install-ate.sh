@@ -1201,7 +1201,7 @@ wait_actortemplate_ready() {
 
   while ((SECONDS < deadline)); do
     if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
-      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
+      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenTag.name // empty' <<<"${json}")
       if [[ -n "${snapshot}" ]]; then
         return 0
       fi

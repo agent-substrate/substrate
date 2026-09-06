@@ -153,6 +153,26 @@ func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.Dele
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
+	// Serialize cleanup against golden actor/tag creation by the reconciler.
+	ctx, lease, err := acquireLease(ctx, s.impl, "lease:actortemplate:"+templateRef.Atespace+":"+templateRef.Name, "ActorTemplate "+templateRef.String())
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Close()
+	tmpl, err := s.impl.GetActorTemplate(ctx, templateRef)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
+	}
+	if err != nil {
+		return nil, err
+	}
+	goldenRef := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+	if _, err := s.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: goldenRef, AnyState: true}); err != nil && status.Code(err) != codes.NotFound {
+		return nil, fmt.Errorf("while deleting golden actor: %w", err)
+	}
+	if _, err := s.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: goldenRef}); err != nil && status.Code(err) != codes.NotFound {
+		return nil, fmt.Errorf("while deleting golden tag: %w", err)
+	}
 	deleted, err := s.impl.DeleteActorTemplate(ctx, templateRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

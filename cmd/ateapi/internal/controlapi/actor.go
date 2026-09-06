@@ -77,13 +77,28 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		return nil, err
 	}
 
-	// If a source tag is requested, resolve it to the external
-	// snapshot the new Actor starts from.
+	// Resolve the explicit tag, or freeze the template's current golden default.
+	tagRef := inActor.GetSourceTag()
+	if tagRef == nil {
+		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+	} else {
+		for _, volume := range template.GetVolumes() {
+			if volume.GetExternalVolumeTemplate() != nil {
+				// TODO: Permit cloning after CSI volume snapshots are supported.
+				return nil, status.Error(codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
+			}
+		}
+	}
 	var sourceTag *ateapipb.Tag
-	if tagRef := inActor.GetSourceTag(); tagRef != nil {
+	if tagRef != nil {
 		sourceTag, err = s.resolveTagSource(ctx, inActor.GetMetadata().GetAtespace(), tagRef, template)
 		if err != nil {
 			return nil, err
+		}
+		if inActor.GetSourceTag() == nil {
+			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -162,12 +177,6 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		return nil, status.Errorf(codes.FailedPrecondition, "source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
-	}
-	for _, volume := range template.GetVolumes() {
-		if volume.GetExternalVolumeTemplate() != nil {
-			// TODO: Permit cloning after CSI volume snapshots are supported.
-			return nil, status.Error(codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
-		}
 	}
 	return tag, nil
 }

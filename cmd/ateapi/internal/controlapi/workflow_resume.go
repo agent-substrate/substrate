@@ -38,9 +38,9 @@ import (
 // and passed by value to the restore step — never mutated after resolution.
 type resumeSnapshotSource struct {
 	// SnapshotURI is the storage location of the durable snapshot to restore
-	// from: the actor's own latest snapshot when one exists, the template's
-	// golden snapshot otherwise. Zero means cold boot from the spec (unless
-	// the actor holds a local snapshot, which takes precedence at restore).
+	// from: the actor's latest snapshot, including a tag borrowed at creation.
+	// Zero means cold boot from the spec (unless the actor holds a local
+	// snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
 	Scope       ateapipb.SnapshotContentScope
 	// GoldenSnapshotURI is the storage location of the ActorTemplate's golden
@@ -179,7 +179,6 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
-	goldenSnapshotStatus := actorTemplate.GetStatus().GetGoldenSnapshotStatus()
 	if uri := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); uri != "" {
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(uri); err != nil {
 			return nil, nil, src, status.Errorf(codes.DataLoss, "Actor %s external snapshot: %v", actorRef, err)
@@ -190,14 +189,11 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		// the capture.
 		builtOnTemplateUID := actor.GetStatus().GetCurrentActorTemplateUid()
 		src.TemplateReplaced = builtOnTemplateUID != "" && builtOnTemplateUID != actorTemplate.GetMetadata().GetUid()
-	} else if goldenURI := goldenSnapshotStatus.GetGoldenSnapshot().GetSnapshotUri(); goldenURI != "" && !boot {
-		if err := validateGoldenSnapshotScope(goldenSnapshotStatus.GetGoldenSnapshot()); err != nil {
-			return nil, nil, src, err
+		// --boot skips only a borrowed default, never the actor's own snapshot
+		// or an explicitly requested tag.
+		if boot && actor.GetSourceTag() == nil && !src.SnapshotURI.OwnedBy(resources.ActorSnapshotOwner(actorRef.Atespace, actor.GetMetadata().GetUid())) {
+			src = resumeSnapshotSource{}
 		}
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(goldenURI); err != nil {
-			return nil, nil, src, status.Errorf(codes.DataLoss, "golden external snapshot %q: %v", goldenURI, err)
-		}
-		src.Scope = goldenSnapshotStatus.GetGoldenSnapshot().GetContentScope()
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -216,13 +212,25 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			dataOnly = src.Scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 		}
 		if dataOnly {
-			goldenURI := goldenSnapshotStatus.GetGoldenSnapshot().GetSnapshotUri()
-			if goldenURI == "" {
-				return nil, nil, src, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
+			ref := actorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+			if ref == nil {
+				return nil, nil, src, status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden tag, which is not available")
 			}
-			if err := validateGoldenSnapshotScope(goldenSnapshotStatus.GetGoldenSnapshot()); err != nil {
+			tag, err := w.store.GetTag(ctx, resources.TagRefFromObjectRef(ref))
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, nil, src, status.Error(codes.FailedPrecondition, "ActorTemplate golden tag is not available")
+			}
+			if err != nil {
+				return nil, nil, src, fmt.Errorf("while getting golden tag: %w", err)
+			}
+			golden := tag.GetStatus().GetSnapshot()
+			if golden.GetSnapshotUri() == "" || tag.GetStatus().GetActorTemplateUid() != actorTemplate.GetMetadata().GetUid() {
+				return nil, nil, src, status.Error(codes.FailedPrecondition, "ActorTemplate golden tag is incomplete or belongs to another template")
+			}
+			if err := validateGoldenSnapshotScope(golden); err != nil {
 				return nil, nil, src, err
 			}
+			goldenURI := golden.GetSnapshotUri()
 			if src.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenURI); err != nil {
 				return nil, nil, src, status.Errorf(codes.DataLoss, "golden external snapshot %q: %v", goldenURI, err)
 			}
@@ -750,7 +758,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		_, err = client.Restore(ctx, req)
 		return tele, maybeCrashActor(ctx, w.store, actorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
 	} else {
-		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
+		slog.InfoContext(ctx, "Actor has no snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		// Booting from scratch: resolve the sandbox binaries from the
