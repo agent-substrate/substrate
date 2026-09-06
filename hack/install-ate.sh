@@ -74,6 +74,8 @@ function usage() {
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
   echo "  --podcert-workers-per-signer N         Concurrent workers per podcertificate-controller signer (default: 1)"
+  echo "  --atenet-router-concurrency N          Envoy worker threads in atenet-router (default: 4)"
+  echo "  --atenet-egress-concurrency N          Envoy worker threads in atenet-egress (default: 4)"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
   echo ""
@@ -228,6 +230,21 @@ podcert_workers_per_signer() {
   local workers="${ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER:-1}"
   if ! [[ "${workers}" =~ ^[1-9][0-9]*$ ]]; then
     echo "Error: --podcert-workers-per-signer must be a positive integer, got '${workers}'" >&2
+    exit 1
+  fi
+  echo "${workers}"
+}
+
+# atenet_concurrency validates one proxy's Envoy worker thread count and echoes
+# it. The two atenet proxies take separate flags: the router accepts short
+# request/response connections, while the egress gateway holds CONNECT tunnels
+# open for the life of an actor's connection, and Envoy pins a connection to a
+# worker for its lifetime.
+atenet_concurrency() {
+  local flag="$1"
+  local workers="${2:-4}"
+  if ! [[ "${workers}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: ${flag} must be a positive integer, got '${workers}'" >&2
     exit 1
   fi
   echo "${workers}"
@@ -798,6 +815,45 @@ apply_podcert_workers_override() {
     WORKERS_PER_SIGNER="${workers}"
 }
 
+# set_envoy_concurrency updates one atenet proxy's Envoy worker thread count.
+# It edits the live Deployment rather than the rendered YAML because the egress
+# gateway is applied as a whole file rather than through an overlay, so there is
+# no single render path to parameterize.
+set_envoy_concurrency() {
+  local deployment="$1"
+  local flag="$2"
+  local requested="$3"
+
+  if [[ -z "${requested}" ]]; then
+    return 0
+  fi
+
+  local workers=""
+  workers="$(atenet_concurrency "${flag}" "${requested}")"
+
+  # Empty under the agentgateway data plane, which runs no Envoy container and
+  # so has no variable to read.
+  local current=""
+  current="$(run_kubectl -n ate-system get "deployment/${deployment}" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="envoy")].env[?(@.name=="ENVOY_CONCURRENCY")].value}' 2>/dev/null || true)"
+  if [[ -z "${current}" || "${current}" == "${workers}" ]]; then
+    return 0
+  fi
+
+  echo "Overriding ${deployment} ENVOY_CONCURRENCY with ${workers}"
+  # --containers=envoy because both Deployments run a Go container alongside
+  # Envoy, and the default is to set the variable on every container.
+  run_kubectl -n ate-system set env "deployment/${deployment}" --containers=envoy \
+    ENVOY_CONCURRENCY="${workers}"
+}
+
+apply_atenet_concurrency_override() {
+  set_envoy_concurrency atenet-router --atenet-router-concurrency \
+    "${ATE_INSTALL_ATENET_ROUTER_CONCURRENCY:-}"
+  set_envoy_concurrency atenet-egress --atenet-egress-concurrency \
+    "${ATE_INSTALL_ATENET_EGRESS_CONCURRENCY:-}"
+}
+
 create_api_authentication_config() {
   log_step "create_api_authentication_config"
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
@@ -959,6 +1015,7 @@ deploy_ate_system() {
   # variant of each.
   ensure_egress_mitm_ca_pool_secret
   apply_atenet_egress
+  apply_atenet_concurrency_override
 
   log_step "Waiting for ATE system components to be ready..."
   if use_bundled_postgres; then
@@ -1086,6 +1143,7 @@ deploy_atenet() {
 
   ensure_egress_mitm_ca_pool_secret
   apply_atenet_egress
+  apply_atenet_concurrency_override
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout="$(rollout_timeout)"
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout="$(rollout_timeout)"
@@ -1457,6 +1515,22 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="${prescan_args[$((i + 1))]}"
       ;;
+    --atenet-router-concurrency=*) ATE_INSTALL_ATENET_ROUTER_CONCURRENCY="${prescan_args[i]#*=}" ;;
+    --atenet-router-concurrency)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --atenet-router-concurrency requires a positive integer" >&2
+        exit 1
+      fi
+      ATE_INSTALL_ATENET_ROUTER_CONCURRENCY="${prescan_args[$((i + 1))]}"
+      ;;
+    --atenet-egress-concurrency=*) ATE_INSTALL_ATENET_EGRESS_CONCURRENCY="${prescan_args[i]#*=}" ;;
+    --atenet-egress-concurrency)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --atenet-egress-concurrency requires a positive integer" >&2
+        exit 1
+      fi
+      ATE_INSTALL_ATENET_EGRESS_CONCURRENCY="${prescan_args[$((i + 1))]}"
+      ;;
     --rollout-timeout=*) ATE_INSTALL_ROLLOUT_TIMEOUT="${prescan_args[i]#*=}" ;;
     --rollout-timeout)
       if (( i + 1 >= ${#prescan_args[@]} )); then
@@ -1518,6 +1592,8 @@ case "${BENCHMARK_SANDBOX_CLASS}" in
     ;;
 esac
 podcert_workers_per_signer >/dev/null
+atenet_concurrency --atenet-router-concurrency "${ATE_INSTALL_ATENET_ROUTER_CONCURRENCY:-4}" >/dev/null
+atenet_concurrency --atenet-egress-concurrency "${ATE_INSTALL_ATENET_EGRESS_CONCURRENCY:-4}" >/dev/null
 rollout_timeout >/dev/null
 
 while [[ "$#" -gt 0 ]]; do
@@ -1556,6 +1632,24 @@ while [[ "$#" -gt 0 ]]; do
         exit 1
       fi
       ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER="$1"
+      ;;
+    --atenet-router-concurrency=*) ATE_INSTALL_ATENET_ROUTER_CONCURRENCY="${1#*=}" ;;
+    --atenet-router-concurrency)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --atenet-router-concurrency requires a positive integer" >&2
+        exit 1
+      fi
+      ATE_INSTALL_ATENET_ROUTER_CONCURRENCY="$1"
+      ;;
+    --atenet-egress-concurrency=*) ATE_INSTALL_ATENET_EGRESS_CONCURRENCY="${1#*=}" ;;
+    --atenet-egress-concurrency)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --atenet-egress-concurrency requires a positive integer" >&2
+        exit 1
+      fi
+      ATE_INSTALL_ATENET_EGRESS_CONCURRENCY="$1"
       ;;
     --rollout-timeout=*) ATE_INSTALL_ROLLOUT_TIMEOUT="${1#*=}" ;;
     --rollout-timeout)
