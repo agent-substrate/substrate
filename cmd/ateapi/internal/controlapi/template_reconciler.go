@@ -33,8 +33,7 @@ import (
 )
 
 const (
-	templateResyncInterval = 20 * time.Second
-	templateListPageSize   = 100
+	templateListPageSize = 100
 
 	// templateWorkerCount is the number of goroutines draining the work
 	// queue.
@@ -74,15 +73,17 @@ type goldenActorControl interface {
 // ActorTemplateReconciler drives stored ActorTemplates through the golden
 // actor state machine.
 type ActorTemplateReconciler struct {
-	persistence templateReconcilerStore
-	control     goldenActorControl
-	queue       workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
+	persistence    templateReconcilerStore
+	control        goldenActorControl
+	queue          workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
+	resyncInterval time.Duration
 }
 
-func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
+func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, resyncInterval time.Duration) *ActorTemplateReconciler {
 	return &ActorTemplateReconciler{
-		persistence: persistence,
-		control:     control,
+		persistence:    persistence,
+		control:        control,
+		resyncInterval: resyncInterval,
 		// Create rate-limiting queue with exponential backoff
 		queue: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()),
 	}
@@ -96,7 +97,7 @@ func (r *ActorTemplateReconciler) Start(ctx context.Context) {
 		for range templateWorkerCount {
 			go wait.UntilWithContext(ctx, r.runWorker, time.Second)
 		}
-		wait.UntilWithContext(ctx, r.resync, templateResyncInterval)
+		wait.UntilWithContext(ctx, r.resync, r.resyncInterval)
 	}()
 }
 
@@ -278,7 +279,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, fmt.Sprintf("golden actor in unexpected state %v", state))
 
 		default:
-			return templateResyncInterval, nil
+			return r.resyncInterval, nil
 		}
 	}
 }

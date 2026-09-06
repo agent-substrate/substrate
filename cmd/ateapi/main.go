@@ -83,6 +83,8 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
+	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, "Interval between actor template resyncs. Must be positive.")
+
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 )
@@ -99,6 +101,9 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
+	if *templateResyncInterval <= 0 {
+		serverboot.Fatal(ctx, "Invalid --template-resync-interval", errors.New("must be positive"))
+	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -226,7 +231,7 @@ func main() {
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv)
+	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}
