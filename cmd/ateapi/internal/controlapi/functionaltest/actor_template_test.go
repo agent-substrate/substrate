@@ -16,7 +16,12 @@ package functionaltest
 
 import (
 	"context"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
@@ -44,7 +49,7 @@ func TestActorTemplateCRUD(t *testing.T) {
 			// Server-owned status on the request is ignored.
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/sneaky"},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 				},
 			},
 		},
@@ -132,4 +137,96 @@ func TestActorTemplateCRUD(t *testing.T) {
 		},
 	})
 	assertGrpcErrorRegex(t, err, codes.InvalidArgument, `sandbox_config\.config_name`)
+}
+
+func TestGoldenTagLifecycle(t *testing.T) {
+	ns := namespaceForTest("golden-tag")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+	tmpl := createTemplateWithSelector(t, tc, "golden-template", &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
+	// Created before readiness: a later golden tag must not change its source.
+	early, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "early"}, ActorTemplate: templateRef.ToObjectRef(),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlapi.NewActorTemplateReconciler(tc.persistence, tc.service).Start(ctx)
+	var goldenRef *ateapipb.ObjectRef
+	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		current, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()})
+		goldenRef = current.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+		return goldenRef != nil, err
+	})
+	if err != nil {
+		t.Fatalf("waiting for golden tag: %v", err)
+	}
+	golden, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uri := golden.GetStatus().GetSnapshot().GetSnapshotUri()
+	parsed, err := resources.ParseSnapshotURI(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.OwnedBy(resources.TagSnapshotOwner(resources.GoldenActorAtespace, parsed.Name())) {
+		t.Fatal("golden snapshot is not tag-owned")
+	}
+	assertSnapshotPresent(t, tc, uri)
+	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("golden actor was not deleted: %v", err)
+	}
+	late, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "late"}, ActorTemplate: templateRef.ToObjectRef(),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if late.GetStatus().GetExternalSnapshot().GetSnapshotUri() != uri || late.GetStatus().GetCurrentActorTemplateUid() != tmpl.GetMetadata().GetUid() {
+		t.Fatal("actor did not inherit golden tag snapshot and template UID")
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.RunCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: resources.ActorRefFromActor(early).ToObjectRef()}); err != nil {
+		t.Fatal(err)
+	}
+	if !tc.fakeAtelet.RunCalled {
+		t.Fatal("actor created before golden readiness did not cold boot")
+	}
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: resources.ActorRefFromActor(early).ToObjectRef()}); err != nil {
+		t.Fatal(err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: resources.ActorRefFromActor(late).ToObjectRef()}); err != nil {
+		t.Fatal(err)
+	}
+	if !tc.fakeAtelet.RestoreCalled {
+		t.Fatal("actor did not restore golden tag")
+	}
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: resources.ActorRefFromActor(late).ToObjectRef()}); err != nil {
+		t.Fatal(err)
+	}
+	assertSnapshotPresent(t, tc, uri)
+	for _, actor := range []*ateapipb.Actor{early, late} {
+		if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: resources.ActorRefFromActor(actor).ToObjectRef(), AnyState: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}); err != nil {
+		t.Fatal(err)
+	}
+	assertSnapshotCollected(t, tc, uri)
+	_, err = tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("golden tag was not deleted: %v", err)
+	}
 }

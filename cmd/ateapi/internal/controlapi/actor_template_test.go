@@ -302,7 +302,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 		// Server-owned status a client must not be able to set.
 		tmpl.Status = &ateapipb.ActorTemplateStatus{
 			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-				GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://my-bucket/snapshots/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/sneaky"},
+				GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 			},
 		}
 	})
@@ -1164,7 +1164,7 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	// A server-owned status write passes validation and bumps the version.
 	updated, err := persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(created), func(tmpl *ateapipb.ActorTemplate) error {
 		tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-			GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/ate-golden/actors/" + someActorUID + "/snapshots/snap-1"},
+			GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 		}}
 		return nil
 	})

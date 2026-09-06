@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1020,11 +1019,26 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 			}
 			if tt.goldenURI != "" {
 				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: tt.goldenURI, ContentScope: tt.goldenScope},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
 				}}
 			}
-			if _, err := persistence.CreateActorTemplate(ctx, tmpl); err != nil {
+			stored, err := persistence.CreateActorTemplate(ctx, tmpl)
+			if err != nil {
 				t.Fatalf("create template: %v", err)
+			}
+			if tt.goldenURI != "" {
+				_, err := persistence.CreateTag(ctx, &ateapipb.Tag{
+					Metadata:    &ateapipb.ResourceMetadata{Atespace: "ns", Name: "golden"},
+					SourceActor: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
+					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
+					Status: &ateapipb.TagStatus{
+						ActorTemplateUid: stored.GetMetadata().GetUid(),
+						Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tt.goldenURI, ContentScope: tt.goldenScope},
+					},
+				})
+				if err != nil {
+					t.Fatalf("create golden tag: %v", err)
+				}
 			}
 
 			w := &ActorWorkflow{store: persistence}
@@ -1045,41 +1059,25 @@ func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
 	}
 }
 
-// TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden covers the
-// golden-fallback branch (actor with no snapshot of its own): a golden
-// snapshot recorded with a non-Full scope holds no guest state, so the resume
-// must fail with a clear error instead of forwarding its scope to atelet
-// with no golden location (which atelet rejects with a confusing
-// "missing bucket" validation error).
-func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
+// A golden tag becoming ready after creation does not change an actor's source.
+func TestLoadActorForResume_DoesNotDefaultGolden(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-
 	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
 	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-		Status: &ateapipb.ActorTemplateStatus{
-			GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-				GoldenSnapshot: &ateapipb.ExternalSnapshot{
-					SnapshotUri:  someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1"),
-					ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				},
-			},
-		},
+		Status: &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+			GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
+		}},
 	}); err != nil {
-		t.Fatalf("create template: %v", err)
+		t.Fatal(err)
 	}
-
 	w := &ActorWorkflow{store: persistence}
-	_, _, _, err := w.loadActorForResume(ctx, actorRef, false)
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("status.Code(err) = %v, want FailedPrecondition (err: %v)", got, err)
-	}
-	if !strings.Contains(err.Error(), "regenerate the golden snapshot") {
-		t.Errorf("error %q does not tell the operator to regenerate the golden snapshot", err)
+	_, _, src, err := w.loadActorForResume(ctx, actorRef, false)
+	if err != nil || !src.SnapshotURI.IsZero() {
+		t.Fatalf("source = %+v, err = %v; want cold boot", src, err)
 	}
 }
 

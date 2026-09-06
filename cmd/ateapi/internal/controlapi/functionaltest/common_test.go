@@ -299,15 +299,13 @@ func assertSnapshotCollected(t *testing.T, tc *testContext, snapshotURI string) 
 	}
 }
 
-// goldenSnapshotURI is the golden snapshot the test templates record: the
-// golden Actor owns it under its own prefix in the reserved atespace, the way
-// the ActorTemplateReconciler's checkpoint would leave it.
+// goldenSnapshotURI is the snapshot owned by the test template's golden tag.
 func goldenSnapshotURI(t *testing.T) string {
 	t.Helper()
-	const goldenActorUID = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
-	uri, err := resources.NewActorSnapshotURI(testStorageLocation, resources.GoldenActorAtespace, goldenActorUID, "golden")
+	const goldenSnapshotName = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
+	uri, err := resources.NewTagSnapshotURI(testStorageLocation, resources.GoldenActorAtespace, goldenSnapshotName)
 	if err != nil {
-		t.Fatalf("NewActorSnapshotURI: %v", err)
+		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
 	return uri.String()
 }
@@ -413,6 +411,21 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		t.Fatalf("failed to create actor template: %v", err)
 	}
 
+	createAtespace(t, tc, resources.GoldenActorAtespace)
+	tag, err := tc.persistence.CreateTag(context.Background(), &ateapipb.Tag{
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
+		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
+		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
+		Status: &ateapipb.TagStatus{
+			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			ActorTemplateUid: created.GetMetadata().GetUid(),
+			SourceActorUid:   "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create golden tag: %v", err)
+	}
+
 	// Record the golden snapshot on the template's status directly in the
 	// store, as the ActorTemplateReconciler's checkpoint would: there is no
 	// status RPC, and the reconciler does not run in this test environment.
@@ -421,7 +434,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		func(dbTemplate *ateapipb.ActorTemplate) error {
 			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+					GoldenTag: resources.TagRefFromTag(tag).ToObjectRef(),
 				},
 			}
 			return nil

@@ -261,7 +261,7 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 		return printProto(out, &ateapipb.ListActorTemplatesResponse{ActorTemplates: templates}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tGOLDEN SNAPSHOT\tERROR\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tGOLDEN TAG\tERROR\tAGE")
 		for _, t := range templates {
 			gss := t.GetStatus().GetGoldenSnapshotStatus()
 			// Error messages are too long for a table cell.
@@ -272,7 +272,7 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
 				t.GetSandboxConfig().GetSandboxClass(),
-				gss.GetGoldenSnapshot().GetSnapshotUri(), errFlag,
+				gss.GetGoldenTag().GetName(), errFlag,
 				formatAge(t.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()

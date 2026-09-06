@@ -1289,19 +1289,6 @@ func TestValidateNestedExternalSnapshot(t *testing.T) {
 				return Validate_Tag(ctx, op, nil, obj, nil)
 			},
 		},
-		{
-			name: "actor_template.status.golden_snapshot_status.golden_snapshot",
-			path: field.NewPath("golden_snapshot_status", "golden_snapshot"),
-			validate: func(ctx context.Context) field.ErrorList {
-				op := operation.Operation{Type: operation.Create}
-				obj := &ateapipb.ActorTemplateStatus{
-					GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-						GoldenSnapshot: badExternalSnapshot(),
-					},
-				}
-				return Validate_ActorTemplateStatus(ctx, op, nil, obj, nil)
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

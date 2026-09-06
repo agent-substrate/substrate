@@ -345,7 +345,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 			},
 			Status: &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/snap-1"},
+					GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-tag"},
 				},
 			},
 		},
@@ -386,10 +386,10 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 
 	// Sorted by atespace, then name. The ERROR column only flags that an
 	// error message exists; the full text is available via json/yaml.
-	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN SNAPSHOT                                                                                  ERROR   AGE
-ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    gs://private/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/snap-1           5m
-ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                                                                                                             3d
-ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                                                                                                    ERROR   5h
+	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN TAG   ERROR   AGE
+ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    golden-tag           5m
+ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                         3d
+ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

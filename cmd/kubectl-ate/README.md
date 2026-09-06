@@ -107,7 +107,7 @@ kubectl ate get workers -l <label-selector>
 | Column | Meaning |
 |---|---|
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
-| `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
+| `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises while building its golden tag. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
 | `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
 | `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
@@ -184,7 +184,7 @@ for a complete manifest example.
 | `ATESPACE` | The atespace the template belongs to. |
 | `NAME` | The template's name. |
 | `SANDBOX CLASS` | The sandbox runtime family (`SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`). |
-| `GOLDEN SNAPSHOT` | The golden snapshot's name once it exists (actors can be created); empty while the golden build is still running. |
+| `GOLDEN TAG` | The golden tag's name once it exists; empty while the golden build is still running. |
 | `ERROR` | `ERROR` when the golden build failed; `-o yaml` shows the full message. |
 | `AGE` | Time elapsed since the template was created. |
 
