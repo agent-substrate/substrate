@@ -396,6 +396,12 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// ponytail: this runs just after Resume, so a workload that reads randomness in the
 	// first instants after resume can outrun the reseed. Fully closing that needs a
 	// freeze/thaw around the reseed, or a VMM VmGenID that acts before the vCPUs resume.
+	//
+	// TODO: switch to a Cloud Hypervisor VmGenID device once it exists. clh has no such
+	// device today; Firecracker and QEMU do. With one, the VMM changes the generation id
+	// and notifies the guest before unpausing the vCPUs, so a >=5.18 kernel reseeds its
+	// CRNG on its own with no host round-trip, no per-restore RPC, and no post-Resume
+	// race. At that point this agent-driven reseed can be dropped.
 	if err := reseedGuestCRNG(ctx, actorUID); err != nil {
 		slog.WarnContext(ctx, "guest CRNG reseed on restore failed; actor may share entropy with clones of the same snapshot",
 			slog.String("id", actorUID), slog.Any("err", err))
