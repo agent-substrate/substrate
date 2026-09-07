@@ -189,6 +189,33 @@ func TestRouterConfigExtProcMaxRequests(t *testing.T) {
 	}
 }
 
+// The whole shutdown sequence has to fit inside the router pod's
+// terminationGracePeriodSeconds (60s, manifests/ate-install/atenet-router.yaml)
+// or the kubelet SIGKILLs mid-drain. That is why the derivation uses
+// drainRouteBudget and not the route timeout: with a route ceiling sized for a
+// full model generation, deriving from it would put the drain alone past five
+// minutes. This pins the independence, which the arithmetic cases below do not.
+func TestRouterConfigDrainTimeoutIndependentOfRouteTimeout(t *testing.T) {
+	const (
+		drainDelay  = 13 * time.Second // --drain-delay in the router manifest
+		graceBudget = 60 * time.Second // terminationGracePeriodSeconds there
+	)
+	cfg := routerConfig{DrainTimeout: 0, RouteTimeout: defaultRouteTimeout}
+	parkCfg := ingress.ParkedRequestConfig{Budget: ingress.DefaultParkedRequestBudget, Max: 1024}.Normalized()
+
+	got := cfg.drainTimeout(parkCfg)
+	if got >= defaultRouteTimeout {
+		t.Errorf("derived drain timeout %v tracks the route timeout %v; it must derive from drainRouteBudget", got, defaultRouteTimeout)
+	}
+
+	// drain delay, then the Envoy drain window (see router.go), then the
+	// ext_proc drain.
+	sequence := drainDelay + (drainRouteBudget + drainTimeoutMargin) + got
+	if sequence > graceBudget {
+		t.Errorf("shutdown sequence sums to %v, past terminationGracePeriodSeconds %v", sequence, graceBudget)
+	}
+}
+
 func TestRouterConfigDrainTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -197,16 +224,16 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 		want    time.Duration
 	}{
 		{
-			name:    "auto derives budget + route timeout + margin",
+			name:    "auto derives budget + drain route budget + margin",
 			cfg:     routerConfig{DrainTimeout: 0},
 			parkCfg: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.Normalized(),
-			want:    5*time.Second + defaultRouteTimeout + drainTimeoutMargin,
+			want:    5*time.Second + drainRouteBudget + drainTimeoutMargin,
 		},
 		{
 			name:    "auto scales with a larger budget",
 			cfg:     routerConfig{DrainTimeout: 0},
 			parkCfg: ingress.ParkedRequestConfig{Budget: 30 * time.Second, Max: 1024}.Normalized(),
-			want:    30*time.Second + defaultRouteTimeout + drainTimeoutMargin,
+			want:    30*time.Second + drainRouteBudget + drainTimeoutMargin,
 		},
 		{
 			name: "parking disabled still derives from the normalized default budget",
@@ -215,7 +242,7 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 			// derived drain still covers a later re-enable without a restart
 			// surprise.
 			parkCfg: ingress.ParkedRequestConfig{Max: 0}.Normalized(),
-			want:    ingress.DefaultParkedRequestBudget + defaultRouteTimeout + drainTimeoutMargin,
+			want:    ingress.DefaultParkedRequestBudget + drainRouteBudget + drainTimeoutMargin,
 		},
 		{
 			name:    "explicit value wins over derivation",

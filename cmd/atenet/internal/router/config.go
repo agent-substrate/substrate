@@ -129,7 +129,8 @@ type routerConfig struct {
 	// ceiling on one request from the ingress listener to the actor's response.
 	// It bounds the actor's own handling time, not the resume that precedes it
 	// — parking and the ext_proc timeout cover that. A non-positive value
-	// leaves Envoy on defaultRouteTimeout.
+	// leaves Envoy on defaultRouteTimeout. It does not size shutdown; see
+	// drainRouteBudget.
 	RouteTimeout time.Duration
 
 	// ParkedRequest configures request parking: hold and retry requests whose
@@ -194,16 +195,16 @@ func (c routerConfig) extProcMaxRequests() int {
 const drainTimeoutMargin = 5 * time.Second
 
 // drainTimeout resolves the effective ext_proc drain deadline: an explicit
-// flag wins; 0 derives park budget + the DEFAULT route timeout + margin. The
-// derivation deliberately ignores a configured --route-timeout so a raised
-// route ceiling cannot silently stretch shutdown past the pod's grace period
-// (see defaultRouteTimeout); operators pair a long route timeout with an
-// explicit --drain-timeout instead.
+// flag wins; 0 derives park budget + drainRouteBudget + margin. The derivation
+// deliberately ignores the route timeout, configured or default, so a route
+// ceiling sized for the longest turn a workload might take cannot stretch
+// shutdown past the pod's grace period (see drainRouteBudget); operators pair a
+// long route timeout with an explicit --drain-timeout instead.
 func (c routerConfig) drainTimeout(parkCfg ingress.ParkedRequestConfig) time.Duration {
 	if c.DrainTimeout > 0 {
 		return c.DrainTimeout
 	}
-	return parkCfg.Budget + defaultRouteTimeout + drainTimeoutMargin
+	return parkCfg.Budget + drainRouteBudget + drainTimeoutMargin
 }
 
 // validate rejects flag combinations that would make the router misbehave

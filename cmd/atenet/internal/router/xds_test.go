@@ -1021,15 +1021,18 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	})
 
 	t.Run("SetterOverrides", func(t *testing.T) {
+		// Deliberately not 5m: that is the default, so it would pass whether or
+		// not the setter did anything. Lowering is also the direction an
+		// operator capping turn length actually goes.
 		x := NewXdsServer(0)
-		x.SetRouteTimeout(5 * time.Minute)
-		if got := routeTimeout(t, x); got != 5*time.Minute {
-			t.Errorf("route timeout after SetRouteTimeout(5m) = %v, want 5m", got)
+		x.SetRouteTimeout(30 * time.Second)
+		if got := routeTimeout(t, x); got != 30*time.Second {
+			t.Errorf("route timeout after SetRouteTimeout(30s) = %v, want 30s", got)
 		}
 	})
 
 	// The flag cannot produce a zero: --route-timeout carries defaultRouteTimeout,
-	// so an operator who never passes it gets 10s, not 0. The guard is on the
+	// so an operator who never passes it gets the default, not 0. The guard is on the
 	// setter because SetRouteTimeout is part of the type's API and reachable
 	// from any caller, and because a zero here is the one value Envoy reads as
 	// "no timeout at all" — a mis-set knob would silently turn every stuck
@@ -1059,12 +1062,27 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	})
 
 	t.Run("IdleTimeoutKeepsEnvoyDefaultWhenRouteTimeoutIsShorter", func(t *testing.T) {
-		for _, d := range []time.Duration{defaultRouteTimeout, envoyDefaultStreamIdleTimeout} {
+		for _, d := range []time.Duration{10 * time.Second, time.Minute} {
 			x := NewXdsServer(0)
 			x.SetRouteTimeout(d)
 			if got := idleTimeout(t, x); got != envoyDefaultStreamIdleTimeout {
 				t.Errorf("idle timeout with a %v route timeout = %v, want %v (unchanged from Envoy's default)", d, got, envoyDefaultStreamIdleTimeout)
 			}
+		}
+	})
+
+	// The default route timeout is exactly Envoy's stream idle default, so the
+	// two timers would otherwise race on a turn that sends nothing until it is
+	// done. The idle reset reaches the client as a torn stream rather than a
+	// timeout, so the idle timer is pinned explicitly at equality instead of
+	// being left implicit.
+	t.Run("IdleTimeoutAtTheDefaultRouteTimeout", func(t *testing.T) {
+		action := routeAction(t, NewXdsServer(0))
+		if action.GetIdleTimeout() == nil {
+			t.Fatal("no idle timeout set on the workload route")
+		}
+		if got, want := action.GetIdleTimeout().AsDuration(), envoyDefaultStreamIdleTimeout; got != want {
+			t.Errorf("idle timeout at the default route timeout = %v, want %v", got, want)
 		}
 	})
 }

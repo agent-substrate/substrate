@@ -135,10 +135,10 @@ spec:
       serviceAccountName: atenet-router
       # Budget for the full shutdown sequence: --drain-delay (13s, readiness
       # propagation) + the Envoy drain window (~15s) + the derived
-      # --drain-timeout (park budget + route timeout + margin, ~20s at
+      # --drain-timeout (park budget + the drain route budget + margin, ~20s at
       # defaults) + slack for the force stop and the tracer/meter flush. The
       # sum must fit within terminationGracePeriodSeconds, or the kubelet
-      # SIGKILLs mid-drain.
+      # SIGKILLs mid-drain. None of it scales with --route-timeout, by design.
       terminationGracePeriodSeconds: 60
       containers:
       - name: atenet-router
@@ -170,17 +170,20 @@ spec:
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
         # Graceful shutdown knobs. --drain-timeout is left at its derived
-        # default (park budget + the default route timeout + margin). The sum
+        # default (park budget + the drain route budget + margin). The sum
         # of the sequence must fit within terminationGracePeriodSeconds above.
         - "--drain-delay=13s"
-        # Envoy's end-to-end timeout on the workload route. Raise it for actors
-        # whose turns legitimately run long — a harness relaying an LLM
-        # completion holds the request open for the whole generation, and at the
-        # 10s default the client gets a 504 mid-turn. NOTE: the drain sequence
-        # deliberately does NOT scale with this; if you raise it and want long
-        # turns to survive a shutdown, raise --drain-timeout and
-        # terminationGracePeriodSeconds alongside it.
-        # - "--route-timeout=5m"
+        # Envoy's end-to-end timeout on the workload route is left at its
+        # default of 5m, which suits an agent relaying a model completion: the
+        # request stays open for the whole generation. Set --route-timeout
+        # lower to cap how long one turn may hold a request open.
+        #
+        # A turn still running after the drain route budget (10s) does not
+        # survive a shutdown, and raising --route-timeout does not change that:
+        # the drain sequence deliberately does not scale with it, so that a
+        # generous route ceiling cannot stretch every rollout to the worst case.
+        # If long turns must survive a shutdown, raise --drain-timeout and
+        # terminationGracePeriodSeconds above together.
         env:
         - name: POD_NAME
           valueFrom:
