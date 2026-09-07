@@ -155,6 +155,9 @@ func main() {
 	egressMITMCAPool := controllers.EgressMITMCAPoolRef()
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		Scheme: scheme,
+		// A Deployment rollout briefly runs two replicas; the lease keeps one active.
+		LeaderElection:   true,
+		LeaderElectionID: "ate-controller.ate.dev",
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: {

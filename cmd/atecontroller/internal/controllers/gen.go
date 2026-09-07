@@ -23,3 +23,7 @@ package controllers
 //+kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch,namespace=ate-system
 
 //go:generate bash ../../../../hack/run-tool.sh controller-gen rbac:headerFile=../../../../hack/boilerplate/sh.txt,roleName=ate-controller paths="./..." output:rbac:artifacts:config=../../../../manifests/ate-install/generated/
+
+// The manager's leader-election lease and the events it records on it.
+//+kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete,namespace=ate-system
+//+kubebuilder:rbac:groups=core,resources=events,verbs=create;patch,namespace=ate-system
