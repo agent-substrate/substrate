@@ -65,9 +65,10 @@ type Handler struct {
 }
 
 func New(apiClient ateapipb.ControlClient, parkCfg ParkedRequestConfig, parkMetrics *ParkingMetrics) *Handler {
+	lot := newParkingLot(parkCfg, parkMetrics)
 	return &Handler{
-		resumer: NewActorResumer(apiClient, withParking(parkCfg)),
-		parking: newParkingLot(parkCfg, parkMetrics),
+		resumer: NewActorResumer(apiClient, withParking(parkCfg), withParkingLot(lot)),
+		parking: lot,
 	}
 }
 
@@ -109,19 +110,8 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		}
 	}
 
-	// Admit the request to the parking lot before resuming. While resume is
-	// in-flight the request occupies a slot; if the actor's worker pool is
-	// momentarily saturated the resumer parks (retries) here rather than failing
-	// fast. A full lot sheds the request immediately so the router applies
-	// backpressure instead of queueing without bound.
-	release, ok := h.parking.enter(ctx)
-	if !ok {
-		return extproc.Result{}, parkingFullErr(actorRef.String())
-	}
-
 	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
 	actor, resumeOutcome, err := h.resumer.ResumeActor(ctx, actorRef)
-	release(parkOutcomeFor(err))
 	if err != nil {
 		return extproc.Result{Resume: string(resumeOutcome)}, mapResumeError(actorRef, err)
 	}

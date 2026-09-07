@@ -70,6 +70,11 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 		return nil
 	}
 
+	var reqErr *extproc.ReqError
+	if errors.As(err, &reqErr) {
+		return err
+	}
+
 	re := &extproc.ReqError{Cause: err}
 
 	// Bare context sentinels reach here when the request's own context ends

@@ -58,17 +58,20 @@ client is held either way.
 stops waiting; with the Envoy dataplane that is bounded by the ext_proc
 message timeout (`budget + 5s`). The resume attempt itself can outlive every
 caller: it carries no client-side deadline and runs until ateapi's
-server-side maximum RPC deadline, holding that actor's singleflight entry.
+server-side maximum RPC deadline, holding that actor's flight entry.
 New requests for the same actor during that window do not start another
 control-plane call — they join the in-flight attempt, and if it has not
 resolved by their own stream deadline they are ended by the dataplane's
 timeout rather than a router verdict.
 
-To bound resource use and provide backpressure, the router admits requests to a
-**parking lot** of fixed capacity (`--parked-request-max`, default `1024`). Each
-in-flight resume occupies one slot. When the lot is full, further requests are
-shed immediately with `503 "actor <id> unavailable: router at capacity"` rather
-than queueing without bound.
+To bound resource use and provide backpressure, parked requests are admitted to
+a **parking lot** of fixed capacity (`--parked-request-max`, default `1024`). A
+request occupies a slot only from the moment it actually parks — its resume
+flight's first retryable failure. A request resolved on the flight's first
+attempt (the actor was already running) never occupies a slot. When the lot is
+full, a request reaching its park transition is shed with `503 "actor <id>
+unavailable: router at capacity"` rather than queueing without bound — at the
+cost of exactly the one resume attempt that revealed it would have to wait.
 
 Every parked request holds one ext_proc stream — one active request against
 Envoy's ext_proc cluster — for its entire wait, while ordinary requests hold
@@ -77,14 +80,16 @@ is therefore the hard ceiling on concurrent parked requests. By default the
 router **derives** it as twice `--parked-request-max` (minimum `1024`), so the
 lot always fits and an equal share of **fast-path headroom** remains — a
 saturated lot cannot starve requests to already-running actors, at any lot
-size. `--extproc-max-requests` overrides the derivation; explicit values are
+size. The lot upholds the same guarantee on its side: admission happens at the
+park transition, so fast-path requests never compete for slots (#1081).
+`--extproc-max-requests` overrides the derivation; explicit values are
 validated `>= --parked-request-max` at startup, because a breaker below the lot
 would silently truncate it — Envoy would reject the overflow itself, with 503s
 that never reach the lot and never count in `parking.rejected`.
 
 Concurrent requests for the *same* actor are de-duplicated by the resumer's
-`singleflight` group: they share a single in-flight `ResumeActor` call and all
-park on its result, so a hot actor consumes N parking slots but only one
+per-actor flight registry: they share a single in-flight `ResumeActor` call and
+all park on its result, so a hot actor consumes N parking slots but only one
 control-plane RPC.
 
 **The park budget is per-flight, not per-request.** The budget clock starts
@@ -98,15 +103,17 @@ expected under sustained saturation.)
 
 ### What is *not* parked
 
-Only transient conditions — capacity (`FailedPrecondition`), concurrency
-(`Aborted`), and control-plane unavailability (`Unavailable`) — are parked.
-Errors that will not resolve by waiting are returned immediately (fail fast):
+Only transient conditions — capacity (`ResourceExhausted`), transient actor
+state (`FailedPrecondition`), concurrency (`Aborted`), and control-plane
+unavailability (`Unavailable`) — are parked. Errors that will not resolve by
+waiting are returned immediately (fail fast):
 
 | Resume result                          | Behavior                          |
 | -------------------------------------- | --------------------------------- |
 | `OK`                                   | Route to worker                   |
 | `Aborted` (concurrent resume)          | Retry (always)                    |
-| `FailedPrecondition` (no free worker)  | **Park & retry** (when enabled)   |
+| `ResourceExhausted` (no free worker)   | **Park & retry** (when enabled)   |
+| `FailedPrecondition` (transient state) | **Park & retry** (when enabled)   |
 | `Unavailable` (control-plane blip)     | **Park & retry** (when enabled)   |
 | `NotFound`                             | Fail fast → `404`                 |
 | `DeadlineExceeded`                     | Fail fast → `504`                 |
@@ -133,7 +140,7 @@ so a parked request always gets its full budget and a normal verdict (routed
 | Flag                             | Default | Meaning                                                            |
 | -------------------------------- | ------- | ------------------------------------------------------------------ |
 | `--parked-request-budget`         | `5s`    | Park budget per resume *flight*; requests de-duplicated onto an in-flight resume share its remaining budget (see Behavior). |
-| `--parked-request-max`            | `1024`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
+| `--parked-request-max`            | `1024`  | Max concurrent **parked** requests (a slot is taken at the park transition, never for a first-attempt lookup); requests parking beyond it are shed (503). `0` disables parking. |
 | `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
 | `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |
 | `--parked-request-retry-jitter`   | `0.1`   | Random fraction in `[0, 1)` added per retry to de-synchronize parked requests. |
@@ -148,10 +155,11 @@ bounds the wait.
 
 - `atenet.router.parking.active` — up/down counter: requests currently parked.
 - `atenet.router.parking.wait.duration` — histogram (seconds) of time spent
-  parked. Recorded **exactly once per admitted request**, at the moment its
-  resume attempt completes; never recorded for shed requests (those only
-  increment `parking.rejected`) nor when parking is disabled. The `outcome`
-  label says how the park ended:
+  parked. Recorded **exactly once per parked request**, at the moment its wait
+  ends; never recorded for requests served on their flight's first attempt
+  (those never park), for shed requests (those only increment
+  `parking.rejected`), nor when parking is disabled. The `outcome` label says
+  how the park ended:
 
   | `outcome`          | When it is set                                                              |
   | ------------------ | --------------------------------------------------------------------------- |
