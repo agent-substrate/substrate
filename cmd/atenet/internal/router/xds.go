@@ -129,18 +129,30 @@ const defaultExtProcMaxRequests = 2048
 // response. It bounds the actor's own handling time, not the resume that
 // precedes it — parking and the ext_proc timeout cover that part.
 //
-// The drain sequence also sizes its Envoy-drain window and derived
-// drain-timeout from this DEFAULT — deliberately not from the configured
-// --route-timeout, so raising the route ceiling for long-running actor turns
-// does not silently stretch every shutdown past terminationGracePeriodSeconds.
-// Operators who raise --route-timeout and want such turns to survive a drain
-// must raise --drain-timeout (and the grace period) explicitly.
+// It is generous because the workloads this platform exists for are agents
+// relaying a model completion, which holds the request open for the whole
+// generation. A ceiling below that turns an ordinary turn into a 504 the
+// caller cannot retry: the actor received the turn and is still working, so a
+// retry runs it twice. gRPC server-streaming and bidi RPCs are bounded by the
+// same ceiling and need the same headroom.
 //
-// TODO(liorlieberman): this ceiling also cuts off gRPC server-streaming and
-// bidi RPCs longer than 10s, so streaming gRPC effectively requires raising
-// --route-timeout today. We need to fix it so streaming works without
-// inflating the timeout for all workloads.
-const defaultRouteTimeout = 10 * time.Second
+// This is not the drain sizing. See drainRouteBudget.
+const defaultRouteTimeout = 5 * time.Minute
+
+// drainRouteBudget is how much in-flight route time the shutdown sequence
+// plans for: the Envoy-drain window and the derived drain-timeout are both
+// sized from it.
+//
+// It is deliberately a separate constant from defaultRouteTimeout, and
+// deliberately not the configured --route-timeout. Shutdown has to fit inside
+// terminationGracePeriodSeconds, so it cannot scale with a route ceiling set
+// for the longest turn a workload might take; sizing it that way would stretch
+// every rollout to the worst case and then be hard-killed by the kubelet
+// anyway. The cost of the split is that a turn still running after this budget
+// does not survive a drain. Operators who need long turns to survive one raise
+// --drain-timeout and terminationGracePeriodSeconds together, which the router
+// manifest documents.
+const drainRouteBudget = 10 * time.Second
 
 // envoyDefaultStreamIdleTimeout is the stream idle timeout Envoy applies when
 // the HTTP connection manager does not set one. We never set it, so this is
@@ -266,11 +278,10 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 	}
 }
 
-// SetRouteTimeout sets Envoy's end-to-end timeout on the workload route. Raise
-// it for actors whose turns legitimately run long — a harness relaying an LLM
-// completion holds the request open for the whole generation, and at the
-// default the client sees a 504 mid-turn. A non-positive value leaves the
-// default unchanged.
+// SetRouteTimeout sets Envoy's end-to-end timeout on the workload route.
+// Lower it to cap how long a single turn may hold a request open, or raise it
+// past the default for workloads whose turns run longer still. A non-positive
+// value leaves the default unchanged.
 func (x *XdsServer) SetRouteTimeout(d time.Duration) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -291,6 +302,13 @@ func (x *XdsServer) SetRouteTimeout(d time.Duration) {
 // Taking the larger of the two keeps the operator's ceiling honest without
 // making the idle timer stricter than it already is: below five minutes the
 // route timeout fires first anyway, so this leaves today's behavior alone.
+//
+// At exactly five minutes, which is now the default route timeout, the two
+// deadlines coincide and either may fire first. An idle-triggered end reaches
+// the client as a reset rather than a 504. Making the idle timer strictly
+// later than the route timeout would settle it, but that changes behavior for
+// operators who already raise --route-timeout past five minutes, so it is left
+// alone here.
 func (x *XdsServer) routeIdleTimeout() time.Duration {
 	if x.routeTimeout > envoyDefaultStreamIdleTimeout {
 		return x.routeTimeout
