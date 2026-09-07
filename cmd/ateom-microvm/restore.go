@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -62,6 +63,37 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 			slog.String("mode", ch.MemRestoreEager))
 	}
 	return ch.MemRestoreEager
+}
+
+// reseedGuestCRNG mixes fresh, per-restore entropy into the restored guest's kernel
+// CRNG through the kata-agent (see the call site in restoreFullScope for why a restore
+// needs this). The nonce is a throwaway; its only job is to differ between restores so
+// that clones of one snapshot diverge instead of producing identical randomness.
+func reseedGuestCRNG(ctx context.Context, actorUID string) error {
+	nonce, err := newReseedNonce()
+	if err != nil {
+		return err
+	}
+	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ac, err := dialAgentRetry(dctx, kata.VsockSocketPath(actorUID), 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("dialing kata-agent for reseed: %w", err)
+	}
+	defer ac.Close()
+	if err := ac.ReseedRandomDev(dctx, nonce); err != nil {
+		return fmt.Errorf("reseeding guest CRNG: %w", err)
+	}
+	return nil
+}
+
+// newReseedNonce returns 32 bytes of fresh entropy to mix into the guest CRNG.
+func newReseedNonce() ([]byte, error) {
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating reseed nonce: %w", err)
+	}
+	return nonce, nil
 }
 
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
@@ -352,6 +384,24 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
 	tResume := time.Now()
+
+	// Reseed the guest CRNG before the workload gets far. A restored guest resumes with
+	// the entropy pool frozen in the snapshot, so every actor restored from one snapshot
+	// (golden cold-start, tag clones) would share an identical CRNG state and emit the
+	// same "random" values. Cloud Hypervisor has no VmGenID device to signal the guest,
+	// so we feed fresh per-restore entropy through the kata-agent's ReseedRandomDev, which
+	// mixes it into /dev/random and reseeds. Best-effort: a failure leaves the actor
+	// running rather than failing the restore, but it is logged because the result is
+	// silently non-unique randomness.
+	// ponytail: this runs just after Resume, so a workload that reads randomness in the
+	// first instants after resume can outrun the reseed. Fully closing that needs a
+	// freeze/thaw around the reseed, or a VMM VmGenID that acts before the vCPUs resume.
+	if err := reseedGuestCRNG(ctx, actorUID); err != nil {
+		slog.WarnContext(ctx, "guest CRNG reseed on restore failed; actor may share entropy with clones of the same snapshot",
+			slog.String("id", actorUID), slog.Any("err", err))
+	} else {
+		slog.InfoContext(ctx, "reseeded guest CRNG on restore", slog.String("id", actorUID))
+	}
 
 	// Block until every readyz-enabled container reports 200.
 	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
