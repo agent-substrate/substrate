@@ -27,6 +27,13 @@ a version suffix, and the installed ate-api-server serves
 install instead, because its DaemonSet selector cannot be changed in
 place.
 
+Node auto-upgrade is off on every node pool that runs workers, and
+none of those nodes is spot or preemptible. The roll paces node moves
+one at a time so that no actor loses state; a node the cloud provider
+moves on its own schedule ignores that pacing, and any actor awake on
+it is destroyed. See the
+[Create Cluster warning](../tools/setup-gcp/README.md#2-create-cluster).
+
 Actor snapshots are readable by both the old and the new build. An
 actor can therefore suspend on one version and resume on the other in
 either direction, which is what lets the two versions serve side by
@@ -48,7 +55,14 @@ Three things break an upgrade.
    same node, and old workers end up next to the new atelet: exactly
    the version skew the roll exists to prevent.
 2. **Do not edit a serving worker pool.** The controller would roll
-   the pool's Deployment straight through live actors.
+   the pool's Deployment straight through live actors, and an actor
+   that is awake when its worker pod goes away does not survive it.
+   It moves to `ACTOR_STATE_CRASHED`, which is terminal: `resume` and
+   `suspend` are both refused, there is no recover verb, and the
+   snapshot the actor still holds cannot be used to start it. The
+   actor has to be deleted and recreated, losing its state. The same
+   applies to scaling a serving pool down, which removes pods without
+   suspending the actors on them.
 3. **(If on GKE) Do not touch the node pool's label until every node
    is rolled.** A pool label update applies in place to every node in
    the pool, so the whole fleet flips at once, with no drain and no

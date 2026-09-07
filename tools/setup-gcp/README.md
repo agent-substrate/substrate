@@ -95,6 +95,32 @@ Filestore CSI driver disabled).
 > podcertificate ClusterTrustBundles to be ready" and `kubectl get
 > clustertrustbundles` reports the resource type is not served.
 
+> [!WARNING]
+> **Turn node auto-upgrade off on any node pool that runs workers, and do not
+> use spot or preemptible nodes for them.** An actor that is awake when its
+> worker pod goes away is moved to `ACTOR_STATE_CRASHED` with its worker
+> assignment cleared, and `CRASHED` is terminal: `resume` and `suspend` are both
+> refused, there is no recover verb, and the snapshot the actor still holds
+> cannot be used to start it. The only way out is to delete the actor and create
+> a new one, which loses its state.
+>
+> Auto-upgrade is the trigger to plan for, because GKE enables it by default and
+> it fires on Google's maintenance schedule rather than yours. `create cluster`
+> does not disable it, so do it yourself on every pool that runs workers:
+>
+> ```bash
+> gcloud container node-pools update "${NODE_POOL}" \
+>   --cluster "${CLUSTER_NAME}" --location "${CLUSTER_LOCATION}" \
+>   --no-enable-autoupgrade
+> ```
+>
+> This is a management setting, so it takes effect without recreating nodes and
+> is safe to apply to a serving cluster. Node auto-repair, preemption and OOM
+> kills reach the same path and cannot be configured away, so treat the setting
+> as removing the scheduled risk rather than all of it. Change versions through
+> the [rolling upgrade runbook](../../docs/upgrade.md), which has you suspend
+> every actor on a node before the node moves.
+
 ```bash
 go run ./tools/setup-gcp create cluster [flags]
 ```
