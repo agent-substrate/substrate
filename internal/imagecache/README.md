@@ -244,13 +244,14 @@ skips the scan entirely, conservatively, if any record or bundle spec
 fails to read. There is no online whole-pool scan (ext4's split: bounded
 recovery at mount, fsck offline).
 
-**Deletion is two-phase.** A layer is atomically renamed to `.rm-*`
-inside the layer's singleflight (one `rename(2)` — eviction can never
-stall a pull), then removed asynchronously; a crash in between leaves
-the dir for the startup sweep. This matters because the kernel offers no
-protection here: deleting a directory that is a live overlay lowerdir in
-another mount namespace succeeds silently, leaves the overlay's behavior
-undefined, and doesn't even free the space until the mount goes away.
+**Deletion is two-phase.** A layer is atomically renamed to `.rm-*` under
+the layer's interlock (one `rename(2)`, taken only if uncontended — so
+eviction can never stall a pull), then removed asynchronously; a crash in
+between leaves the dir for the startup sweep. This matters because the
+kernel offers no protection here: deleting a directory that is a live
+overlay lowerdir in another mount namespace succeeds silently, leaves the
+overlay's behavior undefined, and doesn't even free the space until the
+mount goes away.
 
 Deleting the cache root by hand (while no actors are starting) remains
 safe — the store re-pulls whatever is missing.

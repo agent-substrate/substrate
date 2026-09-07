@@ -215,6 +215,11 @@ type Store struct {
 	imageSF singleflight.Group
 	layerSF singleflight.Group
 
+	// layerLocks holds the retire/reuse interlock per layer (see layerLock).
+	// Entries are added on first use and never removed, so this is the one
+	// piece of per-layer bookkeeping eviction does not reclaim.
+	layerLocks sync.Map
+
 	// evictMu serializes EvictUnused passes (concurrent passes would fight
 	// over the same candidates for no benefit).
 	evictMu sync.Mutex
@@ -517,7 +522,7 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 			return nil, fmt.Errorf("invalid diffID %q in image record for %s: %w", d, digest, err)
 		}
 		dir := s.layerDir(diffID)
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+		if !layerFSPresent(dir) {
 			return nil, nil
 		}
 		layerDirs[i] = dir
@@ -635,6 +640,7 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 	// naming a missing lowerdir. Ordered after the rewrite so even this
 	// failure path leaves the surviving layers referenced.
 	for _, dir := range layerDirs {
+		// Not layerFSPresent: the errno is part of the report.
 		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
 			return nil, fmt.Errorf("layer dir vanished during pull (evicted?): %w", err)
 		}
@@ -648,21 +654,49 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 	return &Image{Digest: digest, Config: cfgFile.Config, LayerDirs: layerDirs}, nil
 }
 
+// layerFSPresent reports whether a layer's unpacked tree is in the pool.
+// Any stat failure counts as absent, so an unreadable layer is re-pulled
+// rather than handed to a caller that cannot use it.
+func layerFSPresent(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, layerFSDirName))
+	return err == nil
+}
+
 // ensureLayer makes the unpacked tree for diffID present in the pool,
 // collapsing concurrent requests for the same layer across images.
+//
+// A layer pull that joins the flight instead of leading it shares the
+// leader's outcome: one download per herd, failures and the leader's own
+// cancellation included.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
-		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
-			// Refresh the dir mtime inside the flight: retireLayer re-checks
-			// the mtime in this same flight, so a layer reused here can
-			// never be renamed away between this stat and the image record
-			// that will re-reference it.
+	_, err, _ := s.layerSF.Do(diffID.String(), func() (any, error) {
+		// Acquire fails on a cancelled ctx even with the lock free, which
+		// would turn a cache hit into a failure shared with healthy
+		// joiners; a free lock still serves the cache hit below.
+		lock := s.layerLock(diffID.Hex)
+		ctxErr := lock.Acquire(ctx, 1)
+		if ctxErr != nil && !lock.TryAcquire(1) {
+			return nil, ctxErr
+		}
+		defer lock.Release(1)
+
+		if layerFSPresent(dir) {
+			// Refresh the mtime under the interlock: retireLayer re-checks it
+			// under the same lock, so a layer reused here can never be renamed
+			// away between this stat and the image record that will
+			// re-reference it.
 			now := time.Now()
 			if err := os.Chtimes(dir, now, now); err != nil {
 				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
 			}
 			return nil, nil
+		}
+		if ctxErr != nil {
+			// Only the hit: the layer streams are bound to the pull's parent
+			// ctx (remoteOpts), so unpacking here would run a whole download
+			// for a doomed pull.
+			return nil, ctxErr
 		}
 		return nil, s.unpackLayerToPool(ctx, diffID, layer)
 	})
@@ -731,7 +765,7 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 	if err := os.Rename(tmp, s.layerDir(diffID)); err != nil {
 		// A concurrent unpack (another process sharing the pool) may have won;
 		// its layer is as good as ours.
-		if _, statErr := os.Stat(filepath.Join(s.layerDir(diffID), layerFSDirName)); statErr == nil {
+		if layerFSPresent(s.layerDir(diffID)) {
 			return nil
 		}
 		return fmt.Errorf("while moving layer into pool: %w", err)

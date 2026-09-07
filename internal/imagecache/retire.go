@@ -15,7 +15,7 @@
 package imagecache
 
 // Two-phase layer deletion: eviction renames a layer dir aside (one
-// rename(2) inside the layer singleflight — the only step that contends
+// rename(2) under the layer interlock — the only step that contends
 // with the pull path) and the slow RemoveAll of the renamed-aside tree
 // happens afterwards, outside all locks. A crash in between leaves a
 // ".rm-*" dir for the startup sweep. Nothing here needs privileges:
@@ -29,6 +29,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 )
 
 // retiredPrefix marks a layer dir that eviction has renamed aside and that
@@ -56,9 +58,21 @@ const (
 	retireRetired
 )
 
-// layerFlightKey is the singleflight key shared by ensureLayer and
-// retireLayer; the retire/reuse interlock depends on both using it.
-func layerFlightKey(hex string) string { return "sha256:" + hex }
+// layerLock returns one layer's interlock, held by ensureLayer across its
+// stat and refresh-or-unpack and by retireLayer across its stat and rename,
+// so a reuse and a retirement never interleave. A lock rather than the
+// shared flight key, because a caller that joins a flight cannot tell
+// whether it joined a reuse or a retirement that renamed the dir away.
+// Never share one between layers: it is held for the length of an unpack,
+// so sharing would serialize unrelated downloads and let a retirement veto
+// a layer it could have taken.
+func (s *Store) layerLock(hex string) *semaphore.Weighted {
+	if lk, ok := s.layerLocks.Load(hex); ok {
+		return lk.(*semaphore.Weighted)
+	}
+	lk, _ := s.layerLocks.LoadOrStore(hex, semaphore.NewWeighted(1))
+	return lk.(*semaphore.Weighted)
+}
 
 // isLayerDirName reports whether name is a well-formed sha256 layer
 // directory name. Callers enumerate directories and read hexes out of
@@ -80,68 +94,52 @@ func isLayerDirName(name string) bool {
 // returns the renamed path; the caller deletes it afterwards. A layer
 // with an mtime after cutoff is vetoed and left in place.
 //
-// The mtime check and the rename run inside the layer singleflight — the
-// same flight in which ensureLayer refreshes the mtime — so a retirement
-// and a reuse cannot interleave: whichever runs second sees the first.
+// The mtime check and the rename run under the layer's interlock — the same
+// lock ensureLayer holds while it refreshes the mtime — so a retirement and
+// a reuse cannot interleave: whichever runs second sees the first.
 func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus, error) {
 	if !isLayerDirName(hex) {
 		return "", retireVetoed, fmt.Errorf("not a layer dir name: %q", hex)
 	}
 	dir := filepath.Join(s.layersDir(), hex)
 
-	// Pre-flight, outside the singleflight: a missing dir or a fresh mtime
-	// means nothing to do, and no reason to enter the flight and block
-	// behind an in-progress download. Both checks are re-run inside the
-	// flight before the rename, so this is a fast path, not the
+	// Pre-flight, outside the interlock: a missing dir or a fresh mtime means
+	// nothing to do and no reason to contend with the pull path at all. Both
+	// checks are re-run under the lock, so this is a fast path, not the
 	// correctness path.
+	if fi, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		return "", retireGone, nil
+	} else if err != nil {
+		return "", retireVetoed, err
+	} else if fi.ModTime().After(cutoff) {
+		slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", fi.ModTime()))
+		return "", retireVetoed, nil
+	}
+
+	// If we cannot acquire the lock it's being held by ensureLayer, which is
+	// using the layer.
+	lock := s.layerLock(hex)
+	if !lock.TryAcquire(1) {
+		return "", retireVetoed, nil
+	}
+	defer lock.Release(1)
+
 	fi, err := os.Stat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", retireGone, nil
 	} else if err != nil {
 		return "", retireVetoed, err
 	}
+	// A concurrent ensureLayer touched the dir if it reused this layer since
+	// the pre-flight stat.
 	if fi.ModTime().After(cutoff) {
 		slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", fi.ModTime()))
 		return "", retireVetoed, nil
 	}
 
-	var retired string
-	status := retireGone
-	ran := false
-	_, err, _ = s.layerSF.Do(layerFlightKey(hex), func() (any, error) {
-		ran = true
-		fi, err := os.Stat(dir)
-		if errors.Is(err, os.ErrNotExist) {
-			status = retireGone
-			return nil, nil
-		} else if err != nil {
-			status = retireVetoed
-			return nil, err
-		}
-		// A concurrent ensureLayer touched the dir if it reused this layer
-		// since the pre-flight stat.
-		if fi.ModTime().After(cutoff) {
-			slog.Info(logMsgLayerRetireVetoed, slog.String("diffid", hex), slog.Time("last_used", fi.ModTime()))
-			status = retireVetoed
-			return nil, nil
-		}
-		dst := filepath.Join(s.layersDir(), fmt.Sprintf("%s%s-%d", retiredPrefix, hex[:12], time.Now().UnixNano()))
-		if err := os.Rename(dir, dst); err != nil {
-			status = retireVetoed
-			return nil, fmt.Errorf("while retiring layer %s: %w", hex, err)
-		}
-		retired = dst
-		status = retireRetired
-		return nil, nil
-	})
-	if !ran {
-		// Our closure never executed: Do joined a flight already in progress
-		// (an ensureLayer reuse or another retire), so status/retired are
-		// stale zero values. Concurrent activity on the layer is a veto.
-		return "", retireVetoed, nil
+	dst := filepath.Join(s.layersDir(), fmt.Sprintf("%s%s-%d", retiredPrefix, hex[:12], time.Now().UnixNano()))
+	if err := os.Rename(dir, dst); err != nil {
+		return "", retireVetoed, fmt.Errorf("while retiring layer %s: %w", hex, err)
 	}
-	if err != nil {
-		return "", status, err
-	}
-	return retired, status, nil
+	return dst, retireRetired, nil
 }
