@@ -298,6 +298,8 @@ To visualize traces locally:
 
 > ateom carries no manual spans — its only instrumentation is the `otelgrpc` interceptor on the gRPC surface `atelet` calls. So it produces a span for an actor lifecycle operation (`suspend`, `resume`) and nothing at all for a read like `kubectl ate get actor`. Its sampler is parent based, so a lifecycle command is traced end to end into ateom whenever `ateapi` roots a sampled trace, which the kind overlay makes unconditional; the per-component ratio never enters into it. To check whether ateom exported its spans through the [OTLP relay](#the-ateom-otlp-relay) rather than falling back to direct network egress, inspect the span's resource attributes: `ate.otlp.relay` will be set to `"relay"` (instead of `"direct"`).
 
+> `ateapi` traces its PostgreSQL store. Every statement issued while serving a sampled request becomes a client span under the RPC span, named by its query summary (`SELECT actors`, `UPDATE workers`), with the parameterized statement in `db.query.text` and never the argument values. Transaction control appears as well, as `begin` and `commit` spans, so commit latency is visible. Store spans only join a trace that is already sampled: they follow `ateapi`'s sampler and have no switch of their own, and background work such as outbox polling and lease upkeep produces none.
+
 > **Developer Guide:** For detailed instructions on configuring OpenTelemetry tracer providers, middleware, and exporters in your servers or clients, please refer to the [Tracing Best Practices](dev/best-practices/tracing.md) guide.
 
 ---

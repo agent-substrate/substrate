@@ -118,8 +118,9 @@ func (*queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.Tra
 // The store issues one hand-written statement per call, so a keyword scan is
 // enough: the table follows INTO for INSERT, UPDATE for UPDATE, TABLE for
 // LOCK, and the first FROM for SELECT and DELETE. A statement that reads
-// several tables (any JOIN) or none (SELECT clock_timestamp()) has no
-// collection, and DDL and transaction control report only their keyword.
+// several tables (any JOIN), none (SELECT clock_timestamp()) or only a
+// subquery's (SELECT EXISTS(SELECT 1 FROM t)) has no collection, and DDL and
+// transaction control report only their keyword.
 func querySummary(sql string) (operation, collection string) {
 	fields := strings.Fields(sql)
 	if len(fields) == 0 {
@@ -144,6 +145,11 @@ func querySummary(sql string) (operation, collection string) {
 		switch {
 		case strings.EqualFold(f, "JOIN"):
 			return operation, ""
+		case at < 0 && opensSubquery(f):
+			// A subquery opened before the marker owns the first FROM,
+			// as in SELECT EXISTS(SELECT 1 FROM t): the outer statement
+			// reads no table of its own.
+			return operation, ""
 		case at < 0 && strings.EqualFold(f, marker):
 			at = i + 2
 		}
@@ -152,6 +158,12 @@ func querySummary(sql string) (operation, collection string) {
 		return operation, ""
 	}
 	return operation, collectionToken(fields, at)
+}
+
+// opensSubquery reports whether a whitespace-delimited token starts a nested
+// SELECT: "SELECT", "(SELECT" or "EXISTS(SELECT".
+func opensSubquery(tok string) bool {
+	return strings.EqualFold(tok[strings.LastIndexByte(tok, '(')+1:], "SELECT")
 }
 
 // collectionToken returns fields[i] stripped of surrounding punctuation, or
