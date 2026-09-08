@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router"
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egressinject"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/sdsmint"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/cobra"
@@ -42,4 +43,5 @@ func init() {
 	rootCmd.AddCommand(router.NewRouterCmd())
 	rootCmd.AddCommand(NewDnsCmd())
 	rootCmd.AddCommand(sdsmint.NewSdsmintCmd())
+	rootCmd.AddCommand(egressinject.NewCmd())
 }

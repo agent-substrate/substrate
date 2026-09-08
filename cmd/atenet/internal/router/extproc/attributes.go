@@ -37,14 +37,16 @@ const (
 
 	// ActorIdentityFilterStateKey is the filter-state key holding the actor
 	// identity the egress gateway read from the peer certificate it verified
-	// against the actor-identity CA. Egress-only, and set and read entirely in
-	// manifests/ate-install/atenet-egress-with-sdsmint.yaml: the MITM access
+	// against the actor-identity CA. Egress-only: it is set on the CONNECT leg
+	// (manifests/ate-install/atenet-egress-with-sdsmint.yaml), the MITM access
 	// logs stamp it, and the optional additional ext_proc service
-	// (hack/experimental-additional-egress-extproc.sh) requests it. No Go in
-	// this repository reads it — this handler authenticates the certificate
-	// itself — but it is part of the same namespace and drifts if it is not
-	// declared with the rest.
+	// (hack/experimental-additional-egress-extproc.sh) requests it and reads it
+	// back via ActorIdentityFilterStateAttribute in the egress credential
+	// injector (cmd/atenet/internal/router/egressinject).
 	ActorIdentityFilterStateKey = "dev.ate.actor.identity"
+	// ActorIdentityFilterStateAttribute is the CEL expression ext_proc evaluates
+	// to read ActorIdentityFilterStateKey back out.
+	ActorIdentityFilterStateAttribute = "filter_state['" + ActorIdentityFilterStateKey + "']"
 
 	// directionAttribute carries the Direction outright, for dataplanes that
 	// have no Envoy filter chain to name. It is set from a dataplane expression,
