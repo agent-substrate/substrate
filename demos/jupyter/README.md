@@ -57,10 +57,12 @@ Substrate routes HTTP traffic using `Ate-Target-Actor: <atespace>/<actor>`.
 A browser cannot add that header to an address-bar navigation or WebSocket
 upgrade, so this demo puts a lightweight NGINX reverse proxy (`jupyter-proxy`)
 between the browser and the Substrate router. Its configuration injects the
-header for the Actor created above and preserves Jupyter's WebSocket upgrade:
+header for the Actor created above, preserves the browser's `Host` as application
+metadata, and preserves Jupyter's WebSocket upgrade:
 
 ```nginx
 proxy_pass http://atenet-router.ate-system.svc.cluster.local;
+proxy_set_header Host $http_host;
 proxy_set_header Ate-Target-Actor ate-demo-jupyter/jupyter-notebook;
 proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection "upgrade";
