@@ -235,7 +235,7 @@ weaver registry check -r docs/metrics/registry   # the same command, direct
 
 `make verify` runs the script. It uses a local `weaver` binary if there is one, and the official image if there is none.
 
-**To add or change an instrument:** change `metrics.yaml` and run the script.
+**To add or change an instrument:** follow [Metrics Best Practices](dev/best-practices/metrics.md), which covers the instrument choice, the labels, the Go, the test, and the registry entry; then change `metrics.yaml` and run the script.
 
 Two files, and not one:
 
