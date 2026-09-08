@@ -199,13 +199,15 @@ func TestQuerySummary(t *testing.T) {
 		{"DELETE FROM leases WHERE expires_at <= clock_timestamp()", "DELETE", "leases"},
 		{"INSERT INTO leases (key, token, expires_at) VALUES ($1, $2, clock_timestamp()) ON CONFLICT (key) DO UPDATE SET token = $2", "INSERT", "leases"},
 		{"INSERT INTO worker_outbox_trim (xid) SELECT xid FROM worker_outbox_default ORDER BY xid DESC LIMIT 1", "INSERT", "worker_outbox_trim"},
-		{"SELECT EXISTS(SELECT 1 FROM worker_outbox_default)", "SELECT", "worker_outbox_default"},
+		{"SELECT proto FROM actors WHERE name IN (SELECT name FROM actor_templates WHERE atespace = $1)", "SELECT", "actors"},
 		{"LOCK TABLE worker_outbox IN ACCESS EXCLUSIVE MODE", "LOCK", "worker_outbox"},
 		// No single table.
 		{"SELECT clock_timestamp()", "SELECT", ""},
 		{"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", "SELECT", ""},
 		{"SELECT child.relname FROM pg_inherits i JOIN pg_class child ON child.oid = i.inhrelid", "SELECT", ""},
 		{"SELECT count(*) FROM (SELECT 1) AS sub", "SELECT", ""},
+		{"SELECT EXISTS(SELECT 1 FROM worker_outbox_default)", "SELECT", ""},
+		{"SELECT (SELECT xid FROM worker_outbox_trim) >= $1::xid8", "SELECT", ""},
 		{"CREATE SCHEMA IF NOT EXISTS \"ate\"", "CREATE", ""},
 		{"DROP TABLE worker_outbox_p1", "DROP", ""},
 		// Transaction control as pgx issues it.
