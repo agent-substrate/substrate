@@ -47,10 +47,13 @@ const eventKindPeriodic = "periodic"
 
 // defaultLabelsKey resolves the actor-identity label group's spelling --
 // actorlog's, so usage events and lifecycle events promote into Cloud
-// Logging labels the same way. Resolved once, off atelet's boot path:
-// metadata.OnGCE probes the metadata server (seconds of timeout off GCE), so
-// startStatsPoller warms this on a throwaway goroutine and sync.OnceValue
-// makes any emit that arrives first simply wait for the in-flight probe.
+// Logging labels the same way. metadata.OnGCE probes the metadata server, so
+// startStatsPoller warms this off the boot path on a throwaway goroutine;
+// sync.OnceValue makes an emit that arrives first wait for the in-flight
+// probe. That wait is first-tick-only and bounded: milliseconds on GCE, the
+// transport's 2s dial timeout off GCE, a 5s cap on the one pathological
+// branch (SMBIOS says GCE, probes disagree) -- and no request path ever
+// touches it.
 var defaultLabelsKey = sync.OnceValue(func() string {
 	return actorlog.LabelsKey(metadata.OnGCE())
 })
@@ -67,10 +70,8 @@ type statsEventEmitter struct {
 // leveled diagnostics, and quieting the node with --log-level=warn must not
 // silently sever them -- the subsystem's one off-switch is
 // --actor-stats-poll-interval=0. The records still carry level INFO on the
-// wire, so nothing downstream changes; sharing atelet's stdout is safe
-// because each record is written whole, in a single Write. In production w
-// is a asyncWriter over stdout (see startStatsPoller), so a stalled
-// log consumer costs events, never the sweep.
+// wire, so nothing downstream changes. In production w is an asyncWriter
+// over the process's synchronized stdout writer (see startStatsPoller).
 func newStatsEventEmitter(w io.Writer, labelsKey func() string) *statsEventEmitter {
 	return &statsEventEmitter{
 		log:       slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))),
@@ -78,48 +79,56 @@ func newStatsEventEmitter(w io.Writer, labelsKey func() string) *statsEventEmitt
 	}
 }
 
-// usageEventQueueDepth is the asyncWriter's buffer, in records: sized
-// to absorb a full sweep's burst (statsSweepConcurrency probes emitting into
-// one queue, a few hundred actors on a packed node) while the writer
-// goroutine drains at pipe speed.
+// usageEventQueueDepth is the asyncWriter's buffer, in records: about one
+// tick of a packed node. A healthy drain outruns the RPC-paced producers by
+// orders of magnitude, so the queue only fills once the pipe is dead --
+// where any finite depth drops, and the choice is cosmetic.
 const usageEventQueueDepth = 256
 
-// asyncWriter decouples event emission from the log consumer's health.
-// A write to a full stdout pipe blocks forever -- there is no timeout on the
-// syscall -- and emit runs inside the sweep's errgroup, so one stalled log
-// consumer (wedged rotation, disk-full fallout) would otherwise park a probe,
-// wedge the sweep, and silently freeze the metrics channel that shares it,
-// which is exactly the signal that must survive such an incident. Writes
-// land in a bounded queue drained by one goroutine; a full queue drops the
-// record and counts it. Dropping is safe here: the samples are point-in-time
-// readings the next healthy tick repairs, and when stdout is dead the events
-// are lost either way -- the choice is whether the metrics die with them.
+// asyncWriter decouples event emission from the log consumer's health. A
+// write to a full stdout pipe blocks forever, and emit runs inside the
+// sweep's errgroup, so one stalled log consumer (wedged rotation, disk-full
+// fallout) would otherwise park a probe, wedge the sweep, and silently
+// freeze the metrics channel that shares it. Writes land in a bounded queue
+// drained by one goroutine; a full queue drops the record and counts it.
+// Dropping is safe: the samples are point-in-time readings the next healthy
+// tick repairs, and when stdout is dead the events are lost either way --
+// the choice is whether the metrics die with them.
 type asyncWriter struct {
 	w  io.Writer
 	ch chan []byte
+
+	// report carries the drop warning over the same fixed-level pipeline as
+	// the records: the loss signal is part of the feed's integrity, so it
+	// must be exactly as unkillable by --log-level as the feed itself.
+	report *slog.Logger
 
 	dropped atomic.Int64
 }
 
 func newAsyncWriter(ctx context.Context, w io.Writer, depth int) *asyncWriter {
-	nb := &asyncWriter{w: w, ch: make(chan []byte, depth)}
-	go nb.run(ctx)
-	return nb
+	aw := &asyncWriter{
+		w:      w,
+		ch:     make(chan []byte, depth),
+		report: slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))),
+	}
+	go aw.run(ctx)
+	return aw
 }
 
-func (nb *asyncWriter) run(ctx context.Context) {
+func (aw *asyncWriter) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case b := <-nb.ch:
-			// A failed or short write is the log stream's problem, not ours:
-			// the record is best-effort and there is nobody to report to.
-			_, _ = nb.w.Write(b)
-			// The stream just proved itself live again, so a warning about
-			// the stall can actually land.
-			if n := nb.dropped.Swap(0); n > 0 {
-				slog.WarnContext(ctx, "Usage events dropped while the log stream stalled", slog.Int64("count", n))
+		case b := <-aw.ch:
+			// Best-effort: a failed write has nobody to report to.
+			_, _ = aw.w.Write(b)
+			// Report drops only after a successful write, when the stream
+			// can carry the warning -- written directly, so the drain does
+			// not queue behind itself.
+			if n := aw.dropped.Swap(0); n > 0 {
+				aw.report.WarnContext(ctx, "Usage events dropped while the log stream stalled", slog.Int64("count", n))
 			}
 		}
 	}
@@ -128,14 +137,14 @@ func (nb *asyncWriter) run(ctx context.Context) {
 // Write queues one record without ever blocking. It reports full success
 // even on a drop: the emitter has no recovery to offer, and the drop is
 // already counted for the writer goroutine to report.
-func (nb *asyncWriter) Write(p []byte) (int, error) {
+func (aw *asyncWriter) Write(p []byte) (int, error) {
 	// The slog handler reuses its buffer after Write returns, so the queue
 	// must own a copy.
 	b := append([]byte(nil), p...)
 	select {
-	case nb.ch <- b:
+	case aw.ch <- b:
 	default:
-		nb.dropped.Add(1)
+		aw.dropped.Add(1)
 	}
 	return len(p), nil
 }

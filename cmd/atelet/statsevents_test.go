@@ -232,8 +232,10 @@ func (w *stallableWriter) Write(p []byte) (int, error) {
 // queue held.
 func TestAsyncWriterNeverBlocks(t *testing.T) {
 	under := &stallableWriter{gate: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	const depth = 4
-	nb := newAsyncWriter(context.Background(), under, depth)
+	aw := newAsyncWriter(ctx, under, depth)
 
 	// The writer goroutine dequeues one record and wedges on it; the queue
 	// holds depth more. Everything past that must drop, not block. The
@@ -243,7 +245,7 @@ func TestAsyncWriterNeverBlocks(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < writes; i++ {
-			if _, err := nb.Write([]byte("x")); err != nil {
+			if _, err := aw.Write([]byte("x")); err != nil {
 				t.Errorf("Write returned %v, want nil", err)
 			}
 		}
@@ -253,29 +255,33 @@ func TestAsyncWriterNeverBlocks(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Write blocked on a wedged log stream")
 	}
-	dropped := int(nb.dropped.Load())
+	dropped := int(aw.dropped.Load())
 	if dropped < writes-depth-1 || dropped > writes-depth {
 		t.Errorf("dropped = %d, want %d or %d", dropped, writes-depth-1, writes-depth)
 	}
 
 	// Conservation: everything not dropped -- the wedged in-flight record
-	// plus the queue -- drains once the stream recovers.
+	// plus the queue -- drains once the stream recovers, and the drop report
+	// arrives over the same sink, unkillable by any verbosity knob.
 	close(under.gate)
 	wantWritten := writes - dropped
-	waitFor(t, func() bool { return under.wrote.Len() >= wantWritten })
-	if got := under.wrote.Len(); got != wantWritten {
+	waitFor(t, func() bool { return bytes.Count(under.wrote.Bytes(), []byte("x")) >= wantWritten })
+	if got := bytes.Count(under.wrote.Bytes(), []byte("x")); got != wantWritten {
 		t.Errorf("drained %d records, want %d", got, wantWritten)
 	}
+	waitFor(t, func() bool { return bytes.Contains(under.wrote.Bytes(), []byte("Usage events dropped")) })
 }
 
 // TestAsyncWriterCopies: the slog handler reuses its buffer after
 // Write returns, so the queue must hold copies, not aliases.
 func TestAsyncWriterCopies(t *testing.T) {
 	under := &stallableWriter{gate: make(chan struct{})}
-	nb := newAsyncWriter(context.Background(), under, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	aw := newAsyncWriter(ctx, under, 4)
 
 	p := []byte("original")
-	if _, err := nb.Write(p); err != nil {
+	if _, err := aw.Write(p); err != nil {
 		t.Fatal(err)
 	}
 	copy(p, "clobber!")
