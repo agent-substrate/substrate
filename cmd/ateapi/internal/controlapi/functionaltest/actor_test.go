@@ -1375,7 +1375,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 		},
 	}
 	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	// 1. CreateActor
 	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -1421,6 +1421,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if pauseResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		t.Fatalf("expected state ACTOR_STATE_PAUSED after pause, got %v", pauseResp.GetActor().GetStatus().GetState())
 	}
+	waitForWorkerAvailable(t, tc, workerName)
 
 	// 4. ResumeActor from paused
 	resumeResp2, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
