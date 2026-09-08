@@ -72,6 +72,16 @@ of running pods, so clean up once you are done reading:
 $ hack/cleanup-e2e.sh   # deletes every namespace labeled ate.dev/e2e
 ```
 
+Not every suite has a namespace to keep. One that runs against a pre-installed
+worker pool -- `TestActorEgress` uses the standing `ate-demo-egress` pool from
+`hack/install-ate-kind.sh --deploy-demo-egress` -- creates only an atespace,
+which lives in Valkey rather than Kubernetes, so a failure leaves nothing
+labeled `ate.dev/e2e` behind. Read the standing namespace instead:
+
+```shell
+$ kubectl logs -n ate-demo-egress -l ate.dev/worker-pool=egress
+```
+
 ## Creating a new test suite
 
 Copy `testmain_test.go` from `internal/e2e/suites/example` into your new suite. It will
