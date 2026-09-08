@@ -499,8 +499,9 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	return rec, nil
 }
 
-// validateSnapshotFiles ensures that joining a reported snapshot path to its
-// checkpoint directory cannot escape that directory.
+// validateSnapshotFiles rejects names that are not lexically local to a
+// checkpoint directory. Actual file access must still use os.Root so symlinks
+// cannot escape that directory.
 func validateSnapshotFiles(files []string) error {
 	for i, name := range files {
 		if !filepath.IsLocal(name) {

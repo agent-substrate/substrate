@@ -555,20 +555,11 @@ func initSnapshotSizeMetric() error {
 // recordSnapshotSize labels each image with the registry's file.name. That
 // label used to be spelled "kind", which means the snapshot's provenance
 // everywhere else in the ate.* namespace, not one of its files.
-func recordSnapshotSize(ctx context.Context, file, path, templateAtespace, templateName string) {
+func recordSnapshotSize(ctx context.Context, file string, size int64, templateAtespace, templateName string) {
 	if snapshotSizeBytes == nil {
 		return
 	}
-	fi, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "Failed to stat snapshot image for size metric",
-			slog.String("file", file), slog.String("path", path), slog.Any("err", err))
-		return
-	}
-	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
+	snapshotSizeBytes.Record(ctx, size, metric.WithAttributes(
 		semconv.FileNameKey.String(file),
 		ateattr.TemplateAtespaceKey.String(templateAtespace),
 		ateattr.TemplateNameKey.String(templateName),
@@ -688,7 +679,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 			return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), fmt.Errorf("%w: while uploading external snapshot: %w", ateerrors.ReasonFaileSaveSnapshot, err))
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
 			op.failedPhase = ateattr.SnapshotPhasePersist
 			return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), fmt.Errorf("%w: while moving to local snapshot: %w", ateerrors.ReasonFaileSaveSnapshot, err))
@@ -733,19 +724,32 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	}
 }
 
-func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
-	localCheckpointPath := ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalConfig().GetSnapshotName())
-	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, rec *sandboxAssetsRecord) error {
+	root, err := os.OpenRoot(ateompath.ActorPath(req.GetActorUid()))
+	if err != nil {
+		return fmt.Errorf("while opening actor directory: %w", err)
+	}
+	defer root.Close()
+
+	localDir := filepath.Join("local-checkpoint", req.GetLocalConfig().GetSnapshotName())
+	if err := root.MkdirAll(localDir, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
 	}
 
 	// Move exactly the files ateom reported.
 	for _, fileName := range rec.SnapshotFiles {
-		src := filepath.Join(checkpointDir, fileName)
-		dst := filepath.Join(localCheckpointPath, fileName)
-		recordSnapshotSize(ctx, fileName, src, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+		src := filepath.Join("checkpoint-state", fileName)
+		dst := filepath.Join(localDir, fileName)
+		info, err := root.Stat(src)
+		if err != nil {
+			return fmt.Errorf("while inspecting checkpoint file %s: %w", fileName, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("checkpoint file %s is not a regular file", fileName)
+		}
+		recordSnapshotSize(ctx, fileName, info.Size(), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
-		if err := os.Rename(src, dst); err != nil {
+		if err := root.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
 		}
 	}
@@ -755,7 +759,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(localCheckpointPath, sandboxManifestName), manifest, 0o600); err != nil {
+	if err := root.WriteFile(filepath.Join(localDir, sandboxManifestName), manifest, 0o600); err != nil {
 		return fmt.Errorf("while writing snapshot manifest: %w", err)
 	}
 
@@ -791,16 +795,34 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 // leaves only orphaned files, never a manifest pointing at files that never
 // landed; retries overwrite the deterministic object names.
 func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string) error {
+	root, err := os.OpenRoot(srcDir)
+	if err != nil {
+		return fmt.Errorf("while opening snapshot directory: %w", err)
+	}
+	defer root.Close()
+
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range rec.SnapshotFiles {
-		local := filepath.Join(srcDir, fileName)
-		recordSnapshotSize(ctx, fileName, local, templateAtespace, templateName)
 		g.Go(func() error {
+			local, err := root.Open(fileName)
+			if err != nil {
+				return fmt.Errorf("while opening %s in snapshot directory: %w", fileName, err)
+			}
+			defer local.Close()
+			info, err := local.Stat()
+			if err != nil {
+				return fmt.Errorf("while inspecting %s in snapshot directory: %w", fileName, err)
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("snapshot file %s is not a regular file", fileName)
+			}
+			recordSnapshotSize(ctx, fileName, info.Size(), templateAtespace, templateName)
+
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
-			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
+			if err := ategcs.SendFileToGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
 				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
 			}
 			return nil
@@ -883,7 +905,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		return "", fmt.Errorf("while addressing snapshot manifest in GCS: %w", err)
 	}
 
-	manifest, err := os.ReadFile(filepath.Join(localDir, sandboxManifestName))
+	manifest, err := readSnapshotManifest(localDir)
 	if errors.Is(err, os.ErrNotExist) {
 		// The local snapshot is gone. A previous invocation may have uploaded
 		// and pruned it: the remote manifest is uploaded last, so its presence
@@ -929,6 +951,15 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 	}
 
 	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+}
+
+func readSnapshotManifest(dir string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(sandboxManifestName)
 }
 
 // narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA
@@ -1049,7 +1080,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		manifest, err := os.ReadFile(filepath.Join(ateompath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()), sandboxManifestName))
+		manifest, err := readSnapshotManifest(ateompath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()))
 		if err != nil {
 			if isTerminalFileSystemErr(err) {
 				return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), err)
@@ -1320,14 +1351,23 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 }
 
 func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName string, srcDir, dstDir string, files []string) error {
+	sourceRoot, err := os.OpenRoot(filepath.Join(srcDir, snapshotName))
+	if err != nil {
+		return fmt.Errorf("while opening local checkpoint directory: %w", err)
+	}
+	defer sourceRoot.Close()
+	destinationRoot, err := os.OpenRoot(dstDir)
+	if err != nil {
+		return fmt.Errorf("while opening restore directory: %w", err)
+	}
+	defer destinationRoot.Close()
+
 	for _, fileName := range files {
 		if ctx.Err() != nil {
 			return fmt.Errorf("context cancelled: %w", ctx.Err())
 		}
-		src := filepath.Join(srcDir, snapshotName, fileName)
-		dst := filepath.Join(dstDir, fileName)
-		if _, err := copyFile(src, dst); err != nil {
-			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
+		if _, err := copyRootFile(sourceRoot, fileName, destinationRoot, fileName); err != nil {
+			return fmt.Errorf("failed to copy %s: %w", fileName, err)
 		}
 	}
 
@@ -1360,30 +1400,52 @@ var errKernelCopyUnsupported = errors.New("kernel range copy unsupported")
 // local checkpoint restore, and it destroys the sparseness that later stages rely on to
 // tell which parts of guest RAM actually hold anything.
 func copyFile(src, dst string) (int64, error) {
-	sourceFileStat, err := os.Stat(src)
-	if err != nil {
-		return 0, err
-	}
-
-	if !sourceFileStat.Mode().IsRegular() {
-		return 0, fmt.Errorf("%s is not a regular file", src)
-	}
-
 	source, err := os.Open(src)
 	if err != nil {
 		return 0, err
 	}
 	defer source.Close()
+	sourceFileStat, err := source.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if !sourceFileStat.Mode().IsRegular() {
+		return 0, fmt.Errorf("%s is not a regular file", src)
+	}
 
 	destination, err := createDestFile(dst)
 	if err != nil {
 		return 0, err
 	}
+	return copyOpenFile(source, destination, sourceFileStat.Size())
+}
 
+func copyRootFile(sourceRoot *os.Root, sourceName string, destinationRoot *os.Root, destinationName string) (int64, error) {
+	source, err := sourceRoot.Open(sourceName)
+	if err != nil {
+		return 0, err
+	}
+	defer source.Close()
+	sourceFileStat, err := source.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if !sourceFileStat.Mode().IsRegular() {
+		return 0, fmt.Errorf("%s is not a regular file", sourceName)
+	}
+
+	destination, err := destinationRoot.OpenFile(destinationName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		return 0, err
+	}
+	return copyOpenFile(source, destination, sourceFileStat.Size())
+}
+
+func copyOpenFile(source *os.File, destination io.WriteCloser, sourceSize int64) (int64, error) {
 	if sd, ok := destination.(sparseDest); ok {
-		switch err := copySparse(source, sd, sourceFileStat.Size()); {
+		switch err := copySparse(source, sd, sourceSize); {
 		case err == nil:
-			return sourceFileStat.Size(), destination.Close()
+			return sourceSize, destination.Close()
 		case !errors.Is(err, errSparseUnsupported):
 			return 0, errors.Join(err, destination.Close())
 		}
@@ -1524,16 +1586,27 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 	if err != nil {
 		return err
 	}
+	root, err := os.OpenRoot(dstDir)
+	if err != nil {
+		return fmt.Errorf("while opening restore directory: %w", err)
+	}
+	defer root.Close()
+
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		fileName := fileName
-		local := filepath.Join(dstDir, fileName)
 		g.Go(func() error {
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
-			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
+			local, err := root.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+			if err != nil {
+				return fmt.Errorf("while opening %s in restore directory: %w", fileName, err)
+			}
+			fetchErr := ategcs.FetchFileFromGCSWithZstd(gCtx, s.gcsClient, objectURI, local)
+			closeErr := local.Close()
+			if err := errors.Join(fetchErr, closeErr); err != nil {
 				return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
 			}
 			return nil
