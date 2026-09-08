@@ -137,6 +137,11 @@ const defaultExtProcMaxRequests = 2048
 // same ceiling and need the same headroom.
 //
 // This is not the drain sizing. See drainRouteBudget.
+//
+// TODO(liorlieberman): a high default is the blunt instrument, not the fix.
+// Streaming and bidi RPCs need a ceiling this generous, and ordinary turns do
+// not; a per-route timeout would give the first without imposing it on every
+// workload. Tracked with the rest of the timeout consolidation in #1291.
 const defaultRouteTimeout = 5 * time.Minute
 
 // drainRouteBudget is how much in-flight route time the shutdown sequence
