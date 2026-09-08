@@ -75,7 +75,7 @@ func (e *Env) atenetEgressManifestPath() string {
 func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 	if e.Cfg.Router == config.RouterAgentgateway {
 		if e.Cfg.AdditionalEgressExtprocService != "" {
-			return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-router=envoy")
+			return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --dataplane=envoy")
 		}
 		return e.KustomizeResolve(ctx, installDir+"/agentgateway-egress")
 	}

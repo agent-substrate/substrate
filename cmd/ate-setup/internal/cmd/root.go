@@ -88,7 +88,7 @@ func init() {
 		"Target a local Kind cluster: use the kind overlays, the local registry, and host-architecture builds")
 	f.StringVar(&opts.Kubeconfig, "kubeconfig", "", "Path to the kubeconfig file")
 	f.StringVar(&opts.Context, "context", "", "Name of the kubeconfig context to use (defaults to KUBECTL_CONTEXT)")
-	f.StringVar(&opts.Router, "atenet-router", "", "atenet router dataplane: envoy or agentgateway (default envoy)")
+	f.StringVar(&opts.Router, "dataplane", "", "Ingress and egress dataplane: envoy or agentgateway (default envoy)")
 	f.StringVar(&opts.RolloutTimeout, "rollout-timeout", "", "Timeout for workload rollouts as a duration string (e.g. 60s, 5m)")
 	f.IntVar(&opts.PodcertWorkersPerSigner, "podcert-workers-per-signer", 0, "Number of worker goroutines per signer in podcertificate-controller")
 	f.BoolVar(&opts.ExperimentalUseSDSMint, "experimental-use-sdsmint", false, "Deploy egress gateway with dynamic per-SNI certificate minting")

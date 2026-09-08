@@ -43,7 +43,7 @@ func TestRouterConfigValidate(t *testing.T) {
 		{
 			name:    "unknown router rejected",
 			cfg:     routerConfig{AtenetRouter: "blah"},
-			wantErr: "--atenet-router must be",
+			wantErr: "--dataplane must be",
 		},
 		{
 			name:    "negative extproc-max-requests rejected",

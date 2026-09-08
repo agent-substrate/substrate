@@ -237,7 +237,7 @@ func Load(opts Options) (*Config, error) {
 		applyKindDefaults(cfg)
 	}
 
-	cfg.Router = firstNonEmpty(opts.Router, env["ATE_ATENET_ROUTER"], RouterEnvoy)
+	cfg.Router = firstNonEmpty(opts.Router, env["ATE_DATAPLANE"], RouterEnvoy)
 
 	if err := validate(cfg); err != nil {
 		return nil, err
@@ -283,7 +283,7 @@ func validate(cfg *Config) error {
 			return fmt.Errorf("--experimental-additional-egress-extproc-service requires --experimental-use-sdsmint")
 		}
 		if cfg.Router != RouterEnvoy {
-			return fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-router=envoy")
+			return fmt.Errorf("--experimental-additional-egress-extproc-service requires --dataplane=envoy")
 		}
 	}
 	return nil

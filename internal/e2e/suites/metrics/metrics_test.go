@@ -23,6 +23,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// they add the drive steps their instruments need.
 	resume(t, ctx, clients, actorID)
 
-	// Drive request through the router so Envoy ext_proc emits atenet_router_route_duration.
+	// Drive request through the router so the dataplane emits atenet_router_route_duration.
 	rClient, err := e2e.NewRouterClient(ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
@@ -88,15 +89,28 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	triggerActorCrash(t, ctx, clients, actorID)
 
 	deadline := time.Now().Add(2 * time.Minute)
+	prefixes := e2e.PlatformMetricPrefixes
+	agentGateway := os.Getenv("E2E_DATAPLANE") == "agentgateway"
+	if agentGateway {
+		prefixes = withoutMetricPrefix(prefixes, "atenet_router_route_duration")
+	}
 	var missing []string
-	var ateomSeen, controllerSeen bool
+	var ateomSeen, controllerSeen, routeDurationSeen bool
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
 		if err != nil {
 			t.Fatalf("ScrapeCollectorMetrics: %v", err)
 		}
-		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
+		missing = e2e.MissingPlatformMetrics(scrape, prefixes)
+		routeDurationSeen = true
+		if agentGateway {
+			routerScrape, err := e2e.ScrapeAgentGatewayRouterMetrics(ctx)
+			if err != nil {
+				t.Fatalf("ScrapeAgentGatewayRouterMetrics: %v", err)
+			}
+			routeDurationSeen = len(e2e.MissingPlatformMetrics(routerScrape, []string{"agentgateway_atenet_router_route_duration_seconds"})) == 0
+		}
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
 		// reader, so the reconcile families are what prove the bridge, not just that
@@ -105,7 +119,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
 			strings.Contains(scrape, "controller_runtime_")
 
-		if len(missing) == 0 && ateomSeen && controllerSeen {
+		if len(missing) == 0 && ateomSeen && controllerSeen && routeDurationSeen {
 			var errs []string
 
 			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
@@ -301,8 +315,18 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
 			missing, ateomSeen, controllerSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v",
-		missing, ateomSeen, controllerSeen)
+	t.Fatalf("platform telemetry validation failed: collector missing metrics %v, AgentGateway route duration seen=%v, ateom pushed=%v, atecontroller pushed=%v",
+		missing, routeDurationSeen, ateomSeen, controllerSeen)
+}
+
+func withoutMetricPrefix(prefixes []string, omit string) []string {
+	filtered := make([]string, 0, len(prefixes)-1)
+	for _, prefix := range prefixes {
+		if prefix != omit {
+			filtered = append(filtered, prefix)
+		}
+	}
+	return filtered
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

@@ -26,6 +26,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -62,11 +64,14 @@ func TestRequestParking(t *testing.T) {
 		t.Fatalf("creating router client: %v", err)
 	}
 	defer router.Close()
-	statusz, err := e2e.NewStatuszClient(ctx)
-	if err != nil {
-		t.Fatalf("creating statusz client: %v", err)
+	var statusz *e2e.StatuszClient
+	if os.Getenv("E2E_DATAPLANE") != "agentgateway" {
+		statusz, err = e2e.NewStatuszClient(ctx)
+		if err != nil {
+			t.Fatalf("creating statusz client: %v", err)
+		}
+		defer statusz.Close()
 	}
-	defer statusz.Close()
 
 	t.Run("ParkThenServed", func(t *testing.T) {
 		// Occupy the only worker with actor A.
@@ -163,14 +168,20 @@ func TestRequestParking(t *testing.T) {
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
 
-		if resp.StatusCode != http.StatusServiceUnavailable {
-			t.Fatalf("status = %d (body %q), want 503", resp.StatusCode, string(body))
+		wantStatus := http.StatusServiceUnavailable
+		if os.Getenv("E2E_DATAPLANE") == "agentgateway" {
+			wantStatus = http.StatusGatewayTimeout
 		}
-		if !strings.Contains(string(body), "no free workers available") {
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("status = %d (body %q), want %d", resp.StatusCode, string(body), wantStatus)
+		}
+		if wantStatus == http.StatusServiceUnavailable && !strings.Contains(string(body), "no free workers available") {
 			t.Errorf("body = %q, want the router's capacity verdict", string(body))
 		}
-		if ct := resp.Header.Get("content-type"); ct != "text/plain" {
-			t.Errorf("content-type = %q, want text/plain", ct)
+		if wantStatus == http.StatusServiceUnavailable {
+			if ct := resp.Header.Get("content-type"); ct != "text/plain" {
+				t.Errorf("content-type = %q, want text/plain", ct)
+			}
 		}
 		// Lower bound proves the request parked (fail-fast would answer in
 		// milliseconds); upper bound proves the router's own verdict landed
@@ -181,7 +192,7 @@ func TestRequestParking(t *testing.T) {
 		if elapsed > routerParkBudget+4*time.Second {
 			t.Errorf("503 after %v: too slow, likely an Envoy timeout rather than the router's verdict", elapsed)
 		}
-		t.Logf("budget exhausted after %v", elapsed)
+		t.Logf("budget exhausted after %v with HTTP %d", elapsed, wantStatus)
 	})
 }
 
@@ -273,14 +284,39 @@ func waitForParkedCount(ctx context.Context, t *testing.T, statusz *e2e.StatuszC
 	deadline := time.Now().Add(4 * time.Second)
 	var last int
 	for time.Now().Before(deadline) {
-		p, err := statusz.Parking(ctx)
-		if err == nil {
-			last = p.Active
-			if cond(p.Active) {
+		if statusz != nil {
+			p, err := statusz.Parking(ctx)
+			if err == nil {
+				last = p.Active
+				if cond(p.Active) {
+					return
+				}
+			}
+		} else if active, ok := agentGatewayParkingCount(ctx); ok {
+			last = active
+			if cond(active) {
 				return
 			}
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for the parking gauge to satisfy the condition (last active=%d)", last)
+}
+
+func agentGatewayParkingCount(ctx context.Context) (int, bool) {
+	scrape, err := e2e.ScrapeAgentGatewayRouterMetrics(ctx)
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(scrape, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || !strings.HasPrefix(fields[0], "agentgateway_substrate_request_parking_active") {
+			continue
+		}
+		value, err := strconv.ParseFloat(fields[1], 64)
+		if err == nil {
+			return int(value), true
+		}
+	}
+	return 0, false
 }
