@@ -48,3 +48,26 @@ func TestAdvancesGuestClockOnRestore(t *testing.T) {
 		})
 	}
 }
+
+func TestParseVersion(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want [3]int
+		ok   bool
+	}{
+		{"53.0.0", [3]int{53, 0, 0}, true},
+		{"v53.0", [3]int{53, 0, 0}, true},
+		{"53", [3]int{53, 0, 0}, true},
+		{" 52.1.3 ", [3]int{52, 1, 3}, true},
+		{"53.0.0+build7", [3]int{53, 0, 0}, true},
+		{"", [3]int{}, false},
+		{"v", [3]int{}, false},
+		{"abc", [3]int{}, false},
+		{"53.abc", [3]int{}, false},
+	} {
+		got, ok := parseVersion(tc.in)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("parseVersion(%q) = %v,%v want %v,%v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}

@@ -66,19 +66,6 @@ type runningActor struct {
 	// apiSocket is the CH api-socket for this ateom-owned VMM.
 	apiSocket string
 
-	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
-	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
-	// CheckpointWorkload overlays CH's new (sparse, faulted-only) snapshot onto this
-	// base to produce a COMPLETE snapshot (CH's OnDemand snapshot alone drops the
-	// un-faulted pages). Empty for cold-run actors (their snapshot is already complete).
-	restoreSourceDir string
-
-	// snapshotIsSelfContained is set when this actor was restored eagerly, which
-	// reads every populated extent up front. Every page the snapshot had is then
-	// resident, so cloud-hypervisor's next snapshot already holds all of it and
-	// there is no delta to overlay onto restoreSourceDir.
-	snapshotIsSelfContained bool
-
 	// guestAgent is the kata-agent ttrpc client retained past boot. Two things
 	// share it: the stdout/stderr forwarding goroutines (they pump the
 	// container's output via ReadStdout/ReadStderr on this connection for the

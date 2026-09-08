@@ -14,6 +14,11 @@
 
 package ch
 
+import (
+	"strconv"
+	"strings"
+)
+
 // clockAdvanceSince is the first cloud-hypervisor release that catches the guest
 // clock up to wall-clock time when restoring a snapshot: on aarch64 it advances
 // CNTVCT_EL0 by the downtime, and on x86 it keeps KVM_CLOCK_REALTIME set so the
@@ -33,4 +38,49 @@ func (i VMMInfo) AdvancesGuestClockOnRestore() bool {
 		return false
 	}
 	return compareVersions(v, clockAdvanceSince) >= 0
+}
+
+// semver parses the reported version, preferring the semver field ("53.0.0") and
+// falling back to the release tag ("v53.0").
+func (i VMMInfo) semver() ([3]int, bool) {
+	if v, ok := parseVersion(i.Version); ok {
+		return v, true
+	}
+	return parseVersion(i.BuildVersion)
+}
+
+// parseVersion reads a dotted version, tolerating a leading "v", a missing patch
+// component, and trailing build metadata ("53.0.0-dirty").
+func parseVersion(s string) ([3]int, bool) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "v")
+	if s == "" {
+		return [3]int{}, false
+	}
+	// Drop any pre-release or build suffix.
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i]
+	}
+
+	var out [3]int
+	for idx, part := range strings.SplitN(s, ".", 3) {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return [3]int{}, false
+		}
+		out[idx] = n
+	}
+	return out, true
+}
+
+func compareVersions(a, b [3]int) int {
+	for i := range a {
+		switch {
+		case a[i] < b[i]:
+			return -1
+		case a[i] > b[i]:
+			return 1
+		}
+	}
+	return 0
 }
