@@ -70,7 +70,7 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, pre stor
 	// Order matters: the delete is what erases the Actor's pointer at the
 	// Worker, so a failed release has to leave the record in place for the
 	// caller to rediscover and retry.
-	if err := w.ensureBoundActorsReleased(ctx, worker); err != nil {
+	if err := w.ensureBoundActorsReleased(ctx, worker, crashCause{reason: ateattr.ReasonWorkerPodGone}); err != nil {
 		return nil, err
 	}
 
@@ -116,12 +116,25 @@ func (w *WorkerWorkflow) ensureDraining(ctx context.Context, worker *ateapipb.Wo
 	return drained, nil
 }
 
+// crashCause travels as a pair so the crash record and the counter cannot
+// describe one crash differently. containerTerminatedReason is the kubelet's
+// word for the termination, already normalized because it reaches
+// ate.actor.crashes as a label; empty on every path but a recycle.
+type crashCause struct {
+	reason                    string
+	containerTerminatedReason string
+}
+
 // ensureBoundActorsReleased resets every Actor bound to the Worker.
+//
+// Pages forward, which is safe only here: the assignment rows survive the sweep
+// and go with the record. ensureWorkerEmptied is the variant for a Worker that
+// stays.
 //
 // A single failure stops the sweep, leaving the Worker record in place with the
 // Actors that have not been released still bound to it, so a retry picks up
 // where this left off.
-func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *ateapipb.Worker) (err error) {
+func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *ateapipb.Worker, cause crashCause) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseBoundActors")
 	defer func() { err = done(err) }()
 
@@ -134,7 +147,7 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 			return fmt.Errorf("while listing the assignments of worker %s: %w", worker.GetMetadata().GetName(), err)
 		}
 		for _, assignment := range page.Items {
-			if err := w.releaseBoundActor(ctx, worker, assignment); err != nil {
+			if err := w.releaseBoundActor(ctx, worker, assignment, cause); err != nil {
 				return err
 			}
 			released++
@@ -153,8 +166,11 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 // releaseBoundActor resets one Actor bound to the Worker. An Actor that already
 // reached ACTOR_STATE_SUSPENDED saved its state cleanly during graceful
 // termination, so it is left untouched and remains resumable. An Actor that was
-// still running when the pod disappeared is moved to ACTOR_STATE_CRASHED and its
-// pod pointers are cleared.
+// still running when the sandbox went away is moved to ACTOR_STATE_CRASHED and
+// its pod pointers are cleared.
+//
+// It does not touch the assignment row: on the delete path the record's removal
+// cascades it away, and ensureWorkerEmptied releases it explicitly.
 //
 // Nothing to release is the common case and reports success: a superseded
 // assignment and an Actor that has since moved elsewhere both leave no Actor
@@ -162,7 +178,7 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 //
 // A concurrent SuspendActor or ResumeActor wins the optimistic version check;
 // this attempt fails as ABORTED so the caller retries against the newer state.
-func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment) error {
+func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment, cause crashCause) error {
 	if assignment.GetActor() == nil {
 		markSkipped(ctx, "assignment names no actor")
 		return nil
@@ -205,11 +221,18 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
-	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
+	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, cause.reason)
+	var causeLogAttrs []slog.Attr
+	if cause.containerTerminatedReason != "" {
+		crashAttrs = append(crashAttrs, ateattr.ContainerLastTerminatedReasonKey.String(cause.containerTerminatedReason))
+		causeLogAttrs = append(causeLogAttrs, slog.String(string(ateattr.ContainerLastTerminatedReasonKey), cause.containerTerminatedReason))
+	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "Releasing actor from a worker whose pod is gone",
-		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
-			slog.String("worker", name))...)
+	releaseAttrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))
+	releaseAttrs = append(releaseAttrs, slog.String(string(ateattr.WorkerNameKey), name))
+	releaseAttrs = append(releaseAttrs, ateattr.FailureLogAttrs(cause.reason)...)
+	slog.LogAttrs(ctx, slog.LevelInfo, "Releasing actor from a worker that lost its sandbox",
+		append(releaseAttrs, causeLogAttrs...)...)
 	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		toUpdate.Status.WorkerAssignment = nil
@@ -231,7 +254,7 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 	}
 
 	if !wasAlreadyCrashed {
-		logActorCrashed(ctx, actor, opName, ateattr.ReasonWorkerPodGone)
+		logActorCrashed(ctx, actor, opName, cause.reason, causeLogAttrs...)
 		recordActorCrash(ctx, crashAttrs)
 	}
 	return nil

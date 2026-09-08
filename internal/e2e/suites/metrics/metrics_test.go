@@ -248,6 +248,18 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 						crashErrs = append(crashErrs, fmt.Sprintf("ate_failure_domain %q disagrees with ate_failure_reason %q, which classifies as %q", domainVal, reasonVal, want))
 					}
 
+					// Only the reason that observes a kubelet-managed container carries
+					// the kubelet's word for it, and only from the bounded set.
+					terminatedVal := extractLabelValue(line, "k8s_container_status_last_terminated_reason")
+					switch {
+					case reasonVal == ateattr.ReasonWorkerSandboxGone && terminatedVal == "":
+						crashErrs = append(crashErrs, "k8s_container_status_last_terminated_reason is missing on a WORKER_SANDBOX_GONE crash")
+					case terminatedVal != "" && ateattr.NormalizeContainerTerminationReason(terminatedVal) != terminatedVal:
+						crashErrs = append(crashErrs, fmt.Sprintf("k8s_container_status_last_terminated_reason %q is unbounded (must be a kubelet reason the control plane knows, or _OTHER)", terminatedVal))
+					case terminatedVal != "" && reasonVal != ateattr.ReasonWorkerSandboxGone:
+						crashErrs = append(crashErrs, fmt.Sprintf("k8s_container_status_last_terminated_reason %q is set on ate_failure_reason %q, which observes no container", terminatedVal, reasonVal))
+					}
+
 					if tmplAtespaceVal == "" {
 						crashErrs = append(crashErrs, "ate_template_atespace label is missing or empty")
 					}

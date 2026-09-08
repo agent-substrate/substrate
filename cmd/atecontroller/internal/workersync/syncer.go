@@ -23,12 +23,22 @@ import (
 	"maps"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workerpod"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 )
@@ -76,11 +86,8 @@ func (k workerKey) workerRef() *ateapipb.ObjectRef {
 // logAttrs identifies the Worker in a log line, along with the pod it is
 // derived from. The pod is the useful handle for an operator reaching for
 // kubectl; the name is what identifies the record the syncer is acting on.
-func (k workerKey) logAttrs() []any {
-	return []any{
-		slog.String("worker", k.workerName()),
-		slog.String("pod", k.namespace+"/"+k.name),
-	}
+func (k workerKey) logAttrs() []slog.Attr {
+	return ateattr.WorkerLogAttrs(k.workerName(), k.namespace+"/"+k.name)
 }
 
 // WorkerPoolSyncer reconciles the state of worker pods from Kubernetes Informer
@@ -91,18 +98,25 @@ func (k workerKey) logAttrs() []any {
 // backoff on transient failures such as a lost version precondition.
 type WorkerPoolSyncer struct {
 	client           ateapipb.ControlClient
+	pods             kubernetes.Interface
 	workerInformer   cache.SharedIndexInformer
 	workerPoolLister listersv1alpha1.WorkerPoolLister
 	queue            workqueue.TypedRateLimitingInterface[workerKey]
+	// tracer roots the spans the syncer opens, since an informer callback
+	// carries none. A field rather than a reach for the global provider so a
+	// test can record against a local one.
+	tracer trace.Tracer
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods kubernetes.Interface, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:           client,
+		pods:             pods,
 		workerInformer:   workerInformer,
 		workerPoolLister: workerPoolLister,
 		queue:            workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
+		tracer:           otel.Tracer("workersync"),
 	}
 }
 
@@ -192,12 +206,12 @@ func (s *WorkerPoolSyncer) processNextWorkItem(ctx context.Context) bool {
 		// future pod event enqueues it again. Every other code — including the
 		// UNAVAILABLE a transport failure surfaces as — requeues.
 		if status.Code(err) == codes.InvalidArgument {
-			slog.ErrorContext(ctx, "Syncer: reconcile rejected as invalid, dropping",
+			slog.LogAttrs(ctx, slog.LevelError, "Syncer: reconcile rejected as invalid, dropping",
 				append(key.logAttrs(), slog.Any("err", err))...)
 			s.queue.Forget(key)
 			return true
 		}
-		slog.ErrorContext(ctx, "Syncer: reconcile failed, requeueing",
+		slog.LogAttrs(ctx, slog.LevelError, "Syncer: reconcile failed, requeueing",
 			append(key.logAttrs(), slog.Any("err", err))...)
 		s.queue.AddRateLimited(key)
 		return true
@@ -214,21 +228,52 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		return err
 	}
 	if !exists {
-		slog.InfoContext(ctx, "Syncer: deregistering worker (pod deleted)", key.logAttrs()...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Syncer: deregistering worker (pod deleted)", key.logAttrs()...)
 		return s.reconcileDeadWorker(ctx, key)
 	}
 	pod := obj.(*corev1.Pod)
 	if string(pod.UID) != key.uid {
 		// The pod was deleted and a new one took its name. This key names the
 		// dead incarnation; the live pod was enqueued under its own key.
-		slog.InfoContext(ctx, "Syncer: deregistering worker (pod replaced)", key.logAttrs()...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Syncer: deregistering worker (pod replaced)", key.logAttrs()...)
 		return s.reconcileDeadWorker(ctx, key)
+	}
+	// Read once and carried down: the sandbox check and createOrUpdateWorker both
+	// need the record, and reading it twice would double the RPCs the syncer makes
+	// on every pod event and every resync.
+	worker, err := s.getWorker(ctx, key)
+	if err != nil {
+		return err
+	}
+	// Before draining and before eligibility: a restarted ateom leaves the pod,
+	// its UID and its IP untouched, so nothing else here notices, and its actors
+	// are stranded for as long as the check waits.
+	if worker, err = s.recycleIfSandboxReplaced(ctx, key, pod, worker); err != nil {
+		return err
+	}
+	// After the recycle, and on its own condition rather than as part of it: the
+	// container id only changes once a replacement is Running, while a crash loop
+	// is the kubelet refusing to start one, so the two are almost never true at
+	// the same moment.
+	quarantined, err := s.quarantineIfCrashLooping(ctx, key, pod, worker)
+	if err != nil {
+		return err
+	}
+	if quarantined {
+		// The Worker is drained and its pod is on the way out; converging the
+		// rest of the record against a pod that is being replaced is churn, and
+		// the copy read above is stale after the drain anyway.
+		return nil
 	}
 	// Checked before eligibility: draining works off the registered record by name
 	// and never reads the pod IP, while a Terminating pod can legitimately report
 	// no IP once its sandbox is torn down. Gating on the IP first would drop the
 	// transition and leave the worker schedulable for as long as the pod lingers.
 	if pod.DeletionTimestamp != nil {
+		if worker == nil {
+			// Never registered, so there is nothing to stop the scheduler placing on.
+			return nil
+		}
 		// The pod has entered Terminating: mark the worker DRAINING so the
 		// scheduler stops routing new actors to it. We deliberately do NOT touch
 		// the bound actor here — inside the pod ateom has received SIGTERM and is
@@ -240,19 +285,20 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues it.
 		return nil
 	}
-	return s.createOrUpdateWorker(ctx, key, pod)
+	return s.createOrUpdateWorker(ctx, key, pod, worker)
 }
 
-func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod) error {
+// createOrUpdateWorker converges the registry record with the pod. w is the
+// record as reconcile read it, or nil when the pod has none yet.
+func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerKey, pod *corev1.Pod, w *ateapipb.Worker) error {
 	poolName := pod.Labels[workerPodLabel]
 	pool, err := s.workerPoolLister.WorkerPools(key.namespace).Get(poolName)
 	if err != nil {
 		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
 	}
 
-	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
-	if status.Code(err) == codes.NotFound {
-		slog.InfoContext(ctx, "Syncer: registering worker", key.logAttrs()...)
+	if w == nil {
+		slog.LogAttrs(ctx, slog.LevelInfo, "Syncer: registering worker", key.logAttrs()...)
 		worker := &ateapipb.Worker{
 			// Workers are global-scoped, so the name carries no atespace. See
 			// workerKey.workerName for where the name comes from.
@@ -265,21 +311,25 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			NodeName:        pod.Spec.NodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
-			// Capacity is the Worker's to report, not the syncer's to infer
-			// from the pod: it is what the ateom can actually supply. Until
-			// that report lands, CreateWorker's reified ceiling holds the
-			// Worker to a single Actor.
+			// The ateom container and the capacity are both status, reported
+			// after this rather than claimed here: capacity is what the ateom
+			// can actually supply, and until it reports nothing is placed on
+			// this Worker at all.
 		}
 		// status is output-only: CreateWorker sets STATE_ACTIVE itself.
 		//
 		// ALREADY_EXISTS means we lost a create race; requeue and converge via
 		// the update path. INVALID_ARGUMENT is terminal — see
 		// processNextWorkItem.
-		_, err := s.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: worker})
-		return err
-	}
-	if err != nil {
-		return fmt.Errorf("getting worker: %w", err)
+		if _, err := s.client.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: worker}); err != nil {
+			return err
+		}
+		// Reconcile again at once to record the ateom container. Until that
+		// lands the Worker has none, and a restart in the gap reads as a Worker
+		// that never had one — adopted rather than recycled, leaving anything
+		// already placed on it bound to a sandbox that is gone.
+		s.queue.Add(key)
+		return nil
 	}
 
 	// UpdateWorker replaces the whole resource, so the two mutable fields are
@@ -290,12 +340,12 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	// new pod, which arrives under a new key.
 	var changed bool
 	if w.GetSandboxClass() != string(pool.Spec.SandboxClass) {
-		slog.InfoContext(ctx, "Syncer: updating worker (SandboxClass changed)", key.logAttrs()...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Syncer: updating worker (SandboxClass changed)", key.logAttrs()...)
 		w.SandboxClass = string(pool.Spec.SandboxClass)
 		changed = true
 	}
 	if !maps.Equal(w.GetLabels(), pool.GetLabels()) {
-		slog.InfoContext(ctx, "Syncer: updating worker (labels changed)", key.logAttrs()...)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Syncer: updating worker (labels changed)", key.logAttrs()...)
 		w.Labels = pool.GetLabels()
 		changed = true
 	}
@@ -304,7 +354,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		// log it just in case we can reproduce it. It is logged rather than
 		// repaired because ip is immutable on a registered Worker: writing the
 		// pod's value back would be rejected rather than applied.
-		slog.WarnContext(ctx, "Syncer: registered worker IP disagrees with its pod",
+		slog.LogAttrs(ctx, slog.LevelWarn, "Syncer: registered worker IP disagrees with its pod",
 			append(key.logAttrs(), slog.String("registered", w.GetIp()), slog.String("pod_ip", pod.Status.PodIP))...)
 	}
 	if !changed {
@@ -316,6 +366,158 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	// worker at its new version.
 	_, err = s.client.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: w})
 	return err
+}
+
+// getWorker reads the registry record for key, reporting an unregistered pod as
+// a nil Worker rather than an error: that is the state the create path drives
+// from, not a failure.
+func (s *WorkerPoolSyncer) getWorker(ctx context.Context, key workerKey) (*ateapipb.Worker, error) {
+	w, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting worker: %w", err)
+	}
+	return w, nil
+}
+
+// recycleIfSandboxReplaced recycles the Worker when the kubelet has swapped the
+// ateom container under it, and returns the record as it now stands. The
+// container id is the only evidence, and it lives on the record rather than in
+// memory here: an ate-controller restart would lose it and strand every actor
+// caught by the restart it missed.
+//
+// Nothing to compare yet is left for a later event. RecycleWorker decides what a
+// match, a mismatch and an absent id each mean.
+func (s *WorkerPoolSyncer) recycleIfSandboxReplaced(ctx context.Context, key workerKey, pod *corev1.Pod, w *ateapipb.Worker) (*ateapipb.Worker, error) {
+	ateom := workerpod.AteomStatus(pod)
+	if w == nil || ateom == nil || ateom.ContainerID == "" || w.GetStatus().GetAteomContainerId() == ateom.ContainerID {
+		return w, nil
+	}
+
+	terminatedReason := workerpod.SandboxTerminatedReason(ateom)
+	// An absent id is adopted rather than recycled: no sandbox was lost, so
+	// there is nothing to report, count or correlate.
+	if w.GetStatus().GetAteomContainerId() == "" {
+		return s.recycleWorker(ctx, key, ateom.ContainerID, terminatedReason)
+	}
+
+	// One trace over the whole fault. Informer callbacks carry no span, so
+	// without this the record below is detached from the RecycleWorker call and
+	// from every Actor crashed record ateapi writes because of it. The trace id
+	// reaches all of them whether or not the trace itself is sampled.
+	ctx, span := s.tracer.Start(ctx, "ReconcileReplacedSandbox",
+		trace.WithAttributes(s.sandboxLossAttributes(w, ateom, terminatedReason)...))
+	defer span.End()
+
+	attrs := key.logAttrs()
+	attrs = append(attrs, ateattr.WorkerPoolLogAttrs(w.GetWorkerNamespace(), w.GetWorkerPool())...)
+	attrs = append(attrs, ateattr.FailureLogAttrs(ateattr.ReasonWorkerSandboxGone)...)
+	attrs = append(attrs,
+		slog.String(string(ateattr.ContainerLastTerminatedReasonKey), terminatedReason),
+		slog.Int(string(ateattr.ContainerRestartCountKey), int(ateom.RestartCount)))
+
+	slog.LogAttrs(ctx, slog.LevelError, "Syncer: worker lost its sandbox, recycling", attrs...)
+
+	recycled, err := s.recycleWorker(ctx, key, ateom.ContainerID, terminatedReason)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+		return nil, err
+	}
+	return recycled, nil
+}
+
+// quarantineIfCrashLooping takes a Worker out of the pool when the kubelet has
+// given up restarting its ateom, and hands the pod back to its Deployment.
+//
+// Substrate keeps no restart threshold of its own: the kubelet already backs off
+// exponentially and resets once a container stays up, and a second opinion here
+// would only disagree with it. Draining is what stops the losses — every Actor
+// placed on a sandbox that keeps dying is destroyed permanently, since
+// ACTOR_STATE_CRASHED is terminal.
+func (s *WorkerPoolSyncer) quarantineIfCrashLooping(ctx context.Context, key workerKey, pod *corev1.Pod, w *ateapipb.Worker) (bool, error) {
+	if w == nil || pod.DeletionTimestamp != nil || !workerpod.InCrashLoop(workerpod.AteomStatus(pod)) {
+		return false, nil
+	}
+
+	ctx, span := s.tracer.Start(ctx, "QuarantineCrashLoopingWorker",
+		trace.WithAttributes(ateattr.WorkerAttributes(w.GetMetadata().GetName(), w.GetWorkerPod())...))
+	defer span.End()
+
+	attrs := key.logAttrs()
+	attrs = append(attrs, ateattr.WorkerPoolLogAttrs(w.GetWorkerNamespace(), w.GetWorkerPool())...)
+	attrs = append(attrs, slog.String(string(ateattr.ContainerStatusReasonKey), workerpod.CrashLoopBackOff))
+	if ateom := workerpod.AteomStatus(pod); ateom != nil {
+		attrs = append(attrs, slog.Int(string(ateattr.ContainerRestartCountKey), int(ateom.RestartCount)))
+	}
+
+	// Drain before deleting: the pod lingers through its grace period, and an
+	// ACTIVE Worker takes placements for as long as it does.
+	if err := s.markWorkerDraining(ctx, key); err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+		return false, err
+	}
+	if err := s.replaceWorkerPod(ctx, key, attrs); err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, err.Error())
+		return false, err
+	}
+	return true, nil
+}
+
+// replaceWorkerPod hands a worker whose ateom will not stay up back to
+// Kubernetes. Quarantining alone would stop the actor losses and leave the pool
+// a worker short with nothing to repair it: the pod stays, and its Deployment
+// has no reason to act. Deleting it does, and if the ateom is genuinely broken
+// the replacement crash-loops as an ordinary pod, which every Kubernetes tool
+// already surfaces and backs off.
+//
+// A pod already gone is the state this drives towards, so NotFound is success.
+func (s *WorkerPoolSyncer) replaceWorkerPod(ctx context.Context, key workerKey, attrs []slog.Attr) error {
+	slog.LogAttrs(ctx, slog.LevelError, "Syncer: ateom will not stay up, replacing the worker pod", attrs...)
+	err := s.pods.CoreV1().Pods(key.namespace).Delete(ctx, key.name, metav1.DeleteOptions{
+		// Guard against deleting a same-named pod that replaced this one
+		// between the informer read and this call.
+		Preconditions: &metav1.Preconditions{UID: (*types.UID)(&key.uid)},
+	})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
+	}
+	return err
+}
+
+// recycleWorker hands the observed container to the control plane, which
+// decides whether that is an adoption or a lost sandbox. A Worker deleted in the
+// meantime is the state this drives towards, so NOT_FOUND is success.
+func (s *WorkerPoolSyncer) recycleWorker(ctx context.Context, key workerKey, ateomContainerID, terminatedReason string) (*ateapipb.Worker, error) {
+	recycled, err := s.client.RecycleWorker(ctx, &ateapipb.RecycleWorkerRequest{
+		Worker:                  key.workerRef(),
+		AteomContainerId:        ateomContainerID,
+		SandboxTerminatedReason: terminatedReason,
+	})
+	if status.Code(err) == codes.NotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return recycled, nil
+}
+
+// sandboxLossAttributes describes the fault on the span. The pool and class come
+// off the Worker record rather than the pod, which is where the control plane
+// reads them from too.
+func (s *WorkerPoolSyncer) sandboxLossAttributes(w *ateapipb.Worker, ateom *corev1.ContainerStatus, terminatedReason string) []attribute.KeyValue {
+	attrs := ateattr.WorkerAttributes(w.GetMetadata().GetName(), w.GetWorkerPod())
+	attrs = append(attrs, ateattr.FailureAttributes(ateattr.ReasonWorkerSandboxGone)...)
+	attrs = append(attrs,
+		ateattr.SandboxClassKey.String(ateattr.NormalizeSandboxClass(w.GetSandboxClass())),
+		ateattr.ContainerLastTerminatedReasonKey.String(terminatedReason),
+		ateattr.ContainerRestartCountKey.Int(int(ateom.RestartCount)))
+	return append(attrs, ateattr.WorkerPoolAttributes(w.GetWorkerNamespace(), w.GetWorkerPool())...)
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
@@ -337,7 +539,7 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 // the record. A version conflict comes back as ABORTED so the caller requeues
 // and retries against the updated record.
 func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, key workerKey) error {
-	slog.InfoContext(ctx, "Syncer: marking worker draining (pod deleting)", key.logAttrs()...)
+	slog.LogAttrs(ctx, slog.LevelInfo, "Syncer: marking worker draining (pod deleting)", key.logAttrs()...)
 	_, err := s.client.DrainWorker(ctx, &ateapipb.DrainWorkerRequest{Worker: key.workerRef()})
 	if status.Code(err) == codes.NotFound {
 		return nil
