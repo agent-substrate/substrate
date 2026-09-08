@@ -97,12 +97,14 @@ Filestore CSI driver disabled).
 
 > [!WARNING]
 > **Turn node auto-upgrade off on any node pool that runs workers, and do not
-> use spot or preemptible nodes for them.** An actor that is awake when its
-> worker pod goes away is moved to `ACTOR_STATE_CRASHED` with its worker
-> assignment cleared, and `CRASHED` is terminal: `resume` and `suspend` are both
-> refused, there is no recover verb, and the snapshot the actor still holds
-> cannot be used to start it. The only way out is to delete the actor and create
-> a new one, which loses its state.
+> use spot or preemptible nodes for them.** When a worker pod is deleted,
+> `SIGTERM` is forwarded into the actor's containers and the control plane keeps
+> accepting a suspend for about 60 seconds. An actor suspended inside that
+> window keeps its state. One still awake when the window closes is moved to
+> `ACTOR_STATE_CRASHED` with its worker assignment cleared, and `CRASHED` is
+> terminal: `resume` and `suspend` are both refused, there is no recover verb,
+> and the snapshot the actor still holds cannot be used to start it. The only
+> way out is to delete the actor and create a new one, which loses its state.
 >
 > Auto-upgrade is the trigger to plan for, because GKE enables it by default and
 > it fires on Google's maintenance schedule rather than yours. `create cluster`
@@ -119,7 +121,7 @@ Filestore CSI driver disabled).
 > kills reach the same path and cannot be configured away, so treat the setting
 > as removing the scheduled risk rather than all of it. Change versions through
 > the [rolling upgrade runbook](../../docs/upgrade.md), which has you suspend
-> every actor on a node before the node moves.
+> every actor on a node at your own pace before the node moves.
 
 ```bash
 go run ./tools/setup-gcp create cluster [flags]
