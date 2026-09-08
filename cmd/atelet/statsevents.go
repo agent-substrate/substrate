@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"cloud.google.com/go/compute/metadata"
 
@@ -67,13 +68,76 @@ type statsEventEmitter struct {
 // silently sever them -- the subsystem's one off-switch is
 // --actor-stats-poll-interval=0. The records still carry level INFO on the
 // wire, so nothing downstream changes; sharing atelet's stdout is safe
-// because a JSON handler writes each record in a single Write and the
-// records are small.
+// because each record is written whole, in a single Write. In production w
+// is a asyncWriter over stdout (see startStatsPoller), so a stalled
+// log consumer costs events, never the sweep.
 func newStatsEventEmitter(w io.Writer, labelsKey func() string) *statsEventEmitter {
 	return &statsEventEmitter{
 		log:       slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))),
 		labelsKey: labelsKey,
 	}
+}
+
+// usageEventQueueDepth is the asyncWriter's buffer, in records: sized
+// to absorb a full sweep's burst (statsSweepConcurrency probes emitting into
+// one queue, a few hundred actors on a packed node) while the writer
+// goroutine drains at pipe speed.
+const usageEventQueueDepth = 256
+
+// asyncWriter decouples event emission from the log consumer's health.
+// A write to a full stdout pipe blocks forever -- there is no timeout on the
+// syscall -- and emit runs inside the sweep's errgroup, so one stalled log
+// consumer (wedged rotation, disk-full fallout) would otherwise park a probe,
+// wedge the sweep, and silently freeze the metrics channel that shares it,
+// which is exactly the signal that must survive such an incident. Writes
+// land in a bounded queue drained by one goroutine; a full queue drops the
+// record and counts it. Dropping is safe here: the samples are point-in-time
+// readings the next healthy tick repairs, and when stdout is dead the events
+// are lost either way -- the choice is whether the metrics die with them.
+type asyncWriter struct {
+	w  io.Writer
+	ch chan []byte
+
+	dropped atomic.Int64
+}
+
+func newAsyncWriter(ctx context.Context, w io.Writer, depth int) *asyncWriter {
+	nb := &asyncWriter{w: w, ch: make(chan []byte, depth)}
+	go nb.run(ctx)
+	return nb
+}
+
+func (nb *asyncWriter) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case b := <-nb.ch:
+			// A failed or short write is the log stream's problem, not ours:
+			// the record is best-effort and there is nobody to report to.
+			_, _ = nb.w.Write(b)
+			// The stream just proved itself live again, so a warning about
+			// the stall can actually land.
+			if n := nb.dropped.Swap(0); n > 0 {
+				slog.WarnContext(ctx, "Usage events dropped while the log stream stalled", slog.Int64("count", n))
+			}
+		}
+	}
+}
+
+// Write queues one record without ever blocking. It reports full success
+// even on a drop: the emitter has no recovery to offer, and the drop is
+// already counted for the writer goroutine to report.
+func (nb *asyncWriter) Write(p []byte) (int, error) {
+	// The slog handler reuses its buffer after Write returns, so the queue
+	// must own a copy.
+	b := append([]byte(nil), p...)
+	select {
+	case nb.ch <- b:
+	default:
+		nb.dropped.Add(1)
+	}
+	return len(p), nil
 }
 
 // emit writes one usage event. The identity comes solely from the sample's

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -211,4 +212,90 @@ func TestStatsEventEmitterNil(t *testing.T) {
 	if buf.Len() != 0 {
 		t.Errorf("nil sample emitted a record: %q", buf.String())
 	}
+}
+
+// stallableWriter blocks every Write until released -- the stalled log
+// consumer the asyncWriter exists for.
+type stallableWriter struct {
+	gate  chan struct{}
+	wrote syncBuffer
+}
+
+func (w *stallableWriter) Write(p []byte) (int, error) {
+	<-w.gate
+	return w.wrote.Write(p)
+}
+
+// TestAsyncWriterNeverBlocks pins the contract: with the underlying
+// writer wedged, every Write returns immediately -- overflow drops and
+// counts instead of blocking -- and releasing the wedge drains what the
+// queue held.
+func TestAsyncWriterNeverBlocks(t *testing.T) {
+	under := &stallableWriter{gate: make(chan struct{})}
+	const depth = 4
+	nb := newAsyncWriter(context.Background(), under, depth)
+
+	// The writer goroutine dequeues one record and wedges on it; the queue
+	// holds depth more. Everything past that must drop, not block. The
+	// in-flight handoff is asynchronous, so tolerate one record of slack.
+	const writes = depth + 8
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < writes; i++ {
+			if _, err := nb.Write([]byte("x")); err != nil {
+				t.Errorf("Write returned %v, want nil", err)
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Write blocked on a wedged log stream")
+	}
+	dropped := int(nb.dropped.Load())
+	if dropped < writes-depth-1 || dropped > writes-depth {
+		t.Errorf("dropped = %d, want %d or %d", dropped, writes-depth-1, writes-depth)
+	}
+
+	// Conservation: everything not dropped -- the wedged in-flight record
+	// plus the queue -- drains once the stream recovers.
+	close(under.gate)
+	wantWritten := writes - dropped
+	waitFor(t, func() bool { return under.wrote.Len() >= wantWritten })
+	if got := under.wrote.Len(); got != wantWritten {
+		t.Errorf("drained %d records, want %d", got, wantWritten)
+	}
+}
+
+// TestAsyncWriterCopies: the slog handler reuses its buffer after
+// Write returns, so the queue must hold copies, not aliases.
+func TestAsyncWriterCopies(t *testing.T) {
+	under := &stallableWriter{gate: make(chan struct{})}
+	nb := newAsyncWriter(context.Background(), under, 4)
+
+	p := []byte("original")
+	if _, err := nb.Write(p); err != nil {
+		t.Fatal(err)
+	}
+	copy(p, "clobber!")
+
+	close(under.gate)
+	waitFor(t, func() bool { return under.wrote.Len() > 0 })
+	if got := under.wrote.String(); got != "original" {
+		t.Errorf("record = %q, want the copy taken at Write time", got)
+	}
+}
+
+// waitFor polls until cond returns true or the deadline passes.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition not reached before deadline")
 }

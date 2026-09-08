@@ -32,6 +32,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
@@ -463,5 +467,33 @@ func TestStatsPollerCPUDeltaSaturatesCorruptCounter(t *testing.T) {
 	got := p.collect(context.Background())[key].cpuDeltaUsec
 	if got != math.MaxInt64 {
 		t.Errorf("corrupt-counter sweep delta = %d, want pinned at MaxInt64", got)
+	}
+}
+
+// TestNodeWorkerPools pins the resolver's ingestion rules: a labeled worker
+// maps by pod UID, an empty label value names no pool and never enters the
+// map (the presence-only selector matches it anyway), and unlabeled pods are
+// not workers at all. The fake clientset honors label selectors but not the
+// spec.nodeName field selector, so node scoping is not assertable here.
+func TestNodeWorkerPools(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-a", Namespace: "pool-ns", UID: "uid-a",
+			Labels: map[string]string{workerPoolLabel: "pool-a"},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "worker-empty", Namespace: "pool-ns", UID: "uid-empty",
+			Labels: map[string]string{workerPoolLabel: ""},
+		}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "bystander", Namespace: "other-ns", UID: "uid-bystander",
+		}},
+	)
+
+	got := nodeWorkerPools(client, "node-1")(context.Background())
+
+	want := map[string]workerPoolRef{"uid-a": {namespace: "pool-ns", name: "pool-a"}}
+	if diff := cmp.Diff(want, got, cmp.AllowUnexported(workerPoolRef{})); diff != "" {
+		t.Errorf("nodeWorkerPools mismatch (-want +got):\n%s", diff)
 	}
 }

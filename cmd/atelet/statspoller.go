@@ -407,9 +407,19 @@ func nodeWorkerPools(client kubernetes.Interface, nodeName string) func(ctx cont
 		}
 		pools := make(map[string]workerPoolRef, len(pods.Items))
 		for _, pod := range pods.Items {
+			name := pod.Labels[workerPoolLabel]
+			if name == "" {
+				// The list matches on the key's presence, and an existence
+				// selector matches empty-valued labels too -- anyone can
+				// stamp ate.dev/worker-pool: "" on a pod (a bare key in
+				// YAML parses to exactly that). Half a pair names no pool,
+				// so it never enters the map: downstream, absent and
+				// unresolvable are the same answer, unlabeled.
+				continue
+			}
 			pools[string(pod.UID)] = workerPoolRef{
 				namespace: pod.Namespace,
-				name:      pod.Labels[workerPoolLabel],
+				name:      name,
 			}
 		}
 		return pools
@@ -553,7 +563,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 			return ateompb.NewAteomClient(conn), closer, nil
 		},
 		inst:         inst,
-		eventEmitter: newStatsEventEmitter(os.Stdout, defaultLabelsKey),
+		eventEmitter: newStatsEventEmitter(newAsyncWriter(ctx, os.Stdout, usageEventQueueDepth), defaultLabelsKey),
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
