@@ -1755,10 +1755,10 @@ type TagStatus struct {
 	// UID of the ActorTemplate the snapshot was taken under. Actors can only be
 	// seeded from a tag under the same template.
 	ActorTemplateUid string `protobuf:"bytes,2,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
-	// Immutable base storage location captured when the tag is reserved. Its
-	// snapshot lives at <storage_location>/atespaces/<atespace>/tags/<tag_uid>.
-	// Retained independently of the source actor and template so deleting an
-	// unfinished tag can collect any partial copy after those resources are gone.
+	// storage_location is the base object-storage URI for this tag's snapshot.
+	// Set by the server from the source actor's template when the tag is created
+	// and immutable thereafter. The full snapshot URI is available in
+	// snapshot.snapshot_uri once tag creation completes.
 	StorageLocation string `protobuf:"bytes,3,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
 	// source_actor_uid is the UID of the Actor this tag's snapshot was copied
 	// from.
