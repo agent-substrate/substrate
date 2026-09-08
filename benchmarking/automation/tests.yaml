@@ -43,7 +43,7 @@
 #                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
-#                  test's substrate is deployed (e.g. ["--atenet-router=agentgateway"]
+#                  test's substrate is deployed (e.g. ["--dataplane=agentgateway"]
 #                  or ["--experimental-use-sdsmint"]).
 #
 # ---- type: locust -----------------------------------------------------------

@@ -258,38 +258,46 @@ func postThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.Route
 	}
 }
 
-// assertEgressGatewayConnect waits for the atenet-egress access log to show a
-// CONNECT to port opened by actorName.
+// assertEgressGatewayConnect waits for the atenet-egress log to show a CONNECT
+// to port opened by actorName. Envoy logs authenticated peer details in its
+// successful CONNECT access record; AgentGateway logs the terminated tunnel.
 func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.Time, actorName, port string) {
 	t.Helper()
 	want := fmt.Sprintf("a CONNECT to port %s by actor %s", port, actorName)
-	waitForAccessLog(t, ctx, since, want, func(lines []string) (bool, error) {
+	waitForAccessLog(t, ctx, since, want, func(lines []gatewayAccessLogLine) bool {
 		for _, line := range lines {
-			authority, ok := accessLogField(line, "authority")
-			if !ok || !strings.HasSuffix(authority, ":"+port) {
-				continue
+			switch line.container {
+			case "envoy":
+				authority, ok := accessLogField(line.text, "authority")
+				if ok && strings.HasSuffix(authority, ":"+port) && strings.Contains(line.text, "/actor/"+actorName) {
+					t.Logf("egress gateway tunneled the request: %s", line.text)
+					return true
+				}
+			case "agentgateway":
+				if strings.Contains(line.text, "CONNECT tunnel terminated") &&
+					strings.Contains(line.text, "target=") &&
+					strings.Contains(line.text, ":"+port) {
+					t.Logf("egress gateway tunneled the request: %s", line.text)
+					return true
+				}
 			}
-			if !strings.Contains(line, "/actor/"+actorName) {
-				continue
-			}
-			t.Logf("egress gateway tunneled the request: %s", line)
-			return true, nil
 		}
-		return false, nil
+		return false
 	})
+}
+
+type gatewayAccessLogLine struct {
+	container string
+	text      string
 }
 
 // waitForAccessLog polls the atenet-egress access log, across every gateway
 // replica, until predicate accepts the lines written since.
-func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want string, predicate func(lines []string) (bool, error)) {
+func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want string, predicate func(lines []gatewayAccessLogLine) bool) {
 	t.Helper()
 	const (
 		gatewayNamespace = "ate-system"
 		gatewaySelector  = "app=atenet-egress"
-		gatewayContainer = "envoy"
-		// The access log's line prefix, from the HttpConnectionManager
-		// text_format_source in manifests/ate-install/atenet-egress.yaml.
-		accessLogPrefix = "[egress] "
 	)
 
 	clients := e2e.GetClients()
@@ -305,32 +313,43 @@ func waitForAccessLog(t *testing.T, ctx context.Context, since metav1.Time, want
 	const timeout = 30 * time.Second
 	deadline := time.Now().Add(timeout)
 	for {
-		var lines []string
+		var lines []gatewayAccessLogLine
 		for _, pod := range pods.Items {
+			container := ""
+			for _, candidate := range pod.Spec.Containers {
+				if candidate.Name == "envoy" || candidate.Name == "agentgateway" {
+					container = candidate.Name
+					break
+				}
+			}
+			if container == "" {
+				t.Fatalf("egress gateway pod %s has neither an Envoy nor AgentGateway container", pod.Name)
+			}
 			logs, err := clients.K8s.CoreV1().Pods(gatewayNamespace).GetLogs(pod.Name, &corev1.PodLogOptions{
-				Container: gatewayContainer,
+				Container: container,
 				SinceTime: &since,
 			}).DoRaw(ctx)
 			if err != nil {
 				t.Fatalf("reading logs of %s/%s: %v", gatewayNamespace, pod.Name, err)
 			}
 			for line := range strings.SplitSeq(string(logs), "\n") {
-				if strings.Contains(line, accessLogPrefix) {
-					lines = append(lines, line)
+				if (container == "envoy" && strings.Contains(line, "[egress] ")) ||
+					(container == "agentgateway" && (strings.Contains(line, "substrate.connect.authority=") ||
+						strings.Contains(line, "CONNECT tunnel terminated"))) {
+					lines = append(lines, gatewayAccessLogLine{container: container, text: line})
 				}
 			}
 		}
 
-		matched, err := predicate(lines)
-		if err != nil {
-			t.Fatalf("looking for %s in the atenet-egress access log: %v", want, err)
-		}
-		if matched {
+		if predicate(lines) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no atenet-egress access-log line for %s after %v; lines seen:\n%s",
-				want, timeout, strings.Join(lines, "\n"))
+			seen := make([]string, 0, len(lines))
+			for _, line := range lines {
+				seen = append(seen, line.text)
+			}
+			t.Fatalf("no atenet-egress access-log line for %s after %v; lines seen:\n%s", want, timeout, strings.Join(seen, "\n"))
 		}
 		time.Sleep(1 * time.Second)
 	}

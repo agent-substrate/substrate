@@ -22,7 +22,7 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `ate-setup` | `hack/install-ate.sh` | Notes |
 |---|---|---|
 | `--kind` | `hack/install-ate-kind.sh`, or `ATE_INSTALL_KIND=true` | Kind overlays, the local registry, and host-architecture image builds |
-| `--atenet-router envoy\|agentgateway` | `--atenet-router envoy\|agentgateway` | atenet router dataplane (default `envoy`) |
+| `--dataplane envoy\|agentgateway` | `--dataplane envoy\|agentgateway` | ingress and egress dataplane (default `envoy`) |
 | `--rollout-timeout DURATION` | `--rollout-timeout DURATION` | Readiness timeout for workloads (default `60s`). Unlike the shell flag it also governs the podcertificate-controller and CSI waits, which stay at their 120s default until it is passed |
 | `--podcert-workers-per-signer N` | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |
 | `--experimental-use-sdsmint` | `--experimental-use-sdsmint` | Mint TLS certificates on-demand via SDS in atenet egress gateway |

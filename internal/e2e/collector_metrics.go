@@ -31,6 +31,7 @@ const (
 	collectorNamespace = "otel-system"
 	collectorService   = "opentelemetry-collector"
 	collectorPromPort  = 8889
+	routerStatsPort    = 15020
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -49,6 +50,42 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_checkpoint_duration",
 	"atenet_router_route_duration",
 	"ate_scheduler_eligible_workers",
+}
+
+// ScrapeAgentGatewayRouterMetrics reads the AgentGateway router's native
+// Prometheus stats endpoint. AgentGateway instruments are not OTLP exports.
+func ScrapeAgentGatewayRouterMetrics(ctx context.Context) (string, error) {
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
+	if err != nil {
+		return "", fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", fmt.Errorf("creating k8s client: %w", err)
+	}
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, routerStatsPort)
+	if err != nil {
+		return "", err
+	}
+	defer stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("scraping AgentGateway metrics: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading AgentGateway metrics: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("AgentGateway metrics returned %d: %s", resp.StatusCode, body)
+	}
+	return string(body), nil
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
