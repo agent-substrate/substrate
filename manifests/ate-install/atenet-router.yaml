@@ -180,7 +180,7 @@ spec:
         # deliberately does NOT scale with this; if you raise it and want long
         # turns to survive a shutdown, raise --drain-timeout and
         # terminationGracePeriodSeconds alongside it.
-        # - "--route-timeout=5m"
+        - "--route-timeout=5m"
         env:
         - name: POD_NAME
           valueFrom:
