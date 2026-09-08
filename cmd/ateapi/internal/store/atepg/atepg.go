@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -145,7 +146,7 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
 	}
 	// Per-statement trace spans; the watch pool inherits this through Copy().
-	cfg.ConnConfig.Tracer = queryTracer{}
+	cfg.ConnConfig.Tracer = newQueryTracer(otel.GetTracerProvider(), cfg.ConnConfig)
 	usesTLS := cfg.ConnConfig.TLSConfig != nil
 	for _, fallback := range cfg.ConnConfig.Fallbacks {
 		usesTLS = usesTLS || fallback.TLSConfig != nil
