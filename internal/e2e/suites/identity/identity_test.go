@@ -272,7 +272,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		}
 	})
 
-	// Resume from the golden snapshot (the restore path, not --boot).
+	// Resume from the golden snapshot (the restore path).
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}

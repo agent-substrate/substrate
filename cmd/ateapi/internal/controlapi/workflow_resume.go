@@ -65,7 +65,7 @@ type restoreTelemetry struct {
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent:
 // a re-entered workflow fast-forwards past the steps a previous attempt
 // completed, deriving progress from the persisted actor alone.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool) (_ *ateapipb.Actor, resumed bool, err error) {
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, resumed bool, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate
@@ -103,7 +103,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	defer lease.Close()
 
 	var src resumeSnapshotSource
-	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef, boot)
+	actor, actorTemplate, src, err = w.loadActorForResume(leaseCtx, actorRef)
 	if err != nil {
 		return nil, false, err
 	}
@@ -155,7 +155,7 @@ func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
 
 // loadActorForResume fetches the current actor record and its template, and
 // resolves the boot source for the pending restore.
-func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef, boot bool) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
+func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, _ resumeSnapshotSource, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForResume")
 	defer func() { err = done(err) }()
 
@@ -192,7 +192,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		// as well; it is already disallowed at admission time.
 		builtOnTemplateUID := actor.GetStatus().GetCurrentActorTemplateUid()
 		src.TemplateReplaced = builtOnTemplateUID != "" && builtOnTemplateUID != actorTemplate.GetMetadata().GetUid()
-	} else if goldenURI := goldenSnapshotStatus.GetGoldenSnapshot().GetSnapshotUri(); goldenURI != "" && !boot {
+	} else if goldenURI := goldenSnapshotStatus.GetGoldenSnapshot().GetSnapshotUri(); goldenURI != "" {
 		if err := validateGoldenSnapshotScope(goldenSnapshotStatus.GetGoldenSnapshot()); err != nil {
 			return nil, nil, src, err
 		}

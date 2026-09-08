@@ -29,9 +29,8 @@ import (
 
 type fakeControlClient struct {
 	ateapipb.ControlClient
-	mu          sync.Mutex
-	calls       []string
-	resumeBoots []bool
+	mu    sync.Mutex
+	calls []string
 }
 
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
@@ -52,7 +51,6 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
-	f.resumeBoots = append(f.resumeBoots, in.GetBoot())
 	return &ateapipb.ResumeActorResponse{}, nil
 }
 
@@ -74,12 +72,6 @@ func (f *fakeControlClient) recordedCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
-}
-
-func (f *fakeControlClient) recordedBoots() []bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]bool(nil), f.resumeBoots...)
 }
 
 // newTestConfig starts srv, sets HTTPClient and RouterURL, and ensures

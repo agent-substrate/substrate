@@ -477,7 +477,6 @@ Because the guards are required and only a read supplies them, an update is alwa
 Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
-    *   `boot`: (Optional) If `true`, bypasses snapshots and performs a cold boot.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
 
 #### `SuspendActor`

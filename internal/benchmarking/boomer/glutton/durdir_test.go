@@ -162,31 +162,6 @@ func TestDurDirReadModeSentOnWire(t *testing.T) {
 	}
 }
 
-func TestDurDirBootstrapDoesNotBoot(t *testing.T) {
-	srv := &fake.Server{Data: []byte("data")}
-	fakeCtrl := &fakeControlClient{}
-	cfg := newTestConfig(t, srv, &userclass.Config{
-		APIStub: fakeCtrl,
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			DurDirFileSize: int64(len(srv.Data)),
-		}),
-	})
-
-	rt := &durDirRuntime{cfg: cfg}
-	_, err := rt.startUser(context.Background(), cfg.Dyn.Load())
-	if err != nil {
-		t.Fatalf("startUser failed: %v", err)
-	}
-
-	boots := fakeCtrl.recordedBoots()
-	if len(boots) == 0 {
-		t.Fatalf("expected ResumeActor to be called during bootstrap, got 0 calls")
-	}
-	if boots[0] {
-		t.Errorf("bootstrap ResumeActor Boot: got %v, want false", boots[0])
-	}
-}
-
 func TestDurDirBootstrapUsesConfiguredResumeMode(t *testing.T) {
 	tests := []struct {
 		name            string

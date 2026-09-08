@@ -218,12 +218,11 @@ func (u *gluttonUser) create(ctx context.Context) error {
 func (u *gluttonUser) resume(ctx context.Context) bool {
 	metricName := "ResumeActor"
 	if u.firstResume {
-		metricName = "ResumeActorColdStart"
+		metricName = "ResumeActorFirstResume"
 	}
 	err := u.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
 			Actor: u.ref(),
-			Boot:  u.firstResume,
 		}, grpc.Trailer(tr))
 		return err
 	})

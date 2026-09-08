@@ -1381,11 +1381,6 @@ message ResumeActorRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
-
-  // If true, skip golden snapshot and boot the workload from scratch.
-  //
-  // +k8s:optional
-  bool boot = 2;
 }
 
 message ResumeActorResponse {
