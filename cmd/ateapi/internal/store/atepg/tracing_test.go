@@ -102,7 +102,7 @@ func TestQueryTracerJoinsParentTrace(t *testing.T) {
 		if got, ok := attrs[key]; !ok {
 			t.Errorf("missing %s", key)
 		} else if got != want {
-			t.Errorf("%s = %v, want %v", key, got.Emit(), want.Emit())
+			t.Errorf("%s = %v, want %v", key, got.String(), want.String())
 		}
 	}
 	for _, key := range []attribute.Key{semconv.ErrorTypeKey, semconv.DBResponseStatusCodeKey} {
