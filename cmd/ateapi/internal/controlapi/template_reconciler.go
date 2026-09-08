@@ -23,10 +23,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
@@ -74,17 +74,15 @@ type goldenActorControl interface {
 // ActorTemplateReconciler drives stored ActorTemplates through the golden
 // actor state machine.
 type ActorTemplateReconciler struct {
-	persistence    templateReconcilerStore
-	control        goldenActorControl
-	sandboxConfigs listersv1alpha1.SandboxConfigLister
-	queue          workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
+	persistence templateReconcilerStore
+	control     goldenActorControl
+	queue       workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
 }
 
-func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, sandboxConfigs listersv1alpha1.SandboxConfigLister) *ActorTemplateReconciler {
+func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
 	return &ActorTemplateReconciler{
-		persistence:    persistence,
-		control:        control,
-		sandboxConfigs: sandboxConfigs,
+		persistence: persistence,
+		control:     control,
 		// Create rate-limiting queue with exponential backoff
 		queue: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[resources.ActorTemplateRef]()),
 	}
@@ -202,11 +200,10 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			// The snapshot has already failed.
 			return 0, nil
 		}
-		if goldenSnapshotStatus.GetGoldenSnapshot() != nil {
+		if goldenSnapshotStatus.GetGoldenSnapshot().GetSnapshotUri() != "" {
 			// The golden snapshot exists already.
 			return 0, nil
 		}
-		// TODO: Freeze sandbox assets before creating the golden actor.
 
 		actor, err := r.ensureActorExists(ctx, tmpl, goldenActorRef)
 		if err != nil {
@@ -259,11 +256,11 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 			// The golden actor was never resumed, or a previous resume didn't
 			// finish; ResumeActor is reentrant from both.
-			if snapshot := actor.GetStatus().GetLatestSnapshot(); snapshot != nil {
+			if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
 				// Golden actors never start from a source snapshot, so an
 				// existing snapshot means an earlier suspend completed
 				// without being recorded.
-				return 0, r.saveGoldenSnapshot(ctx, tmpl, snapshot)
+				return 0, r.saveGoldenSnapshot(ctx, tmpl, actor.GetStatus().GetExternalSnapshot())
 			}
 			if _, err := r.control.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: goldenActorRef}); err != nil {
 				// A crash during resume is observed as CRASHED on the retry.
@@ -286,27 +283,29 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	}
 }
 
-// suspendActor suspends the golden actor and returns the resulting snapshot.
-// Reentrant: SuspendActor completes an in-flight suspend and is a no-op on an
-// already-suspended actor, returning the existing snapshot either way.
-func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapipb.ObjectRef) (*ateapipb.ObjectRef, error) {
+// suspendActor suspends the golden actor and returns the external snapshot it
+// wrote. Reentrant: SuspendActor completes an in-flight suspend and is a no-op
+// on an already-suspended actor, returning the existing snapshot either way.
+func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *ateapipb.ObjectRef) (*ateapipb.ExternalSnapshot, error) {
 	resp, err := r.control.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: goldenRef})
 	if err != nil {
 		// A crash during suspend is observed as CRASHED on the retry.
 		return nil, fmt.Errorf("while suspending golden actor: %w", err)
 	}
-	snapshot := resp.GetActor().GetStatus().GetLatestSnapshot()
-	if snapshot == nil {
-		return nil, fmt.Errorf("suspending golden actor returned no ActorSnapshot")
+	suspended := resp.GetActor().GetStatus().GetExternalSnapshot()
+	if suspended.GetSnapshotUri() == "" {
+		return nil, fmt.Errorf("suspending golden actor produced no external snapshot")
 	}
-	return snapshot, nil
+	return suspended, nil
 }
 
-// saveGoldenSnapshot records the golden snapshot, the terminal success state
-// that marks the template ready for use, ending the reconcile pass.
-func (r *ActorTemplateReconciler) saveGoldenSnapshot(ctx context.Context, observed *ateapipb.ActorTemplate, snapshot *ateapipb.ObjectRef) error {
+// saveGoldenSnapshot records the golden actor's external snapshot, the
+// terminal success state that marks the template ready for use, ending the
+// reconcile pass. The golden actor keeps owning those objects; the template
+// only points at them.
+func (r *ActorTemplateReconciler) saveGoldenSnapshot(ctx context.Context, observed *ateapipb.ActorTemplate, golden *ateapipb.ExternalSnapshot) error {
 	_, err := r.checkpoint(ctx, observed, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
-		snapshotStatus.GoldenSnapshot = snapshot
+		snapshotStatus.GoldenSnapshot = proto.CloneOf(golden)
 	})
 	return err
 }
@@ -346,13 +345,12 @@ func (r *ActorTemplateReconciler) fail(ctx context.Context, observed *ateapipb.A
 // goldenSnapshotDone reports whether the golden snapshot build reached a
 // terminal state: the snapshot was recorded, or the build failed.
 func goldenSnapshotDone(snapshotStatus *ateapipb.GoldenSnapshotStatus) bool {
-	return snapshotStatus.GetGoldenSnapshot() != nil || snapshotStatus.GetErrorMessage() != ""
+	return snapshotStatus.GetGoldenSnapshot().GetSnapshotUri() != "" || snapshotStatus.GetErrorMessage() != ""
 }
 
 // goldenSnapshotWarmupFor returns 0 when every container has a readyz probe
 // (ResumeActor already blocked until the workload reported 200), and the
-// default warmup otherwise. Mirrors the CRD controller's function of the
-// same name; keep both in sync.
+// default warmup otherwise.
 func goldenSnapshotWarmupFor(containers []*ateapipb.Container) time.Duration {
 	if len(containers) == 0 {
 		return goldenSnapshotWarmup

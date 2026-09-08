@@ -66,10 +66,10 @@ External volumes are declared on the `ActorTemplate` resource. For complete deta
 
 To attach a CSI volume to an actor:
 
-1. Define the volume under `spec.volumes` with an `externalVolumeTemplate`.
-2. Mount the volume inside one or more containers under `spec.containers[].volumeMounts`.
+1. Define the volume under `volumes` with an `externalVolumeTemplate`.
+2. Mount the volume inside one or more containers under `containers[].volumeMounts`.
 
-#### `spec.volumes[]`
+#### `volumes[]`
 
 ```yaml
 volumes:
@@ -83,7 +83,7 @@ volumes:
 * `externalVolumeTemplate.capacity`: Quantity string representing the requested volume size (e.g. `1Gi`, `50Gi`).
 * `externalVolumeTemplate.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
 
-#### `spec.containers[].volumeMounts[]`
+#### `containers[].volumeMounts[]`
 
 ```yaml
 volumeMounts:
@@ -91,11 +91,11 @@ volumeMounts:
   mountPath: /var/data
 ```
 
-* `name`: Must match the declared `spec.volumes[].name`.
+* `name`: Must match the declared `volumes[].name`.
 * `mountPath`: Unix path inside the container sandbox where the volume will be mounted.
 
 > [!NOTE]
-> All declared volumes in `spec.volumes` must be mounted by at least one container.
+> All declared volumes in `volumes` must be mounted by at least one container.
 
 ---
 

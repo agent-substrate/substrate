@@ -119,6 +119,11 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+        # ate-api copies external snapshots for tags and deletes the ones
+        # nothing refers to any more, so it needs the same backend atelet reads
+        # and writes them through.
+        - name: ATE_STORAGE_BACKEND
+          value: "gcs"
         # OTLP exporter settings are shared by every control plane component;
         # see manifests/ate-install/ate-otel-config.yaml. Listed first so the
         # per-developer ConfigMap below can still override a key.

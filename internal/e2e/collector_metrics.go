@@ -54,7 +54,7 @@ var PlatformMetricPrefixes = []string{
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
 // its Prometheus exporter surface, returning the raw exposition text.
 func ScrapeCollectorMetrics(ctx context.Context) (string, error) {
-	config, err := ateclient.LoadConfig(KubeConfig, KubeContext)
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
 	if err != nil {
 		return "", fmt.Errorf("loading kubeconfig: %w", err)
 	}

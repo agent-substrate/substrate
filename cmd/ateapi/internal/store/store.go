@@ -114,28 +114,22 @@ type Interface interface {
 	// Deletes and returns an Actor's policy subresource.
 	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
 
-	// Creates an immutable ActorSnapshot. The caller sets snapshot_uri; the
-	// store keeps no location of its own.
-	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
-
-	// Fetches an ActorSnapshot by reference. Returns ErrNotFound if missing.
-	GetActorSnapshot(ctx context.Context, snapshotRef resources.ActorSnapshotRef) (*ateapipb.ActorSnapshot, error)
-
-	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
-	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
-
-	// Adds an immutable Atespace-owned tag to the ActorSnapshot addressed by
-	// snapshotRef. Returns ErrNotFound if the snapshot does not exist, or
+	// CreateTag creates an immutable tag to an actor snapshot.
+	//
+	// Returns ErrAlreadyExists if the name is taken — including by the caller's
+	// own unfinished attempt, which it can then read back and resume — or
 	// ErrFailedPrecondition if the tag's atespace does not exist.
-	CreateActorSnapshotTag(ctx context.Context, snapshotRef resources.ActorSnapshotRef, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+	CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error)
 
 	// Fetches an Atespace-owned tag by reference. Returns ErrNotFound if
-	// missing. The tag's snapshot field names the ActorSnapshot it resolves
-	// to; fetch it with GetActorSnapshot if needed.
-	GetActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
+	// missing.
+	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 
-	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag
-	// addressed by tagRef, and returns the stored ActorSnapshotTag with
+	// Lists Tags in one atespace, or all atespaces when empty.
+	ListTags(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.Tag], error)
+
+	// UpdateTag performs a transactional read-modify-write on the tag
+	// addressed by tagRef, and returns the stored Tag with
 	// advanced metadata (version, update_time).
 	//
 	// precondition guards the write against landing on unexpected state: it is
@@ -153,10 +147,12 @@ type Interface interface {
 	// precondition no longer holds, ErrVersionConflict if the retry budget is
 	// exhausted, ErrImmutableField if the mutated tag changed a field that is
 	// immutable for its lifetime, or the mutate's error verbatim otherwise.
-	UpdateActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef, precondition Precondition, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
+	//
+	// status.snapshot is immutable once set
+	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
 
 	// Deletes and returns a tag.
-	DeleteActorSnapshotTag(ctx context.Context, tagRef resources.ActorSnapshotTagRef) (*ateapipb.ActorSnapshotTag, error)
+	DeleteTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
@@ -222,10 +218,42 @@ type Interface interface {
 	// exhausted, or the mutate's error verbatim otherwise.
 	UpdateWorker(ctx context.Context, name string, precondition Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 
-	// Removes a worker by name and returns the deleted resource. Returns
-	// ErrNotFound if missing, or ErrUIDConflict/ErrVersionConflict if pre does
-	// not describe the worker the caller observed.
+	// Removes a worker by name, along with every assignment it holds, and
+	// returns the deleted resource. Returns ErrNotFound if missing, or
+	// ErrUIDConflict/ErrVersionConflict if pre does not describe the worker the
+	// caller observed.
 	DeleteWorker(ctx context.Context, name string, pre DeletePreconditions) (*ateapipb.Worker, error)
+
+	// Assignments and Worker allocation are updated atomically.
+
+	// BindActorToWorker assigns an Actor and updates the Worker's allocation.
+	// Rebinding the same Actor replaces its assignment.
+	//
+	// admit decides whether the Worker will take the Actor, and runs against the
+	// Worker as it stands with its row locked, so the answer cannot go stale
+	// between the check and the bind. Returning an error from it refuses the
+	// bind and is returned unchanged. It is consulted only for a new binding: an
+	// Actor already on this Worker is already counted against it.
+	//
+	// ErrNotFound if the Worker is gone.
+	BindActorToWorker(ctx context.Context, workerName string, assignment *ateapipb.ActorAssignment, admit func(*ateapipb.Worker) error) error
+
+	// ReleaseActorFromWorker removes an assignment and updates allocation,
+	// returning the Worker as it now stands so the caller can feed the
+	// watch-fed cache, which until then reports it full. It returns nil if the
+	// assignment was already absent.
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
+
+	// GetWorkerAssignment returns a Worker's assignment for actorUID, or
+	// ErrNotFound when the Worker is not hosting that Actor.
+	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error)
+
+	// ListWorkerAssignments returns a page of the Actors a Worker hosts.
+	ListWorkerAssignments(ctx context.Context, workerName string, opts ListOptions) (ListResponse[*ateapipb.ActorAssignment], error)
+
+	// FindWorkerHostingActor names the Worker holding an assignment for
+	// actorUID, or ErrNotFound if none does.
+	FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error)
 
 	// WatchWorkers returns an active subscription to track worker state changes.
 	// The watch's Events channel is closed when the caller calls Close, the

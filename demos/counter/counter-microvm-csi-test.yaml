@@ -33,5 +33,4 @@ metadata:
 spec:
   replicas: 1
   sandboxClass: microvm
-  sandboxConfigName: microvm
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm

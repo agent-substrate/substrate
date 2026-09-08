@@ -1121,10 +1121,17 @@ const (
 	// This is similar to ErrorTypeInvalid, but the error will not include the
 	// too-long value.  See TooLong().
 	CauseTypeTooLong CauseType = "FieldValueTooLong"
+	// CauseTypeTooShort is used to report that the given value is too short.
+	// This is similar to ErrorTypeInvalid. See TooShort().
+	CauseTypeTooShort CauseType = "FieldValueTooShort"
 	// CauseTypeTooMany is used to report "too many". This is used to
 	// report that a given list has too many items. This is similar to FieldValueTooLong,
 	// but the error indicates quantity instead of length.
 	CauseTypeTooMany CauseType = "FieldValueTooMany"
+	// CauseTypeTooFew is used to report "too few". This is used to
+	// report that a given list has too few items. This is similar to FieldValueTooLong,
+	// but the error indicates quantity instead of length.
+	CauseTypeTooFew CauseType = "FieldValueTooFew"
 	// CauseTypeInternal is used to report other errors that are not related
 	// to user input.  See InternalError().
 	CauseTypeInternal CauseType = "InternalError"
@@ -1650,6 +1657,7 @@ type Condition struct {
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$`
 	// +kubebuilder:validation:MaxLength=316
 	// +k8s:alpha(since: "1.37")=+k8s:required
+	// +k8s:alpha(since: "1.37")=+k8s:format=k8s-label-key
 	Type string `json:"type" protobuf:"bytes,1,opt,name=type"`
 	// status of the condition, one of True, False, Unknown.
 	// +required
@@ -1684,12 +1692,15 @@ type Condition struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:Pattern=`^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$`
 	// +k8s:alpha(since: "1.37")=+k8s:required
-	// +k8s:alpha(since: "1.37")=+k8s:maxBytes=1024
+	// +k8s:alpha(since: "1.38")=+k8s:maxBytes=1024
 	Reason string `json:"reason" protobuf:"bytes,5,opt,name=reason"`
 	// message is a human readable message indicating details about the transition.
 	// This may be an empty string.
-	// +required
-	// +kubebuilder:validation:Required
+	// +optional
+	// +kubebuilder:validation:Optional
+	// +default=""
 	// +kubebuilder:validation:MaxLength=32768
+	// +k8s:alpha(since: "1.38")=+k8s:optional
+	// +k8s:alpha(since: "1.38")=+k8s:maxBytes=32768
 	Message string `json:"message" protobuf:"bytes,6,opt,name=message"`
 }

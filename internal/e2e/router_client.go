@@ -70,7 +70,7 @@ type RouterClient struct {
 // NewRouterClient establishes a port-forward to the ingress atenet-router. Call Close
 // to tear it down.
 func NewRouterClient(ctx context.Context) (*RouterClient, error) {
-	config, err := ateclient.LoadConfig(KubeConfig, KubeContext)
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("loading kubeconfig: %w", err)
 	}

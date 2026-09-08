@@ -265,7 +265,10 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			NodeName:        pod.Spec.NodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
-			Capacity:        workerCapacity(pod),
+			// Capacity is the Worker's to report, not the syncer's to infer
+			// from the pod: it is what the ateom can actually supply. Until
+			// that report lands, CreateWorker's reified ceiling holds the
+			// Worker to a single Actor.
 		}
 		// status is output-only: CreateWorker sets STATE_ACTIVE itself.
 		//
@@ -325,38 +328,6 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 		}
 	}
 	return false
-}
-
-// ateomContainerName is the name of the container in a worker pod that hosts the
-// actor's sandbox; its resource limits bound what an actor placed here can use.
-const ateomContainerName = "ateom"
-
-// workerCapacity returns the worker pod's capacity for hosting an actor — CPU
-// in millicores and memory in bytes — taken from the ateom container's resource
-// limits. A dimension the pod does not limit reports 0, which the scheduler
-// treats as "unknown" (unconstrained); a pod that limits neither reports nil
-// rather than an all-zero message that says the same thing. The actor sandbox
-// runs nested in the ateom container's cgroup, so that container's limits — not
-// the pod total — are the relevant envelope.
-func workerCapacity(pod *corev1.Pod) *ateapipb.WorkerCapacity {
-	var capacity ateapipb.WorkerCapacity
-	for i := range pod.Spec.Containers {
-		c := &pod.Spec.Containers[i]
-		if c.Name != ateomContainerName {
-			continue
-		}
-		if v := c.Resources.Limits.Cpu(); v != nil {
-			capacity.CpuMilli = v.MilliValue()
-		}
-		if v := c.Resources.Limits.Memory(); v != nil {
-			capacity.MemoryBytes = v.Value()
-		}
-		break
-	}
-	if capacity.CpuMilli == 0 && capacity.MemoryBytes == 0 {
-		return nil
-	}
-	return &capacity
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler

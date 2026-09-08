@@ -170,17 +170,26 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 
 	reqID := atomic.AddUint64(&r.nextID, 1)
 
+	// The flight below detaches from the caller's lifecycle but must keep its
+	// trace identity: detaching with a bare background context makes the
+	// ateapi call start a fresh root trace, so the server-side resume spans
+	// (step.*, atelet, snapshot fetch) fragment away from the request that
+	// triggered them and sample independently of it. Joiners share the
+	// leader's flight, so the flight carries the leader's span context.
+	callerSpanCtx := trace.SpanContextFromContext(ctx)
+
 	ch := r.flight.DoChan(actorRef.String(), func() (interface{}, error) {
 		// We detach the context from the first caller using a fixed background budget.
 		// This guarantees that if Caller 1 disconnects or times out, the underlying
 		// resume operation continues running for Caller 2 and Caller 3 without failing.
+		// Only cancellation is detached; the trace context above is kept.
 		//
 		// The budget is therefore per-FLIGHT, not per-caller: its clock starts with
 		// the first caller, and later callers de-duplicated onto this flight share
 		// its remaining budget and outcome. A late joiner can see budget_exhausted
 		// after waiting far less than a full budget itself — the accepted cost of
 		// one control-plane RPC per hot actor (see docs/request-parking.md).
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
+		bgCtx, bgCancel := context.WithTimeout(trace.ContextWithSpanContext(context.Background(), callerSpanCtx), r.budget)
 		defer bgCancel()
 		// The budget bounds the RETRY LOOP only — it never cancels an
 		// in-flight ResumeActor. ateapi durably claims the worker and marks

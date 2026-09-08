@@ -94,9 +94,10 @@ type WorkerPoolSpec struct {
 	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
 
 	// SandboxClass selects the sandbox runtime family for this pool, which drives
-	// the worker pod shape (KVM/vhost device mounts and node placement) and which
-	// SandboxConfigs are eligible. The concrete binary is still selected by
-	// WorkerImage. Defaults to gvisor.
+	// the worker pod shape (KVM/vhost device mounts and node placement). The
+	// concrete binary is still selected by WorkerImage. Defaults to gvisor.
+	// The sandbox binaries themselves come from the SandboxConfig each
+	// ActorTemplate names (required).
 	//
 	// See Also: TODOs in ActorTemplate SandboxClass
 	//
@@ -104,14 +105,6 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
-
-	// SandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
-	// sandbox binaries. It overrides the cluster-wide default SandboxConfig for
-	// this pool's SandboxClass. The referenced config's SandboxClass must match
-	// this pool's SandboxClass. If empty, the default SandboxConfig for the
-	// SandboxClass is used.
-	// +optional
-	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
 }
 
 type WorkerPoolStatus struct {

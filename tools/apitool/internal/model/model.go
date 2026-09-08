@@ -554,7 +554,7 @@ func Resources(api *API) ([]Resource, error) {
 var resourceNames = []string{
 	"Actor",
 	"ActorSnapshot",
-	"ActorSnapshotTag",
+	"Tag",
 	"ActorTemplate",
 	"Atespace",
 	"Worker",

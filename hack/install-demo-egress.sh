@@ -42,10 +42,9 @@ demo-egress_cmdline() {
     --deploy-demo-egress) demo-egress_deploy ;;
     --delete-demo-egress) demo-egress_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-egress-microvm_cmdline() {
@@ -53,10 +52,9 @@ demo-egress-microvm_cmdline() {
     --deploy-demo-egress-microvm) demo-egress-microvm_deploy ;;
     --delete-demo-egress-microvm) demo-egress-microvm_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-egress-mitm_cmdline() {
@@ -64,10 +62,9 @@ demo-egress-mitm_cmdline() {
     --deploy-demo-egress-mitm) demo-egress-mitm_deploy ;;
     --delete-demo-egress-mitm) demo-egress-mitm_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-egress-microvm-mitm_cmdline() {
@@ -75,10 +72,9 @@ demo-egress-microvm-mitm_cmdline() {
     --deploy-demo-egress-microvm-mitm) demo-egress-microvm-mitm_deploy ;;
     --delete-demo-egress-microvm-mitm) demo-egress-microvm-mitm_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-egress_deploy() {

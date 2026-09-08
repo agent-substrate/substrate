@@ -49,8 +49,8 @@ resources:
     quantity: 512Mi
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_MICROVM
-  # Deliberately not the class default; installed cluster-wide by
-  # hack/install-microvm-deps.sh, so a missing or stale install fails loudly.
+  # Installed cluster-wide by hack/install-microvm-deps.sh; naming it
+  # explicitly makes a missing or stale install fail loudly.
   configName: microvm
 snapshotsConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL

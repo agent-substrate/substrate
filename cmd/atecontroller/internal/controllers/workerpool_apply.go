@@ -24,6 +24,7 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
+	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -68,6 +69,7 @@ const (
 	atunnelIdentityMountPath    = "/run/podidentity.podcert.ate.dev"
 	atunnelEgressTrustVolume    = "atunnel-egress-trust"
 	atunnelEgressTrustMountPath = "/run/servicedns.podcert.ate.dev"
+	ateomCapacityVolume         = "ateom-capacity"
 )
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
@@ -119,6 +121,10 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		WithEnv(ateomContainerEnv(otel)...).
 		WithVolumeMounts(
 			corev1ac.VolumeMount().
+				WithName(ateomCapacityVolume).
+				WithMountPath(ateomcapacity.CapacityMountPath).
+				WithReadOnly(true),
+			corev1ac.VolumeMount().
 				WithName("run-ateom").
 				WithMountPath(ateompath.BasePath).
 				WithMountPropagation(corev1.MountPropagationHostToContainer),
@@ -137,6 +143,13 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithRunAsUser(0).
 			WithRunAsGroup(0)).
 		WithVolumes(
+			corev1ac.Volume().
+				WithName(ateomCapacityVolume).
+				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
+					WithItems(
+						resourceFieldRefFile(ateomcapacity.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(ateomcapacity.MemoryLimitFile, "limits.memory", wholeBytes),
+					)),
 			corev1ac.Volume().
 				WithName("run-ateom").
 				WithHostPath(corev1ac.HostPathVolumeSource().
@@ -236,6 +249,24 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 		}
 	}
 	return envs
+}
+
+// Divisors for resourceFieldRefFile. The downward API reports
+// ceil(limit/divisor), so these are the units the value arrives in; the default
+// divisor of one core would round a fractional CPU limit up to a whole one.
+const (
+	milliCores = "1m"
+	wholeBytes = "1"
+)
+
+// resourceFieldRefFile projects a container resource in units of divisor.
+func resourceFieldRefFile(path, resourceName, divisor string) *corev1ac.DownwardAPIVolumeFileApplyConfiguration {
+	return corev1ac.DownwardAPIVolumeFile().
+		WithPath(path).
+		WithResourceFieldRef(corev1ac.ResourceFieldSelector().
+			WithContainerName("ateom").
+			WithResource(resourceName).
+			WithDivisor(resource.MustParse(divisor)))
 }
 
 func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {

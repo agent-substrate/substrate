@@ -1,7 +1,0 @@
-{
-  "*publicprivate.T1": {
-    "public": [
-      "field T1.Public"
-    ]
-  }
-}

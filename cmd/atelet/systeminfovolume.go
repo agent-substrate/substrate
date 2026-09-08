@@ -23,13 +23,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/pemutil"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volumepath"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	certlisters "k8s.io/client-go/listers/certificates/v1beta1"
@@ -213,13 +213,8 @@ func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID strin
 // root, skipping it if contents already match. relPath is re-validated here
 // and confined by root: atelet is the last line before the host filesystem.
 func writeSystemInfoFile(root *os.Root, relPath string, data []byte) error {
-	if relPath == "" || strings.HasPrefix(relPath, "/") {
-		return fmt.Errorf("invalid system-info path %q: must be a non-empty relative path", relPath)
-	}
-	for _, seg := range strings.Split(relPath, "/") {
-		if seg == ".." || seg == "." || seg == "" {
-			return fmt.Errorf("invalid system-info path %q: must not contain empty, '.', or '..' segments", relPath)
-		}
+	if err := volumepath.ValidateProjected(relPath); err != nil {
+		return fmt.Errorf("invalid system-info path %q: %w", relPath, err)
 	}
 	dst := filepath.FromSlash(relPath)
 	if existing, err := root.ReadFile(dst); err == nil && bytes.Equal(existing, data) {

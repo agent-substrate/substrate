@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -36,6 +37,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
+
+// testSnapshotOwnerUID stands in for the Actor UID an external snapshot's
+// prefix is keyed on. The store keeps a snapshot URI opaque, so the tests only
+// need URIs of the right shape, not ones an actual actor wrote.
+const testSnapshotOwnerUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
 
 // One Postgres container serves every test in this package; each test gets
 // isolation via clearAll rather than a fresh container, which would be
@@ -144,12 +150,18 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 		}
 	}
 
+	// Every migration applied once and no more: two racing starts must not each
+	// record the same version.
+	want, err := fs.Glob(migrationFiles, "migrations/*.sql")
+	if err != nil {
+		t.Fatalf("listing migrations: %v", err)
+	}
 	var applied int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM "concurrent-startup".schema_migrations WHERE version_id > 0 AND is_applied`).Scan(&applied); err != nil {
 		t.Fatalf("reading applied migrations: %v", err)
 	}
-	if applied != 1 {
-		t.Fatalf("applied migration rows = %d, want 1", applied)
+	if applied != len(want) {
+		t.Fatalf("applied migration rows = %d, want %d", applied, len(want))
 	}
 }
 
@@ -452,7 +464,7 @@ func appliedMigrationVersions(t *testing.T, pool *pgxpool.Pool) []int64 {
 // state, so the statement lives here rather than on Persistence.
 func clearAll(t *testing.T, p *Persistence) {
 	t.Helper()
-	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_outbox, worker_outbox_trim`); err != nil {
+	if _, err := p.pool.Exec(context.Background(), `TRUNCATE atespaces, actors, actor_egress_policies, actor_templates, tags, workers, worker_assignments, leases, worker_outbox, worker_outbox_trim`); err != nil {
 		t.Fatalf("truncating tables: %v", err)
 	}
 }
@@ -584,75 +596,91 @@ func TestUpdateActorTemplate_ConcurrentWriteReturnsConflict(t *testing.T) {
 	}
 }
 
-func TestUpdateActorSnapshotTag_CASPreventsDeleteRecreateABA(t *testing.T) {
+// createTestSuspendedActor seeds an actor holding an external snapshot, which
+// is what CreateTag tags.
+func createTestSuspendedActor(t *testing.T, s *Persistence, atespace, name string) *ateapipb.Actor {
+	t.Helper()
+	created, err := s.CreateActor(context.Background(), &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
+		Status: &ateapipb.ActorStatus{
+			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + atespace + "/actors/" + testSnapshotOwnerUID + "/snapshots/" + name, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor(%s/%s) failed: %v", atespace, name, err)
+	}
+	return created
+}
+
+// createTestTag creates tagName over its own copy of actor's
+// external snapshot, already finalized.
+func createTestTag(t *testing.T, s *Persistence, actor *ateapipb.Actor, tagAtespace, tagName string) *ateapipb.Tag {
+	t.Helper()
+	tag, err := s.CreateTag(context.Background(), &ateapipb.Tag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: tagAtespace, Name: tagName},
+		Scope:    ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+		Status: &ateapipb.TagStatus{
+			Snapshot:       &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
+			SourceActorUid: actor.GetMetadata().GetUid(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTag(%s/%s) failed: %v", tagAtespace, tagName, err)
+	}
+	return tag
+}
+
+func TestUpdateTag_CASPreventsDeleteRecreateABA(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
-	for _, name := range []string{"snapshot-a", "snapshot-b"} {
-		if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name},
-			Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://bucket/" + name},
-		}); err != nil {
-			t.Fatalf("CreateActorSnapshot(%q) failed: %v", name, err)
-		}
-	}
-	original, err := s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: "snapshot-a"}, &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tag-a"},
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-	})
-	if err != nil {
-		t.Fatalf("CreateActorSnapshotTag failed: %v", err)
-	}
+	actorA := createTestSuspendedActor(t, s, "team-a", "actor-a")
+	actorB := createTestSuspendedActor(t, s, "team-a", "actor-b")
+	original := createTestTag(t, s, actorA, "team-a", "tag-a")
 
 	mutations := 0
-	var recreated *ateapipb.ActorSnapshotTag
-	_, err = s.UpdateActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"}, store.PreconditionFrom(original), func(toUpdate *ateapipb.ActorSnapshotTag) error {
+	var recreated *ateapipb.Tag
+	_, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}, store.PreconditionFrom(original), func(toUpdate *ateapipb.Tag) error {
 		mutations++
-		if _, err := s.DeleteActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"}); err != nil {
+		if _, err := s.DeleteTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"}); err != nil {
 			return fmt.Errorf("deleting original tag: %w", err)
 		}
-		recreated, err = s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: "snapshot-b"}, &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tag-a"},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-		})
-		if err != nil {
-			return fmt.Errorf("recreating tag: %w", err)
-		}
-		toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+		recreated = createTestTag(t, s, actorB, "team-a", "tag-a")
+		toUpdate.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
 		return nil
 	})
 	if !errors.Is(err, store.ErrVersionConflict) {
-		t.Fatalf("UpdateActorSnapshotTag error = %v, want ErrVersionConflict", err)
+		t.Fatalf("UpdateTag error = %v, want ErrVersionConflict", err)
 	}
 	if mutations != 1 {
 		t.Errorf("guarded mutation ran %d times, want 1", mutations)
 	}
-	stored, err := s.GetActorSnapshotTag(ctx, resources.ActorSnapshotTagRef{Atespace: "team-a", Name: "tag-a"})
+	stored, err := s.GetTag(ctx, resources.TagRef{Atespace: "team-a", Name: "tag-a"})
 	if err != nil {
-		t.Fatalf("GetActorSnapshotTag failed: %v", err)
+		t.Fatalf("GetTag failed: %v", err)
 	}
 	if diff := cmp.Diff(recreated, stored, protocmp.Transform()); diff != "" {
 		t.Errorf("recreated tag was overwritten (-want +got):\n%s", diff)
 	}
 }
 
-func TestCreateActorSnapshotTag_ForeignKeyErrors(t *testing.T) {
+func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
 	createTestAtespace(t, s, "team-a")
-	tag := func() *ateapipb.ActorSnapshotTag {
-		return &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "latest"}}
-	}
+	actor := createTestSuspendedActor(t, s, "team-a", "actor-a")
 
-	if _, err := s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "team-a", Name: "missing"}, tag()); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("missing snapshot error = %v, want ErrNotFound", err)
-	}
-	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "snapshot"}}); err != nil {
-		t.Fatalf("CreateActorSnapshot: %v", err)
-	}
-	tagWithoutAtespace := tag()
-	tagWithoutAtespace.Metadata.Atespace = "gone"
-	if _, err := s.CreateActorSnapshotTag(ctx, resources.ActorSnapshotRef{Atespace: "gone", Name: "snapshot"}, tagWithoutAtespace); !errors.Is(err, store.ErrFailedPrecondition) {
+	// A tag in an atespace that does not exist trips the tag's atespace FK.
+	_, err := s.CreateTag(ctx, &ateapipb.Tag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "latest"},
+		Status: &ateapipb.TagStatus{
+			InProgressSnapshotUri: "gs://bucket/atespaces/gone/tags/latest",
+			SourceActorUid:        actor.GetMetadata().GetUid(),
+		},
+	})
+	if !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("missing tag atespace error = %v, want ErrFailedPrecondition", err)
 	}
 }
@@ -835,5 +863,85 @@ func TestAcquireLease_ConcurrentTakeover(t *testing.T) {
 	}
 	for lease := range winners {
 		lease.Close()
+	}
+}
+
+// TestSaveWorker_RejectsAStaleWrite proves the precondition saveWorker states
+// on top of the row lock its callers hold: a Worker read before someone else
+// wrote it cannot overwrite that write.
+func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN, "public")
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "stale-write-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	// Move the stored Worker on, so the copy above is a version behind.
+	if _, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Ip = "10.0.0.1"
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin failed: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := saveWorker(ctx, tx, created); !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("saveWorker() with a stale Worker = %v, want ErrVersionConflict", err)
+	}
+}
+
+// TestSaveWorker_RejectsAVanishedWorker keeps a deleted row from being an
+// update of nothing.
+func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
+	requirePool(t)
+	ctx := context.Background()
+
+	p, err := Connect(ctx, containerDSN, "public")
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	clearAll(t, p)
+
+	created, err := p.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "vanished-worker"},
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker failed: %v", err)
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin failed: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := saveWorker(ctx, tx, created); !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("saveWorker() on a deleted Worker = %v, want ErrVersionConflict", err)
 	}
 }

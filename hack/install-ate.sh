@@ -38,6 +38,11 @@ fi
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
+# Called by a ${demo}_cmdline handler for an argument it does not own.
+ate_demo_flag_unhandled() {
+  ATE_DEMO_FLAG_HANDLED=false
+}
+
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-egress.sh
@@ -116,6 +121,13 @@ function usage() {
   echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
   echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
+  echo ""
+  echo "Authentication configuration:"
+  echo ""
+  echo "  EXPECTED_JWT_ISSUER                    Issuer URL ate-api-server requires in service account tokens, verbatim."
+  echo "                                         Default: derived from PROJECT_ID/CLUSTER_LOCATION/CLUSTER_NAME"
+  echo "                                         (https://container.googleapis.com/v1/projects/.../clusters/...),"
+  echo "                                         else the cluster's OIDC discovery document"
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -796,8 +808,13 @@ create_api_authentication_config() {
   run_kubectl create namespace ate-system --dry-run=client -o yaml \
     | run_kubectl apply -f -
 
+  # ate-api-server accepts a token only if its iss claim equals this string
+  # exactly. EXPECTED_JWT_ISSUER, when set, is that string; the derivation
+  # below is for clusters whose issuer follows the standard form.
   local jwt_issuer=""
-  if [[ -n "${PROJECT_ID:-}" && -n "${CLUSTER_LOCATION:-}" && -n "${CLUSTER_NAME:-}" ]]; then
+  if [[ -n "${EXPECTED_JWT_ISSUER:-}" ]]; then
+    jwt_issuer="${EXPECTED_JWT_ISSUER}"
+  elif [[ -n "${PROJECT_ID:-}" && -n "${CLUSTER_LOCATION:-}" && -n "${CLUSTER_NAME:-}" ]]; then
     jwt_issuer="https://container.googleapis.com/v1/projects/${PROJECT_ID}/locations/${CLUSTER_LOCATION}/clusters/${CLUSTER_NAME}"
   else
     jwt_issuer=$(run_kubectl get --raw /.well-known/openid-configuration 2>/dev/null | grep -o '"issuer":"[^"]*' | sed 's/"issuer":"//' || true)
@@ -814,6 +831,8 @@ create_api_authentication_config() {
   esac
   local authentication_config
   authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n%s' "${jwt_issuer}" "${discovery_config}")
+  echo "ate-api-authentication authentication.yaml:"
+  echo "  | ${authentication_config//$'\n'/$'\n'  | }"
   run_kubectl create configmap -n ate-system ate-api-authentication \
     --from-literal=authentication.yaml="${authentication_config}" \
     --dry-run=client -o yaml \
@@ -887,13 +906,13 @@ deploy_ate_system() {
   deploy_crds
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
-  # SandboxConfig so the defaults below are validated too).
+  # SandboxConfig so the configs below are validated too).
   run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
 
-  # Install the cluster-wide default sandbox config(s). Sandbox binaries live on
-  # cluster-scoped SandboxConfigs resolved via each WorkerPool's SandboxClass
-  # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
-  # they name their own SandboxConfig.
+  # Install the cluster-wide sandbox config(s). Sandbox binaries live on
+  # cluster-scoped SandboxConfigs each ActorTemplate names via
+  # sandboxConfig.configName; gVisor templates name this one unless they
+  # create their own SandboxConfig.
   run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
 
   # Ahead of the bundle below, for the same reason as the namespace: every
@@ -1091,7 +1110,7 @@ get_actor_state() {
 }
 
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
-# is allowed. Actors must be ACTOR_STATE_SUSPENDED before deletion.
+# accepts the actor: ACTOR_STATE_SUSPENDED, ACTOR_STATE_CRASHED, or ACTOR_STATE_DELETING.
 prepare_actor_for_delete() {
   local actor_name="$1"
   local atespace="$2"
@@ -1105,7 +1124,7 @@ prepare_actor_for_delete() {
     fi
 
     case "${state}" in
-      ACTOR_STATE_SUSPENDED)
+      ACTOR_STATE_SUSPENDED | ACTOR_STATE_CRASHED | ACTOR_STATE_DELETING)
         return 0
         ;;
       ACTOR_STATE_PAUSED)
@@ -1124,7 +1143,7 @@ prepare_actor_for_delete() {
     sleep 2
   done
 
-  echo "timed out waiting for actor ${actor_name} to reach ACTOR_STATE_SUSPENDED" >&2
+  echo "timed out waiting for actor ${actor_name} to become deletable" >&2
   return 1
 }
 
@@ -1187,7 +1206,7 @@ wait_actortemplate_ready() {
 
   while ((SECONDS < deadline)); do
     if json=$(run_kubectl_ate get actor-template "${template}" -a "${atespace}" -o json 2>/dev/null); then
-      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.name // empty' <<<"${json}")
+      snapshot=$(jq -r '.actorTemplates[0].status.goldenSnapshotStatus.goldenSnapshot.snapshotUri // empty' <<<"${json}")
       if [[ -n "${snapshot}" ]]; then
         return 0
       fi
@@ -1507,17 +1526,21 @@ podcert_workers_per_signer >/dev/null
 rollout_timeout >/dev/null
 
 while [[ "$#" -gt 0 ]]; do
-  # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
-  # handled this argument and can continue. Otherwise, fallthrough to check
-  # the other arguments.
+  # Handlers signal an unclaimed argument via ate_demo_flag_unhandled, not exit
+  # status: an `if`-condition call would suppress errexit in the whole call tree.
+  ATE_DEMO_FLAG_HANDLED=false
   for demo_name in "${ATE_DEMOS[@]}"; do
-    if declare -F "${demo_name}_cmdline" >/dev/null 2>&1; then
-      if "${demo_name}_cmdline" "$1"; then
-        shift
-        continue 2
-      fi
+    declare -F "${demo_name}_cmdline" >/dev/null 2>&1 || continue
+    ATE_DEMO_FLAG_HANDLED=true
+    "${demo_name}_cmdline" "$1"
+    if [[ "${ATE_DEMO_FLAG_HANDLED}" == "true" ]]; then
+      break
     fi
   done
+  if [[ "${ATE_DEMO_FLAG_HANDLED}" == "true" ]]; then
+    shift
+    continue
+  fi
 
   case $1 in
     --atenet-router=*) ATE_ATENET_ROUTER="${1#*=}" ;;

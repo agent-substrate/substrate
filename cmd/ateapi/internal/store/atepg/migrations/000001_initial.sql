@@ -52,33 +52,16 @@ CREATE TABLE actor_templates (
     PRIMARY KEY (atespace, name)
 );
 
-CREATE TABLE actor_snapshots (
+CREATE TABLE tags (
     atespace  text NOT NULL,
     name      text NOT NULL,
     uid       text NOT NULL,
     version   bigint NOT NULL,
     proto     bytea NOT NULL,
-    PRIMARY KEY (atespace, name)
-);
-
-CREATE TABLE actor_snapshot_tags (
-    atespace           text NOT NULL,
-    name               text NOT NULL,
-    snapshot_atespace  text NOT NULL,
-    snapshot_name      text NOT NULL,
-    uid                text NOT NULL,
-    version            bigint NOT NULL,
-    proto              bytea NOT NULL,
     PRIMARY KEY (atespace, name),
-    CONSTRAINT actor_snapshot_tags_atespace_fk
-        FOREIGN KEY (atespace) REFERENCES atespaces(name) ON DELETE RESTRICT,
-    CONSTRAINT actor_snapshot_tags_snapshot_fk
-        FOREIGN KEY (snapshot_atespace, snapshot_name)
-        REFERENCES actor_snapshots(atespace, name) ON DELETE RESTRICT
+    CONSTRAINT tags_atespace_fk
+        FOREIGN KEY (atespace) REFERENCES atespaces(name) ON DELETE RESTRICT
 );
-
-CREATE INDEX actor_snapshot_tags_snapshot_idx
-    ON actor_snapshot_tags (snapshot_atespace, snapshot_name);
 
 -- Workers are global-scoped and named by their Kubernetes pod UID, so name
 -- alone is the primary key.
@@ -88,6 +71,20 @@ CREATE TABLE workers (
     version  bigint NOT NULL,
     proto    bytea NOT NULL
 );
+
+-- One row per Actor, keyed by Actor UID because an Actor has at most one
+-- Worker. Kept separate from workers so Worker reads, writes, and watch events
+-- do not grow with occupancy. The primary key finds an Actor's Worker;
+-- worker_name lists a Worker's Actors.
+CREATE TABLE worker_assignments (
+    actor_uid    text PRIMARY KEY,
+    worker_name  text NOT NULL
+        REFERENCES workers(name) ON DELETE CASCADE,
+    proto        bytea NOT NULL
+);
+
+CREATE INDEX worker_assignments_worker_idx
+    ON worker_assignments (worker_name);
 
 -- Transactional outbox backing WatchWorkers.
 --

@@ -82,7 +82,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	// instead leaves the actor (and its assignment) intact so the caller retries
 	// crashActor, which re-attempts the release. releaseWorker is idempotent, so
 	// a retry after a release that already succeeded is a no-op.
-	sandboxClass, err := releaseWorker(ctx, st, actor)
+	sandboxClass, _, err := releaseWorker(ctx, st, actor)
 	if err != nil {
 		return fmt.Errorf("while releasing worker to crash actor: %w", err)
 	}
@@ -129,17 +129,18 @@ type crashActorStore interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
-	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
 }
 
 // releaseWorker clears the worker's assignment if it still points at the given
 // actor. A missing worker or an already-cleared assignment is not an error.
-// It returns the worker's sandboxClass if found.
-func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) (string, error) {
+// It returns the worker's sandboxClass if found, and the worker as it stands
+// after the release, which callers holding a cache of workers hand to it.
+func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) (string, *ateapipb.Worker, error) {
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
-		return "", nil
+		return "", nil, nil
 	}
 	workerName := assignment.GetWorker().GetName()
 
@@ -147,29 +148,23 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 	if errors.Is(err, store.ErrNotFound) {
 		// No need to release if the worker is not found.
 		slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", workerName))
-		return "", nil
+		return "", nil, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("while getting worker to release: %w", err)
+		return "", nil, fmt.Errorf("while getting worker to release: %w", err)
 	}
 
 	sandboxClass := worker.GetSandboxClass()
-	wass := worker.GetStatus().GetAssignment()
-	if wass == nil {
-		slog.WarnContext(ctx, "Worker's assignment is already nil, skipping release", slog.String("worker", workerName))
-		return sandboxClass, nil
+	// Release only this actor's assignment; the worker may be hosting others,
+	// and they are unaffected by this one crashing. A worker that is no longer
+	// hosting it has already been released.
+	released, err := st.ReleaseActorFromWorker(ctx, workerName, actor.GetMetadata().GetUid())
+	if err != nil {
+		return sandboxClass, nil, fmt.Errorf("while releasing worker: %w", err)
 	}
-	// Only free it if it still belongs to us
-	if wass.GetActorUid() != actor.GetMetadata().GetUid() {
-		slog.WarnContext(ctx, "Worker already assigned to another Actor", slog.String("worker", workerName))
-		return sandboxClass, nil
+	if released == nil {
+		slog.WarnContext(ctx, "Worker is not hosting this Actor, skipping release",
+			slog.String("worker", workerName))
 	}
-
-	if _, err := st.UpdateWorker(ctx, workerName, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Status.Assignment = nil
-		return nil
-	}); err != nil {
-		return sandboxClass, fmt.Errorf("while releasing worker: %w", err)
-	}
-	return sandboxClass, nil
+	return sandboxClass, released, nil
 }

@@ -109,7 +109,18 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenF
 }
 
 func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool) (*Client, error) {
-	clientset, err := NewK8sClientset(kubeconfigPath, k8sContext)
+	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
+	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
+	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
+	// clusters), client-go will print out a warning every time it initializes.
+	config.WarningHandlerWithContext = &rest.NoWarnings{}
+
+	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
@@ -146,8 +157,8 @@ func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint, token
 	}, nil
 }
 
-// LoadConfig loads a Kubernetes client configuration from the specified kubeconfig path and context.
-func LoadConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
+// LoadKubeConfig loads a Kubernetes client configuration from the specified kubeconfig path and context.
+func LoadKubeConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	loadingRules.ExplicitPath = kubeconfigPath
 	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: k8sContext}
@@ -155,10 +166,16 @@ func LoadConfig(kubeconfigPath, k8sContext string) (*rest.Config, error) {
 }
 
 func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext, tokenFile string, traceEnabled bool) (*Client, error) {
-	config, err := LoadConfig(kubeconfigPath, k8sContext)
+	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
+
+	// We fetch a ClusterTrustBundle via the certificates.k8s.io/v1beta1 API in
+	// serverTLSConfig().  Until we migrate to certificates.k8s.io/v1
+	// ClusterTrustBundle (which locks us into supporting only k8s 1.37+
+	// clusters), client-go will print out a warning every time it initializes.
+	config.WarningHandlerWithContext = &rest.NoWarnings{}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
@@ -349,18 +366,9 @@ func newTraceInterceptor() grpc.UnaryClientInterceptor {
 	}
 }
 
-// NewK8sClientset creates a new Kubernetes Clientset using the provided kubeconfig path and context.
-func NewK8sClientset(kubeconfigPath, k8sContext string) (*kubernetes.Clientset, error) {
-	config, err := LoadConfig(kubeconfigPath, k8sContext)
-	if err != nil {
-		return nil, err
-	}
-	return kubernetes.NewForConfig(config)
-}
-
 // NewMetricsClientset creates a new Kubernetes Metrics Clientset using the provided kubeconfig path and context.
 func NewMetricsClientset(kubeconfigPath, k8sContext string) (*metricsv1beta1.Clientset, error) {
-	config, err := LoadConfig(kubeconfigPath, k8sContext)
+	config, err := LoadKubeConfig(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, err
 	}

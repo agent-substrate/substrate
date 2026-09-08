@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
@@ -39,6 +40,8 @@ func testWorkerUID(podName string) string {
 // with one minimal ActorTemplate stored in tmplAtespace. Dependencies the
 // unit tests never reach (worker cache, atelet dialer, k8s clients) are nil,
 // so a step that unexpectedly executes against them fails the test loudly.
+// External snapshots go to an in-memory object store, reachable from a test as
+// w.objectStore.(*objectstoretest.Fake).
 func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
@@ -54,7 +57,76 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, nil, "", nil)
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoretest.New())
+}
+
+// newFinalizeWorkflow builds an ActorWorkflow over persistence with an
+// in-memory object store, for the step-level tests that seed the store
+// directly rather than going through newTestActorWorkflow.
+func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
+	objects := objectstoretest.New()
+	return &ActorWorkflow{store: persistence, objectStore: objects}, objects
+}
+
+// mustActorSnapshotURI builds the URI of a snapshot the actor took under
+// template's storage location, the way the suspend workflow does.
+func mustActorSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, actor *ateapipb.Actor, name string) resources.SnapshotURI {
+	t.Helper()
+	atespace, uid := actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetUid()
+	uri, err := resources.NewActorSnapshotURI(template.GetSnapshotsConfig().GetStorageLocation(), atespace, uid, name)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI(%s/%s/%s): %v", atespace, uid, name, err)
+	}
+	return uri
+}
+
+const (
+	// testStorageLocation is the snapshots_config.storage_location the tests
+	// build snapshot URIs under.
+	testStorageLocation = "gs://bucket/root"
+
+	// someActorUID stands in for the UID the store assigns an Actor, for tests
+	// that need a well-formed snapshot URI but never exercise who owns it. Those
+	// seed their Actor in a single call, before a real UID exists.
+	someActorUID = "6b1f9d0c-4a2e-4d38-9c77-5e0a1b2c3d4e"
+)
+
+// someActorSnapshotURI builds the URI of a snapshot under someActorUID's
+// prefix, at location.
+func someActorSnapshotURI(t *testing.T, location, atespace, name string) string {
+	t.Helper()
+	uri, err := resources.NewActorSnapshotURI(location, atespace, someActorUID, name)
+	if err != nil {
+		t.Fatalf("NewActorSnapshotURI(%s/%s/%s): %v", atespace, someActorUID, name, err)
+	}
+	return uri.String()
+}
+
+// mustTagSnapshotURI builds the URI of the one snapshot a tag owns, the way the
+// tag workflow does.
+func mustTagSnapshotURI(t *testing.T, template *ateapipb.ActorTemplate, atespace, name string) resources.SnapshotURI {
+	t.Helper()
+	uri, err := resources.NewTagSnapshotURI(template.GetSnapshotsConfig().GetStorageLocation(), atespace, name)
+	if err != nil {
+		t.Fatalf("NewTagSnapshotURI(%s/%s): %v", atespace, name, err)
+	}
+	return uri
+}
+
+// mustUpdateActorStatus mutates a stored actor's status. Tests reach for it to
+// record snapshot URIs: an actor's prefix is keyed on the UID the store
+// assigns, so its URIs cannot be written until the row exists.
+func mustUpdateActorStatus(t *testing.T, ctx context.Context, persistence store.Interface, actor *ateapipb.Actor, mutate func(*ateapipb.ActorStatus)) *ateapipb.Actor {
+	t.Helper()
+	actorRef := resources.ActorRefFromActor(actor)
+	updated, err := persistence.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		mutate(toUpdate.Status)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor(%s): %v", actorRef, err)
+	}
+	return updated
 }
 
 // seedWorkflowActor stores an actor with the given state, bound to the given

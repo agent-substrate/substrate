@@ -28,6 +28,7 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
+	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -677,6 +678,13 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithRunAsGroup(0)).
 		WithVolumes(
 			corev1ac.Volume().
+				WithName(ateomCapacityVolume).
+				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
+					WithItems(
+						resourceFieldRefFile(ateomcapacity.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(ateomcapacity.MemoryLimitFile, "limits.memory", wholeBytes),
+					)),
+			corev1ac.Volume().
 				WithName("run-ateom").
 				WithHostPath(corev1ac.HostPathVolumeSource().
 					WithPath(ateompath.BasePath).
@@ -758,6 +766,10 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 							WithFieldPath("metadata.uid"))),
 			).
 			WithVolumeMounts(
+				corev1ac.VolumeMount().
+					WithName(ateomCapacityVolume).
+					WithMountPath(ateomcapacity.CapacityMountPath).
+					WithReadOnly(true),
 				corev1ac.VolumeMount().
 					WithName("run-ateom").
 					WithMountPath(ateompath.BasePath).

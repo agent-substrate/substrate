@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -355,5 +356,73 @@ func TestStatsPollerWorkerPoolLabels(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got, cmp.AllowUnexported(templateAggregate{}, templateKey{}, workerPoolRef{})); diff != "" {
 		t.Errorf("collect() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestAddSat(t *testing.T) {
+	tests := []struct {
+		name string
+		agg  int64
+		v    uint64
+		want int64
+	}{
+		{name: "normal add", agg: 100, v: 50, want: 150},
+		{name: "zero add", agg: 100, v: 0, want: 100},
+		// A wire value above MaxInt64 -- a corrupt or hostile guest reading --
+		// must pin at the ceiling, not wrap the aggregate negative.
+		{name: "value above MaxInt64 saturates", agg: 0, v: math.MaxUint64, want: math.MaxInt64},
+		// The addition itself can also overflow once inputs are clamped.
+		{name: "sum overflow saturates", agg: math.MaxInt64 - 10, v: 100, want: math.MaxInt64},
+		{name: "exactly at ceiling", agg: math.MaxInt64 - 5, v: 5, want: math.MaxInt64},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := addSat(tc.agg, tc.v); got != tc.want {
+				t.Errorf("addSat(%d, %d) = %d, want %d", tc.agg, tc.v, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestStatsPollerCollectSaturatesCorruptSamples pins the end-to-end behavior:
+// one guest reporting absurd counters must not flip a template's aggregates
+// negative -- a negative gauge misreads as "no memory", and a negative CPU
+// delta is a spec-violating counter Add. Everything pins at MaxInt64 instead.
+func TestStatsPollerCollectSaturatesCorruptSamples(t *testing.T) {
+	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	fakes := map[string]*fakeStatsAteom{
+		"uid-1": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, math.MaxUint64, math.MaxUint64)},
+		"uid-2": {resp: executingResponse("ns-a", "tmpl-a", ateompb.SandboxClass_SANDBOX_CLASS_GVISOR, ateompb.StatsSource_STATS_SOURCE_CGROUP, 1000, 700)},
+	}
+	p, _ := newPollerFixture(t, fakes)
+
+	got := p.collect(context.Background())[key]
+	if got == nil {
+		t.Fatal("collect() returned no aggregate for the template")
+	}
+	if got.memoryCurrentBytes != math.MaxInt64 || got.memoryWorkingSetBytes != math.MaxInt64 {
+		t.Errorf("memory aggregates = %d/%d, want both pinned at MaxInt64",
+			got.memoryCurrentBytes, got.memoryWorkingSetBytes)
+	}
+	if got.memoryCurrentBytes < 0 || got.memoryWorkingSetBytes < 0 || got.cpuDeltaUsec < 0 {
+		t.Errorf("aggregate went negative: %+v", got)
+	}
+}
+
+// TestStatsPollerCPUDeltaSaturatesCorruptCounter: a baseline followed by an
+// absurd counter value is a huge "increase"; it must clamp, not go negative.
+func TestStatsPollerCPUDeltaSaturatesCorruptCounter(t *testing.T) {
+	key := templateKey{templateNamespace: "ns-a", templateName: "tmpl-a", sandboxClass: "gvisor", source: "cgroup"}
+	fake := &fakeStatsAteom{resp: cpuResponse("uid-a", 1000)}
+	p, _ := newPollerFixture(t, map[string]*fakeStatsAteom{"uid-1": fake})
+
+	if got := p.collect(context.Background())[key].cpuDeltaUsec; got != 0 {
+		t.Fatalf("first sweep delta = %d, want 0", got)
+	}
+
+	fake.resp = cpuResponse("uid-a", math.MaxUint64)
+	got := p.collect(context.Background())[key].cpuDeltaUsec
+	if got != math.MaxInt64 {
+		t.Errorf("corrupt-counter sweep delta = %d, want pinned at MaxInt64", got)
 	}
 }

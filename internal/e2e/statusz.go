@@ -42,7 +42,7 @@ type StatuszClient struct {
 // NewStatuszClient establishes a port-forward to the router's status port.
 // Call Close to tear it down.
 func NewStatuszClient(ctx context.Context) (*StatuszClient, error) {
-	config, err := ateclient.LoadConfig(KubeConfig, KubeContext)
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("loading kubeconfig: %w", err)
 	}

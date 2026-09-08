@@ -34,8 +34,9 @@ const (
 	kindAtespace      resourceKind = "atespace"
 	kindActor         resourceKind = "actor"
 	kindActorTemplate resourceKind = "actor-template"
-	kindSnapshot      resourceKind = "snapshot"
+	kindTag           resourceKind = "tag"
 	kindWorker        resourceKind = "worker"
+	kindWorkerAssign  resourceKind = "worker-assignment"
 )
 
 // pageToken is PostgreSQL's opaque keyset page token. It carries no database

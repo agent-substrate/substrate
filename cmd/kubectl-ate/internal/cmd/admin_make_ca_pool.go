@@ -37,7 +37,7 @@ var makeCaPoolCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		kconfig, err := ateclient.LoadConfig(kubeconfig, k8sContext)
+		kconfig, err := ateclient.LoadKubeConfig(kubeconfig, k8sContext)
 		if err != nil {
 			return fmt.Errorf("while reading kubeconfig: %w", err)
 		}

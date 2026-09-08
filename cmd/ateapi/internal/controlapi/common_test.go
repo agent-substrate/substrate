@@ -15,9 +15,11 @@
 package controlapi
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -45,4 +47,34 @@ func selectorLabelsOfSize(n int) map[string]string {
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
+}
+
+// firstAssignment returns the single Actor a Worker is hosting, or nil when it
+// is hosting none. These tests place one Actor per Worker, so "the assignment"
+// is still a meaningful thing to assert on even though a Worker holds a set;
+// asserting through this keeps them readable and would fail loudly (by looking
+// at the wrong entry) if a test ever placed two.
+func firstAssignment(t *testing.T, st store.Interface, workerName string) *ateapipb.ActorAssignment {
+	t.Helper()
+	page, err := st.ListWorkerAssignments(context.Background(), workerName, store.ListOptions{})
+	if err != nil {
+		t.Fatalf("list assignments of worker %q: %v", workerName, err)
+	}
+	if len(page.Items) == 0 {
+		return nil
+	}
+	return page.Items[0]
+}
+
+// seedAssignment places an actor on an already-created worker, which is how a
+// test arranges a worker that is already hosting something.
+func seedAssignment(t *testing.T, st store.Interface, workerName string, assignment *ateapipb.ActorAssignment) {
+	t.Helper()
+	if assignment == nil {
+		return
+	}
+	ctx := context.Background()
+	if err := st.BindActorToWorker(ctx, workerName, assignment, nil); err != nil {
+		t.Fatalf("seed assignment on worker %q: %v", workerName, err)
+	}
 }
