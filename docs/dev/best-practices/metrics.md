@@ -47,8 +47,8 @@ Every metric PR has these parts. Reviewers check for each one.
 |---|---|---|---|
 | How many times something happened, and its rate | Counter | `Int64Counter` | `ate.imagecache.requests` (`internal/imagecache/metrics.go`) |
 | How long or how big each occurrence was, as a distribution | Histogram | `Float64Histogram` (seconds), `Int64Histogram` (bytes) | `ate.actor.restore.duration` (`cmd/atelet/metrics.go`), `atelet.snapshot.size` (`cmd/atelet/main.go`) |
-| How many things exist right now, where the sum across labels is meaningful | UpDownCounter | `Int64ObservableUpDownCounter` (you can enumerate them at collection time), `Int64UpDownCounter` (you own the increments; rare) | `ate.workerpool.workers` (`cmd/ateapi/internal/controlapi/metrics.go`) |
-| A level that is not summable across labels | Gauge | `Int64ObservableGauge` / `Float64ObservableGauge` | `ate.actor.stats.memory.working_set` (`cmd/atelet/statspoller.go`) |
+| How many things exist right now, in a total you own and account for, split by labels | UpDownCounter | `Int64ObservableUpDownCounter` (you can enumerate them at collection time), `Int64UpDownCounter` (you own the increments; rare) | `ate.workerpool.workers` (`cmd/ateapi/internal/controlapi/metrics.go`) |
+| A reading you sample from somewhere else and only tag with labels, whether or not a dashboard sums it | Gauge | `Int64ObservableGauge` / `Float64ObservableGauge` | `ate.actor.stats.memory.working_set` (`cmd/atelet/statspoller.go`) |
 
 Rules of thumb:
 
@@ -56,11 +56,14 @@ Rules of thumb:
   reads the truth (a cache, a map) at collection time, so a missed decrement
   cannot drift the value. Use a synchronous UpDownCounter only when there is no
   state to enumerate at collection time.
-* **Do not use a gauge for something that is a sum.** Worker counts are an
-  UpDownCounter because idle plus assigned is the pool and the pools sum to the
-  fleet. Reserve a gauge for a level whose sum across labels means nothing: a
-  ratio, an age, a temperature. If you find yourself writing `sum by` over it
-  in a query, it was an UpDownCounter.
+* **UpDownCounter or gauge: ask who owns the total.** The test is not whether
+  the value can be summed. Ask whether the labels split a total you own and
+  account for, or only tag separate readings you sampled from elsewhere. Idle
+  plus assigned is the pool and the pools are the fleet, a total the control
+  plane maintains, so worker counts are an UpDownCounter. Memory working set is
+  sampled from cgroups per template, so it is a gauge even though the usual
+  query sums it per node, just as upstream sums `k8s.pod.memory.usage` across
+  pods and still types it as a gauge.
 * **Do not add a failure counter next to a success counter.** One instrument,
   with the failure on `error.type` or `ate.failure.reason`; the key's absence
   means success. See [Reporting failures](#reporting-failures).
@@ -276,8 +279,9 @@ For a value you can enumerate at collection time, register a callback rather
 than tracking increments:
 
 ```go
-// Counts per kind sum to the cache's total, so this is an UpDownCounter and
-// not a gauge; observable, because the cache index is the truth to read.
+// The cache owns its index and the counts per kind partition it, so this is
+// an UpDownCounter and not a gauge; observable, because the index is the
+// truth to read at collection time.
 entries, err := meter.Int64ObservableUpDownCounter(entriesMetric,
 	metric.WithUnit("{snapshot}"),
 	metric.WithDescription("Number of snapshots held in the node-local cache."))
@@ -468,7 +472,7 @@ four instruments, not one:
 |---|---|---|
 | Is it helping? | `ate.snapshotcache.requests` counter, by outcome | `ate.snapshotcache.outcome`, `ate.snapshot.kind`, `error.type` on error |
 | What does a miss cost? | `ate.snapshotcache.fill.duration` histogram, seconds, `snapshotPhaseBuckets` | `ate.snapshot.kind`, `ate.template.atespace`, `ate.template.name`, failure pair on failure |
-| How much does it hold? | `ate.snapshotcache.size` observable UpDownCounter, bytes (bytes per kind sum to the node's cache size, so not a gauge), plus an `ate.snapshotcache.evictions` counter | `ate.snapshot.kind`; evictions also carry an `ate.snapshotcache.eviction.reason` enum (`capacity`, `ttl`, `explicit`) |
+| How much does it hold? | `ate.snapshotcache.size` observable UpDownCounter, bytes (the cache owns the total and kind partitions it, so not a gauge), plus an `ate.snapshotcache.evictions` counter | `ate.snapshot.kind`; evictions also carry an `ate.snapshotcache.eviction.reason` enum (`capacity`, `ttl`, `explicit`) |
 
 What is deliberately **not** a label: the snapshot name or digest (one per
 actor, unbounded), the object-storage URL (a path), the actor. The per-actor
