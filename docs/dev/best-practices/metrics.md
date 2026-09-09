@@ -66,8 +66,9 @@ Rules of thumb:
   UpDownCounter is a tally you keep yourself: something starts, you add one;
   it ends, you subtract one. `ate.workerpool.workers` is one because ateapi
   assigns and releases every worker, so it is the one keeping that tally. A
-  gauge is a dial you read: memory working set is whatever the cgroup reports
-  when atelet asks, written down per template. Ask "did I get this number by
+  gauge is a dial you read: memory working set is whatever the sandbox reports
+  when atelet polls it (a cgroup on gVisor, the guest agent on micro-VM),
+  written down per template. Ask "did I get this number by
   adding and subtracting, or by looking?" and the answer is the instrument.
   How a dashboard later aggregates the number does not enter into it. The
   type is a promise to the pipeline about what the datapoints are, and
@@ -118,7 +119,7 @@ Use UCUM units, the same ones the rest of the tree uses:
 | time | `s` | `time.Since(start).Seconds()` as `float64` |
 | size | `By` | `int64` bytes |
 | count of a thing | `{thing}` in braces: `{request}`, `{worker}`, `{crash}` | `int64` |
-| ratio | `1` | `float64` |
+| ratio | `1` (UCUM; no instrument in tree uses it yet) | `float64` |
 
 Record seconds, not milliseconds, even for fast paths: the buckets carry the
 resolution, and mixing units across instruments breaks every dashboard that
@@ -169,8 +170,10 @@ ones every new metric meets:
 
 Every label key is a constant in `internal/ateattr/ateattr.go`, and every
 bounded value set is a group of constants there beside it. A metric never
-declares `attribute.Key("...")` locally. Add the key and its values to
-`ateattr` first; the registry entry and the code then agree by construction.
+declares `attribute.Key("...")` locally; the one instrument that does, the
+router's parking `outcome` label, predates the rule and is recorded under
+`lint_exceptions` in `substrate.yaml`. Add the key and its values to `ateattr`
+first; the registry entry and the code then agree by construction.
 
 Before adding a label, ask what the dashboard groups by. A label nobody will
 group or filter by multiplies the series count for nothing. Three or four
@@ -212,9 +215,10 @@ from the context is the span, so an exemplar can point at the sampled trace.
 
 ### Shape
 
-Each package that emits metrics has one `metrics.go` holding: the instrument
-name constants, a struct of instruments, a constructor that takes a
-`metric.Meter`, and unexported `record*` methods that are nil-safe.
+Put a package's instruments in one `metrics.go` holding: the instrument name
+constants, a struct of instruments, a constructor that takes a `metric.Meter`,
+and unexported `record*` methods that are nil-safe. `internal/imagecache`,
+`cmd/atelet` and `cmd/ateapi/internal/controlapi` follow this shape.
 
 ```go
 const requestsMetric = "ate.snapshotcache.requests"
@@ -280,8 +284,9 @@ component name as the scope (`"atelet"`, `"ateapi"`, `"atecontroller"`):
   (`cmd/atelet`).
 
 The meter provider itself is set up once per binary by
-`serverboot.InitMetrics` (Prometheus reader plus OTLP push) or
-`serverboot.InitMetricsPushOnly` (OTLP push only, for ateom and atecontroller).
+`serverboot.InitMetrics` (Prometheus reader plus OTLP push),
+`serverboot.InitMetricsPushOnly` (OTLP push only; atecontroller), or
+`serverboot.InitMetricsPushOnlyVia` (OTLP push over the atelet relay; ateom).
 A new component calls one of these and defers `ShutdownProvider`; a new package
 inside an existing component adds nothing there.
 
@@ -453,7 +458,7 @@ the code omits it on some path.
 Then run the check CI runs:
 
 ```sh
-hack/verify/metrics.sh      # uses a local weaver v0.25.1 if present, else the pinned image via docker
+hack/verify/metrics.sh      # local weaver only if it is exactly v0.25.1 (another version is an error), else the pinned image via docker
 ```
 
 ### `docs/metrics/substrate.yaml`
@@ -486,7 +491,7 @@ four instruments, not one:
 | Question | Instrument | Labels |
 |---|---|---|
 | Is it helping? | `ate.snapshotcache.requests` counter, by outcome | `ate.snapshotcache.outcome`, `ate.snapshot.kind`, `error.type` on error |
-| What does a miss cost? | `ate.snapshotcache.fill.duration` histogram, seconds, `snapshotPhaseBuckets` | `ate.snapshot.kind`, `ate.template.atespace`, `ate.template.name`, failure pair on failure |
+| What does a miss cost? | `ate.snapshotcache.fill.duration` histogram, seconds, same boundaries as `snapshotPhaseBuckets` in `cmd/atelet/metrics.go` (unexported there, so copy or lift it) | `ate.snapshot.kind`, `ate.template.atespace`, `ate.template.name`, failure pair on failure |
 | How much does it hold? | `ate.snapshotcache.size` observable UpDownCounter, bytes (the cache owns the total and kind partitions it, so not a gauge), plus an `ate.snapshotcache.evictions` counter | `ate.snapshot.kind`; evictions also carry an `ate.snapshotcache.eviction.reason` enum (`capacity`, `ttl`, `explicit`) |
 
 What is deliberately **not** a label: the snapshot name or digest (one per
