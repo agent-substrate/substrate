@@ -64,6 +64,23 @@ func TestBearerTokenCreds(t *testing.T) {
 	}
 }
 
+func TestMintedBearerTokenCreds(t *testing.T) {
+	creds := &mintedBearerTokenCreds{
+		token:     "initial-token",
+		expiresAt: time.Now().Add(time.Hour),
+	}
+	md, err := creds.GetRequestMetadata(context.Background())
+	if err != nil {
+		t.Fatalf("GetRequestMetadata: %v", err)
+	}
+	if got, want := md["authorization"], "Bearer initial-token"; got != want {
+		t.Errorf("authorization=%q want %q", got, want)
+	}
+	if !creds.RequireTransportSecurity() {
+		t.Error("RequireTransportSecurity() = false, want true")
+	}
+}
+
 func TestReadBearerToken(t *testing.T) {
 	creds, err := readBearerToken(strings.NewReader("some-token\n"))
 	if err != nil {

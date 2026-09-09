@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/internal/clustertrustbundle"
@@ -333,6 +334,23 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 	if tokenFile != "" {
 		return grpc.WithPerRPCCredentials(fileBearerTokenCreds(tokenFile)), nil
 	}
+	creds := &mintedBearerTokenCreds{clientset: clientset}
+	if _, err := creds.mint(ctx); err != nil {
+		return nil, err
+	}
+	return grpc.WithPerRPCCredentials(creds), nil
+}
+
+// mintedBearerTokenCreds requests a bearer token for clientServiceAccount and
+// automatically re-mints a fresh token when the cached token is near expiry.
+type mintedBearerTokenCreds struct {
+	clientset *kubernetes.Clientset
+	mu        sync.Mutex
+	token     string
+	expiresAt time.Time
+}
+
+func (m *mintedBearerTokenCreds) mint(ctx context.Context) (string, error) {
 	expirationSeconds := int64(3600)
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
@@ -340,15 +358,34 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
-	token, err := clientset.CoreV1().ServiceAccounts(systemNamespace()).CreateToken(ctx, clientServiceAccount(), tokenRequest, metav1.CreateOptions{})
+	token, err := m.clientset.CoreV1().ServiceAccounts(systemNamespace()).CreateToken(ctx, clientServiceAccount(), tokenRequest, metav1.CreateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
+		return "", fmt.Errorf("failed to request ateapi bearer token: %w", err)
 	}
 	if token.Status.Token == "" {
-		return nil, fmt.Errorf("failed to request ateapi bearer token: token response was empty")
+		return "", fmt.Errorf("failed to request ateapi bearer token: token response was empty")
 	}
-	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
+	m.token = token.Status.Token
+	if token.Status.ExpirationTimestamp.IsZero() {
+		m.expiresAt = time.Now().Add(time.Hour)
+	} else {
+		m.expiresAt = token.Status.ExpirationTimestamp.Time
+	}
+	return m.token, nil
 }
+
+func (m *mintedBearerTokenCreds) GetRequestMetadata(ctx context.Context, _ ...string) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.token == "" || time.Now().Add(time.Minute).After(m.expiresAt) {
+		if _, err := m.mint(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]string{"authorization": "Bearer " + m.token}, nil
+}
+
+func (m *mintedBearerTokenCreds) RequireTransportSecurity() bool { return true }
 
 func readBearerToken(r io.Reader) (bearerTokenCreds, error) {
 	b, err := io.ReadAll(r)
