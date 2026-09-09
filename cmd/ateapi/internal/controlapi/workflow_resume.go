@@ -188,6 +188,8 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		// The Actor records the template its guest state was built on; a
 		// different UID on its current template means it was repointed since
 		// the capture.
+		// TODO: Disallow updating the ActorTemplate ID for paused actors here
+		// as well; it is already disallowed at admission time.
 		builtOnTemplateUID := actor.GetStatus().GetCurrentActorTemplateUid()
 		src.TemplateReplaced = builtOnTemplateUID != "" && builtOnTemplateUID != actorTemplate.GetMetadata().GetUid()
 	} else if goldenURI := goldenSnapshotStatus.GetGoldenSnapshot().GetSnapshotUri(); goldenURI != "" && !boot {
