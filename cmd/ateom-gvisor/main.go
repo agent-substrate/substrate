@@ -128,7 +128,7 @@ func do(ctx context.Context) error {
 		return err
 	}
 
-	slog.InfoContext(ctx, "ateom booting")
+	slog.InfoContext(ctx, "ateom booting", slog.String("version", version.Version))
 
 	const serviceName = "ateom-gvisor"
 	// Export through atelet's node-local relay when it is there, so telemetry

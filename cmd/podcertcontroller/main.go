@@ -103,6 +103,7 @@ func main() {
 		return
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.InfoContext(ctx, "podcertcontroller starting", slog.String("version", version.Version))
 
 	var kconfig *rest.Config
 	var err error

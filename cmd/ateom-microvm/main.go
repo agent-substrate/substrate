@@ -114,7 +114,7 @@ func do(ctx context.Context) error {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		return err
 	}
-	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
+	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.Version))
 
 	const serviceName = "ateom-microvm"
 	// Export through atelet's node-local relay when it is there, so telemetry
