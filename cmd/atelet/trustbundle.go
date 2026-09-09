@@ -31,8 +31,7 @@ import (
 const EgressTrustBundleName = "egress-mitm.ate.dev"
 
 // supportedTrustBundles maps the bundle names the trustBundle data source
-// may reference to their backing ClusterTrustBundles. Enforced here so a
-// configurable backend registry (#932) can widen it without an API change.
+// may reference to their backing ClusterTrustBundles.
 //
 // TODO(#932): select by signer name + label selector, merging the matches, so
 // a new root can be trialed on a subset of workloads.
@@ -79,7 +78,7 @@ func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (o
 }
 
 // trustBundleHash hashes the raw backing contents. The sanitized output is
-// not comparable: it shuffles the anchors on every call.
+// not comparable as anchors are shuffled on every call.
 func trustBundleHash(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])

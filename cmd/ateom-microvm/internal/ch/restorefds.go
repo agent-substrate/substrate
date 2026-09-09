@@ -150,8 +150,7 @@ func (c *Client) RestoreWithNetFDs(ctx context.Context, sourceDir string, nets [
 	}
 	defer resp.Body.Close()
 	if !strings.HasPrefix(resp.Status, "2") {
-		// The body is CH's actual error (e.g. which device failed to restore);
-		// the status line alone says only "500".
+		// The body is CH's actual error. The status line only provides http 500.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("vm.restore failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}

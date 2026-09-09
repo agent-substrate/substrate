@@ -666,7 +666,6 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
-	// CheckpointWorkload tore the sandbox down; stop refreshing its volumes.
 	s.systemInfoVolumes.Deregister(actorUID)
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
@@ -1113,7 +1112,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		runtimeRec = goldenRec
 	}
 
-	// Undo the Register in the prep goroutine below if the restore fails.
+	// Undo the Register if the restore fails.
 	defer func() {
 		if err != nil {
 			s.systemInfoVolumes.Deregister(actorUID)
@@ -1312,8 +1311,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		}
 	}
 
-	// Only after teardown: a Terminate that fails earlier leaves the actor
-	// running, and its volumes must keep refreshing until the retry.
+	// Deregister after teardown succeeds
 	s.systemInfoVolumes.Deregister(actorUID)
 
 	// Unmount external volumes

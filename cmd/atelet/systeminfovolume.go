@@ -75,7 +75,7 @@ type registeredActor struct {
 }
 
 // systemInfoVolumeRefresher writes system-info volumes when an actor starts
-// and rewrites them while it runs as the projected ClusterTrustBundles change.
+// and refreshes them as needed.
 type systemInfoVolumeRefresher struct {
 	lister    certlisters.ClusterTrustBundleLister
 	hasSynced cache.InformerSynced
@@ -90,8 +90,7 @@ type systemInfoVolumeRefresher struct {
 	actors map[string]*registeredActor
 }
 
-// newSystemInfoVolumeRefresher subscribes to ClusterTrustBundle events;
-// informer is nil only in unit tests.
+// newSystemInfoVolumeRefresher subscribes to ClusterTrustBundle events.
 func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, informer cache.SharedIndexInformer) *systemInfoVolumeRefresher {
 	r := &systemInfoVolumeRefresher{
 		lister: lister,
@@ -105,9 +104,9 @@ func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, i
 	return r
 }
 
-// Register records actorUID's system-info volumes (possibly none) and writes
-// their contents from current cluster state. Registering a UID that is still
-// registered is a lifecycle bug and panics.
+// Register records actorUID's system-info volumes and writes their contents
+// from current cluster state.
+// Double registering an actor causes a panic.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) error {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
 	// Held until the initial write finishes so a refresh cannot interleave.
@@ -132,16 +131,15 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 	return nil
 }
 
-// Deregister drops actorUID's registration. Once it returns nothing writes to
-// the actor's volumes again, so Checkpoint/Terminate may wipe the directories.
+// Deregister drops actorUID's registration.
 func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	r.mu.Lock()
 	actor := r.actors[actorUID]
 	delete(r.actors, actorUID)
 	r.mu.Unlock()
 	if actor != nil {
-		// Taking the lock waits out a write in progress; stale stops a refresh
-		// that snapshotted the entry before the delete.
+		// Setting stale stops a refresh that snapshotted the entry before
+		// the delete.
 		actor.mu.Lock()
 		actor.stale = true
 		actor.mu.Unlock()
@@ -189,9 +187,7 @@ func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID
 	return payload, bundleHashes, nil
 }
 
-// write brings the volume's files up to date. Unchanged files are left alone
-// and changed ones replaced by rename: restores re-bind guest state by real
-// path and inode.
+// write brings the volume's files up to date.
 func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID string, v *systemInfoVolume) error {
 	payload, bundleHashes, err := r.collectData(ref, actorUID, v.Spec)
 	if err != nil {
@@ -215,7 +211,7 @@ func (r *systemInfoVolumeRefresher) write(ref resources.ActorRef, actorUID strin
 }
 
 // writeSystemInfoFile writes one projected file inside root, skipping it if
-// the contents already match. relPath is validated again rather than trusted.
+// the contents already match. Also re-validates relPath.
 func writeSystemInfoFile(root *os.Root, relPath string, data []byte) error {
 	if err := volumepath.ValidateProjected(relPath); err != nil {
 		return fmt.Errorf("invalid system-info path %q: %w", relPath, err)
@@ -273,9 +269,7 @@ func writeFileAtomicRoot(root *os.Root, relPath string, data []byte, perm os.Fil
 	return d.Sync()
 }
 
-// eventHandler enqueues the bundle names an event touches; the run loop does
-// the writes. Deletes enqueue too: refreshBundle then keeps the last good
-// contents.
+// eventHandler enqueues the bundle names an event touches.
 func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 	enqueue := func(obj any) {
 		if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -296,8 +290,7 @@ func (r *systemInfoVolumeRefresher) eventHandler() cache.ResourceEventHandler {
 	}
 }
 
-// run drains the queue until ctx ends. One worker is enough: rotations are
-// rare and the queue coalesces them.
+// run drains the queue until ctx ends.
 func (r *systemInfoVolumeRefresher) run(ctx context.Context) {
 	defer r.queue.ShutDown()
 	if r.hasSynced != nil && !cache.WaitForCacheSync(ctx.Done(), r.hasSynced) {
@@ -328,8 +321,7 @@ func (r *systemInfoVolumeRefresher) processNextWorkItem(ctx context.Context) boo
 }
 
 // refreshBundle rewrites every registered volume that projects bundleName and
-// is behind its current contents. Files keep their last good contents on any
-// failure; only write errors requeue.
+// is behind its current contents.
 func (r *systemInfoVolumeRefresher) refreshBundle(ctx context.Context, bundleName string) error {
 	targets := r.projecting(bundleName)
 	if len(targets) == 0 {
@@ -378,8 +370,7 @@ func projectsBundle(si *ateletpb.SystemInfoVolume, bundleName string) bool {
 	return false
 }
 
-// projecting snapshots the actors with a volume projecting bundleName. Specs
-// never change after Register, so the registry lock suffices.
+// projecting snapshots the actors with a volume projecting bundleName.
 func (r *systemInfoVolumeRefresher) projecting(bundleName string) []*registeredActor {
 	r.mu.Lock()
 	defer r.mu.Unlock()
