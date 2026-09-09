@@ -1138,6 +1138,9 @@ func (x *EgressPolicy) GetRules() []*EgressRule {
 // metadata. Rules have the same meaning and validation as EgressPolicy.rules.
 type EgressPolicyTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// Rules are evaluated in order, with the same semantics as EgressPolicy.rules.
+	// A request is denied when no rule matches.
+	//
 	// +k8s:optional
 	// +k8s:maxItems=256
 	// +k8s:listType=atomic # rule order matters
