@@ -144,9 +144,8 @@ Container environment variables support literal `value` entries only. Values are
 ### Workload Connectivity
 
 A higher-order system reaches an actor through the **Substrate Router** by
-setting `ate-target-actor` to `<atespace>/<actor>`. Substrate does not provide
-DNS discovery for actors. This value selects the Actor; `Host` and HTTP/2
-`:authority` remain application metadata. Normal HTTP requirements still apply:
+setting `ate-target-actor` to `<atespace>/<actor>`. This value selects the Actor;
+`Host` and HTTP/2 `:authority` remain application metadata. Normal HTTP requirements still apply:
 clients must send a valid `Host` or `:authority`, usually derived automatically
 from the request URL, and reverse proxies should preserve it when the application
 depends on the original authority.

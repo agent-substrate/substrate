@@ -37,7 +37,7 @@ decision, and the mTLS hop to the worker:
 flowchart LR
     subgraph job["nighthawk runner Job"]
         alc["nighthawk_adaptive_load_client<br/>exponential ramp + binary search"]
-      svc["nighthawk_service<br/>16 event loops, actor headers<br/>rotated across all actors"]
+        svc["nighthawk_service<br/>16 event loops, actor headers<br/>rotated across all actors"]
         alc -->|gRPC| svc
     end
 
@@ -54,7 +54,7 @@ flowchart LR
         atunnel["atunnel :443"] --> glutton["glutton actor<br/>POST /ping :80"]
     end
 
-   svc -->|"HTTP :80<br/>ate-target-actor"| envoy
+    svc -->|"HTTP :80<br/>ate-target-actor"| envoy
     extproc -->|ResumeActor| ateapi
     envoy -->|"mTLS :443"| atunnel
 ```

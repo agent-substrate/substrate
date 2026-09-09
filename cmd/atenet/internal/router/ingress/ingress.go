@@ -18,8 +18,9 @@
 // saturated), and points the dataplane at the worker that ends up hosting it.
 //
 // Everything reaching this handler is unauthenticated client input. The
-// certificate authentication used for egress belongs to the sibling egress
-// package, and the two are kept apart deliberately.
+// opposite trust model — an actor identity carried by a CA-signed client
+// certificate — belongs to the sibling egress package, and the two are kept
+// apart deliberately.
 package ingress
 
 import (

@@ -100,7 +100,7 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle path is required")
 	}
 	if cfg.AllowedClientID == "" {
-		return nil, fmt.Errorf("atunnel: allowed client ID is required")
+		return nil, fmt.Errorf("atunnel: allowed client identity is required")
 	}
 	if cfg.Upstream == nil || cfg.Upstream.Scheme == "" || cfg.Upstream.Host == "" {
 		return nil, fmt.Errorf("atunnel: upstream URL is required")
@@ -469,7 +469,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	// ReverseProxy changes the URL destination but intentionally retains Host.
 	s.proxy.ServeHTTP(w, r.WithContext(requestCtx))
 }
 
