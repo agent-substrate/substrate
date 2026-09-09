@@ -165,7 +165,7 @@ func TestSetupActorNetworkFinalState(t *testing.T) {
 	withTestNetNS(t, func(interior netns.NsHandle) {
 		skipWithoutInetNAT(t)
 
-		if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
+		if _, err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
 			t.Fatalf("SetupActorNetwork: %v", err)
 		}
 
@@ -246,7 +246,7 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 		skipWithoutInetNAT(t)
 
 		for i := range 3 {
-			if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
+			if _, err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
 				t.Fatalf("SetupActorNetwork (activation %d): %v", i, err)
 			}
 			if linkByName(t, HostVethName) == nil {
@@ -346,7 +346,7 @@ func TestSetupActorNetworkEgressRedirect(t *testing.T) {
 	withTestNetNS(t, func(interior netns.NsHandle) {
 		skipWithoutInetNAT(t)
 
-		if err := SetupActorNetwork(ctx, NetworkConfig{
+		if _, err := SetupActorNetwork(ctx, NetworkConfig{
 			InteriorNetNS:      interior,
 			EgressRedirectPort: egressPort,
 		}); err != nil {
@@ -568,7 +568,7 @@ func TestSetupActorNetworkIPv6Gate(t *testing.T) {
 					tc.disable(t)
 				}
 
-				if err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
+				if _, err := SetupActorNetwork(ctx, NetworkConfig{InteriorNetNS: interior}); err != nil {
 					t.Fatalf("SetupActorNetwork: %v", err)
 				}
 
@@ -624,7 +624,7 @@ func TestSetupActorNetworkHostVethHWAddr(t *testing.T) {
 		skipWithoutInetNAT(t)
 
 		want := MustParseMAC("02:a8:1e:00:00:01")
-		if err := SetupActorNetwork(ctx, NetworkConfig{
+		if _, err := SetupActorNetwork(ctx, NetworkConfig{
 			InteriorNetNS:      interior,
 			HostVethHWAddr:     want,
 			SweepInteriorLinks: true,
@@ -660,7 +660,7 @@ func TestSetupActorNetworkSweepsInteriorLinks(t *testing.T) {
 			t.Fatalf("planting a leftover interior link: %v", err)
 		}
 
-		if err := SetupActorNetwork(ctx, NetworkConfig{
+		if _, err := SetupActorNetwork(ctx, NetworkConfig{
 			InteriorNetNS:      interior,
 			SweepInteriorLinks: true,
 		}); err != nil {

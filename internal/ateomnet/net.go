@@ -59,8 +59,10 @@ const (
 	ActorVethIPv6Gateway = "fd00:169:254::1"
 	ActorVethIPv6IP      = "fd00:169:254::2"
 
-	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
-	ActorVethSubnet = "169.254.17.0/30"
+	// ActorVethSubnet is the point-to-point /30 the actor veth lives on, and
+	// ActorVethIPv6Subnet is its /126 counterpart.
+	ActorVethSubnet     = "169.254.17.0/30"
+	ActorVethIPv6Subnet = "fd00:169:254::/126"
 )
 
 var (
@@ -630,6 +632,19 @@ func DumpNetInfo(ctx context.Context, prefix string) error {
 	return nil
 }
 
+// ActorNetwork is what SetupActorNetwork configured, for a caller that cannot
+// read it back out of the interior netns. gVisor can: runsc adopts that
+// namespace's links, addresses and routes as the guest's own. A micro-VM cannot
+// -- its interior veth is cross-connected to a tap at L2, so the L3 state there
+// is inert and the guest has to be told over the kata-agent channel.
+//
+// The zero value is the IPv4-only configuration, which is also what an error
+// return leaves behind.
+type ActorNetwork struct {
+	// IPv6 reports whether the actor veth was given its IPv6 address.
+	IPv6 bool
+}
+
 type NetworkConfig struct {
 	// InteriorNetNS is the target network namespace for the actor's veth pair peer.
 	// Used by: Both gVisor and MicroVM.
@@ -655,7 +670,7 @@ type NetworkConfig struct {
 
 // SetupActorNetwork builds a fresh point-to-point network between the worker
 // pod netns and the interior netns.
-func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
+func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (_ ActorNetwork, retErr error) {
 	// Build a fresh point-to-point network between the worker pod netns and the
 	// gVisor interior netns. The worker side keeps the pod's real eth0 and creates
 	// ateom0 as the gateway; the pair's peer is born inside the actor netns as
@@ -670,7 +685,7 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	// Clean up stale state from a failed prior activation before creating the
 	// next actor-side network. The worker currently runs one actor at a time.
 	if err := CleanupActorNetwork(ctx, cfg.InteriorNetNS); err != nil {
-		return fmt.Errorf("failed to clean up stale actor network before setup: %w", err)
+		return ActorNetwork{}, fmt.Errorf("failed to clean up stale actor network before setup: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
@@ -696,7 +711,7 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 			}
 			return nil
 		}); err != nil {
-			return err
+			return ActorNetwork{}, err
 		}
 	}
 
@@ -720,15 +735,15 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	}
 
 	if err := netlink.LinkAdd(veth); err != nil {
-		return fmt.Errorf("while creating actor veth pair: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while creating actor veth pair: %w", err)
 	}
 
 	hostLink, err := netlink.LinkByName(HostVethName)
 	if err != nil {
-		return fmt.Errorf("while getting host veth: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while getting host veth: %w", err)
 	}
 	if err := netlink.AddrReplace(hostLink, HostVethAddr); err != nil {
-		return fmt.Errorf("while assigning host veth address: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while assigning host veth address: %w", err)
 	}
 	// Decided once, here in the worker pod netns, and carried into the interior
 	// netns below. Probing separately on each side would let them disagree: the
@@ -746,39 +761,39 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	actorIPv6 := podIPv6 && vethIPv6
 	if actorIPv6 {
 		if err := netlink.AddrReplace(hostLink, HostVethIPv6Addr); err != nil {
-			return fmt.Errorf("while assigning host veth ipv6 address: %w", err)
+			return ActorNetwork{}, fmt.Errorf("while assigning host veth ipv6 address: %w", err)
 		}
 	} else {
 		slog.DebugContext(ctx, "actor networking is IPv4-only",
 			"link", HostVethName, "podHasGlobalIPv6", podIPv6, "vethIPv6Enabled", vethIPv6)
 	}
 	if err := netlink.LinkSetUp(hostLink); err != nil {
-		return fmt.Errorf("while bringing up host veth: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while bringing up host veth: %w", err)
 	}
 
 	if err := NetNSDo(ctx, cfg.InteriorNetNS, func(ctx context.Context) error {
 		return ConfigureActorVeth(ctx, actorIPv6)
 	}); err != nil {
-		return fmt.Errorf("while configuring actor veth in interior netns: %w", err)
+		return ActorNetwork{}, fmt.Errorf("while configuring actor veth in interior netns: %w", err)
 	}
 
 	if err := EnableIPv4Forwarding(); err != nil {
-		return err
+		return ActorNetwork{}, err
 	}
 	if err := InstallActorNftablesRules(cfg.EgressRedirectPort); err != nil {
-		return err
+		return ActorNetwork{}, err
 	}
 
 	if cfg.DumpNetInfo {
 		if err := DumpNetInfo(ctx, "Pod NetNS "); err != nil {
-			return fmt.Errorf("while dumping pod netns links: %w", err)
+			return ActorNetwork{}, fmt.Errorf("while dumping pod netns links: %w", err)
 		}
 		if err := NetNSDo(ctx, cfg.InteriorNetNS, func(ctx context.Context) error {
 			return DumpNetInfo(ctx, "Interior NetNS ")
 		}); err != nil {
-			return fmt.Errorf("while dumping interior netns links: %w", err)
+			return ActorNetwork{}, fmt.Errorf("while dumping interior netns links: %w", err)
 		}
 	}
 
-	return nil
+	return ActorNetwork{IPv6: actorIPv6}, nil
 }

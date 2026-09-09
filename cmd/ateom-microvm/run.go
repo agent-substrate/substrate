@@ -411,7 +411,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Networking (host side): per-activation veth into the interior netns. The
 	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+	if _, err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
 		InteriorNetNS:      s.interiorNetNS,
 		HostVethHWAddr:     hostVethHWAddr,
 		SweepInteriorLinks: true,

@@ -643,7 +643,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err != nil {
 		return nil, err
 	}
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+	if _, err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
 		InteriorNetNS:      s.interiorNetNS,
 		DumpNetInfo:        true,
 		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
@@ -922,7 +922,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err != nil {
 		return nil, err
 	}
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+	if _, err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
 		InteriorNetNS:      s.interiorNetNS,
 		DumpNetInfo:        true,
 		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
