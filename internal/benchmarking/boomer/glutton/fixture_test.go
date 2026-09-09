@@ -32,6 +32,7 @@ type fakeControlClient struct {
 	mu          sync.Mutex
 	calls       []string
 	resumeBoots []bool
+	resumeErr   error
 }
 
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
@@ -53,6 +54,9 @@ func (f *fakeControlClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "ResumeActor")
 	f.resumeBoots = append(f.resumeBoots, in.GetBoot())
+	if f.resumeErr != nil {
+		return nil, f.resumeErr
+	}
 	return &ateapipb.ResumeActorResponse{}, nil
 }
 
