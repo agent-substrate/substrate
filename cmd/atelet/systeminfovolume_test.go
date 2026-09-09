@@ -34,9 +34,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// ctbStore is a mutable stand-in for the informer cache: tests rotate the
-// backing ClusterTrustBundle by replacing it in the indexer, the way watch
-// events replace it in production.
+// ctbStore stands in for the informer cache; set replaces the backing
+// ClusterTrustBundle the way a watch event would.
 type ctbStore struct {
 	indexer cache.Indexer
 	lister  certlisters.ClusterTrustBundleLister
@@ -98,8 +97,7 @@ func metadataVolumeSpec() *ateletpb.SystemInfoVolume {
 }
 
 // registerTrustVolume registers actorUID with one volume projecting the
-// egress bundle at trust/ca.pem, rooted under a temp actors dir mirroring
-// ateompath's <actorsDir>/<uid>/system-info/<volume> shape.
+// egress bundle at <dir>/<uid>/system-info/trust/ca.pem.
 func registerTrustVolume(t *testing.T, r *systemInfoVolumeRefresher, dir, actorUID string) {
 	t.Helper()
 	vol := &systemInfoVolume{
@@ -148,9 +146,9 @@ func TestSystemInfoVolumeRefresher_RefreshesRunningActorsOnChange(t *testing.T) 
 		}
 	}
 
-	// A replayed event for unchanged contents (relist, daily resync) must
-	// not rewrite the files — a no-op rewrite still replaces the inode. The
-	// sentinel stands in for inode identity.
+	// A replayed event for unchanged contents (relist, resync) must not
+	// rewrite the file, since a rewrite replaces the inode. The sentinel
+	// stands in for the inode.
 	sentinelPath := filepath.Join(dir, "uid-1", "system-info", "trust", "ca.pem")
 	if err := os.WriteFile(sentinelPath, []byte("sentinel"), 0o644); err != nil {
 		t.Fatal(err)
@@ -243,9 +241,8 @@ func TestSystemInfoVolumeRefresher_RegisterEmptyStopsRefreshing(t *testing.T) {
 	}
 }
 
-// TestSystemInfoVolumeRefresher_RegisterRewritesFromCurrentState pins the
-// no-persistence restart story: a fresh refresher knows nothing of past
-// writes, so the next Run/Restore applies any rotation missed in between.
+// A fresh refresher (atelet restarted) applies any rotation it missed while
+// down at the next Register.
 func TestSystemInfoVolumeRefresher_RegisterRewritesFromCurrentState(t *testing.T) {
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
@@ -305,9 +302,8 @@ func TestSystemInfoVolumeRefresher_WriteFailureIsolatedAndRetried(t *testing.T) 
 	}
 }
 
-// TestSystemInfoVolumeRefresher_EventPipelineRetriesFailedWrites drives the
-// informer-to-workqueue path end to end: events only enqueue, the run loop
-// writes, and a failed write requeues with backoff until it lands.
+// An event goes through the queue and run loop, and a failed write requeues
+// until it lands.
 func TestSystemInfoVolumeRefresher_EventPipelineRetriesFailedWrites(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permission-based write-failure injection needs non-root")
@@ -352,9 +348,8 @@ func TestSystemInfoVolumeRefresher_EventPipelineRetriesFailedWrites(t *testing.T
 	}
 }
 
-// TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone pins the
-// identical-contents skip: a rotation rewrites the bundle file but not the
-// volume's metadata files. mtime stands in for inode identity.
+// A rotation rewrites the bundle file but not the volume's other files. mtime
+// stands in for the inode.
 func TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone(t *testing.T) {
 	ctx := context.Background()
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
@@ -435,9 +430,8 @@ func TestSystemInfoVolumeRegister_WritesActorMetadata(t *testing.T) {
 	}
 }
 
-// TestSystemInfoVolumeRegister_StableRealPaths pins the restore contract:
-// virtiofsd (find-paths mode) and gVisor's gofer re-bind suspend-time guest
-// state by recorded path, so regeneration must not move or drop real paths.
+// Restores re-bind guest state by the paths recorded at suspend, so
+// regeneration must not move or drop real paths.
 func TestSystemInfoVolumeRegister_StableRealPaths(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
 	r := newSystemInfoVolumeRefresher(nil, nil)
@@ -489,9 +483,8 @@ func TestSystemInfoVolumeRegister_StableRealPaths(t *testing.T) {
 	}
 }
 
-// TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh pins the
-// two-level locking: a refresh stuck writing one actor must not block
-// Register or Deregister of other actors.
+// A refresh stuck writing one actor must not block Register or Deregister of
+// other actors.
 func TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh(t *testing.T) {
 	ctx := context.Background()
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
@@ -586,9 +579,7 @@ func TestSystemInfoVolumesFor(t *testing.T) {
 	}
 }
 
-// TestSystemInfoVolumeRefresher_ConcurrentLifecycle hammers Register,
-// Deregister, rotation, and refresh together; the race detector guards the
-// two-level locking.
+// Register, Deregister, and refresh run concurrently for the race detector.
 func TestSystemInfoVolumeRefresher_ConcurrentLifecycle(t *testing.T) {
 	ctx := context.Background()
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
@@ -632,9 +623,8 @@ func TestSystemInfoVolumeRefresher_ConcurrentLifecycle(t *testing.T) {
 	wg.Wait()
 }
 
-// TestWriteSystemInfoFile_ConfinedToRoot pins os.Root confinement: a
-// symlinked directory inside the volume cannot route a projected file
-// outside it, which path-string validation alone cannot catch.
+// A symlink inside the volume must not route a projected file outside it;
+// path validation alone cannot catch that.
 func TestWriteSystemInfoFile_ConfinedToRoot(t *testing.T) {
 	dir := t.TempDir()
 	volRoot := filepath.Join(dir, "vol")

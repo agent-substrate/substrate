@@ -64,7 +64,7 @@ type whoamiResponse struct {
 // micro-VM lane enforces that the hardest: virtiofsd's find-paths migration
 // re-opens recorded paths on restore, and a path that moved leaves the guest
 // reference faulty (EIO under --migration-on-error=guest-error), which the
-// held-fd assertion below catches — a write scheme that relocates real files
+// held-fd assertion below catches. A write scheme that relocates real files
 // (e.g. a timestamped-directory symlink swap) would break every held fd of
 // any actor that ever touched a system-info file.
 func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
@@ -152,13 +152,9 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 		seenUIDs[got.UID] = id
 	}
 
-	// Live refresh: rotate the pool while both actors RUN — no suspend, no
-	// resume — and wait until each observes the new sanitized contents at
-	// the same path. atelet's informer rewrites the projected file (temp +
-	// rename at the stable path) for every running actor that projects the
-	// bundle, and both runtimes must surface the host-side rename on their
-	// next read (gVisor revalidating the bind mount through the gofer, the
-	// micro-VM through virtio-fs).
+	// Live refresh: rotate the pool while both actors run and wait until each
+	// sees the new sanitized contents at the same path. Both runtimes must
+	// surface the host-side rename on their next read.
 	liveTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-live")
 	for _, id := range ids {
 		waitForTrust(t, ctx, rc, id, liveTrust)
@@ -169,10 +165,9 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// held fd from probe startup plus the freshly indexed file inodes — and the
 	// resume regenerates every file underneath that state.
 	//
-	// The trust bundle is rotated first, and the suspend deliberately does
-	// NOT wait for the rotation to propagate live: whichever side of the
-	// suspend the live rewrite lands on, the resumed actor must observe the
-	// rotated sanitized contents at the same path.
+	// The bundle is rotated first and the suspend does not wait for the live
+	// rewrite: whichever side of the suspend it lands on, the resumed actor
+	// must see the rotated contents.
 	rotatedTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
@@ -207,10 +202,8 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	waitForTrust(t, ctx, rc, ids[1], rotatedTrust)
 }
 
-// waitForTrust polls the probe until its projected trust bundle equals want:
-// the live-refresh chain (reconciler -> ClusterTrustBundle -> atelet informer
-// -> host rewrite -> guest revalidation) exposes no completion signal to wait
-// on.
+// waitForTrust polls the probe until its projected trust bundle equals want;
+// live refresh has no completion signal to wait on.
 func waitForTrust(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
@@ -294,8 +287,7 @@ func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) 
 	return out
 }
 
-// tryWhoami is whoami without the fatality, for polls that must ride out a
-// transient router or port-forward hiccup.
+// tryWhoami is whoami returning the error instead of failing the test.
 func tryWhoami(ctx context.Context, rc *e2e.RouterClient, id string) (whoamiResponse, error) {
 	var out whoamiResponse
 	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, "/whoami")

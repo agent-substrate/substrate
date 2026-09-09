@@ -34,9 +34,8 @@ const EgressTrustBundleName = "egress-mitm.ate.dev"
 // may reference to their backing ClusterTrustBundles. Enforced here so a
 // configurable backend registry (#932) can widen it without an API change.
 //
-// TODO(#932): select bundles by signer name + label selector (merging the
-// matches) instead of one direct object, so a new root can be trialed on a
-// fraction of workloads before it reaches all of them.
+// TODO(#932): select by signer name + label selector, merging the matches, so
+// a new root can be trialed on a subset of workloads.
 var supportedTrustBundles = map[string]string{
 	EgressTrustBundleName: "egress-mitm.ate.dev:mitm:primary-bundle",
 }
@@ -63,9 +62,8 @@ func bundleNamesFor(objectName string) []string {
 	return names
 }
 
-// rawTrustBundle returns the unsanitized contents of the named trust
-// bundle's backing ClusterTrustBundle, resolving the name against the
-// allowlist and reading through atelet's informer-backed lister.
+// rawTrustBundle returns the unsanitized contents of the ClusterTrustBundle
+// backing the allowlisted bundle name.
 func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (objectName, raw string, err error) {
 	objectName, supported := supportedTrustBundles[name]
 	if !supported {
@@ -80,9 +78,8 @@ func rawTrustBundle(lister certlisters.ClusterTrustBundleLister, name string) (o
 	return objectName, bundle.Spec.TrustBundle, nil
 }
 
-// trustBundleHash fingerprints raw backing contents. Refreshes compare this,
-// never the projected bytes: sanitization shuffles the anchors, so two
-// projections of identical contents differ byte-wise.
+// trustBundleHash hashes the raw backing contents. The sanitized output is
+// not comparable: it shuffles the anchors on every call.
 func trustBundleHash(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
