@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -44,7 +45,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // the sentry. runsc starts that process from the root container's create and
 // from inside that container's cgroup — container.createRoot wraps the sandbox
 // and gofer spawn in cgroup.RunInCgroup — so the sentry lands in the leaf of
-// "pause", the first container RunWorkload and RestoreWorkload create.
+// the pause container, the first one RunWorkload and RestoreWorkload create.
 //
 // The leaf is a direct child of the delegated scope rather than of ateom's own
 // cgroup, because runsc resolves cgroupsPath against the parent of the cgroup
@@ -70,7 +71,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // What the leaf holds besides the actor's own work: the sentry's own overhead
 // (its Go heap, page tables, netstack) and the gofers. Process listings taken
 // on a live node in #161 put runsc-sandbox and both gofers — the pause
-// container's and the actor container's — in the "pause" cgroup. Those runs
+// container's and the actor container's — in the pause cgroup. Those runs
 // predate #496, so they establish the leaf name and the fact that everything
 // lands in one leaf, not the absolute path, which #496's delegation moved under
 // the pod scope.
@@ -86,7 +87,7 @@ const defaultCgroupRoot = "/sys/fs/cgroup"
 // The name has to agree with the cgroupsPath convention in
 // ocispec.ShapeGVisor, which is "/" + containerName relative to the same
 // scope.
-const sandboxCgroupContainer = "pause"
+const sandboxCgroupContainer = ocispec.PauseContainer
 
 // GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
 //
