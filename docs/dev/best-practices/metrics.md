@@ -58,8 +58,9 @@ Rules of thumb:
   state to enumerate at collection time.
 * **Do not use a gauge for something that is a sum.** Worker counts are an
   UpDownCounter because idle plus assigned is the pool and the pools sum to the
-  fleet. Memory working set is a gauge because summing it across templates is
-  not a meaningful number.
+  fleet. Reserve a gauge for a level whose sum across labels means nothing: a
+  ratio, an age, a temperature. If you find yourself writing `sum by` over it
+  in a query, it was an UpDownCounter.
 * **Do not add a failure counter next to a success counter.** One instrument,
   with the failure on `error.type` or `ate.failure.reason`; the key's absence
   means success. See [Reporting failures](#reporting-failures).
@@ -110,7 +111,7 @@ divides one by another.
 
 Every histogram sets explicit bucket boundaries. The SDK defaults (`0, 5, 10,
 25 … 10000`) were chosen for milliseconds and are wrong for a value recorded in
-seconds: everything under five seconds lands in one bucket. Pick boundaries
+seconds: everything between zero and five seconds lands in one bucket. Pick boundaries
 that cover both ends of what you have seen, and write down in a comment which
 ends those are. Reuse an existing set when the quantity is comparable:
 
@@ -161,11 +162,12 @@ group or filter by multiplies the series count for nothing. Three or four
 labels is typical; the restore histogram, with the most, has eight, and several
 are conditional.
 
-The SDK enforces a hard limit: 2000 distinct attribute sets per instrument per
-process. Past that, every new combination is folded into one series carrying
-only `otel.metric.overflow=true`, silently. Multiply the value counts of your
-labels and keep the product well under that; the limit is per process, so a
-per-template label on atelet is bounded by the templates one node hosts, not
+The SDK enforces a hard limit: 2000 distinct attribute sets per instrument,
+held per reader (`OTEL_GO_X_CARDINALITY_LIMIT` changes it; unset means 2000).
+Past that, every new combination is folded into one series carrying only
+`otel.metric.overflow=true`, silently. Multiply the value counts of your labels
+and keep the product well under that. The limit applies inside one process, so
+a per-template label on atelet is bounded by the templates one node hosts, not
 the cluster.
 
 ## Reporting failures
@@ -222,7 +224,8 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 
 // recordRequest counts one lookup. kind is known before the lookup starts, so
 // the label is present on every outcome, which is what lets the registry mark
-// it required.
+// it required. failureOutcome and errorType are the same two helpers as in
+// internal/imagecache/metrics.go.
 func (i *Instruments) recordRequest(ctx context.Context, kind, outcome string, err error) {
 	if i == nil || i.requests == nil {
 		return
@@ -273,16 +276,18 @@ For a value you can enumerate at collection time, register a callback rather
 than tracking increments:
 
 ```go
-gauge, err := meter.Int64ObservableGauge(entriesMetric,
+// Counts per kind sum to the cache's total, so this is an UpDownCounter and
+// not a gauge; observable, because the cache index is the truth to read.
+entries, err := meter.Int64ObservableUpDownCounter(entriesMetric,
 	metric.WithUnit("{snapshot}"),
 	metric.WithDescription("Number of snapshots held in the node-local cache."))
 ...
 _, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 	for kind, n := range cache.countByKind() {
-		o.ObserveInt64(gauge, n, metric.WithAttributes(ateattr.SnapshotKindKey.String(kind)))
+		o.ObserveInt64(entries, n, metric.WithAttributes(ateattr.SnapshotKindKey.String(kind)))
 	}
 	return nil
-}, gauge)
+}, entries)
 ```
 
 Two habits from `RegisterWorkerCount` in ateapi: if the source is unavailable,
@@ -400,7 +405,7 @@ permitted value as a member. Put a new group beside `registry.ate.imagecache`:
       substrate:
         emitted_by: [atelet]
         golden_signals: [latency, errors]
-        code_anchor: cmd/atelet/snapshotcache/metrics.go
+        code_anchor: cmd/atelet/internal/snapshotcache/metrics.go
         cuj: Resumes became slower on one node. Does the snapshot cache miss?
     attributes:
       - ref: ate.snapshotcache.outcome
@@ -457,7 +462,7 @@ which question the panel answers.
 
 A cache in front of snapshot downloads, in atelet, wants to answer: is the cache
 helping, how much does a miss cost, and how much disk does it hold. That is
-three instruments, not one:
+four instruments, not one:
 
 | Question | Instrument | Labels |
 |---|---|---|
@@ -477,18 +482,20 @@ Steps, in order:
    `SnapshotCacheEvictionReasonKey`, and their value constants. Reuse
    `SnapshotKindKey`, `TemplateAtespaceKey`, `TemplateNameKey`, `ErrorTypeKey`,
    `FailureAttributes`.
-2. `cmd/atelet/snapshotcache/metrics.go`: the `Instruments` struct, constructor
+2. `cmd/atelet/internal/snapshotcache/metrics.go` (a package one binary uses
+   goes under `cmd/<binary>/internal/`): the `Instruments` struct, constructor
    against a `metric.Meter`, nil-safe `record*` methods, the size callback
    reading the cache's index under its existing lock.
 3. `cmd/atelet/main.go`: build the instruments with `otel.Meter("atelet")` and
    pass them into the cache.
-4. `cmd/atelet/snapshotcache/metrics_test.go`: `ManualReader`; a miss-then-hit
+4. `cmd/atelet/internal/snapshotcache/metrics_test.go`: `ManualReader`; a miss-then-hit
    test, a failure test asserting `error.type` only on `error`, an eviction
    test per reason, a size test after an insert and an evict.
 5. `docs/metrics/registry/metrics.yaml`: the `registry.ate.snapshotcache`
    attribute group and the four metric entries; `hack/verify/metrics.sh`.
-6. `docs/metrics/substrate.yaml`: the existing `image cache cost and eviction`
-   blind spot describes the same gap for the image cache; leave it, but do not
-   add a matching one for snapshots.
+6. `docs/metrics/substrate.yaml`: nothing to add. The size and eviction
+   instruments ship with the cache, so it starts with no blind spot; the
+   `image cache cost and eviction` entry there is the image cache's gap, not
+   this one's.
 7. `docs/observability.md`: four rows in the table, one paragraph on the
    outcome semantics.
