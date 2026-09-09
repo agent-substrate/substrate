@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -228,6 +229,7 @@ func TestSystemInfoVolumeRefresher_RegisterEmptyStopsRefreshing(t *testing.T) {
 
 	// The actor comes back under a spec with no system-info volumes: it stays
 	// tracked, but its former volumes stop refreshing.
+	r.Deregister("uid-1")
 	if err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil); err != nil {
 		t.Fatalf("Register(empty): %v", err)
 	}
@@ -533,28 +535,54 @@ func TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh(t *testing.T)
 	}
 }
 
-// TestSystemInfoVolumeRefresher_StaleFence pins the fence closing the
-// snapshot race: an entry superseded by Register or removed by Deregister is
-// marked stale, so a refresh that snapshotted it earlier skips it instead of
-// writing into directories being replaced or wiped.
-func TestSystemInfoVolumeRefresher_StaleFence(t *testing.T) {
-	certA := string(testCertPEM(t))
+// A refresh that snapshotted an entry before Deregister removed it must see
+// it marked stale and skip it.
+func TestSystemInfoVolumeRefresher_DeregisterMarksStale(t *testing.T) {
 	store := newCTBStore(t)
-	store.set(t, certA)
+	store.set(t, string(testCertPEM(t)))
 	r := newSystemInfoVolumeRefresher(store.lister, nil)
 	dir := t.TempDir()
 
 	registerTrustVolume(t, r, dir, "uid-1")
-	old := r.actors["uid-1"]
-	registerTrustVolume(t, r, dir, "uid-1")
-	if !old.stale {
-		t.Error("replacement left the superseded entry unfenced")
-	}
-
 	cur := r.actors["uid-1"]
 	r.Deregister("uid-1")
 	if !cur.stale {
 		t.Error("Deregister left the removed entry unfenced")
+	}
+}
+
+func TestSystemInfoVolumeRefresher_RegisterTwicePanics(t *testing.T) {
+	store := newCTBStore(t)
+	store.set(t, string(testCertPEM(t)))
+	r := newSystemInfoVolumeRefresher(store.lister, nil)
+	dir := t.TempDir()
+	registerTrustVolume(t, r, dir, "uid-1")
+
+	defer func() {
+		if recover() == nil {
+			t.Error("Register of a still-registered UID did not panic")
+		}
+	}()
+	_ = r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil)
+}
+
+func TestSystemInfoVolumesFor(t *testing.T) {
+	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{
+		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+		{Name: "trust", Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")}},
+		{Name: "meta", Source: &ateletpb.Volume_SystemInfo{SystemInfo: metadataVolumeSpec()}},
+	}}
+	got := systemInfoVolumesFor("uid-1", spec)
+	if len(got) != 2 || got[0].Name != "trust" || got[1].Name != "meta" {
+		t.Fatalf("systemInfoVolumesFor = %+v, want the two system-info volumes in spec order", got)
+	}
+	for _, v := range got {
+		if want := ateompath.SystemInfoVolumeRoot("uid-1", v.Name); v.Root != want || v.Spec == nil {
+			t.Errorf("volume %q: root %q spec %v, want root %q and a spec", v.Name, v.Root, v.Spec, want)
+		}
+	}
+	if got := systemInfoVolumesFor("uid-1", &ateletpb.WorkloadSpec{}); len(got) != 0 {
+		t.Errorf("systemInfoVolumesFor(no volumes) = %+v, want none", got)
 	}
 }
 

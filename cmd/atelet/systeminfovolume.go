@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/pemutil"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -47,6 +48,21 @@ type systemInfoVolume struct {
 	// appliedHashes maps each projected bundle name to the trustBundleHash
 	// last written into this volume.
 	appliedHashes map[string]string
+}
+
+// systemInfoVolumesFor lists spec's system-info volumes with their host roots.
+func systemInfoVolumesFor(actorUID string, spec *ateletpb.WorkloadSpec) []*systemInfoVolume {
+	var volumes []*systemInfoVolume
+	for _, vol := range spec.GetVolumes() {
+		if si := vol.GetSystemInfo(); si != nil {
+			volumes = append(volumes, &systemInfoVolume{
+				Name: vol.GetName(),
+				Root: ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName()),
+				Spec: si,
+			})
+		}
+	}
+	return volumes
 }
 
 type registeredActor struct {
@@ -94,48 +110,43 @@ func newSystemInfoVolumeRefresher(lister certlisters.ClusterTrustBundleLister, i
 	return r
 }
 
-// Register records actorUID's system-info volumes — possibly none, every
-// actor is tracked — and writes their complete contents from current cluster
-// state, replacing any prior registration. Fail-closed: an actor that
-// declared a projection must not start without it.
+// Register records actorUID's system-info volumes (possibly none) and writes
+// their contents from current cluster state. Registering a UID that is still
+// registered is a lifecycle bug and panics.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) error {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
-	// Locked before publication: a refresher that snapshots the new entry
-	// blocks until the initial population below finishes.
+	// Held until the initial write finishes so a refresh cannot interleave.
 	actor.mu.Lock()
 	defer actor.mu.Unlock()
 
 	r.mu.Lock()
-	old := r.actors[actorUID]
-	r.actors[actorUID] = actor
+	_, dup := r.actors[actorUID]
+	if !dup {
+		r.actors[actorUID] = actor
+	}
 	r.mu.Unlock()
-
-	if old != nil {
-		// Same actor, same directories: drain any refresh mid-write under
-		// the superseded registration and fence late snapshots of it.
-		old.mu.Lock()
-		old.stale = true
-		old.mu.Unlock()
+	if dup {
+		panic(fmt.Sprintf("system-info volumes: actor %s registered twice", actorUID))
 	}
 
 	for _, v := range volumes {
 		if err := r.write(ref, actorUID, v); err != nil {
-			actor.stale = true // half-populated; the caller deregisters on failure
 			return fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
 		}
 	}
 	return nil
 }
 
-// Deregister drops actorUID's registration once the sandbox is down (or
-// never came up). It returns only after any in-flight write to the actor's
-// volumes finishes, so Checkpoint/Terminate can wipe its directories safely.
+// Deregister drops actorUID's registration. Once it returns nothing writes to
+// the actor's volumes again, so Checkpoint/Terminate may wipe the directories.
 func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	r.mu.Lock()
 	actor := r.actors[actorUID]
 	delete(r.actors, actorUID)
 	r.mu.Unlock()
 	if actor != nil {
+		// Taking the lock waits out a write in progress; stale stops a refresh
+		// that snapshotted the entry before the delete.
 		actor.mu.Lock()
 		actor.stale = true
 		actor.mu.Unlock()

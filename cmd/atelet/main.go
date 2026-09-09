@@ -264,12 +264,6 @@ func main() {
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
-	// Watch only the ClusterTrustBundle we care about (currently the egress
-	// bundle); the field selector makes this factory unusable for any other
-	// type. The v1beta1 API is feature-gated: on a cluster that does not
-	// serve it, startup blocks at WaitForCacheSync below, with the
-	// reflector's errors naming the missing API. The 24h resync guards
-	// against missed watch events; failed writes retry via the workqueue.
 	clusterTrustBundleInformerFactory := informers.NewSharedInformerFactoryWithOptions(k8sClient, 24*time.Hour,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
 			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
@@ -295,9 +289,6 @@ func main() {
 		csiDriverConfigLister,
 		systemInfoVolumes,
 	)
-
-	// Live-refresh projected trust bundles: bundle events enqueue, and the
-	// run loop rewrites the files of registered running actors.
 	go systemInfoVolumes.run(ctx)
 
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
@@ -318,7 +309,6 @@ func main() {
 	// it would never list or watch. Start is idempotent per informer — this
 	// launches the new one and leaves the already-running ones untouched.
 	ateFactory.Start(stopCh)
-
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
@@ -506,13 +496,14 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	// prepareOCIBundles registers system-info volumes for live refresh; leave
-	// no registration behind for a sandbox that never came up.
 	defer func() {
 		if err != nil {
 			s.systemInfoVolumes.Deregister(actorUID)
 		}
 	}()
+	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+		return nil, err
+	}
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
 		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
 	); err != nil {
@@ -668,8 +659,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
-	// The sandbox is down from here on (CheckpointWorkload deletes the
-	// containers): stop refreshing its system-info volumes.
+	// CheckpointWorkload tore the sandbox down; stop refreshing its volumes.
 	s.systemInfoVolumes.Deregister(actorUID)
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
@@ -1116,6 +1106,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		runtimeRec = goldenRec
 	}
 
+	// Undo the Register in the prep goroutine below if the restore fails.
+	defer func() {
+		if err != nil {
+			s.systemInfoVolumes.Deregister(actorUID)
+		}
+	}()
+
 	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
 	// CONCURRENTLY. They are independent — only the final ateom.RestoreWorkload
 	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
@@ -1123,15 +1120,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
 	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
 	// copied to checkpointDir for the LOCAL case.
-
-	// prepareOCIBundles registers system-info volumes for live refresh; leave
-	// no registration behind for a restore that fails.
-	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
-		}
-	}()
-
 	var assetPaths map[string]string
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
@@ -1192,6 +1180,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
+		}
+		if err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
+			return err
 		}
 		t := time.Now()
 		err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
@@ -1313,9 +1305,8 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		}
 	}
 
-	// The sandbox is down: stop refreshing its system-info volumes. Not
-	// earlier — a Terminate that fails before teardown leaves the actor
-	// running, and it must keep refreshing until the retry succeeds.
+	// Only after teardown: a Terminate that fails earlier leaves the actor
+	// running, and its volumes must keep refreshing until the retry.
 	s.systemInfoVolumes.Deregister(actorUID)
 
 	// Unmount external volumes
@@ -1571,8 +1562,7 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with. It also registers and populates system-info volumes; the caller
-// deregisters if the start later fails.
+// with.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1582,28 +1572,14 @@ func (s *AteomHerder) prepareOCIBundles(
 	targetAteomUid string,
 ) error {
 	// Prepare host folders for volume types that need them.
-	var siVolumes []*systemInfoVolume
 	for _, vol := range spec.GetVolumes() {
-		switch volSrc := vol.GetSource().(type) {
+		switch vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
 			}
-
-		case *ateletpb.Volume_SystemInfo:
-			siVolumes = append(siVolumes, &systemInfoVolume{
-				Name: vol.GetName(),
-				Root: ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName()),
-				Spec: volSrc.SystemInfo,
-			})
 		}
-	}
-	// Registering before boot makes the files carry the values of the actor
-	// actually being started, whatever checkpointed state it boots from, and
-	// keeps them current while it runs.
-	if err := s.systemInfoVolumes.Register(actorUID, actorRef, siVolumes); err != nil {
-		return err
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -1659,10 +1635,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return err
-	}
-	return nil
+	return g.Wait()
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
