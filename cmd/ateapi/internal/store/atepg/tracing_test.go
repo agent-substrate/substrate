@@ -141,6 +141,38 @@ func TestQueryTracerSkipsWithoutSampledParent(t *testing.T) {
 	}
 }
 
+// recordOnlySampler records every span without sampling it, the one
+// decision that yields a parent that is recording yet not sampled.
+type recordOnlySampler struct{}
+
+func (recordOnlySampler) ShouldSample(sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	return sdktrace.SamplingResult{Decision: sdktrace.RecordOnly}
+}
+
+func (recordOnlySampler) Description() string { return "RecordOnly" }
+
+func TestQueryTracerLeavesRecordOnlyParentOpen(t *testing.T) {
+	t.Parallel()
+	qt, _, sr := newTestQueryTracer(t)
+	recordOnly := sdktrace.NewTracerProvider(sdktrace.WithSampler(recordOnlySampler{}), sdktrace.WithSpanProcessor(sr))
+	ctx, parent := recordOnly.Tracer("test").Start(context.Background(), "parent")
+	if parent.SpanContext().IsSampled() || !parent.IsRecording() {
+		t.Fatal("test setup: parent must be recording but not sampled")
+	}
+
+	// The statement is skipped because the parent is not sampled. Ending it
+	// must not touch the parent, which is the span the context now carries.
+	qctx := qt.TraceQueryStart(ctx, nil, pgx.TraceQueryStartData{SQL: "SELECT 1"})
+	qt.TraceQueryEnd(qctx, nil, pgx.TraceQueryEndData{})
+
+	if !parent.IsRecording() {
+		t.Error("TraceQueryEnd ended the parent span it did not start")
+	}
+	if n := len(sr.Ended()); n != 0 {
+		t.Errorf("recorded %d ended spans before the parent finished, want 0", n)
+	}
+}
+
 func TestQueryTracerErrorStatus(t *testing.T) {
 	t.Parallel()
 	qt, tp, sr := newTestQueryTracer(t)
