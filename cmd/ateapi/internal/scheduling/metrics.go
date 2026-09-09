@@ -92,7 +92,7 @@ func (s *scheduler) recordEligibleWorkers(ctx context.Context, matching []*ateap
 		s.eligibleWorkers.Record(ctx, count, metric.WithAttributes(
 			ateattr.WorkerPoolNamespaceKey.String(k.namespace),
 			ateattr.WorkerPoolNameKey.String(k.pool),
-			ateattr.SandboxClassKey.String(constraints.SandboxClass),
+			ateattr.SandboxClassAttribute(constraints.SandboxClass),
 			ateattr.SchedulingConstraintKey.String(constraintStr),
 		))
 	}

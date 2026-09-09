@@ -129,10 +129,15 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 	}
-	// The durable checkpoint was never uploaded and the local one lived on the
-	// node that went away, so both die with the worker.
-	if got.GetStatus().GetInProgressSnapshotName() != "" || got.GetStatus().GetInProgressLocalSnapshotName() != "" {
-		t.Errorf("in-progress checkpoints not cleared: %v", got.GetStatus())
+	// The local checkpoint lived on the node that went away, so it dies with
+	// the worker.
+	if got.GetStatus().GetInProgressLocalSnapshotName() != "" {
+		t.Errorf("in-progress local checkpoint not cleared: %v", got.GetStatus())
+	}
+	// The durable one is kept: it names the prefix whatever atelet already
+	// uploaded lives under, which the actor's delete needs to collect it.
+	if got.GetStatus().GetInProgressSnapshotName() != "partial-snapshot" {
+		t.Errorf("in-progress external checkpoint not preserved: %v", got.GetStatus())
 	}
 	// The last completed snapshot is what makes the actor resumable, so it stays.
 	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"); got.GetStatus().GetExternalSnapshot().GetSnapshotUri() != want {

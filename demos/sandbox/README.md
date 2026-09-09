@@ -47,13 +47,13 @@ kubectl ate get actor-template sandbox-template -a ate-demo-sandbox
 
 ### 2. Create a Sandbox Actor
 
-Create the sandbox actor in the demo's atespace with a chosen name (e.g., `my-sandbox-1`) — `--template-ref` names the template, resolved in the actor's atespace:
+Create the sandbox actor in the demo's atespace with a chosen name (e.g., `my-sandbox-1`) — `--template` names the template, resolved in the actor's atespace:
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template-ref sandbox-template
+kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template sandbox-template
 ```
 
 ### 3. Port-Forward Services

@@ -103,9 +103,9 @@ hack/install-ate-kind.sh --deploy-demo-counter
 # install kubectl-ate
 go install ./cmd/kubectl-ate
 
-# create a counter actor in the demo's atespace (--template-ref names the
+# create a counter actor in the demo's atespace (--template names the
 # actor template, resolved in the actor's atespace)
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template-ref counter
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 
 # port-forward the network router to bind to local port `8000`
 kubectl port-forward -n ate-system svc/atenet-router 8000:80

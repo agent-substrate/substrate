@@ -202,14 +202,6 @@ func parseTagScope(value string) (ateapipb.TagScope, error) {
 	}
 }
 
-func parseNamespacedName(value string) (*ateapipb.ObjectRef, error) {
-	atespace, name, ok := strings.Cut(value, "/")
-	if !ok || atespace == "" || name == "" || strings.Contains(name, "/") {
-		return nil, fmt.Errorf("malformed reference %q (expected <atespace>/<name>)", value)
-	}
-	return &ateapipb.ObjectRef{Atespace: atespace, Name: name}, nil
-}
-
 func init() {
 	getTagsCmd.Flags().StringVarP(&tagAtespaceFlag, "atespace", "a", "", "Atespace to list/get tags in")
 	getTagsCmd.Flags().BoolVarP(&tagAllAtespacesFlag, "all-atespaces", "A", false, "List tags across all atespaces")

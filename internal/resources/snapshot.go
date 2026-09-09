@@ -60,9 +60,7 @@ func (p StoragePrefix) String() string { return p.uri }
 type SnapshotOwner struct {
 	kind     string
 	atespace string
-	// id distinguishes one owner from every other of its kind: an Actor's UID,
-	// which no later Actor reuses, or, for a tag, the name of the single
-	// snapshot it owns.
+	// id is the owning Actor's or Tag's UID, which no later resource reuses.
 	id string
 }
 
@@ -73,12 +71,10 @@ func ActorSnapshotOwner(atespace, actorUID string) SnapshotOwner {
 	return SnapshotOwner{kind: actorsOwnerKind, atespace: atespace, id: actorUID}
 }
 
-// TagSnapshotOwner returns the owner of the one snapshot a Tag holds. A tag
-// never takes a second snapshot, so its prefix is that snapshot's prefix, and
-// the name is minted fresh rather than derived from the tag: a recreated tag
-// cannot compute its way onto the objects its predecessor left.
-func TagSnapshotOwner(atespace, snapshotName string) SnapshotOwner {
-	return SnapshotOwner{kind: tagsOwnerKind, atespace: atespace, id: snapshotName}
+// TagSnapshotOwner returns the owner of the one snapshot a Tag holds. It is
+// keyed on the UID so a recreated tag never inherits its predecessor's objects.
+func TagSnapshotOwner(atespace, tagUID string) SnapshotOwner {
+	return SnapshotOwner{kind: tagsOwnerKind, atespace: atespace, id: tagUID}
 }
 
 // IsZero reports whether o is the zero SnapshotOwner.
@@ -129,7 +125,7 @@ func (o SnapshotOwner) Prefix(location string) (StoragePrefix, error) {
 //	gs://bucket/root                                                    location
 //	gs://bucket/root/atespaces/team-a/actors/<uid>                      an Actor's prefix
 //	gs://bucket/root/atespaces/team-a/actors/<uid>/snapshots/<name>     one of its snapshots
-//	gs://bucket/root/atespaces/team-a/tags/<name>                       a tag's prefix, and
+//	gs://bucket/root/atespaces/team-a/tags/<uid>                        a tag's prefix, and
 //	                                                                    its only snapshot
 type SnapshotURI struct {
 	uri         string
@@ -160,13 +156,13 @@ func NewActorSnapshotURI(location, atespace, actorUID, name string) (SnapshotURI
 // NewTagSnapshotURI returns the URI of the snapshot a Tag owns, stored under
 // an ActorTemplate's snapshotsConfig.location. The tag's prefix and its
 // snapshot's are the same: a tag holds exactly one snapshot.
-func NewTagSnapshotURI(location, atespace, name string) (SnapshotURI, error) {
-	owner := TagSnapshotOwner(atespace, name)
+func NewTagSnapshotURI(location, atespace, tagUID string) (SnapshotURI, error) {
+	owner := TagSnapshotOwner(atespace, tagUID)
 	prefix, err := owner.Prefix(location)
 	if err != nil {
 		return SnapshotURI{}, err
 	}
-	return SnapshotURI{uri: prefix.String(), location: location, owner: owner, ownerPrefix: prefix.String(), name: name}, nil
+	return SnapshotURI{uri: prefix.String(), location: location, owner: owner, ownerPrefix: prefix.String(), name: tagUID}, nil
 }
 
 // ParseSnapshotURI parses a given snapshot URI.
@@ -184,7 +180,7 @@ func ParseSnapshotURI(uri string) (SnapshotURI, error) {
 	case n >= 6 && segments[n-6] == atespacesPathSegment && segments[n-4] == actorsOwnerKind && segments[n-2] == snapshotsPathSegment:
 		u.Path = strings.Join(segments[:n-6], "/")
 		return NewActorSnapshotURI(u.String(), segments[n-5], segments[n-3], segments[n-1])
-	// /root/atespaces/team-a/tags/<name>
+	// /root/atespaces/team-a/tags/<uid>
 	//       n-4       n-3    n-2  n-1
 	case n >= 4 && segments[n-4] == atespacesPathSegment && segments[n-2] == tagsOwnerKind:
 		u.Path = strings.Join(segments[:n-4], "/")

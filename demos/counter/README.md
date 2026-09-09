@@ -51,14 +51,14 @@ kubectl ate get actor-template counter -a ate-demo-counter -o yaml
 
 ### 2. Create a Counter Actor
 
-Create the counter actor with a chosen ID (e.g., `my-counter-1`) using `--template-ref` (the template's name, resolved in the actor's atespace — so the actor lives in the demo's atespace, which the deploy step already created):
+Create the counter actor with a chosen ID (e.g., `my-counter-1`) using `--template` (the template's name, resolved in the actor's atespace — so the actor lives in the demo's atespace, which the deploy step already created):
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
 # Create the actor from the counter template.
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template-ref counter
+kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 ```
 
 ### 3. Port-Forward Services
@@ -164,7 +164,7 @@ deploy directly instead:
 ./hack/install-ate.sh --deploy-demo-counter-microvm
 ```
 
-Then create an actor (`--template-ref counter-microvm`, in the
+Then create an actor (`--template counter-microvm`, in the
 `ate-demo-counter-microvm` atespace), increment the counter, suspend
 it, resume it (even on a different worker), and confirm the count continues —
 the actor's counter lives in guest RAM, so a continuing count proves the

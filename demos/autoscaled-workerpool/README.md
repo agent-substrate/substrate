@@ -107,7 +107,7 @@ kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-aut
 
 ## How to Use
 
-We can trigger autoscaling by spawning multiple actors and sending traffic to assign workers in the pool. The actors go in the demo's atespace (`ate-demo-autoscaled-workerpool`) — `--template-ref` names the template, resolved in the actor's atespace:
+We can trigger autoscaling by spawning multiple actors and sending traffic to assign workers in the pool. The actors go in the demo's atespace (`ate-demo-autoscaled-workerpool`) — `--template` names the template, resolved in the actor's atespace:
 
 ### 1. Spawn load actors
 
@@ -117,7 +117,7 @@ go install ./cmd/kubectl-ate
 
 # Create 15 actors to generate load
 for i in {001..015}; do
-  kubectl ate create actor c$i -a ate-demo-autoscaled-workerpool --template-ref counter
+  kubectl ate create actor c$i -a ate-demo-autoscaled-workerpool --template counter
 done
 ```
 

@@ -998,16 +998,16 @@ func newTestSuspendedActor(atespace, name string) *ateapipb.Actor {
 
 // newTestInProgressTag builds the row CreateTag reserves for a
 // tag of actor: ATESPACE-scoped, with no snapshot yet and the destination of
-// the copy still to come recorded in status.in_progress_snapshot_uri.
+// the copy still to come derived from status.storage_location and its UID.
 func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 	atespace := actor.GetMetadata().GetAtespace()
 	return &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
 		Scope:    ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.TagStatus{
-			ActorTemplateUid:      "template-uid",
-			InProgressSnapshotUri: testTagSnapshotURI("gs://private", atespace, name),
-			SourceActorUid:        actor.GetMetadata().GetUid(),
+			ActorTemplateUid: "template-uid",
+			StorageLocation:  "gs://private",
+			SourceActorUid:   actor.GetMetadata().GetUid(),
 		},
 	}
 }
@@ -1062,18 +1062,17 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 			t.Errorf("missing GetTag = %v, want ErrNotFound", err)
 		}
 
-		// Finalize: naming the snapshot and clearing the in-progress URI
-		// together is the one transition status.snapshot is allowed.
+		// Finalize: publishing the copy is the one transition status.snapshot allows.
 		ready, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"}, store.PreconditionFrom(tag), finalizeTag)
 		if err != nil {
 			t.Fatalf("finalizing tag failed: %v", err)
 		}
-		// Check if the pending URI was promoted to the Snapshot field.
-		if ready.GetStatus().GetSnapshot().GetSnapshotUri() != tag.GetStatus().GetInProgressSnapshotUri() {
-			t.Errorf("finalized tag snapshot uri = %q, want the reserved %q", ready.GetStatus().GetSnapshot().GetSnapshotUri(), tag.GetStatus().GetInProgressSnapshotUri())
+		wantURI := testTagSnapshotURI(tag.GetStatus().GetStorageLocation(), "team-a", tag.GetMetadata().GetUid())
+		if got := ready.GetStatus().GetSnapshot().GetSnapshotUri(); got != wantURI {
+			t.Errorf("finalized tag snapshot uri = %q, want %q", got, wantURI)
 		}
-		if ready.GetStatus().GetInProgressSnapshotUri() != "" {
-			t.Errorf("finalized tag in-progress uri = %q, want it cleared", ready.GetStatus().GetInProgressSnapshotUri())
+		if got := ready.GetStatus().GetStorageLocation(); got != tag.GetStatus().GetStorageLocation() {
+			t.Errorf("finalized tag storage location = %q, want unchanged", got)
 		}
 
 		updated, err := s.UpdateTag(ctx, resources.TagRef{Atespace: "team-a", Name: "production"}, store.PreconditionFrom(ready), func(toUpdate *ateapipb.Tag) error {
@@ -1134,10 +1133,14 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 				},
 			},
 			{
-				name: "reopening the in-progress snapshot uri",
+				name: "storage location",
 				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.InProgressSnapshotUri = testTagSnapshotURI("gs://private", "team-a", "again")
+					toUpdate.Status.StorageLocation = "gs://elsewhere"
 				},
+			},
+			{
+				name:   "clearing the storage location",
+				mutate: func(toUpdate *ateapipb.Tag) { toUpdate.Status.StorageLocation = "" },
 			},
 			{
 				name:   "actor template uid",
@@ -1280,14 +1283,12 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 }
 
 // finalizeTag mutates a reserved tag the way the tag workflow's second
-// transaction does: it names the copy that landed and clears the in-progress
-// URI, in one update.
+// transaction does: it names the copy that landed under the tag UID.
 func finalizeTag(toUpdate *ateapipb.Tag) error {
 	toUpdate.Status.Snapshot = &ateapipb.ExternalSnapshot{
-		SnapshotUri:  toUpdate.GetStatus().GetInProgressSnapshotUri(),
+		SnapshotUri:  testTagSnapshotURI(toUpdate.GetStatus().GetStorageLocation(), toUpdate.GetMetadata().GetAtespace(), toUpdate.GetMetadata().GetUid()),
 		ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 	}
-	toUpdate.Status.InProgressSnapshotUri = ""
 	return nil
 }
 

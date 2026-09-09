@@ -321,6 +321,16 @@ func ValidateCustom_Resources_Limits(_ context.Context, _ operation.Operation, f
 	return errs
 }
 
+// ValidateCustom_SnapshotsConfig_StorageLocation ensures an
+// ActorTemplate's snapshotsConfig.location is a well-formed
+// URI with a bucket, so a bad location fails fast.
+func ValidateCustom_SnapshotsConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	if err := resources.ValidateSnapshotLocation(*value); err != nil {
+		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
+	}
+	return nil
+}
+
 // ValidateCustom_SnapshotsConfig requires on_commit to be a
 // subset of on_pause. UNSPECIFIED means FULL, so an unset on_commit over a
 // DATA on_pause is rejected too.

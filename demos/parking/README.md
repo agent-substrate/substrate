@@ -41,7 +41,7 @@ This command will:
 ### 2. Create more actors than workers
 
 Actors live in the demo's **atespace** (`ate-demo-parking`), and their DNS names
-embed it (`<id>.<atespace>.actors.resources.substrate.ate.dev`). `--template-ref`
+embed it (`<id>.<atespace>.actors.resources.substrate.ate.dev`). `--template`
 names the template, resolved in the actor's atespace:
 
 ```bash
@@ -50,7 +50,7 @@ go install ./cmd/kubectl-ate
 
 # 4 actors share a 2-worker pool -> oversubscribed.
 for id in p1 p2 p3 p4; do
-  kubectl ate create actor "$id" --atespace ate-demo-parking --template-ref parking
+  kubectl ate create actor "$id" --atespace ate-demo-parking --template parking
 done
 ```
 

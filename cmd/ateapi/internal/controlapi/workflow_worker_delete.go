@@ -213,9 +213,10 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		toUpdate.Status.WorkerAssignment = nil
-		// Both in-progress checkpoints die with the worker: the durable one was
-		// never uploaded, the local one lived on the node that went away.
-		toUpdate.Status.InProgressSnapshotName = ""
+		// Local in-progress checkpoint dies with the worker: it lived on the node
+		// that went away. The external in-progress checkpoint is kept. It'll be deleted
+		// with the actor when the actor is deleted (only possible outcome from CRASHED
+		// state).
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		return nil
 	})

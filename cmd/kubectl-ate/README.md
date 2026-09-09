@@ -110,8 +110,8 @@ kubectl ate get workers -l <label-selector>
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
 | `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
-| `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
-| `ATEOM IP` | The pod IP of that worker. Empty while suspended. |
+| `WORKER POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
+| `WORKER IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
 | `AGE` | Time elapsed since the actor was created. |
 
@@ -193,10 +193,8 @@ Manage the execution state of your workloads.
 *(Note: Actors are identified by a user-provided name, which must be a valid DNS-1123 label)*
 
 ```bash
-# Create a new actor deriving from an ActorTemplate. The template name is
-# resolved in the actor's atespace. -a/--atespace is required and the
-# atespace must already exist (kubectl ate create atespace <atespace>).
-kubectl ate create actor my-actor --template-ref=<template-name> -a <atespace>
+# Create a new actor from an ActorTemplate.
+kubectl ate create actor my-actor --template=<template-name> -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor -a <atespace>
@@ -229,8 +227,8 @@ kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope pu
 kubectl ate update tag <tag-name> -a <atespace> --scope published
 kubectl ate update tag <tag-name> -a <atespace> --scope atespace
 
-# Create an actor from a tag and remove the tag when it is no longer needed.
-kubectl ate create actor <actor-name> -a <atespace> --template-ref <template-name> --tag <tag-atespace/tag-name>
+# Create an actor from a tag.
+kubectl ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
 kubectl ate delete tag <tag-name> -a <atespace>
 ```
 
