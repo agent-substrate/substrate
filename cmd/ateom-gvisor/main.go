@@ -93,9 +93,11 @@ var (
 // ingress to.
 const actorHTTPUpstream = "http://" + ateomnet.ActorVethIP + ":80"
 
-// Workers get a conservative shutdown period. This needs to be significantly less than the K8s
-// termination grace period for the ateom.
-const workloadGracePeriod = 1 * time.Minute
+// workloadGracePeriod is the whole budget for draining the worker on shutdown.
+// It needs to stay significantly less than the K8s termination grace period
+// for the ateom, so the escalation to SIGKILL happens here rather than as a
+// kubelet SIGKILL of ateom itself.
+const workloadGracePeriod = 30 * time.Minute
 
 // resumeTimeout is the conservative ceiling for unpausing a paused sandbox.
 const resumeTimeout = 30 * time.Second
@@ -492,15 +494,18 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	// a SIGTERM.
 	s.cancelActiveRestoreOrRunRPC()
 
+	// One deadline covers the whole drain. Waiting for the lock and waiting out
+	// SIGTERM below both run against it, so the two phases split a single grace
+	// period rather than each getting one: an RPC that burns most of the budget
+	// leaves the containers only the remainder, and the total stays bounded by
+	// workloadGracePeriod however the time falls between them.
+	deadline := time.Now().Add(workloadGracePeriod)
+
 	// Attempt to acquire the lock used to serialize ateom RPCs. This will wait for any
 	// pending RPCs to finish (suspend, resume, etc...). After the RPCs finish there
 	// should be no active session. The run / resume was cancelled and the
 	// checkpoint / restore will stop the workload and clear the active session.
-	//
-	// In the worst case, these RPCs take almost the entire grace period and then
-	// fail. We will then proceed to send SIGTERM to the containers and wait for
-	// them to exit, potentially waiting for 2x the total grace period.
-	lockCtx, lockCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	lockCtx, lockCancel := context.WithDeadline(ctx, deadline)
 	defer lockCancel()
 
 	if !s.lock.LockContext(lockCtx) {
@@ -521,7 +526,7 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		wg.Add(1)
 		go func(containerName string) {
 			defer wg.Done()
-			if err := s.killContainer(ctx, session, containerName); err != nil {
+			if err := killContainer(ctx, session.rcmd, containerName, deadline); err != nil {
 				slog.WarnContext(ctx, "Failed to kill container during shutdown", slog.String("container", containerName), slog.Any("err", err))
 			}
 		}(name)
@@ -531,23 +536,39 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 	slog.InfoContext(ctx, "Shutting down")
 }
 
-// killContainer stops a container by sending SIGTERM, waiting for the grace period,
-// and escalating to SIGKILL if necessary.
-func (s *AteomService) killContainer(ctx context.Context, session *workloadSession, name string) error {
+// containerKillTimeout bounds the post-SIGKILL wait, so a completely broken
+// gVisor cannot hold shutdown open indefinitely. It is deliberately not drawn
+// from the grace period: by this point the container has already had its
+// allowance and the deadline has passed. A var so tests can shorten it.
+var containerKillTimeout = 5 * time.Second
+
+// containerRuntime is the slice of *runsc that graceful shutdown needs. Narrowed
+// to an interface so killContainer's SIGTERM-then-SIGKILL escalation can be
+// exercised without executing runsc.
+type containerRuntime interface {
+	cmdKill(ctx context.Context, containerName, signal string) error
+	cmdWait(ctx context.Context, containerName string) error
+}
+
+// killContainer stops a container by sending SIGTERM, waiting until deadline, and
+// escalating to SIGKILL if necessary. deadline is the shared drain deadline, so a
+// caller that has already spent most of the grace period elsewhere leaves the
+// container only what is left of it.
+func killContainer(ctx context.Context, rcmd containerRuntime, name string, deadline time.Time) error {
 	// Propagate SIGTERM to the application container so it can save state and close connections.
 	// If the actor installed no SIGTERM handler it terminates immediately.
 	slog.InfoContext(ctx, "Sending SIGTERM to container", slog.String("container", name))
-	if err := session.rcmd.cmdKill(ctx, name, "SIGTERM"); err != nil {
+	if err := rcmd.cmdKill(ctx, name, "SIGTERM"); err != nil {
 		slog.ErrorContext(ctx, "Failed to propagate SIGTERM to container", slog.String("container", name), slog.Any("err", err))
 		return fmt.Errorf("failed to propagate SIGTERM to container %q: %w", name, err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- session.rcmd.cmdWait(ctx, name)
+		done <- rcmd.cmdWait(ctx, name)
 	}()
 
-	sigTermCtx, sigTermCtxCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	sigTermCtx, sigTermCtxCancel := context.WithDeadline(ctx, deadline)
 	defer sigTermCtxCancel()
 
 	err := waitContainerStop(sigTermCtx, done)
@@ -568,15 +589,13 @@ func (s *AteomService) killContainer(ctx context.Context, session *workloadSessi
 		return ctx.Err()
 	}
 
-	// sigTermCtx timed out. Send SIGKILL.
+	// sigTermCtx hit the drain deadline. Send SIGKILL.
 	slog.WarnContext(ctx, "Grace period expired; killing container", slog.String("container", name))
-	if err := session.rcmd.cmdKill(ctx, name, "SIGKILL"); err != nil {
+	if err := rcmd.cmdKill(ctx, name, "SIGKILL"); err != nil {
 		slog.WarnContext(ctx, "Failed to send SIGKILL to container (it might have already exited)", slog.String("container", name), slog.Any("err", err))
 	}
 
-	// Block until the killed container actually exits, but set a short timeout (e.g. 5 seconds)
-	// to avoid blocking indefinitely if gVisor is completely broken.
-	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	killCtx, cancel := context.WithTimeout(ctx, containerKillTimeout)
 	defer cancel()
 
 	err = waitContainerStop(killCtx, done)
