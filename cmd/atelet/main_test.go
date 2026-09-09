@@ -1727,6 +1727,55 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
+	// The split arrangement spreads durable data over an index and one blob per
+	// file, so the carve has to select a set rather than a single name — and
+	// still leave the guest state behind.
+	t.Run("microvm full capture uploads the durable index and blobs as data", func(t *testing.T) {
+		store := &recordingObjectStorage{}
+		s := &AteomHerder{gcsClient: store}
+		dir := filepath.Join(t.TempDir(), "pause-snap-1")
+		rec := fullRec("microvm")
+		rec.SnapshotFiles = []string{
+			"config.json", "memory-ranges",
+			ateompath.DurableDirIndexFile,
+			ateompath.DurableDirBlobPrefix + "0000",
+			ateompath.DurableDirBlobPrefix + "0001",
+		}
+		writeLocalSnapshot(t, dir, rec, map[string]string{
+			"config.json": "cfg", "memory-ranges": "mem",
+			ateompath.DurableDirIndexFile:           "index",
+			ateompath.DurableDirBlobPrefix + "0000": "one",
+			ateompath.DurableDirBlobPrefix + "0001": "two",
+		})
+
+		req := validUploadPausedCheckpointRequest()
+		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		if _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri); err != nil {
+			t.Fatalf("uploadLocalCheckpointDir: %v", err)
+		}
+		want := []string{
+			pausedSnapshotPath + "/durable-dir.blob-0000.zstd",
+			pausedSnapshotPath + "/durable-dir.blob-0001.zstd",
+			pausedSnapshotPath + "/durable-dir.index.tar.zstd",
+			pausedSnapshotPath + "/manifest.json",
+		}
+		if got := store.keys(); !slices.Equal(got, want) {
+			t.Errorf("uploaded objects = %v, want %v", got, want)
+		}
+		uploaded := remoteManifest(t, store)
+		if uploaded.Scope != ateattr.SnapshotScopeData {
+			t.Errorf("uploaded manifest scope = %q, want %q", uploaded.Scope, ateattr.SnapshotScopeData)
+		}
+		want = []string{
+			ateompath.DurableDirIndexFile,
+			ateompath.DurableDirBlobPrefix + "0000",
+			ateompath.DurableDirBlobPrefix + "0001",
+		}
+		if !slices.Equal(uploaded.SnapshotFiles, want) {
+			t.Errorf("uploaded manifest files = %v, want %v", uploaded.SnapshotFiles, want)
+		}
+	})
+
 	t.Run("gvisor full capture without durable tar has no data", func(t *testing.T) {
 		s := &AteomHerder{gcsClient: &recordingObjectStorage{}}
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
