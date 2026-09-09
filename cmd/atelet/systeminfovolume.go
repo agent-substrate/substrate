@@ -131,7 +131,8 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 	return nil
 }
 
-// Deregister drops actorUID's registration.
+// Deregister drops actorUID's registration. After Deregister returns, no more
+// system-info volumes will be written for the actor.
 func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
 	r.mu.Lock()
 	actor := r.actors[actorUID]
