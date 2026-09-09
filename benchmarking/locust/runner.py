@@ -727,6 +727,7 @@ def main() -> None:
     logs_path = work_dir / f"{args.name}_logs.txt"
     traces_path = work_dir / f"{args.name}_traces.txt"
     status_path = work_dir / f"{args.name}_status.json"
+    server_summary_json = work_dir / f"{args.name}_server_summary.json"
 
     prefix = (
         f"{args.dest.rstrip('/')}/runs/{args.name}"
@@ -738,6 +739,7 @@ def main() -> None:
         traces.flush()
         log_run_config(args, prefix, work_dir, logs)
         exit_code = run_test(args, csv_prefix, logs, traces)
+        run_end_ts = int(datetime.now(timezone.utc).timestamp())
 
         stats_generated = False
         if stats_csv.exists():
@@ -767,6 +769,37 @@ def main() -> None:
                             facts,
                             logs,
                         )
+
+                        # Harvest server-side ground truth from Prometheus (bin-packing, PSI, snapshots)
+                        prom_url = os.environ.get(
+                            "PROMETHEUS_URL",
+                            "http://prometheus.benchmarking.svc.cluster.local:9090",
+                        )
+                        try:
+                            from server_telemetry import (
+                                extract_and_record_server_telemetry,
+                            )
+
+                            extract_and_record_server_telemetry(
+                                prom_url=prom_url,
+                                start_ts=run_ts,
+                                end_ts=run_end_ts,
+                                stats_history_csv=stats_history_csv,
+                                active_users=args.users,
+                                worker_pod_count=facts.get("worker_pod_count")
+                                or 5,
+                                output_json_path=server_summary_json,
+                                jsonl_path=jsonl_path,
+                                data_ts=data_ts,
+                                tag=args.tag,
+                                test_name=args.name,
+                                logs=logs,
+                            )
+                        except Exception as e:
+                            tee(
+                                logs,
+                                f"Warning: Failed to harvest server telemetry: {e}",
+                            )
             except Exception as e:
                 tee(logs, f"Failed to generate JSONL from {stats_csv}: {e}")
                 if jsonl_path.exists():
@@ -789,7 +822,9 @@ def main() -> None:
         (work_dir / f"{args.name}_exceptions.csv", "exceptions.csv"),
         (work_dir / f"{args.name}_failures.csv", "failures.csv"),
         (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
+        (server_summary_json, "server_summary.json"),
         # TODO: remove after data migration
+        (server_summary_json, f"{args.name}_server_summary.json"),
         (jsonl_path, f"{args.name}.jsonl"),
     ]
     for src, basename in files:
