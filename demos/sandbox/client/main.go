@@ -51,9 +51,17 @@ func main() {
 	actorName := pflag.String("name", "", "Name of the sandbox actor (required)")
 	atespace := pflag.String("atespace", "", "Atespace the actor lives in (required)")
 	ateapiAddr := pflag.String("ateapi", "", "Address of the ateapi gRPC server (defaults to port-forwarding svc/api)")
-	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the local actor proxy")
+	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the local actor proxy or atenet router")
+	tokenFile := pflag.String("token-file", "", "Path to a bearer token for ateapi authentication (defaults to a Kubernetes ServiceAccount token)")
 	kubeconfig := pflag.String("kubeconfig", "", "Path to the kubeconfig file")
 	k8sContext := pflag.String("context", "", "The name of the kubeconfig context to use")
+
+	// Router mTLS flags (when connecting directly to atenet-router):
+	routerCert := pflag.String("router-cert", "", "Path to client certificate PEM for atenet-router mTLS")
+	routerKey := pflag.String("router-key", "", "Path to client private key PEM for atenet-router mTLS")
+	routerCA := pflag.String("router-ca", "", "Path to CA certificate PEM for atenet-router (defaults to ClusterTrustBundle)")
+	routerClientSA := pflag.String("router-client-sa", "atenet-client", "ServiceAccount name for the minted router client certificate")
+	routerClientNS := pflag.String("router-client-ns", "ate-system", "Namespace for the minted router client certificate")
 	pflag.Parse()
 
 	if *actorName == "" {
@@ -61,6 +69,9 @@ func main() {
 	}
 	if *atespace == "" {
 		log.Fatal("--atespace is required")
+	}
+	if *tokenFile == "-" {
+		log.Fatal("--token-file=- is not supported by the interactive REPL client; pass a file path")
 	}
 	actorRef := resources.ActorRef{Atespace: *atespace, Name: *actorName}
 
@@ -76,22 +87,22 @@ func main() {
 		cancel()
 	}()
 
-	// 1. Connect to ateapi and Resume Actor
-	log.Println("Connecting to ateapi...")
-	cli, err := ateclient.NewClient(ctx, *kubeconfig, *k8sContext, *ateapiAddr, "", false)
+	// 1. Connect to ateapi
+	if *ateapiAddr == "" {
+		log.Print("Connecting to ateapi (auto port-forward to svc/api)...")
+	} else {
+		log.Printf("Connecting to ateapi at %s...", *ateapiAddr)
+	}
+	// Connect once, up front, so a bad kube context fails here rather than at exit.
+	// The client connection is deliberately not tied to ctx: ctx is canceled by the
+	// interrupt handler, and the deferred suspend below still has to reach ateapi after that.
+	cli, err := ateclient.NewClient(context.Background(), *kubeconfig, *k8sContext, *ateapiAddr, *tokenFile, false)
 	if err != nil {
-		log.Fatalf("Failed to dial ateapi: %v", err)
+		log.Fatalf("Failed to connect to ateapi: %v", err)
 	}
 	defer cli.Close()
 
-	log.Printf("Resuming actor %s...", actorRef.Name)
-	_, err = cli.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
-	if err != nil {
-		log.Fatalf("Failed to resume actor: %v", err)
-	}
-	log.Println("Actor resumed successfully.")
-
-	// Ensure we suspend the actor on exit
+	// Ensure we suspend the actor on exit.
 	defer func() {
 		log.Printf("Suspending actor %s...", actorRef.Name)
 		suspendCtx := context.Background()
@@ -103,7 +114,25 @@ func main() {
 		}
 	}()
 
-	// 2. Start Input Loop (REPL)
+	// 2. Connect to atenet router or proxy
+	router, err := setupRouter(
+		ctx,
+		*kubeconfig, *k8sContext,
+		*atenetAddr,
+		*routerCert, *routerKey, *routerCA,
+		*routerClientSA, *routerClientNS,
+	)
+	if err != nil {
+		log.Fatalf("Failed to configure router client: %v", err)
+	}
+	if router.stop != nil {
+		defer router.stop()
+	}
+
+	// No explicit resume: a request through the router wakes a suspended
+	// actor on its own, so the first command wakes it.
+
+	// 3. Start Input Loop (REPL)
 	fmt.Println("Starting Sandbox REPL. Type 'exit' to leave.")
 
 	lines := make(chan string)
@@ -143,7 +172,7 @@ func main() {
 			}
 
 			// Send command to atenet router
-			output, err := runCommand(ctx, *atenetAddr, actorRef, line)
+			output, err := runCommand(ctx, router, actorRef, line)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				continue
@@ -162,13 +191,16 @@ func main() {
 	}
 }
 
-func runCommand(ctx context.Context, atenetAddr string, actorRef resources.ActorRef, command string) (*ProcessResponse, error) {
-	url := fmt.Sprintf("http://%s/process", atenetAddr)
+func runCommand(ctx context.Context, router *routerClient, actorRef resources.ActorRef, command string) (*ProcessResponse, error) {
+	url := fmt.Sprintf("%s/process", router.baseURL)
 
 	reqBody := ProcessRequest{
 		Command: []string{"sh", "-c", command},
 	}
-	jsonBody, _ := json.Marshal(reqBody)
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonBody))
 	if err != nil {
@@ -177,7 +209,7 @@ func runCommand(ctx context.Context, atenetAddr string, actorRef resources.Actor
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(atenet.TargetActorHeader, actorRef.String())
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := router.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}

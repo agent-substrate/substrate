@@ -14,11 +14,11 @@ It allows you to run arbitrary commands in an sandboxed, isolated container (run
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed as in the [Quickstart](../../README.md#quickstart-development)
-  or [GKE Quickstart](../../README.md#gke-quickstart-development).
+- A k8s cluster with Agent Substrate installed.
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured in `demos/sandbox/sandbox-template.yaml.tmpl`).
 - `kubectl-ate` CLI installed (can be installed via `go install ./cmd/kubectl-ate`).
+- A kube context with access to the `ate-system` namespace. The client mints its `ate-client` ServiceAccount token and requests an ingress client certificate through it.
 
 ## How to Run on Agent Substrate
 
@@ -75,6 +75,28 @@ go build -o bin/sandbox-client ./demos/sandbox/client
 ./bin/sandbox-client --atenet=localhost:8000 --atespace=ate-demo-sandbox --name=my-sandbox-1
 ```
 
+By default, the client automatically port-forwards `svc/api` for control-plane access (authenticating via a minted `ate-client` ServiceAccount token with automatic token refresh) and reaches the actor via the local proxy at `localhost:8000`.
+
+You can also customize connections with flags:
+- `--ateapi`: Address of the ateapi gRPC server (defaults to auto port-forwarding `svc/api`).
+- `--atenet`: Address of the local actor proxy or atenet router (defaults to `localhost:8000`). If set to `""`, the client automatically port-forwards `svc/atenet-router:443` over mTLS.
+- `--token-file`: Path to a bearer token for ateapi authentication (defaults to a minted ServiceAccount token).
+- `--kubeconfig`: Path to the kubeconfig file.
+- `--context`: Kubeconfig context to use.
+- `--router-cert`, `--router-key`: Path to client certificate and private key PEM files for direct router mTLS.
+- `--router-ca`: Path to CA certificate PEM file to verify atenet-router (defaults to `servicedns.podcert.ate.dev/identity` ClusterTrustBundle).
+- `--router-client-sa`, `--router-client-ns`: ServiceAccount and namespace for the minted SPIFFE client certificate when connecting directly (defaults to `atenet-client` in `ate-system`).
+
+The client sends each `/process` request to the router and automatically sets
+the routing header from `--name` and `--atespace`:
+
+```go
+req.Header.Set(atenet.TargetActorHeader, actorRef.String())
+```
+
+Any replacement HTTP client must send an equivalent `ate-target-actor` header;
+the URL and `Host` header do not select the Actor.
+
 Once in the `sandbox>` prompt, you can run commands:
 
 ```bash
@@ -85,16 +107,3 @@ sandbox> cat test.txt
 ```
 
 Type `exit` to leave. This will automatically trigger the suspension of the actor.
-
-To permanently delete the suspended actor:
-```bash
-kubectl ate delete actor my-sandbox-1 -a ate-demo-sandbox
-```
-
-## How to Uninstall
-
-To remove the sandbox demo resources (actors, template, atespace, workerpool, and namespace) from your cluster, run:
-
-```bash
-go run ./cmd/ate-setup delete demo sandbox
-```
