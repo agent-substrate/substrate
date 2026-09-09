@@ -96,8 +96,8 @@ const actorHTTPUpstream = "http://" + ateomnet.ActorVethIP + ":80"
 // workloadGracePeriod is the whole budget for draining the worker on shutdown.
 // It needs to stay significantly less than the K8s termination grace period
 // for the ateom, so the escalation to SIGKILL happens here rather than as a
-// kubelet SIGKILL of ateom itself. A var so tests can shorten it.
-var workloadGracePeriod = 30 * time.Minute
+// kubelet SIGKILL of ateom itself.
+const workloadGracePeriod = 30 * time.Minute
 
 // resumeTimeout is the conservative ceiling for unpausing a paused sandbox.
 const resumeTimeout = 30 * time.Second

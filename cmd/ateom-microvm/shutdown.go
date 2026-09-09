@@ -41,8 +41,7 @@ import (
 // own termination grace period — 3600s, set by
 // workerTerminationGracePeriodSeconds in cmd/atecontroller — so the escalation
 // happens here rather than as a kubelet SIGKILL of ateom itself.
-// A var so tests can shorten it.
-var workloadGracePeriod = 30 * time.Minute
+const workloadGracePeriod = 30 * time.Minute
 
 // workloadKillTimeout bounds the post-SIGKILL wait. The VM teardown that
 // follows is what ultimately guarantees the workload is gone, so a wedged
