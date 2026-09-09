@@ -205,14 +205,20 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	return &Instruments{requests: requests}, nil
 }
 
-func (i *Instruments) recordRequest(ctx context.Context, outcome string, err error) {
+// recordRequest counts one lookup. kind is known before the lookup starts, so
+// the label is present on every outcome, which is what lets the registry mark
+// it required.
+func (i *Instruments) recordRequest(ctx context.Context, kind, outcome string, err error) {
 	if i == nil || i.requests == nil {
 		return
 	}
 	if err != nil {
 		outcome = failureOutcome(err)
 	}
-	attrs := []attribute.KeyValue{ateattr.SnapshotCacheOutcomeKey.String(outcome)}
+	attrs := []attribute.KeyValue{
+		ateattr.SnapshotCacheOutcomeKey.String(outcome),
+		ateattr.SnapshotKindKey.String(kind),
+	}
 	if outcome == ateattr.SnapshotCacheOutcomeError {
 		attrs = append(attrs, ateattr.ErrorTypeKey.String(errorType(err)))
 	}
@@ -222,6 +228,12 @@ func (i *Instruments) recordRequest(ctx context.Context, outcome string, err err
 
 The nil-safety matters: tests, benchmarks and metric-free deployments construct
 the subsystem without instruments, and the call sites stay unconditional.
+
+Every label the registry marks `required` has to be set on every path through
+the record method. Here `kind` is a parameter rather than something derived
+after the fact, so a miss, a hit and a failure all carry it. If a label is only
+known on some paths, mark it `conditionally_required` in the registry and omit
+it on the others; do not emit it empty.
 
 ### Getting a meter
 
@@ -388,7 +400,8 @@ permitted value as a member. Put a new group beside `registry.ate.imagecache`:
 The `annotations.substrate` block is substrate's own and Weaver passes it
 through: `emitted_by` names the binaries, `code_anchor` the file that creates
 the instrument, `cuj` the question an operator answers with it, and `buckets`
-the histogram boundaries. Fill all of them; a reader of the registry should not
+the histogram boundaries. Fill all applicable fields, including `buckets` for a
+histogram; a reader of the registry should not
 need the code.
 
 Attributes that already exist (`ate.template.name`, `ate.snapshot.kind`,
