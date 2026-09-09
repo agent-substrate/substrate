@@ -206,7 +206,7 @@ func TestMintCertReadsThroughForAnActorTheCacheHasNotSeenYet(t *testing.T) {
 			},
 		},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-demo", Name: "counter"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("seed second actor: %v", err)
 	}

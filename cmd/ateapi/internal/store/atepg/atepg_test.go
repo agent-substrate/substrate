@@ -515,7 +515,7 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
@@ -608,7 +608,7 @@ func createTestSuspendedActor(t *testing.T, s *Persistence, atespace, name strin
 			State:            ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + atespace + "/actors/" + testSnapshotOwnerUID + "/snapshots/" + name, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
 		},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("CreateActor(%s/%s) failed: %v", atespace, name, err)
 	}
@@ -726,12 +726,12 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
-	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
+	if _, err := s.CreateActor(ctx, actor, nil); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)
 	}
 }
 
-func TestCreateActorWithEgressPolicy_Rollback(t *testing.T) {
+func TestCreateActor_EgressPolicyRollback(t *testing.T) {
 	p := setupPostgresPersistence(t)
 	ctx := t.Context()
 	createTestAtespace(t, p, "team-a")
@@ -754,7 +754,7 @@ func TestCreateActorWithEgressPolicy_Rollback(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if _, err := p.CreateActorWithEgressPolicy(ctx, actor, policy); err == nil {
+	if _, err := p.CreateActor(ctx, actor, policy); err == nil {
 		t.Fatal("expected policy insert failure")
 	}
 	if _, err := p.GetActor(ctx, ref); !errors.Is(err, store.ErrNotFound) {
@@ -766,7 +766,7 @@ func TestCreateActorWithEgressPolicy_Rollback(t *testing.T) {
 	if _, err := p.pool.Exec(ctx, `ALTER TABLE actor_egress_policies DROP CONSTRAINT fail_policy`); err != nil {
 		t.Fatal(err)
 	}
-	created, err := p.CreateActorWithEgressPolicy(ctx, actor, policy)
+	created, err := p.CreateActor(ctx, actor, policy)
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -783,7 +783,7 @@ func TestCreateActorWithEgressPolicy_Rollback(t *testing.T) {
 	if diff := cmp.Diff(wantPolicy, policy, protocmp.Transform()); diff != "" {
 		t.Errorf("policy input mutated (-want +got):\n%s", diff)
 	}
-	if _, err := p.CreateActorWithEgressPolicy(ctx, actor, &ateapipb.EgressPolicy{}); !errors.Is(err, store.ErrAlreadyExists) {
+	if _, err := p.CreateActor(ctx, actor, &ateapipb.EgressPolicy{}); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("duplicate create: %v, want ErrAlreadyExists", err)
 	}
 	storedPolicy, err := p.GetEgressPolicy(ctx, ref)
@@ -822,7 +822,7 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 	}
 	for _, name := range []string{"a1", "a2"} {
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
+		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}, nil); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 	}

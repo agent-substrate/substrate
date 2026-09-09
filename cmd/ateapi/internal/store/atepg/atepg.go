@@ -616,11 +616,10 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 
 // --- Actors ---
 
-func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
-	return createActor(ctx, p.pool, actor)
-}
-
-func (p *Persistence) CreateActorWithEgressPolicy(ctx context.Context, actor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error) {
+func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, error) {
+	if policy == nil {
+		return createActor(ctx, p.pool, actor)
+	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, err

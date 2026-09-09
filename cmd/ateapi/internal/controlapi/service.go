@@ -37,7 +37,6 @@ import (
 type RPCService struct {
 	ateapipb.UnimplementedControlServer
 	impl                  serviceStore
-	persistence           serviceStore
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
 	sandboxConfigLister   listersv1alpha1.SandboxConfigLister
@@ -80,7 +79,6 @@ func NewRPCService(
 	impl := newServiceImpl(persistence, storageClassLister)
 	s := &RPCService{
 		impl:                  impl,
-		persistence:           persistence,
 		workerCache:           workerCache,
 		sandboxConfigLister:   sandboxConfigLister,
 		csiDriverConfigLister: csiDriverConfigLister,
@@ -157,8 +155,6 @@ type ServiceImpl struct {
 
 	storageClassLister storagev1listers.StorageClassLister
 }
-
-var _ serviceStore = (*ServiceImpl)(nil)
 
 // newServiceImpl creates an instance of the service's middleware
 // implementation layer.

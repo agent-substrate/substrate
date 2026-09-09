@@ -1117,7 +1117,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-			})
+			}, nil)
 			if err != nil {
 				t.Fatalf("racing writer: recreate CreateActor: %v", err)
 			}
