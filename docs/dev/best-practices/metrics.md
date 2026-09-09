@@ -62,14 +62,16 @@ Rules of thumb:
   the final decrement is acceptable, as the router's parked-request count
   does; use the observable form when you would otherwise be mirroring a data
   structure you already own.
-* **UpDownCounter or gauge: ask who owns the total.** The test is not whether
-  the value can be summed. Ask whether the labels split a total you own and
-  account for, or only tag separate readings you sampled from elsewhere. Idle
-  plus assigned is the pool and the pools are the fleet, a total the control
-  plane maintains, so worker counts are an UpDownCounter. Memory working set is
-  sampled from cgroups per template, so it is a gauge even though the usual
-  query sums it per node, just as upstream sums `k8s.pod.memory.usage` across
-  pods and still types it as a gauge.
+* **UpDownCounter or gauge: are you counting, or reading a dial?** An
+  UpDownCounter is a tally you keep yourself: something starts, you add one;
+  it ends, you subtract one. `ate.workerpool.workers` is one because ateapi
+  assigns and releases every worker, so it is the one keeping that tally. A
+  gauge is a dial you read: memory working set is whatever the cgroup reports
+  when atelet asks, written down per template. Ask "did I get this number by
+  adding and subtracting, or by looking?" and the answer is the instrument.
+  How a dashboard later aggregates the number does not enter into it. The
+  type is a promise to the pipeline about what the datapoints are, and
+  rollups and the actor relay act on that promise without checking.
 * **Do not add a failure counter next to a success counter.** One instrument,
   with the failure on `error.type` or `ate.failure.reason`; the key's absence
   means success. See [Reporting failures](#reporting-failures).
