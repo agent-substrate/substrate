@@ -202,3 +202,29 @@ roleRef:
   kind: Role
   name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io
+---
+# Hardware discovery for benchmarking runner: nodes and worker pods across
+# namespaces are read to compute cluster capacity frontiers (actors/vCPU,
+# actors/GB RAM, A/P bin-packing ratio).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: locust-hardware-discovery
+rules:
+- apiGroups: [""]
+  resources: ["nodes", "pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: locust-hardware-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: locust-hardware-discovery
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: benchmarking
+
